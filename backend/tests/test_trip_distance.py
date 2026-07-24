@@ -181,3 +181,80 @@ def test_load_ride_breadcrumbs_pages_filters_and_sorts():
     assert len(crumbs) == 2, "null-coordinate rows filtered"
     assert crumbs[0]["timestamp"] < crumbs[1]["timestamp"], "sorted by timestamp"
     assert MAX_BREADCRUMBS == 10000
+
+
+# --- GPS filter_mode (P1.2) ---------------------------------------------------
+
+def _crumb_as(dt_s, lat, lng, *, phase="trip_in_progress", accuracy=8.0, speed=0.0):
+    ts = (_T0 + timedelta(seconds=dt_s)).isoformat()
+    return {
+        "lat": lat,
+        "lng": lng,
+        "timestamp": ts,
+        "tracking_phase": phase,
+        "accuracy": accuracy,
+        "speed": speed,
+    }
+
+
+def _clean_then_jitter():
+    """6 clean moving fixes, then a 6-fix stationary jitter cluster ~111 m on.
+
+    The jitter is well-formed (accuracy 8 m, speed 0) so only the stationary
+    collapse — not the accuracy gate — removes it.
+    """
+    trace = [
+        _crumb_as(i * 4, 50.400 + i * 0.001, -104.62, accuracy=8.0, speed=15.0)
+        for i in range(6)
+    ]  # ~555 m of real northward travel
+    base_lat, base_lng = 50.406, -104.62
+    offsets = [(0.0, 0.0), (0.00006, 0.00003), (-0.00005, 0.00004),
+               (0.00003, -0.00006), (-0.00004, -0.00002), (0.00002, 0.00005)]
+    for k, (dlat, dlng) in enumerate(offsets):
+        trace.append(_crumb_as(24 + k * 4, base_lat + dlat, base_lng + dlng, accuracy=8.0, speed=0.0))
+    return trace
+
+
+def test_off_mode_is_legacy_no_filter_stats():
+    trace = _clean_then_jitter()
+    with _no_road_snap():
+        result = _run(compute_trip_distances(trace, ride_id="r_off", planned_distance=1.0, filter_mode="off"))
+    assert "filter_mode" not in result.route_quality
+    assert "collapsed_stationary" not in result.route_quality
+
+
+def test_shadow_mode_bills_raw_and_reports_delta():
+    trace = _clean_then_jitter()
+    with _no_road_snap():
+        off = _run(compute_trip_distances(trace, ride_id="r1", planned_distance=1.0, filter_mode="off"))
+        shadow = _run(compute_trip_distances(trace, ride_id="r1", planned_distance=1.0, filter_mode="shadow"))
+    # Shadow must not change the billed distance — same as legacy/off.
+    assert shadow.actual_distance_km == off.actual_distance_km
+    # But it discloses the filtering effect.
+    assert shadow.route_quality["filter_mode"] == "shadow"
+    assert shadow.route_quality["collapsed_stationary"] == 4  # 6 jitter fixes → 2
+    assert shadow.route_quality["dropped_low_accuracy"] == 0
+    assert shadow.route_quality["filtered_delta_km"] > 0
+    assert shadow.route_quality["actual_distance_km_filtered"] < off.actual_distance_km
+
+
+def test_on_mode_bills_filtered_and_keeps_raw_reference():
+    trace = _clean_then_jitter()
+    with _no_road_snap():
+        off = _run(compute_trip_distances(trace, ride_id="r1", planned_distance=1.0, filter_mode="off"))
+        on = _run(compute_trip_distances(trace, ride_id="r1", planned_distance=1.0, filter_mode="on"))
+    # Filtered distance is lower than the jitter-inflated raw value...
+    assert on.actual_distance_km < off.actual_distance_km
+    # ...and the raw value is preserved for reference/audit.
+    assert on.route_quality["actual_distance_km_unfiltered"] == off.actual_distance_km
+    assert on.route_quality["collapsed_stationary"] == 4
+
+
+def test_on_mode_drops_low_accuracy_fixes():
+    # A clean straight trace with two garbage-accuracy fixes spliced in.
+    trace = [_crumb_as(i * 4, 50.400 + i * 0.001, -104.62, accuracy=8.0, speed=15.0) for i in range(6)]
+    trace.insert(3, _crumb_as(10, 50.500, -104.70, accuracy=90.0, speed=15.0))  # far, low-accuracy
+    trace.insert(5, _crumb_as(18, 50.300, -104.50, accuracy=120.0, speed=15.0))
+    with _no_road_snap():
+        on = _run(compute_trip_distances(trace, ride_id="r1", planned_distance=1.0, filter_mode="on"))
+    assert on.route_quality["dropped_low_accuracy"] == 2

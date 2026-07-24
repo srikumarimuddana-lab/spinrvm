@@ -103,6 +103,20 @@ async def cancel_ride_rider(
 
     driver_id = ride.get("driver_id")
 
+    # WS-8 (finding 11): release the booking-time pre-auth hold so the
+    # rider's card isn't blocked for up to 7 days. Must happen BEFORE
+    # we overwrite any payment fields. Best-effort: if the hold is already
+    # captured/expired, cancel_authorization returns False and we carry on.
+    _booking_pi = ride.get("payment_intent_id")
+    _auth = (ride.get("auth_status") or "").lower()
+    if _booking_pi and _auth in ("authorized", "fare_only"):
+        try:
+            _released = await _deps.cancel_authorization(ride_id=ride_id, payment_intent_id=_booking_pi)
+            if _released:
+                logger.info("[CANCEL] released pre-auth hold ride_id=%s pi=%s", ride_id, _booking_pi)
+        except Exception as _rel_exc:
+            logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
+
     # The cancel is already persisted by the atomic claim above, so the
     # assigned driver MUST be released, transitioned back to Period 1, and
     # notified regardless of what happens while computing or charging the fee.
@@ -133,32 +147,35 @@ async def cancel_ride_rider(
             if payment_method == "wallet":
                 rider_wallet = await _deps.db_supabase.find_one("wallets", {"user_id": current_user["id"]})
                 if rider_wallet:
-                    old_balance = _round(_d(rider_wallet.get("balance", 0)))
-                    new_balance = max(_round(old_balance - total_cancel_fee), Decimal("0"))
-                    actual_charge = _round(old_balance - new_balance)
-                    if actual_charge > 0:
-                        await _deps.db_supabase.update_one(
-                            "wallets",
-                            {"id": rider_wallet["id"]},
-                            {
-                                "balance": _f(new_balance),
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            },
-                        )
-                        await _deps.db_supabase.insert_one(
-                            "wallet_transactions",
-                            {
-                                "id": str(uuid.uuid4()),
-                                "wallet_id": rider_wallet["id"],
-                                "user_id": current_user["id"],
-                                "type": "cancellation_fee",
-                                "amount": -_f(actual_charge),
-                                "balance_after": _f(new_balance),
-                                "reference_id": ride_id,
-                                "description": f"Cancellation fee for ride {ride_id[:8]}",
-                                "metadata": {"ride_id": ride_id},
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            },
+                    # WS-6 (finding 10): atomic locked debit. This previously
+                    # read the balance, computed max(balance - fee, 0) in
+                    # Python, and wrote it back filtered on {id} only — a
+                    # wallet top-up webhook or another ride's fee landing
+                    # between the read and the write was silently lost.
+                    # clamp_to_floor keeps the charge-what-they-have behaviour
+                    # inside the lock; reference_id=ride_id makes a replayed
+                    # cancellation idempotent rather than double-charging.
+                    _fee_txn = await _deps.db_supabase.wallet_apply_delta(
+                        wallet_id=rider_wallet["id"],
+                        user_id=current_user["id"],
+                        type_="cancellation_fee",
+                        delta=-total_cancel_fee,
+                        reference_id=ride_id,
+                        description=f"Cancellation fee for ride {ride_id[:8]}",
+                        metadata={"ride_id": ride_id},
+                        floor=Decimal("0"),
+                        clamp_to_floor=True,
+                    )
+                    # The RPC writes the ledger row itself, using the amount it
+                    # actually took. Surface a short-collection so the gap
+                    # between fee charged and driver payout is visible.
+                    _charged = _round(abs(_d(str(_fee_txn.get("applied_delta") or 0))))
+                    if _charged < total_cancel_fee:
+                        logger.info(
+                            "[CANCEL] partial cancellation fee collected ride_id=%s charged=%s of=%s",
+                            ride_id,
+                            _charged,
+                            total_cancel_fee,
                         )
             elif payment_method == "card":
                 # Mirrors settle_card's payment-method resolution: a card pinned
@@ -261,11 +278,16 @@ async def cancel_ride_rider(
         "cancellation_fee_driver": _f(charged_driver),
         "updated_at": _now,
     }
+    # WS-8: mark the booking-time hold as released so reconcilers and the
+    # preauth_capture sweeper skip this ride.
+    if _booking_pi and _auth in ("authorized", "fare_only"):
+        _base_update["auth_status"] = "released"
     if cancel_fee_charge_attempted:
-        # Overwrite both together, even payment_intent_id -> None on a decline —
-        # never leave a stale booking-time hold's PI paired with a fresh status.
+        # WS-8: store the fee PI in its own column (migration 251) instead
+        # of overwriting payment_intent_id — preserving the booking-time PI
+        # for audit and preventing payment_retry from chasing the wrong PI.
         _base_update["payment_status"] = cancel_fee_payment_status
-        _base_update["payment_intent_id"] = cancel_fee_payment_intent_id
+        _base_update["cancel_fee_payment_intent_id"] = cancel_fee_payment_intent_id
     # Migration 38 — attribution. Fall back to the legacy payload on
     # PGRST204 so the rider's cancel button never 503s if the column
     # isn't in prod yet.
@@ -281,7 +303,7 @@ async def cancel_ride_rider(
             },
         )
     except Exception as _col_exc:
-        logger.warning(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal")
+        logger.error(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal", exc_info=True)
         await _deps.db_supabase.update_ride(ride_id, _base_update)
 
     # Verify the cancel actually landed in the database. Same class of

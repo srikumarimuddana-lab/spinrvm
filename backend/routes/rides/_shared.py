@@ -73,19 +73,26 @@ def _decode_polyline(encoded: str) -> list:
     return coords
 
 
-async def _fetch_directions_polyline(
+async def _fetch_directions_route(
     pickup_lat: float,
     pickup_lng: float,
     dropoff_lat: float,
     dropoff_lng: float,
     api_key: str,
     waypoints: Optional[list] = None,
-) -> Optional[list]:
-    """Call Google Directions API and return [[lat, lng], ...] overview polyline.
+) -> Optional[dict]:
+    """Call Google Directions API and return the road route.
 
-    Returns None on any failure — callers must treat this as a soft error and
-    fall back to the client-computed polyline or the Directions API on-device.
-    Timeout is 3 s, well within the ride-creation SLA.
+    Returns ``{"polyline": [[lat, lng], ...], "distance_km": float | None,
+    "duration_s": int | None}`` or ``None`` on any failure — callers must treat
+    a ``None`` result (or ``None`` fields) as a soft error and fall back to the
+    straight-line ``multi_leg_distance`` haversine path.
+
+    ``distance_km`` / ``duration_s`` are summed across ALL legs so a multi-stop
+    route accumulates the full road path (pickup → stop → … → dropoff), not
+    just the final leg. This is the authoritative road distance the fare is
+    priced on (see ``estimates.py``); haversine is only the fallback when this
+    is unavailable. Timeout is 3 s, well within the ride-creation SLA.
     waypoints is an optional list of {lat, lng} stop dicts (multi-stop rides).
     """
     if not api_key:
@@ -106,18 +113,155 @@ async def _fetch_directions_polyline(
             data = resp.json()
         if data.get("status") != "OK" or not data.get("routes"):
             logger.warning(
-                "_fetch_directions_polyline: status=%s — no route returned",
+                "_fetch_directions_route: status=%s — no route returned",
                 data.get("status"),
             )
             return None
-        encoded = data["routes"][0].get("overview_polyline", {}).get("points", "")
+        route = data["routes"][0]
+        encoded = route.get("overview_polyline", {}).get("points", "")
         if not encoded:
             return None
         pts = _decode_polyline(encoded)
-        return pts if len(pts) >= 2 else None
+        if len(pts) < 2:
+            return None
+        # Sum distance/duration across every leg so multi-stop rides accumulate
+        # the whole road path. Guard each field: for status=OK legs are always
+        # present, but a malformed leg must degrade to the haversine fallback
+        # (distance_km=None), never poison the fare with a partial sum.
+        legs = route.get("legs") or []
+        distance_m = 0
+        duration_s = 0
+        for leg in legs:
+            distance_m += int((leg.get("distance") or {}).get("value") or 0)
+            duration_s += int((leg.get("duration") or {}).get("value") or 0)
+        return {
+            "polyline": pts,
+            "distance_km": round(distance_m / 1000.0, 3) if distance_m > 0 else None,
+            "duration_s": duration_s if duration_s > 0 else None,
+        }
     except Exception as exc:
-        logger.warning("_fetch_directions_polyline failed (non-fatal): %s", exc)
+        logger.warning("_fetch_directions_route failed (non-fatal): %s", exc)
         return None
+
+
+async def _fetch_directions_polyline(
+    pickup_lat: float,
+    pickup_lng: float,
+    dropoff_lat: float,
+    dropoff_lng: float,
+    api_key: str,
+    waypoints: Optional[list] = None,
+) -> Optional[list]:
+    """Return only the road-following overview polyline (back-compat shim).
+
+    Thin wrapper over :func:`_fetch_directions_route` for callers that render
+    the route line but do not price on it. Callers that need the road distance
+    should call ``_fetch_directions_route`` directly. Returns None on any
+    failure, same contract as before.
+    """
+    route = await _fetch_directions_route(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, api_key, waypoints)
+    return route["polyline"] if route else None
+
+
+# Fare-distance basis selection --------------------------------------------
+# Straight-line haversine is ALWAYS <= the real road distance, so pricing a
+# fare on it systematically undercharges (0.7 km billed vs 1.8 km road route
+# in the reported Wakeling->Walmart incident — a one-sided loss on every ride
+# because 100% of the fare goes to the driver). We prefer the Directions road
+# distance, guarded by a sanity band so a Maps glitch can't over/undercharge,
+# and fall back to haversine when the road distance is missing or implausible.
+FARE_ROAD_SANITY_MIN_RATIO = 0.95  # road can't be materially shorter than crow-flies (rounding slack)
+FARE_ROAD_SANITY_MAX_RATIO = 3.0  # > 3x straight-line => Directions routed somewhere wrong; distrust it
+
+
+def _road_distance_plausible(haversine_km: float, road_km: Optional[float]) -> bool:
+    """True when ``road_km`` is a believable road distance for this trip.
+
+    Guards against a Maps glitch corrupting the fare: the road route must be at
+    least ~as long as the straight line (never materially shorter) and no more
+    than 3x it. The degenerate pickup==dropoff case (haversine 0) trusts only a
+    small positive road distance.
+    """
+    if road_km is None or road_km <= 0:
+        return False
+    if haversine_km <= 0:
+        return road_km <= 1.0
+    ratio = road_km / haversine_km
+    return FARE_ROAD_SANITY_MIN_RATIO <= ratio <= FARE_ROAD_SANITY_MAX_RATIO
+
+
+def select_fare_distance(haversine_km: float, road_km: Optional[float], *, mode: str) -> tuple:
+    """Choose the distance (km) a fare is priced on and the basis label.
+
+    Returns ``(billed_km, basis)``. ``mode`` is the ``fare_distance_basis``
+    app setting:
+
+      - ``"road"``      price on the road distance when present + inside the
+                        sanity band, else haversine (``"haversine_fallback"``).
+      - ``"shadow"``    always bill haversine (no money change), but the caller
+                        still fetches the road distance to log the delta — used
+                        to de-risk the rollout before flipping to ``"road"``.
+      - ``"haversine"`` kill switch — legacy straight-line behaviour.
+
+    basis is one of: ``"road_route"``, ``"haversine_fallback"``, ``"haversine"``.
+    """
+    hv = round(float(haversine_km), 3)
+    if mode == "road" and _road_distance_plausible(hv, road_km):
+        return round(float(road_km), 3), "road_route"
+    if mode == "road":
+        # Road distance unavailable or implausible — bill haversine, but flag it
+        # so reconciliation/ops can see the road route was missing for this ride.
+        return hv, "haversine_fallback"
+    # "shadow" and "haversine" both bill on haversine (shadow logs the delta
+    # separately in the caller). Unknown modes degrade to the safe legacy path.
+    return hv, "haversine"
+
+
+def resolve_booking_distance(haversine_km: float, token_payload: Optional[dict]) -> tuple:
+    """Distance/duration/basis a booking should charge, honoring the token.
+
+    /estimate signs the quoted road distance into the estimate token (``dk``,
+    with basis ``db``). When that token comes back on /rides, the booking
+    charges *that exact distance* — matching what the rider was shown — instead
+    of re-deriving straight-line haversine (the bug that billed 0.7 km for a
+    1.8 km road route). Duration is recomputed from the chosen distance with the
+    same city-speed model /estimate uses, so the quoted and charged time_fare
+    agree. Falls back to haversine when the token has no distance (older
+    clients, no token, or an estimate that itself fell back to haversine).
+
+    Returns ``(distance_km, duration_minutes, distance_basis)``.
+    """
+    hv = round(float(haversine_km), 3)
+    dk = (token_payload or {}).get("dk")
+    if dk is not None and float(dk) > 0:
+        km = round(float(dk), 3)
+        basis = str((token_payload or {}).get("db") or "road_route")
+        return km, int(km / 30 * 60) + 5, basis
+    return hv, int(hv / 30 * 60) + 5, "haversine"
+
+
+# Below this booked distance a ride is more likely a wrong dropoff coordinate
+# than a real hop (the incident booked 0.7 km for a 1.8 km road route).
+MIN_PLAUSIBLE_BOOKED_KM = 0.3
+
+
+def booked_distance_suspect_reason(
+    distance_km: float, distance_basis: str, *, floor_km: float = MIN_PLAUSIBLE_BOOKED_KM
+) -> Optional[str]:
+    """Why a booked distance looks suspect, or None. Detection only — never blocks.
+
+    ``"below_floor"``      implausibly short (likely a bad dropoff coordinate).
+    ``"road_route_unavailable"``  the road route couldn't be fetched, so the
+                           fare fell back to straight-line and may undercharge.
+    """
+    try:
+        if float(distance_km) < floor_km:
+            return "below_floor"
+    except (TypeError, ValueError):
+        return None
+    if distance_basis == "haversine_fallback":
+        return "road_route_unavailable"
+    return None
 
 
 async def _get_active_service_area_for_point(
@@ -186,13 +330,15 @@ def _round(v: Decimal) -> Decimal:
     return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
 
 
-def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
-    """Recalculate distance, duration, and fare after a stop mutation.
+async def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
+    """Recalculate distance, duration, fare, taxes, and earnings after a stop mutation.
 
     Derives per-km and per-minute rates from the values already stored on the
     ride row (distance_fare / (distance_km * surge) and time_fare / (duration *
-    surge)), then applies them to the new multi-leg distance.  Returns a dict
-    suitable for merging into a $set update.
+    surge)), then applies them to the new multi-leg distance.  Recomputes area
+    fees, taxes, grand_total, driver/admin earnings, and refreshes the
+    fare_breakdown_snapshot so settlement charges exactly what the rider sees.
+    Returns a dict suitable for merging into a $set update.
     """
     # Multi-leg distance pickup → stops → dropoff (shared with /rides/estimate).
     new_distance_km = multi_leg_distance(
@@ -213,18 +359,49 @@ def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
 
     new_distance_fare = _round(per_km_effective * _d(new_distance_km) * surge)
     new_time_fare = _round(per_min_effective * _d(new_duration_minutes) * surge)
-    new_total = _round(
-        _d(ride.get("base_fare", 0)) + new_distance_fare + new_time_fare + _d(ride.get("booking_fee", 0))
-    )
+    booking_fee = _d(ride.get("booking_fee", 0))
+    new_total = _round(_d(ride.get("base_fare", 0)) + new_distance_fare + new_time_fare + booking_fee)
 
-    return {
+    admin_earnings = _round(booking_fee + _d(ride.get("airport_fee", 0) or 0))
+    driver_earnings = _round(new_total - admin_earnings)
+
+    fees_result = await _deps.calculate_all_fees(
+        ride["pickup_lat"],
+        ride["pickup_lng"],
+        ride["dropoff_lat"],
+        ride["dropoff_lng"],
+        round(new_distance_km, 2),
+        float(new_total),
+    )
+    fees_total = _d(fees_result.get("fees_total", 0))
+    tax_amount = _d(fees_result.get("tax_amount", 0))
+    grand_total = _round(new_total + fees_total + tax_amount)
+
+    result = {
         "distance_km": round(new_distance_km, 2),
         "duration_minutes": new_duration_minutes,
         "distance_fare": _money_str(new_distance_fare),
         "time_fare": _money_str(new_time_fare),
         "estimated_fare": _money_str(new_total),
         "total_fare": _money_str(new_total),
+        "grand_total": _money_str(grand_total),
+        "tax_amount": float(_round(tax_amount)),
+        "tax_breakdown": fees_result.get("tax_breakdown", {}),
+        "area_fees_total": float(_round(fees_total)),
+        "area_fees_breakdown": fees_result.get("fees", []),
+        "driver_earnings": _money_str(driver_earnings),
+        "admin_earnings": _money_str(admin_earnings),
     }
+
+    virtual_ride = {**ride, **result}
+    snapshot_lines = _build_fare_breakdown(virtual_ride)
+    result["fare_breakdown_snapshot"] = {
+        "lines": snapshot_lines,
+        "grand_total": float(_round(grand_total)),
+        "updated_at": _deps.datetime.now(_deps.timezone.utc).isoformat(),
+    }
+
+    return result
 
 
 def _f(v: Decimal) -> float:

@@ -20,10 +20,30 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
-    from .route_segments import SegmentedRoute, segment_route
+    from .gps_filtering import (
+        MAX_TRUSTED_ACCURACY_M,
+        collapse_stationary_clusters,
+        filter_low_accuracy,
+    )
+    from .route_segments import (
+        MAX_CONTINUOUS_GAP_SECONDS,
+        MAX_PLAUSIBLE_SPEED_KPH,
+        SegmentedRoute,
+        segment_route,
+    )
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
-    from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
+    from utils.gps_filtering import (  # type: ignore
+        MAX_TRUSTED_ACCURACY_M,
+        collapse_stationary_clusters,
+        filter_low_accuracy,
+    )
+    from utils.route_segments import (  # type: ignore
+        MAX_CONTINUOUS_GAP_SECONDS,
+        MAX_PLAUSIBLE_SPEED_KPH,
+        SegmentedRoute,
+        segment_route,
+    )
 
 
 PHASE_NAMES = ("phase_1", "phase_2", "phase_3")
@@ -321,3 +341,271 @@ async def project_phase_3_route(
             ],
         }
     return RouteProjection(report, geojson)
+
+
+def _haversine_km(points: list[Dict[str, Any]]) -> float:
+    """Time-ordered raw haversine sum over a point list (km)."""
+    total = 0.0
+    for left, right in zip(points, points[1:], strict=False):
+        try:
+            total += calculate_distance(
+                float(left["lat"]), float(left["lng"]), float(right["lat"]), float(right["lng"])
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return round(total, 3)
+
+
+def _accuracy_histogram(points: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """p50/p90/max reported accuracy and how many fixes exceed the trust gate."""
+    values: list[float] = []
+    null_count = 0
+    for point in points:
+        raw = point.get("accuracy")
+        if raw is None:
+            null_count += 1
+            continue
+        try:
+            values.append(float(raw))
+        except (TypeError, ValueError):
+            null_count += 1
+    if not values:
+        return {"count": 0, "null_count": null_count, "p50_m": None, "p90_m": None, "max_m": None, "over_gate_count": 0}
+    values.sort()
+
+    def _pct(q: float) -> float:
+        return round(values[min(len(values) - 1, int(q * len(values)))], 1)
+
+    return {
+        "count": len(values),
+        "null_count": null_count,
+        "p50_m": _pct(0.5),
+        "p90_m": _pct(0.9),
+        "max_m": round(values[-1], 1),
+        "over_gate_count": sum(1 for v in values if v > MAX_TRUSTED_ACCURACY_M),
+        "accuracy_gate_m": MAX_TRUSTED_ACCURACY_M,
+    }
+
+
+def _phase3_raw_points(ride: Dict[str, Any], points: Iterable[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """All in-window Phase 3 fixes, time-ordered (pre-rejection)."""
+    requested_at, started_at, completed_at = _boundaries(ride)
+    bucket: list[tuple[datetime, Dict[str, Any]]] = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        captured_at = parse_iso_utc(point.get("captured_at") or point.get("timestamp"))
+        if captured_at is None:
+            continue
+        if _phase_for(captured_at, requested_at, started_at, completed_at) == "phase_3":
+            bucket.append((captured_at, point))
+    bucket.sort(key=lambda item: item[0])
+    return [point for _, point in bucket]
+
+
+def _gap_timeline(
+    phase3_sorted: list[Dict[str, Any]], gap_events: Iterable[Dict[str, Any]] | None
+) -> list[Dict[str, Any]]:
+    """Dead zones from breadcrumb deltas union recorded gap events (no coordinates)."""
+    gaps: list[Dict[str, Any]] = []
+    for left, right in zip(phase3_sorted, phase3_sorted[1:], strict=False):
+        t_left = parse_iso_utc(left.get("captured_at") or left.get("timestamp"))
+        t_right = parse_iso_utc(right.get("captured_at") or right.get("timestamp"))
+        if t_left is None or t_right is None:
+            continue
+        seconds = (t_right - t_left).total_seconds()
+        if seconds > MAX_CONTINUOUS_GAP_SECONDS:
+            gaps.append(
+                {
+                    "from": t_left.isoformat(),
+                    "to": t_right.isoformat(),
+                    "gap_seconds": int(seconds),
+                    "source": "breadcrumb_delta",
+                }
+            )
+    for event in gap_events or []:
+        if not isinstance(event, dict):
+            continue
+        started = event.get("gap_started_at") or event.get("started_at") or event.get("opened_at")
+        resolved = event.get("gap_resolved_at") or event.get("resolved_at") or event.get("closed_at")
+        gaps.append(
+            {
+                "from": started,
+                "to": resolved,
+                "gap_seconds": event.get("gap_seconds") or event.get("duration_seconds"),
+                "source": "gap_event",
+                "resolved": resolved is not None,
+            }
+        )
+    return gaps
+
+
+def _implied_kmh(prev: Dict[str, Any], curr: Dict[str, Any]) -> tuple[float, float | None, float | None]:
+    """Return ``(jump_metres, elapsed_seconds, implied_kmh)`` between two fixes.
+
+    ``elapsed``/``implied_kmh`` are None when a timestamp is missing; implied
+    speed is ``inf`` when two fixes share a timestamp but moved (a hard spike).
+    """
+    try:
+        jump_m = (
+            calculate_distance(float(prev["lat"]), float(prev["lng"]), float(curr["lat"]), float(curr["lng"])) * 1000.0
+        )
+    except (KeyError, TypeError, ValueError):
+        return 0.0, None, None
+    t_prev = parse_iso_utc(prev.get("captured_at") or prev.get("timestamp"))
+    t_curr = parse_iso_utc(curr.get("captured_at") or curr.get("timestamp"))
+    if t_prev is None or t_curr is None:
+        return jump_m, None, None
+    elapsed = (t_curr - t_prev).total_seconds()
+    if elapsed <= 0:
+        return jump_m, elapsed, (float("inf") if jump_m > 0 else 0.0)
+    return jump_m, elapsed, jump_m / elapsed * 3.6
+
+
+def build_outlier_table(
+    ordered_points: list[Dict[str, Any]],
+    *,
+    max_kmh: float = MAX_PLAUSIBLE_SPEED_KPH,
+) -> Dict[str, Any]:
+    """Per-fix trajectory + spike-outlier verdict for a time-ordered trace.
+
+    Mirrors the pipeline's despike exactly (measure against the last KEPT fix;
+    an into-jump above ``max_kmh`` is a ``spike_outlier`` iff skipping the fix
+    reconnects its neighbours below ``max_kmh``, otherwise ``outage_or_gap``),
+    so the table names precisely which fixes the route pipeline drops and why.
+    Coordinate-free: rows carry only index/time/jump/speed/verdict — never a
+    lat/lng — so the report stays PIPEDA-safe.
+    """
+    rows: list[Dict[str, Any]] = []
+    outlier_count = 0
+    if not ordered_points:
+        return {"outlier_count": 0, "max_plausible_kmh": max_kmh, "rows": rows}
+
+    def _row(index: int, point: Dict[str, Any], jump_m, elapsed, kmh, verdict) -> Dict[str, Any]:
+        return {
+            "index": index,
+            "timestamp": str(point.get("captured_at") or point.get("timestamp") or ""),
+            "jump_m": round(float(jump_m), 1) if jump_m is not None else None,
+            "elapsed_s": round(float(elapsed), 3) if elapsed is not None else None,
+            "implied_kmh": (None if kmh is None else (None if kmh == float("inf") else round(float(kmh), 1))),
+            "implied_speed_impossible": bool(kmh is not None and kmh > max_kmh),
+            "verdict": verdict,
+        }
+
+    rows.append(_row(0, ordered_points[0], 0.0, None, None, "start"))
+    anchor = ordered_points[0]
+    for index in range(1, len(ordered_points)):
+        current = ordered_points[index]
+        following = ordered_points[index + 1] if index + 1 < len(ordered_points) else None
+        jump_m, elapsed, kmh = _implied_kmh(anchor, current)
+        verdict = "ok"
+        if kmh is not None and kmh > max_kmh:
+            skip_ok = False
+            if following is not None:
+                _sj, _se, skip_kmh = _implied_kmh(anchor, following)
+                skip_ok = skip_kmh is not None and skip_kmh <= max_kmh
+            if skip_ok:
+                verdict = "spike_outlier"
+                outlier_count += 1
+            else:
+                verdict = "outage_or_gap"
+        rows.append(_row(index, current, jump_m, elapsed, kmh, verdict))
+        # Advance the anchor only past a KEPT fix — a dropped spike must not
+        # become the reference for the next fix (matches _despike).
+        if verdict != "spike_outlier":
+            anchor = current
+    return {"outlier_count": outlier_count, "max_plausible_kmh": max_kmh, "rows": rows}
+
+
+def build_incident_report(
+    ride: Dict[str, Any],
+    points: Iterable[Dict[str, Any]],
+    *,
+    gap_events: Iterable[Dict[str, Any]] | None = None,
+    recomputes: Iterable[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """A coordinate-free phase-by-phase incident report for one ride.
+
+    Composes the phase breakdown (via analyze_ride_evidence), an accuracy
+    histogram, the effect of the GPS filter (dropped / stationary-collapsed), a
+    gap timeline, and the full DISTANCE LADDER - booked / straight-line /
+    raw-GPS / filtered-GPS / settled / stored - so the divergence that produced
+    a wrong number is legible at a glance. PIPEDA-safe: no coordinates leave the
+    analysis. ``points`` may be a one-shot iterable; it is materialised once.
+    """
+    points = list(points)
+    analysis = analyze_ride_evidence(ride, points)
+
+    phase3 = _phase3_raw_points(ride, points)
+    raw_km = _haversine_km(phase3)
+    kept_accuracy, dropped_low_accuracy, null_accuracy = filter_low_accuracy(phase3)
+    filtered_points, collapsed_stationary = collapse_stationary_clusters(kept_accuracy)
+    filtered_km = _haversine_km(filtered_points)
+
+    try:
+        straight_line_km: float | None = round(
+            calculate_distance(
+                float(ride["pickup_lat"]),
+                float(ride["pickup_lng"]),
+                float(ride["dropoff_lat"]),
+                float(ride["dropoff_lng"]),
+            ),
+            3,
+        )
+    except (KeyError, TypeError, ValueError):
+        straight_line_km = None
+
+    trip_metrics = ((ride.get("ride_metrics") or {}).get("phases") or {}).get("trip_in_progress") or {}
+
+    def _f(value: Any) -> float | None:
+        try:
+            return round(float(value), 3)
+        except (TypeError, ValueError):
+            return None
+
+    distance_ladder = {
+        "booked_planned_km": _f(ride.get("planned_distance_km")),
+        "straight_line_pickup_dropoff_km": straight_line_km,
+        "raw_gps_phase3_km": raw_km,
+        "filtered_gps_phase3_km": filtered_km,
+        "metrics_actual_km": _f(trip_metrics.get("actual_distance_km")),
+        "metrics_road_snapped_km": _f(trip_metrics.get("actual_distance_km_road_snapped")),
+        "settled_distance_km": _f(ride.get("distance_km")),
+        "stored_actual_distance_km": _f(ride.get("actual_distance_km")),
+        "measured_distance_basis": trip_metrics.get("distance_basis"),
+    }
+
+    fare_summary = {
+        "total_fare": ride.get("total_fare"),
+        "planned_distance_km": _f(ride.get("planned_distance_km")),
+        "booking_distance_basis": ride.get("distance_basis"),
+    }
+
+    return {
+        **analysis.report,
+        "incident_report": True,
+        "distance_ladder": distance_ladder,
+        "accuracy_histogram_phase3": _accuracy_histogram(phase3),
+        "gps_filter_effect_phase3": {
+            "raw_point_count": len(phase3),
+            "dropped_low_accuracy": dropped_low_accuracy,
+            "null_accuracy_points": null_accuracy,
+            "collapsed_stationary": collapsed_stationary,
+            "raw_km": raw_km,
+            "filtered_km": filtered_km,
+            "filtered_delta_km": round(raw_km - filtered_km, 3),
+        },
+        "gap_timeline_phase3": _gap_timeline(phase3, gap_events),
+        "trajectory_outliers_phase3": build_outlier_table(phase3),
+        "fare_summary": fare_summary,
+        "distance_recompute_audit": [
+            {
+                "route_revision": r.get("route_revision"),
+                "previous_actual_distance_km": r.get("previous_actual_distance_km"),
+                "new_actual_distance_km": r.get("new_actual_distance_km"),
+                "trigger": r.get("trigger"),
+            }
+            for r in (recomputes or [])
+            if isinstance(r, dict)
+        ],
+    }

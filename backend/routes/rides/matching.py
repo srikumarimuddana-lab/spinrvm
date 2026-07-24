@@ -574,7 +574,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     _casc_skip_vals = await _casc_mget(_casc_skip_keys)
                     _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
                 except Exception as _casc_redis_exc:
-                    logger.debug("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
+                    logger.warning("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
                 # Fix 2: apply subscription filter to cascade pool when the service area
                 # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
                 if _sub_required and _casc_pool:
@@ -775,7 +775,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             poly = get_service_area_polygon(sa or {})
             return poly or None
         except Exception as e:
-            logger.warning("[DISPATCH] service_area polygon fetch failed: %s", e)
+            logger.error("[DISPATCH] service_area polygon fetch failed: %s", e, exc_info=True)
             return None
 
     rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(
@@ -819,7 +819,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         "reward_amount": float(q.get("reward_amount") or 0),
                     }
         except Exception as e:
-            logger.warning(f"Failed to fetch quest progress for driver {driver['id']}: {e}")
+            logger.error(f"Failed to fetch quest progress for driver {driver['id']}: {e}", exc_info=True)
 
         # Per-driver signed URL for the notification's BigPicture fare banner.
         # Bound to this ride + driver and short-lived; rendered on demand by
@@ -1280,6 +1280,18 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     try:
         current_ride = await _deps.db_supabase.get_ride(r_id)
         if current_ride and current_ride.get("status") == RideStatus.SEARCHING:
+            # WS-8 (finding 11): release the booking-time pre-auth hold
+            # so the rider's card isn't blocked for 7 days after timeout.
+            _booking_pi = current_ride.get("payment_intent_id")
+            _auth = (current_ride.get("auth_status") or "").lower()
+            if _booking_pi and _auth in ("authorized", "fare_only"):
+                try:
+                    _released = await _deps.cancel_authorization(ride_id=r_id, payment_intent_id=_booking_pi)
+                    if _released:
+                        logger.info("[AUTO-CANCEL] released pre-auth hold ride_id=%s pi=%s", r_id, _booking_pi)
+                except Exception as _rel_exc:
+                    logger.error("[AUTO-CANCEL] pre-auth release failed ride_id=%s: %s", r_id, _rel_exc, exc_info=True)
+
             now = datetime.now(timezone.utc)
             base_update = {
                 "status": RideStatus.CANCELLED,
@@ -1287,6 +1299,8 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 "cancellation_reason": "No nearby drivers found. Please try again.",
                 "updated_at": now,
             }
+            if _booking_pi and _auth in ("authorized", "fare_only"):
+                base_update["auth_status"] = "released"
             # Migration 38 adds cancelled_by / cancellation_type so the
             # admin panel can filter "No Driver Found" separately. Fall
             # back to base_update on PGRST204 ("column does not exist")
@@ -1302,7 +1316,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     },
                 )
             except Exception as _col_exc:
-                logger.warning(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
+                logger.error(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal", exc_info=True)
                 await _deps.db_supabase.update_ride(r_id, base_update)
             await _deps.manager.send_personal_message(
                 {

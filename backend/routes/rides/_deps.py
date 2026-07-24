@@ -188,11 +188,16 @@ try:
         settle_corporate,
         settle_wallet,
     )
-    from ...utils.stripe_charge import authorize_ride, charge_ancillary_fee, verify_authorization
+    from ...utils.stripe_charge import authorize_ride, cancel_authorization, charge_ancillary_fee, verify_authorization
 except ImportError:
     from services.cancellation_service import calculate_cancellation_fee, pay_driver_cancellation_fee  # type: ignore
     from services.payment_service import send_ride_receipt, settle_card, settle_corporate, settle_wallet  # type: ignore
-    from utils.stripe_charge import authorize_ride, charge_ancillary_fee, verify_authorization  # type: ignore
+    from utils.stripe_charge import (  # type: ignore
+        authorize_ride,
+        cancel_authorization,
+        charge_ancillary_fee,
+        verify_authorization,
+    )
 
 db = db_supabase  # legacy alias
 

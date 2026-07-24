@@ -151,6 +151,56 @@ async def _get_route_integrity_mode() -> str:
     return mode
 
 
+async def _get_gps_distance_filter_mode() -> str:
+    """Read the GPS distance-filter rollout mode (off | shadow | on).
+
+    Unlike route-integrity, a read failure defaults to "off" (legacy, unfiltered)
+    rather than blocking completion: filtering never weakens a safety guard, and
+    shadow/on only refine the *measured* distance — a settings blip must not stop
+    a driver ending their trip. Default when unset is "shadow" so the change is
+    observed on real traffic before it bills.
+    """
+    try:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings()
+    except Exception:
+        logger.error("completion gps-filter configuration read failed; defaulting to off", exc_info=True)
+        return "off"
+    mode = str((settings or {}).get("gps_distance_filter_mode", "shadow")).lower()
+    if mode not in {"off", "shadow", "on"}:
+        logger.warning("gps_distance_filter_mode invalid (%s); defaulting to off", mode)
+        return "off"
+    return mode
+
+
+def _trip_window_compression(
+    quoted_minutes: int,
+    started_at: Optional[datetime],
+    completed_at: Optional[datetime],
+    *,
+    threshold: float = 0.4,
+) -> Optional[Dict[str, Any]]:
+    """Details dict when the in_progress window is far shorter than quoted, else None.
+
+    A window below ``threshold`` × the quoted duration is the incident's shape
+    (late Start-Trip tap or lost tracking). Pure — no I/O; the caller records the
+    detection signal.
+    """
+    if quoted_minutes <= 0 or started_at is None or completed_at is None:
+        return None
+    window_min = (completed_at - started_at).total_seconds() / 60.0
+    if window_min < 0 or window_min >= threshold * quoted_minutes:
+        return None
+    return {
+        "quoted_duration_minutes": int(quoted_minutes),
+        "actual_window_minutes": round(window_min, 2),
+        "ratio": round(window_min / quoted_minutes, 3),
+    }
+
+
 def _completion_fix_rejection(fix: CompletionFix, now: datetime) -> str | None:
     """Return an auditable rejection code for a non-authoritative final fix."""
     captured_at = parse_iso_utc(fix.captured_at)
@@ -341,11 +391,13 @@ async def complete_ride(
     route_geometry_error: Optional[str] = None
 
     try:
+        gps_filter_mode = await _get_gps_distance_filter_mode()
         all_breadcrumbs = await load_ride_breadcrumbs(ride_id)
         distances = await compute_trip_distances(
             all_breadcrumbs,
             ride_id=ride_id,
             planned_distance=planned_distance,
+            filter_mode=gps_filter_mode,
         )
         actual_distance_km = distances.actual_distance_km
         actual_distance_km_haversine = distances.actual_distance_km_haversine
@@ -768,6 +820,26 @@ async def complete_ride(
     )
     # End the rider's live activity on trip completion.
     spawn(send_live_activity_update(completed_ride or {"id": ride_id, "status": RideStatus.COMPLETED}, EVENT_END))
+
+    # Milestone sanity (P2.5.2): a trip whose in_progress window is far shorter
+    # than the quoted duration signals a late "Start Trip" tap or lost tracking —
+    # the shape that under-reported the incident (4-minute window on a ~8-minute
+    # ride). Flag it (detection only; never touches fare or distance) so ops and
+    # the reconciliation job can see it.
+    try:
+        _compression = _trip_window_compression(
+            int(ride.get("duration_minutes") or 0),
+            parse_iso_utc(ride.get("ride_started_at")),
+            update_fields.get("ride_completed_at"),
+        )
+        if _compression is not None:
+            try:
+                from ...utils.distance_integrity import record_integrity_event
+            except ImportError:
+                from utils.distance_integrity import record_integrity_event  # type: ignore
+            spawn(record_integrity_event(ride_id, "trip_window_compressed", _compression))
+    except Exception:
+        logger.error("complete_ride: milestone sanity check failed for ride %s", ride_id, exc_info=True)
     # Keep the specific ``ride_completed`` event on admin too for dashboards
     # that switch directly on the event name rather than status.
     try:

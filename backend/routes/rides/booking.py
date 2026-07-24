@@ -46,6 +46,8 @@ from ._shared import (  # noqa: F401
     _is_corporate_paid,
     _round,
     _sum_fare_breakdown,
+    booked_distance_suspect_reason,
+    resolve_booking_distance,
 )
 
 router = APIRouter()
@@ -418,20 +420,28 @@ async def create_ride(
             message_key=ErrorKeys.PAYMENT_UNPAID_RIDE_BLOCK,
         )
 
-    # Charge the multi-leg route (pickup → stops → dropoff) so the booked fare
-    # matches the multi-stop quote shown at /rides/estimate.
-    distance_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
+    # Straight-line haversine through any stops. This is only the FALLBACK: when
+    # the rider sends back the estimate_token (below) it carries the quoted road
+    # distance, and the booking charges that instead so the booked fare matches
+    # the road-route quote shown at /rides/estimate rather than under-billing on
+    # crow-flies (0.7 km vs 1.8 km in the reported incident).
+    haversine_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
+    distance_km = round(haversine_km, 3)
     duration_minutes = int(distance_km / 30 * 60) + 5
+    distance_basis = "haversine"  # overridden from the estimate token when present
 
     # Fetch service_areas ONCE for this request and share across:
     # (1) fare resolution, (2) airport-fee lookup, (3) area-fees/taxes,
     # (4) service_area_id resolution. Previously each of these hit the
     # table independently — 3-4 full scans per POST /rides.
-    all_areas = []
     try:
         all_areas = await _deps.db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
     except Exception as e:
         logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify service area. Please try again.",
+        ) from e
 
     # Resolve the pickup service area once and pass the match downstream.
     matched_area = await _get_active_service_area_for_point(
@@ -561,6 +571,15 @@ async def create_ride(
                 f"Surge locked from estimate_token for rider={current_user['id']} "
                 f"vt={body.vehicle_type_id}: {float(surge)} (current was {float(current_surge)})"
             )
+            # Charge the quoted road distance the rider was shown, not a
+            # re-derived haversine. Duration recomputed from it with the same
+            # model /estimate used, so quoted and charged time_fare agree.
+            distance_km, duration_minutes, distance_basis = resolve_booking_distance(haversine_km, payload)
+            if distance_basis != "haversine":
+                logger.info(
+                    f"Distance locked from estimate_token for rider={current_user['id']}: "
+                    f"{distance_km}km basis={distance_basis} (haversine was {round(haversine_km, 3)}km)"
+                )
         except EstimateTokenError as e:
             logger.warning(
                 f"estimate_token rejected ({e}); falling back to current surge "
@@ -614,7 +633,6 @@ async def create_ride(
     admin_earnings = fb.admin_earnings
 
     # Calculate area fees + taxes (reuses all_areas + pre-resolved match)
-    fees_result = {}
     try:
         fees_result = await _deps.calculate_all_fees(
             body.pickup_lat,
@@ -628,6 +646,10 @@ async def create_ride(
         )
     except Exception as e:
         logger.error(f"Failed to calculate area fees: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to calculate fees and taxes. Please try again.",
+        ) from e
 
     area_fees_total = fees_result.get("fees_total", 0)
     tax_amount = fees_result.get("tax_amount", 0)
@@ -886,6 +908,34 @@ async def create_ride(
         # created this ride — return it instead of double-charging.
         return fresh_ride
 
+    # Booking distance sanity (P2.1b): a booked distance below the plausible
+    # floor (likely a wrong dropoff coordinate — the incident's 0.7 km) or a
+    # road route we couldn't fetch (haversine fallback, so possibly undercharged)
+    # is worth flagging for ops + the reconciliation job. Detection only — the
+    # booking already succeeded and short trips are legitimate.
+    try:
+        _suspect_reason = booked_distance_suspect_reason(distance_km, distance_basis)
+        if _suspect_reason and fresh_ride.get("id"):
+            try:
+                from ...utils.distance_integrity import record_integrity_event
+            except ImportError:
+                from utils.distance_integrity import record_integrity_event  # type: ignore
+            _deps.spawn(
+                record_integrity_event(
+                    fresh_ride["id"],
+                    "booked_distance_suspect",
+                    {
+                        "reason": _suspect_reason,
+                        "booked_km": round(float(distance_km), 3),
+                        "haversine_km": round(float(haversine_km), 3),
+                        "distance_basis": distance_basis,
+                    },
+                )
+            )
+            _deps._metric_inc("spinr_rides_booked_distance_suspect_total", {"reason": _suspect_reason})
+    except Exception:
+        logger.error("booking distance sanity check failed for ride %s", fresh_ride.get("id"), exc_info=True)
+
     # ── Apply promo code if provided ──
     if body.promo_code:
         try:
@@ -989,7 +1039,7 @@ async def create_ride(
         )
         fresh_ride["fare_breakdown_snapshot"] = fare_snapshot
     except Exception as snap_err:
-        logger.warning(f"create_ride: fare snapshot save failed: {snap_err}")
+        logger.error(f"create_ride: fare snapshot save failed: {snap_err}", exc_info=True)
 
     # ── Route snapshot at creation ──
     # Generate a PNG map of the planned route and upload to Supabase

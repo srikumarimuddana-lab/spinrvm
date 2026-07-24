@@ -58,6 +58,17 @@ async def cancel_ride(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
+    # Ownership guard (findings 5/6/7): a driver may only cancel the ride they
+    # are assigned to. Without this, any authenticated driver could cancel any
+    # ride by id — and worse, the period-1 transition below (line ~132) would
+    # be recorded against the *attacker* while the real driver's period-2 row
+    # is left open forever, corrupting the SGI insurance audit trail. A ride in
+    # `searching` has no assigned driver (driver_id is None), so a driver-side
+    # cancel of it is never legitimate either. Mirrors mark_rider_noshow /
+    # rate_rider in this same file.
+    if ride.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Not your assigned ride")
+
     if ride.get("status") in (RideStatus.IN_PROGRESS, RideStatus.COMPLETED):
         raise RideStateError(f"Cannot cancel a ride in state '{ride.get('status')}'")
 
@@ -76,8 +87,12 @@ async def cancel_ride(
     # trip log corrupted). Filtering on the pre-trip states matches zero rows once
     # the ride has started/ended -> 409, nothing mutated. Mirrors the rider cancel
     # path in routes/rides.py.
+    # driver_id scopes the atomic update to the assigned driver as well, so even
+    # if the in-memory ownership check above raced a reassignment the write can
+    # only ever touch this driver's own ride (findings 5/6).
     _cancel_filter = {
         "id": ride_id,
+        "driver_id": driver["id"],
         "status": {
             "$in": [
                 "requested",
@@ -117,6 +132,22 @@ async def cancel_ride(
             status_code=409,
             detail="Ride can no longer be cancelled (it has started or already ended)",
         )
+
+    # WS-8 (finding 11): release the booking-time pre-auth hold so the
+    # rider's card isn't blocked for up to 7 days after a driver cancel.
+    _booking_pi = ride.get("payment_intent_id")
+    _auth = (ride.get("auth_status") or "").lower()
+    if _booking_pi and _auth in ("authorized", "fare_only"):
+        try:
+            _released = await _deps.cancel_authorization(ride_id=ride_id, payment_intent_id=_booking_pi)
+            if _released:
+                logger.info("[CANCEL] released pre-auth hold ride_id=%s pi=%s", ride_id, _booking_pi)
+                try:
+                    await db_supabase.update_ride(ride_id, {"auth_status": "released"})
+                except Exception:
+                    logger.warning("[CANCEL] auth_status=released write failed ride_id=%s", ride_id)
+        except Exception as _rel_exc:
+            logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
 
     # Make driver available again
     await db_supabase.set_driver_available(driver["id"], True)
@@ -262,32 +293,34 @@ async def mark_rider_noshow(
             if rider_id:
                 rider_wallet = await db_supabase.find_one("wallets", {"user_id": rider_id})
                 if rider_wallet:
-                    old_balance = Decimal(str(rider_wallet.get("balance", 0)))
-                    new_balance = max(old_balance - total_fee, Decimal("0"))
-                    actual_charge = old_balance - new_balance
-                    if actual_charge > 0:
-                        await db_supabase.update_one(
-                            "wallets",
-                            {"id": rider_wallet["id"]},
-                            {
-                                "balance": float(new_balance.quantize(Decimal("0.01"))),
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            },
-                        )
-                        await db_supabase.insert_one(
-                            "wallet_transactions",
-                            {
-                                "id": str(uuid.uuid4()),
-                                "wallet_id": rider_wallet["id"],
-                                "user_id": rider_id,
-                                "type": "noshow_fee",
-                                "amount": -float(actual_charge.quantize(Decimal("0.01"))),
-                                "balance_after": float(new_balance.quantize(Decimal("0.01"))),
-                                "reference_id": ride_id,
-                                "description": f"No-show fee for ride {ride_id[:8]}",
-                                "metadata": {"ride_id": ride_id},
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            },
+                    # WS-6 (finding 8): atomic locked debit. This previously read
+                    # the balance, computed max(balance - fee, 0) in Python, and
+                    # wrote it back filtered on {id} only — a top-up webhook or
+                    # another ride's fee landing in between was silently lost.
+                    # clamp_to_floor reproduces the charge-what-they-have
+                    # behaviour inside the lock, and reference_id=ride_id makes a
+                    # replayed no-show idempotent instead of double-charging.
+                    _noshow_txn = await db_supabase.wallet_apply_delta(
+                        wallet_id=rider_wallet["id"],
+                        user_id=rider_id,
+                        type_="noshow_fee",
+                        delta=-total_fee,
+                        reference_id=ride_id,
+                        description=f"No-show fee for ride {ride_id[:8]}",
+                        metadata={"ride_id": ride_id},
+                        floor=Decimal("0"),
+                        clamp_to_floor=True,
+                    )
+                    # The RPC writes the ledger row itself, using the amount it
+                    # actually took. Surface a short-collection so the gap
+                    # between fee charged and driver payout is visible.
+                    _charged = abs(Decimal(str(_noshow_txn.get("applied_delta") or 0)))
+                    if _charged < total_fee:
+                        logger.info(
+                            "[NOSHOW] partial no-show fee collected ride_id=%s charged=%s of=%s",
+                            ride_id,
+                            _charged,
+                            total_fee,
                         )
 
     # Pay driver

@@ -284,3 +284,95 @@ def test_49_minute_fixture_keeps_two_long_gaps_and_a_5km_jump_separate():
     assert len(flattened) == len(points)
     assert {(point["lat"], point["lng"]) for point in flattened} == {(point["lat"], point["lng"]) for point in points}
     assert segmented.quality.max_gap_seconds == 26 * 60
+
+
+# --- Low-accuracy rejection + gap-aware coverage (P1.3) -----------------------
+
+def test_low_accuracy_points_rejected():
+    segmented = segment_route(
+        [
+            _point(0, sequence=0, accuracy=8),
+            _point(20, sequence=1, accuracy=80),   # too imprecise → rejected
+            _point(40, sequence=2, accuracy=120),  # too imprecise → rejected
+            _point(60, sequence=3, accuracy=12),
+        ],
+        _lifecycle(),
+        None,
+    )
+    reasons = [r.reason for r in segmented.rejected_points]
+    assert reasons.count("low_accuracy") == 2
+    assert segmented.quality.point_count == 2  # only the two precise fixes remain
+
+
+def test_missing_accuracy_is_kept():
+    pts = [
+        {"recording_session_id": "s", "sequence_number": 0, "lat": 50.445, "lng": -104.618,
+         "captured_at": BASE_TIME.isoformat()},
+        {"recording_session_id": "s", "sequence_number": 1, "lat": 50.4451, "lng": -104.618,
+         "captured_at": (BASE_TIME + timedelta(seconds=30)).isoformat()},
+    ]
+    segmented = segment_route(pts, _lifecycle(), None)
+    assert segmented.quality.rejected_point_count == 0
+    assert segmented.quality.point_count == 2
+
+
+def test_gap_aware_coverage_discounts_mid_trip_dead_zone():
+    # Two fixes near the start, then a long silence, then two near the end.
+    # First→last span covers the whole trip (span_coverage ~1.0), but a ~200 s
+    # internal dead zone must drop the gap-aware coverage well below that.
+    pts = [
+        _point(0, sequence=0),
+        _point(20, sequence=1),
+        _point(240, sequence=2),   # 220 s gap — the missing middle
+        _point(260, sequence=3),
+    ]
+    segmented = segment_route(pts, _lifecycle(completed_seconds=260), None)
+    q = segmented.quality
+    assert q.span_coverage_ratio == 1.0                 # fixes at both ends
+    assert q.coverage_ratio < 0.3                       # but the middle is gone
+    assert q.coverage_ratio < q.span_coverage_ratio
+
+
+def test_continuous_trace_coverage_matches_span():
+    # No gap beyond the 60 s threshold → gap-aware equals span.
+    pts = [_point(i * 30, sequence=i) for i in range(5)]  # 0,30,60,90,120
+    segmented = segment_route(pts, _lifecycle(completed_seconds=120), None)
+    q = segmented.quality
+    assert q.coverage_ratio == q.span_coverage_ratio == 1.0
+
+
+# --- Spike despike (stale/duplicate fix "going back") -------------------------
+
+def test_isolated_spike_is_dropped_not_drawn():
+    # A moves forward; a stale fix then jumps ~1.3 km BACK in 0.3 s (impossible),
+    # then the trace continues plausibly from A. The spike must be dropped so it
+    # never becomes a drawn vertex, leaving one continuous segment.
+    pts = [
+        _point(0, sequence=0, lat=50.4100, lng=-104.6500),
+        {  # the spike — 0.3 s later, ~1.3 km away, back toward the start
+            "recording_session_id": "session-a", "sequence_number": 1,
+            "captured_at": (BASE_TIME + timedelta(seconds=0.3)).isoformat(),
+            "lat": 50.4200, "lng": -104.6600, "accuracy": 10,
+        },
+        _point(12, sequence=2, lat=50.4101, lng=-104.6499),
+        _point(24, sequence=3, lat=50.4102, lng=-104.6498),
+    ]
+    segmented = segment_route(pts, _lifecycle(completed_seconds=30), None)
+    reasons = [r.reason for r in segmented.rejected_points]
+    assert "spike_outlier" in reasons
+    drawn = [(p["lat"], p["lng"]) for s in segmented.observed_segments for p in s.points]
+    assert (50.4200, -104.6600) not in drawn          # spike never drawn
+    assert len(segmented.observed_segments) == 1        # one continuous route
+    assert [len(s.points) for s in segmented.observed_segments] == [3]
+
+
+def test_sustained_teleport_is_not_despiked():
+    # Both sides impossible (a real outage/teleport, not a there-and-back spike)
+    # → left for the boundary logic, not dropped.
+    pts = [
+        _point(0, sequence=0, lat=50.4100, lng=-104.6500),
+        _point(1, sequence=1, lat=50.5000, lng=-104.7000),   # far jump
+        _point(2, sequence=2, lat=50.5001, lng=-104.7001),   # stays there
+    ]
+    segmented = segment_route(pts, _lifecycle(completed_seconds=30), None)
+    assert "spike_outlier" not in [r.reason for r in segmented.rejected_points]

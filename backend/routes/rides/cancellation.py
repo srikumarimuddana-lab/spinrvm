@@ -103,6 +103,20 @@ async def cancel_ride_rider(
 
     driver_id = ride.get("driver_id")
 
+    # WS-8 (finding 11): release the booking-time pre-auth hold so the
+    # rider's card isn't blocked for up to 7 days. Must happen BEFORE
+    # we overwrite any payment fields. Best-effort: if the hold is already
+    # captured/expired, cancel_authorization returns False and we carry on.
+    _booking_pi = ride.get("payment_intent_id")
+    _auth = (ride.get("auth_status") or "").lower()
+    if _booking_pi and _auth in ("authorized", "fare_only"):
+        try:
+            _released = await _deps.cancel_authorization(ride_id=ride_id, payment_intent_id=_booking_pi)
+            if _released:
+                logger.info("[CANCEL] released pre-auth hold ride_id=%s pi=%s", ride_id, _booking_pi)
+        except Exception as _rel_exc:
+            logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
+
     # The cancel is already persisted by the atomic claim above, so the
     # assigned driver MUST be released, transitioned back to Period 1, and
     # notified regardless of what happens while computing or charging the fee.
@@ -264,11 +278,16 @@ async def cancel_ride_rider(
         "cancellation_fee_driver": _f(charged_driver),
         "updated_at": _now,
     }
+    # WS-8: mark the booking-time hold as released so reconcilers and the
+    # preauth_capture sweeper skip this ride.
+    if _booking_pi and _auth in ("authorized", "fare_only"):
+        _base_update["auth_status"] = "released"
     if cancel_fee_charge_attempted:
-        # Overwrite both together, even payment_intent_id -> None on a decline —
-        # never leave a stale booking-time hold's PI paired with a fresh status.
+        # WS-8: store the fee PI in its own column (migration 251) instead
+        # of overwriting payment_intent_id — preserving the booking-time PI
+        # for audit and preventing payment_retry from chasing the wrong PI.
         _base_update["payment_status"] = cancel_fee_payment_status
-        _base_update["payment_intent_id"] = cancel_fee_payment_intent_id
+        _base_update["cancel_fee_payment_intent_id"] = cancel_fee_payment_intent_id
     # Migration 38 — attribution. Fall back to the legacy payload on
     # PGRST204 so the rider's cancel button never 503s if the column
     # isn't in prod yet.

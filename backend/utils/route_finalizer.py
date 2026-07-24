@@ -676,6 +676,25 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         drawable = _has_drawable_route(display_segments)
         processing_status = _final_status(segmented, matched_route, drawable, reconstructed)
         quality = _quality_projection(segmented, matched_route, drawable, reconstructed)
+        # Corroborate the gap-aware coverage with the active-trip gap monitor's
+        # record: how many dead zones opened during the ride and their total
+        # duration. Timestamp-only rows (no coordinates); best-effort so a read
+        # failure never fails finalization.
+        try:
+            gap_rows = await db_supabase.get_rows(
+                "ride_location_gap_events",
+                {"ride_id": ride_id},
+                limit=200,
+                columns="gap_seconds",
+            )
+            if gap_rows:
+                quality = {
+                    **quality,
+                    "gap_event_count": len(gap_rows),
+                    "gap_event_seconds": sum(int(g.get("gap_seconds") or 0) for g in gap_rows),
+                }
+        except Exception:
+            logger.debug("gap-event read for route_quality failed for ride_id=%s", ride_id, exc_info=True)
         revision = int((route_row or {}).get("route_revision") or 0) + 1
         now = _now()
         # NOTE: With the 4-tier gap fill in route_reconstruction.py, failed_gaps

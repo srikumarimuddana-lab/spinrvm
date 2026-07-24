@@ -328,7 +328,15 @@ def test_finalizer_persists_reconstructed_sections_and_distance_quality(monkeypa
     assert route_update["route_quality"]["matched_distance_km"] == 0.75
     reconstruct.assert_awaited_once()
     assert reconstruct.await_args.args[2] == {"lat": 50.45, "lng": -104.62}
-    recompute.assert_awaited_once_with("ride_1", ride, 4, 0.75)
+    # The finalizer now passes the whole reconstruction dict + coverage to the
+    # recompute (which resolves observed + routed-connector distance itself),
+    # not the observed-only float it used to.
+    recompute.assert_awaited_once()
+    _rc_args, _rc_kwargs = recompute.await_args
+    assert _rc_args[0] == "ride_1"
+    assert _rc_args[2] == 4
+    assert _rc_kwargs["reconstructed"] == reconstructed
+    assert isinstance(_rc_kwargs["coverage"], float)
 
 
 def _failed_reconstruction() -> dict:
@@ -458,7 +466,19 @@ def test_recomputed_statistics_use_reconstructed_distance_without_touching_fare(
     monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update_one)
     monkeypatch.setattr(route_finalizer.db_supabase, "insert_one", insert_one)
 
-    _run(route_finalizer._recompute_ride_distance_stats("ride_1", ride, 4, 1.55))
+    # New signature: pass the reconstruction dict + coverage; the resolver
+    # returns observed + routed-connector distance (1.55 here) as the measured
+    # value. No pickup/dropoff on this fixture → straight-line floor is skipped.
+    _reconstructed = {
+        "observed_distance_km": 1.55,
+        "routed_connector_distance_km": 0.0,
+        "straight_connector_distance_km": 0.0,
+    }
+    _run(
+        route_finalizer._recompute_ride_distance_stats(
+            "ride_1", ride, 4, reconstructed=_reconstructed, coverage=0.9
+        )
+    )
 
     ride_update = next(payload for table, _filters, payload in updates if table == "rides")
     assert ride_update["actual_distance_km"] == 1.55

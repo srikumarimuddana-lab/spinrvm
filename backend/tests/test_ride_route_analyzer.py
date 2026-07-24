@@ -304,3 +304,37 @@ def test_build_incident_report_includes_recompute_audit_and_gaps():
     assert any(g["source"] == "breadcrumb_delta" and g["gap_seconds"] > 100 for g in gaps)
     assert report["distance_recompute_audit"][0]["trigger"] == "reconstructed_distance"
     assert report["distance_recompute_audit"][0]["new_actual_distance_km"] == 1.8
+
+
+# --- Outlier table (per-fix spike detection) ---------------------------------
+
+def test_build_outlier_table_flags_spikes_and_matches_despike():
+    from backend.utils.ride_route_analyzer import build_outlier_table
+
+    # forward, then a stale fix jumping ~1.3 km BACK in 0.3 s, then forward again.
+    ordered = [
+        {"lat": 50.4100, "lng": -104.6500, "timestamp": (BASE + timedelta(seconds=0)).isoformat()},
+        {"lat": 50.4200, "lng": -104.6600, "timestamp": (BASE + timedelta(seconds=0.3)).isoformat()},  # spike
+        {"lat": 50.4101, "lng": -104.6499, "timestamp": (BASE + timedelta(seconds=12)).isoformat()},
+        {"lat": 50.4102, "lng": -104.6498, "timestamp": (BASE + timedelta(seconds=24)).isoformat()},
+    ]
+    table = build_outlier_table(ordered)
+    assert table["outlier_count"] == 1
+    verdicts = [r["verdict"] for r in table["rows"]]
+    assert verdicts == ["start", "spike_outlier", "ok", "ok"]
+    spike = table["rows"][1]
+    assert spike["implied_speed_impossible"] is True
+    # coordinate-free: no lat/lng leaks into the table rows
+    assert "lat" not in spike and "lng" not in spike
+
+
+def test_build_outlier_table_clean_trace_has_no_outliers():
+    from backend.utils.ride_route_analyzer import build_outlier_table
+
+    ordered = [
+        {"lat": 50.4100 + i * 0.0005, "lng": -104.6500, "timestamp": (BASE + timedelta(seconds=i * 5)).isoformat()}
+        for i in range(6)
+    ]
+    table = build_outlier_table(ordered)
+    assert table["outlier_count"] == 0
+    assert all(r["verdict"] in ("start", "ok") for r in table["rows"])

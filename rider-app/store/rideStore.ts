@@ -3,6 +3,7 @@ import { Linking } from 'react-native';
 import { showToast } from './toastStore';
 import api, { SpinrApiError, hasAuthToken, getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
+import { dropoffLikelyMisresolved } from '@shared/utils/bookingDistanceGuard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
@@ -629,6 +630,14 @@ export const useRideStore = create<RideState>((set, get) => ({
     const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav, quietMode, riderNotes, routePolyline } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
+    }
+    // Guard a mis-resolved dropoff (a stale/wrong saved-place coordinate that
+    // lands on the pickup while the address differs) BEFORE creating a ride
+    // priced on a bogus coordinate. All booking entry points funnel here.
+    if (dropoffLikelyMisresolved(pickup, dropoff)) {
+      throw new Error(
+        "Your destination looks too close to your pickup. Please re-select it so we price the trip correctly.",
+      );
     }
     if (get().currentRide) {
       const serverCheck = await get().fetchActiveRide();

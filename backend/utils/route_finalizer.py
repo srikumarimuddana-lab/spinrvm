@@ -31,6 +31,14 @@ except ImportError:
     from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
 
+# geo_utils lives at the backend root, one level above utils — keep its import in
+# its own block so its parent-relative path can't drag the sibling imports above
+# into the except branch when this module is loaded as ``utils.route_finalizer``.
+try:
+    from ..geo_utils import calculate_distance
+except ImportError:
+    from geo_utils import calculate_distance  # type: ignore
+
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +50,16 @@ MAX_ROUTE_FINALIZER_RETRIES = 5
 # row are rewritten. Keeps idempotent replays (same evidence, new revision)
 # from churning the row and the audit table.
 DISTANCE_RECOMPUTE_EPSILON_KM = 0.05
+
+# Audit trigger label per resolved distance basis (ride_distance_recomputes.trigger
+# is free text, so no migration is needed to add these).
+_DISTANCE_RECOMPUTE_TRIGGER_BY_BASIS = {
+    "observed": "route_reconstruction",
+    "observed_legacy": "route_reconstruction",
+    "reconstructed": "reconstructed_distance",
+    "planned_estimated": "coverage_fallback",
+    "gps_measured": "late_tail_refinalization",
+}
 
 
 def _now() -> datetime:
@@ -188,8 +206,10 @@ def _quality_projection(
         else None
     )
     projected = {
+        # coverage_ratio is now gap-aware (excludes mid-trip dead zones);
+        # temporal_coverage_ratio keeps the first→last span figure.
         "coverage_ratio": quality.coverage_ratio,
-        "temporal_coverage_ratio": quality.coverage_ratio,
+        "temporal_coverage_ratio": quality.span_coverage_ratio,
         "point_count": quality.point_count,
         "segment_count": quality.segment_count,
         "rejected_point_count": quality.rejected_point_count,
@@ -403,11 +423,79 @@ async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_
         await asyncio.sleep(interval_seconds)
 
 
+def _endpoint_straight_line_km(ride: Dict[str, Any]) -> float:
+    """Crow-flies pickup→dropoff distance, the physical floor for any trip."""
+    try:
+        return calculate_distance(
+            float(ride["pickup_lat"]),
+            float(ride["pickup_lng"]),
+            float(ride["dropoff_lat"]),
+            float(ride["dropoff_lng"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+
+def resolve_measured_distance_km(
+    reconstructed: Optional[Dict[str, Any]],
+    *,
+    coverage: float,
+    planned_km: float,
+    straight_line_km: float,
+    min_coverage: float = 0.6,
+    max_straight_share: float = 0.25,
+    min_vs_straight: float = 0.8,
+) -> "tuple[float, str]":
+    """Decide the measured distance a completed ride should DISPLAY (never bill).
+
+    The old code wrote ``observed_distance_km`` (map-matched GPS only), which for
+    a trip with a mid-route dropout is just the jitter near the ends — the 2.6 km
+    that under-reported the 1.8 km incident. This weighs the evidence instead and
+    returns ``(distance_km, basis)``:
+
+      * ``observed`` — good coverage and the gaps (if any) were closed by real
+        road connectors → observed + routed-connector distance.
+      * ``reconstructed`` — coverage is poor but road connectors still bridged
+        the gaps → same value, flagged as partly inferred.
+      * ``planned_estimated`` — the gaps couldn't be routed (straight-line
+        connectors dominate) OR the candidate is physically impossible (below
+        ``min_vs_straight`` × the crow-flies endpoints distance) → keep the
+        planned/booked distance rather than publish a wrong GPS number.
+
+    Straight-line connector distance is NEVER included in the number — a blind
+    chord across an unrouted gap is not a believable road distance.
+    """
+    if not reconstructed:
+        return round(float(planned_km or 0), 3), "planned_estimated"
+
+    observed = float(reconstructed.get("observed_distance_km") or 0)
+    routed = float(reconstructed.get("routed_connector_distance_km") or 0)
+    straight = float(reconstructed.get("straight_connector_distance_km") or 0)
+    candidate = round(observed + routed, 3)
+    denom = candidate + straight
+    straight_share = (straight / denom) if denom > 0 else 0.0
+
+    # Physically-impossible floor: a measured distance far below the straight
+    # line between endpoints cannot be a real trip (2.6 km vs ~5.5 km crow-flies
+    # in the incident) — fall back to the booked estimate.
+    if straight_line_km and candidate < min_vs_straight * float(straight_line_km):
+        return round(float(planned_km or 0), 3), "planned_estimated"
+
+    if candidate > 0 and straight_share <= max_straight_share:
+        if coverage >= min_coverage:
+            return candidate, "observed"
+        return candidate, "reconstructed"
+
+    # Low coverage AND the gaps are straight-line (unrouted) — not trustworthy.
+    return round(float(planned_km or 0), 3), "planned_estimated"
+
+
 async def _recompute_ride_distance_stats(
     ride_id: str,
     ride: Dict[str, Any],
     revision: int,
-    reconstructed_distance_km: Optional[float] = None,
+    reconstructed: Optional[Dict[str, Any]] = None,
+    coverage: float = 0.0,
 ) -> None:
     """Refresh measured-distance stats on a completed ride from full evidence.
 
@@ -434,9 +522,42 @@ async def _recompute_ride_distance_stats(
     )
 
     previous_actual = float(ride.get("actual_distance_km") or 0)
-    new_actual = float(
-        reconstructed_distance_km if reconstructed_distance_km is not None else distances.actual_distance_km or 0
-    )
+
+    # One settings fetch: fare-lock plus the distance-resolution knobs.
+    fare_lock = False
+    min_coverage = 0.6
+    fallback_enabled = True
+    try:
+        _settings = (await get_app_settings()) or {}
+        fare_lock = _settings.get("fare_lock_enabled", False)
+        min_coverage = float(_settings.get("route_min_observed_coverage_ratio", 0.6))
+        fallback_enabled = bool(_settings.get("route_distance_fallback_enabled", True))
+    except Exception:
+        logger.debug("distance-resolution settings read failed during recompute; using defaults", exc_info=True)
+
+    # Decide the measured distance to DISPLAY. The reconstruction path weighs
+    # observed + routed-connector distance against coverage and the crow-flies
+    # floor; a broken trace falls back to the planned/booked distance instead of
+    # publishing a wrong GPS number (the 2.6 km-for-1.8 km symptom). Fare is
+    # never touched here. Late-tail-only recompute (no reconstruction) keeps the
+    # existing GPS-measured value.
+    if reconstructed is not None and fallback_enabled:
+        new_actual, distance_basis = resolve_measured_distance_km(
+            reconstructed,
+            coverage=coverage,
+            planned_km=planned_distance,
+            straight_line_km=_endpoint_straight_line_km(ride),
+            min_coverage=min_coverage,
+        )
+        new_actual = float(new_actual)
+    elif reconstructed is not None:
+        # Fallback disabled — legacy observed-only behaviour, flagged as such.
+        new_actual = float(reconstructed.get("observed_distance_km") or 0)
+        distance_basis = "observed_legacy"
+    else:
+        new_actual = float(distances.actual_distance_km or 0)
+        distance_basis = "gps_measured"
+
     if abs(new_actual - previous_actual) <= DISTANCE_RECOMPUTE_EPSILON_KM:
         return
 
@@ -450,11 +571,6 @@ async def _recompute_ride_distance_stats(
         "gps_points_count": distances.gps_points_count,
     }
 
-    fare_lock = False
-    try:
-        fare_lock = ((await get_app_settings()) or {}).get("fare_lock_enabled", False)
-    except Exception:
-        logger.debug("fare_lock_enabled check failed during recompute, defaulting to False", exc_info=True)
     if fare_lock:
         # Mirrors complete_ride: under fare-lock distance_km is display-only
         # (the fare stays at the booking-time estimate), so keep it in step
@@ -469,9 +585,10 @@ async def _recompute_ride_distance_stats(
     nav_phase["actual_distance_km"] = round(float(distances.pickup_to_driver_km or 0), 3)
     trip_phase = dict(phases.get("trip_in_progress") or {})
     trip_phase["actual_distance_km"] = round(new_actual, 3)
+    trip_phase["distance_basis"] = distance_basis
     if distances.actual_distance_km_haversine is not None:
         trip_phase["actual_distance_km_haversine"] = round(float(distances.actual_distance_km_haversine), 3)
-    if reconstructed_distance_km is not None:
+    if reconstructed is not None:
         trip_phase["actual_distance_km_road_snapped"] = round(new_actual, 3)
     elif distances.actual_distance_km_road is not None:
         trip_phase["actual_distance_km_road_snapped"] = round(float(distances.actual_distance_km_road), 3)
@@ -500,15 +617,16 @@ async def _recompute_ride_distance_stats(
             "new_actual_distance_km": new_actual,
             "previous_phase_distances": ride.get("phase_distances") or {},
             "new_phase_distances": phase_distances,
-            "trigger": "route_reconstruction" if reconstructed_distance_km is not None else "late_tail_refinalization",
+            "trigger": _DISTANCE_RECOMPUTE_TRIGGER_BY_BASIS.get(distance_basis, "route_reconstruction"),
         },
     )
     logger.info(
-        "ride %s measured distance recomputed at route revision %s: %.2fkm -> %.2fkm",
+        "ride %s measured distance recomputed at route revision %s: %.2fkm -> %.2fkm (basis=%s)",
         ride_id,
         revision,
         previous_actual,
         new_actual,
+        distance_basis,
     )
 
 
@@ -558,6 +676,25 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         drawable = _has_drawable_route(display_segments)
         processing_status = _final_status(segmented, matched_route, drawable, reconstructed)
         quality = _quality_projection(segmented, matched_route, drawable, reconstructed)
+        # Corroborate the gap-aware coverage with the active-trip gap monitor's
+        # record: how many dead zones opened during the ride and their total
+        # duration. Timestamp-only rows (no coordinates); best-effort so a read
+        # failure never fails finalization.
+        try:
+            gap_rows = await db_supabase.get_rows(
+                "ride_location_gap_events",
+                {"ride_id": ride_id},
+                limit=200,
+                columns="gap_seconds",
+            )
+            if gap_rows:
+                quality = {
+                    **quality,
+                    "gap_event_count": len(gap_rows),
+                    "gap_event_seconds": sum(int(g.get("gap_seconds") or 0) for g in gap_rows),
+                }
+        except Exception:
+            logger.debug("gap-event read for route_quality failed for ride_id=%s", ride_id, exc_info=True)
         revision = int((route_row or {}).get("route_revision") or 0) + 1
         now = _now()
         # NOTE: With the 4-tier gap fill in route_reconstruction.py, failed_gaps
@@ -618,7 +755,8 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                     ride_id,
                     ride,
                     revision,
-                    reconstructed.get("observed_distance_km") if reconstructed is not None else None,
+                    reconstructed=reconstructed,
+                    coverage=segmented.quality.coverage_ratio,
                 )
             except Exception:
                 logger.error(

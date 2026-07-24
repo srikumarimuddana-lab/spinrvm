@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 try:
-    from .. import db_supabase
+    from .. import db_supabase, socket_manager
     from ..settings_loader import get_app_settings
     from .datetime_utils import parse_iso_utc
     from .loop_monitor import record_heartbeat as _record_heartbeat
@@ -22,6 +22,7 @@ try:
     from .metrics import set_gauge as _metric_gauge
 except ImportError:  # pragma: no cover - supports running backend modules top-level
     import db_supabase  # type: ignore
+    import socket_manager  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
@@ -125,6 +126,49 @@ async def _open_gap_event(ride: dict, decision: GapDecision, threshold_seconds: 
     return bool(inserted)
 
 
+def location_health_payload(ride_id: str, gap_seconds: int, threshold_seconds: int) -> dict:
+    """WebSocket 'location_health' nudge asking the driver app to re-acquire GPS.
+
+    Timestamp/id only — never a coordinate. The driver app reacts by re-asserting
+    the trip location cadence and flushing its outbox, so a live tracking dropout
+    is recovered mid-trip instead of only reconstructed afterward.
+    """
+    return {
+        "type": "location_health",
+        "ride_id": str(ride_id),
+        "state": "gap",
+        "gap_seconds": int(gap_seconds),
+        "threshold_seconds": int(threshold_seconds),
+        "action": "reacquire_gps",
+    }
+
+
+async def _notify_driver_location_health(ride: dict, decision: GapDecision, threshold_seconds: int) -> None:
+    """Best-effort WS nudge to the driver when a NEW gap opens (once per gap).
+
+    Fully defensive: a nudge failure (driver lookup, WS delivery) must never
+    fail the monitor tick. The WS connection key is ``driver_{user_id}``, so the
+    drivers-table id on the ride is resolved to its user_id first (same mapping
+    the ride lifecycle uses). A killed-WS driver won't receive this — an FCM
+    data-ping fallback is a follow-up.
+    """
+    driver_id = ride.get("driver_id")
+    if not driver_id:
+        return
+    try:
+        rows = await db_supabase.get_rows("drivers", {"id": driver_id}, columns="user_id", limit=1)
+        user_id = rows[0].get("user_id") if rows else None
+        if not user_id:
+            return
+        await socket_manager.manager.send_personal_message(
+            location_health_payload(str(ride.get("id")), decision.gap_seconds, threshold_seconds),
+            f"driver_{user_id}",
+        )
+        _metric_inc("spinr_rides_gps_gap_nudge_sent_total")
+    except Exception:
+        logger.warning("location-health driver nudge failed for ride_id=%s", ride.get("id"), exc_info=True)
+
+
 async def _resolve_open_gap_event(ride_id: str, now: datetime) -> bool:
     """Close any current outage after a fresh accepted capture arrives."""
     updated = await db_supabase.update_one(
@@ -181,6 +225,9 @@ async def route_gap_monitor_tick() -> dict[str, int]:
                     decision.gap_seconds,
                     threshold_seconds,
                 )
+                # Nudge the driver app to recover the stream while the trip is
+                # still live (best-effort; never fails the tick).
+                await _notify_driver_location_health(ride, decision, threshold_seconds)
             continue
         if await _resolve_open_gap_event(str(ride_id), now):
             result["resolved"] += 1

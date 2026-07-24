@@ -124,9 +124,14 @@ export function routeQualityLabel(quality: unknown): string {
     inferred_distance_ratio?: unknown;
     failed_gaps?: unknown;
     reconstruction_status?: unknown;
+    distance_basis?: unknown;
   } | undefined;
   if (value?.reconstruction_status === 'retrying') return 'Route reconstruction in progress';
   if (value?.reconstruction_status === 'failed') return 'Route unavailable · reconstruction failed';
+  // When GPS was too incomplete to trust, the displayed distance is the booked
+  // estimate, not a measured value — say so plainly rather than implying a
+  // precise GPS figure (the honest-labeling fix for the incident).
+  if (value?.distance_basis === 'planned_estimated') return 'Distance estimated from booking · GPS incomplete';
   const observedRatio =
     typeof value?.observed_distance_ratio === 'number' ? value.observed_distance_ratio : undefined;
   const inferredRatio =

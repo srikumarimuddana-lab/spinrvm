@@ -18,6 +18,11 @@ try:
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
 
+try:
+    from .gps_filtering import MAX_TRUSTED_ACCURACY_M
+except ImportError:
+    from utils.gps_filtering import MAX_TRUSTED_ACCURACY_M  # type: ignore
+
 
 MAX_CONTINUOUS_GAP_SECONDS = 60
 MAX_CONTINUOUS_DISPLACEMENT_METERS = 300
@@ -51,6 +56,9 @@ class RouteSegmentationQuality:
     missing_tail: bool
     completion_distance_m: float | None
     completion_tolerance_m: float | None
+    # First→last observed fraction (pre-gap-aware). coverage_ratio is now the
+    # gap-aware value; this preserves the old figure for continuity.
+    span_coverage_ratio: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -149,6 +157,19 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
         if _as_coordinate(point) is None:
             rejected.append(_reject(point, "invalid_coordinate"))
             continue
+        # Drop fixes too imprecise to anchor geometry: map-matching a >50 m fix
+        # snaps it to whatever street is nearest, which is how the incident's
+        # parking-lot jitter became rendered loops. Missing/non-numeric accuracy
+        # is kept (can't prove it's bad) — same policy as gps_filtering.
+        accuracy = point.get("accuracy")
+        if accuracy is not None:
+            try:
+                accuracy_m: float | None = float(accuracy)
+            except (TypeError, ValueError):
+                accuracy_m = None
+            if accuracy_m is not None and accuracy_m > MAX_TRUSTED_ACCURACY_M:
+                rejected.append(_reject(point, "low_accuracy"))
+                continue
         identity = (session_id, sequence_number)
         if identity in identities:
             rejected.append(_reject(point, "duplicate_identity"))
@@ -184,7 +205,62 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
             item.sequence_number,
         )
     )
+    # Despike AFTER final ordering so an isolated stale/duplicate fix (e.g. a
+    # cached pickup coordinate re-sent mid-trip) is dropped rather than kept as
+    # the start vertex of the next segment — otherwise it renders as the route
+    # "going back". The offending points are still preserved in raw breadcrumbs.
+    accepted, spike_rejected = _despike(accepted)
+    rejected.extend(spike_rejected)
     return accepted, rejected
+
+
+def _transition_impossible(previous: _ParsedPoint, current: _ParsedPoint) -> bool:
+    """True when previous→current implies a physically impossible ground speed.
+
+    Mirrors the speed guard in ``_boundary_reason`` but returns a plain bool for
+    the despike pass. Legacy WebSocket-batch pairs (server receive-time, no real
+    device capture time) are exempt because their elapsed time is meaningless.
+    """
+    if previous.is_legacy and current.is_legacy:
+        return False
+    elapsed_seconds = (current.captured_at - previous.captured_at).total_seconds()
+    displacement_meters = _distance_meters(previous.point, current.point)
+    if elapsed_seconds <= 0:
+        return displacement_meters > 0
+    return (displacement_meters / elapsed_seconds * 3.6) > MAX_PLAUSIBLE_SPEED_KPH
+
+
+def _despike(ordered: List[_ParsedPoint]) -> tuple[List[_ParsedPoint], List[RejectedRoutePoint]]:
+    """Drop isolated spike fixes so they never become a drawn map vertex.
+
+    A point is an isolated spike when the transition INTO it implies an
+    impossible speed, yet skipping it reconnects its neighbours at a plausible
+    speed — the signature of a stale/duplicate GPS fix (a cached pickup
+    coordinate re-sent mid-trip, a momentary teleport-and-return). It is dropped
+    so the rendered route no longer jumps back to it. A genuine outage (both
+    sides impossible — a real teleport) is left for the segmentation boundary
+    logic, which correctly splits the trace there.
+    """
+    if len(ordered) < 3:
+        return ordered, []
+    kept: List[_ParsedPoint] = [ordered[0]]
+    dropped: List[RejectedRoutePoint] = []
+    index = 1
+    while index < len(ordered):
+        current = ordered[index]
+        following = ordered[index + 1] if index + 1 < len(ordered) else None
+        previous = kept[-1]
+        if (
+            following is not None
+            and _transition_impossible(previous, current)
+            and not _transition_impossible(previous, following)
+        ):
+            dropped.append(_reject(current.point, "spike_outlier"))
+            index += 1
+            continue
+        kept.append(current)
+        index += 1
+    return kept, dropped
 
 
 def _boundary_reason(previous: _ParsedPoint, current: _ParsedPoint) -> tuple[str | None, int]:
@@ -215,18 +291,38 @@ def _boundary_reason(previous: _ParsedPoint, current: _ParsedPoint) -> tuple[str
     return None, elapsed_seconds
 
 
-def _coverage_ratio(points: List[_ParsedPoint], lifecycle: Dict[str, Any]) -> float:
+def _coverage_ratios(points: List[_ParsedPoint], lifecycle: Dict[str, Any]) -> tuple[float, float]:
+    """Return ``(gap_aware_ratio, span_ratio)`` coverage of the trip window.
+
+    ``span_ratio`` is the historical first→last observed fraction of the trip.
+    ``gap_aware_ratio`` additionally subtracts internal dead zones longer than
+    ``MAX_CONTINUOUS_GAP_SECONDS`` — so a mid-trip tracking dropout no longer
+    reads as near-complete coverage just because fixes exist at both ends (the
+    "87% observed" that hid the incident's missing middle). Both are 0.0 when
+    the lifecycle timestamps are unusable.
+    """
     if not points:
-        return 0.0
+        return 0.0, 0.0
     started_at = parse_iso_utc(lifecycle.get("ride_started_at") or lifecycle.get("started_at"))
     completed_at = parse_iso_utc(lifecycle.get("ride_completed_at") or lifecycle.get("completed_at"))
     if started_at is None or completed_at is None or completed_at <= started_at:
-        return 0.0
+        return 0.0, 0.0
+    total_seconds = (completed_at - started_at).total_seconds()
     first = max(points[0].captured_at, started_at)
     last = min(points[-1].captured_at, completed_at)
     if last <= first:
-        return 0.0
-    return round(min(1.0, (last - first).total_seconds() / (completed_at - started_at).total_seconds()), 3)
+        return 0.0, 0.0
+    span_seconds = (last - first).total_seconds()
+    span_ratio = round(min(1.0, span_seconds / total_seconds), 3)
+    # Subtract each internal gap that exceeds the continuity threshold — the
+    # span itself already excludes lead-in/tail (first>started / last<completed).
+    covered_seconds = span_seconds
+    for prev_point, next_point in zip(points, points[1:], strict=False):
+        gap_seconds = (next_point.captured_at - prev_point.captured_at).total_seconds()
+        if gap_seconds > MAX_CONTINUOUS_GAP_SECONDS:
+            covered_seconds -= gap_seconds
+    gap_aware_ratio = round(max(0.0, min(1.0, covered_seconds / total_seconds)), 3)
+    return gap_aware_ratio, span_ratio
 
 
 def _tail_quality(
@@ -281,14 +377,16 @@ def segment_route(
         segments.append(ObservedRouteSegment(tuple(current_points), current_boundary))
 
     missing_tail, completion_distance_m, completion_tolerance = _tail_quality(ordered, lifecycle, completion_point)
+    gap_aware_coverage, span_coverage = _coverage_ratios(ordered, lifecycle)
     quality = RouteSegmentationQuality(
         point_count=len(ordered),
         segment_count=len(segments),
         rejected_point_count=len(rejected),
-        coverage_ratio=_coverage_ratio(ordered, lifecycle),
+        coverage_ratio=gap_aware_coverage,
         max_gap_seconds=max_gap_seconds,
         missing_tail=missing_tail,
         completion_distance_m=completion_distance_m,
         completion_tolerance_m=completion_tolerance,
+        span_coverage_ratio=span_coverage,
     )
     return SegmentedRoute(tuple(segments), tuple(rejected), quality)

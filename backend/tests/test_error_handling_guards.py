@@ -22,6 +22,7 @@ _CORP_POLICY_SRC = (_ROOT / "services" / "corporate_policy_service.py").read_tex
 _EARNINGS_SRC = (_ROOT / "routes" / "drivers" / "earnings.py").read_text()
 _PROFILE_SRC = (_ROOT / "routes" / "drivers" / "profile.py").read_text()
 _SUBSCRIPTIONS_SRC = (_ROOT / "routes" / "drivers" / "subscriptions.py").read_text()
+_USERS_SRC = (_ROOT / "routes" / "users.py").read_text()
 
 
 # ── CRITICAL: driver document verification must fail closed ──────────
@@ -208,3 +209,18 @@ class TestSubscriptionVerifyRaises:
 
     def test_verify_session_raises(self):
         assert _except_block_raises(_SUBSCRIPTIONS_SRC, "verify-session Stripe error")
+
+
+# ── MEDIUM: emergency contacts must not silently degrade ─────────────
+
+
+class TestEmergencyContactsFailClosed:
+    """WS-13: emergency contacts fetch/count failures must raise 503 —
+    returning empty list hides contacts the SOS feature relies on, and
+    bypassing the count check allows unlimited row creation."""
+
+    def test_get_contacts_raises(self):
+        assert _except_block_raises(_USERS_SRC, "Could not fetch emergency contacts")
+
+    def test_add_contact_count_check_raises(self):
+        assert _except_block_raises(_USERS_SRC, "Could not check emergency contact count")

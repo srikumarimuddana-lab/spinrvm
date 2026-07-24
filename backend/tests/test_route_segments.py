@@ -339,3 +339,40 @@ def test_continuous_trace_coverage_matches_span():
     segmented = segment_route(pts, _lifecycle(completed_seconds=120), None)
     q = segmented.quality
     assert q.coverage_ratio == q.span_coverage_ratio == 1.0
+
+
+# --- Spike despike (stale/duplicate fix "going back") -------------------------
+
+def test_isolated_spike_is_dropped_not_drawn():
+    # A moves forward; a stale fix then jumps ~1.3 km BACK in 0.3 s (impossible),
+    # then the trace continues plausibly from A. The spike must be dropped so it
+    # never becomes a drawn vertex, leaving one continuous segment.
+    pts = [
+        _point(0, sequence=0, lat=50.4100, lng=-104.6500),
+        {  # the spike — 0.3 s later, ~1.3 km away, back toward the start
+            "recording_session_id": "session-a", "sequence_number": 1,
+            "captured_at": (BASE_TIME + timedelta(seconds=0.3)).isoformat(),
+            "lat": 50.4200, "lng": -104.6600, "accuracy": 10,
+        },
+        _point(12, sequence=2, lat=50.4101, lng=-104.6499),
+        _point(24, sequence=3, lat=50.4102, lng=-104.6498),
+    ]
+    segmented = segment_route(pts, _lifecycle(completed_seconds=30), None)
+    reasons = [r.reason for r in segmented.rejected_points]
+    assert "spike_outlier" in reasons
+    drawn = [(p["lat"], p["lng"]) for s in segmented.observed_segments for p in s.points]
+    assert (50.4200, -104.6600) not in drawn          # spike never drawn
+    assert len(segmented.observed_segments) == 1        # one continuous route
+    assert [len(s.points) for s in segmented.observed_segments] == [3]
+
+
+def test_sustained_teleport_is_not_despiked():
+    # Both sides impossible (a real outage/teleport, not a there-and-back spike)
+    # → left for the boundary logic, not dropped.
+    pts = [
+        _point(0, sequence=0, lat=50.4100, lng=-104.6500),
+        _point(1, sequence=1, lat=50.5000, lng=-104.7000),   # far jump
+        _point(2, sequence=2, lat=50.5001, lng=-104.7001),   # stays there
+    ]
+    segmented = segment_route(pts, _lifecycle(completed_seconds=30), None)
+    assert "spike_outlier" not in [r.reason for r in segmented.rejected_points]

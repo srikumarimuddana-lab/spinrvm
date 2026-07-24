@@ -58,6 +58,17 @@ async def cancel_ride(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
+    # Ownership guard (findings 5/6/7): a driver may only cancel the ride they
+    # are assigned to. Without this, any authenticated driver could cancel any
+    # ride by id — and worse, the period-1 transition below (line ~132) would
+    # be recorded against the *attacker* while the real driver's period-2 row
+    # is left open forever, corrupting the SGI insurance audit trail. A ride in
+    # `searching` has no assigned driver (driver_id is None), so a driver-side
+    # cancel of it is never legitimate either. Mirrors mark_rider_noshow /
+    # rate_rider in this same file.
+    if ride.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Not your assigned ride")
+
     if ride.get("status") in (RideStatus.IN_PROGRESS, RideStatus.COMPLETED):
         raise RideStateError(f"Cannot cancel a ride in state '{ride.get('status')}'")
 
@@ -76,8 +87,12 @@ async def cancel_ride(
     # trip log corrupted). Filtering on the pre-trip states matches zero rows once
     # the ride has started/ended -> 409, nothing mutated. Mirrors the rider cancel
     # path in routes/rides.py.
+    # driver_id scopes the atomic update to the assigned driver as well, so even
+    # if the in-memory ownership check above raced a reassignment the write can
+    # only ever touch this driver's own ride (findings 5/6).
     _cancel_filter = {
         "id": ride_id,
+        "driver_id": driver["id"],
         "status": {
             "$in": [
                 "requested",

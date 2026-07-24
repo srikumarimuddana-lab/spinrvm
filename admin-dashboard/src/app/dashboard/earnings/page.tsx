@@ -197,7 +197,7 @@ function CeoMetricsHeader({
                         Business overview
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                        {overview ? overview.period.label : "Loading…"} · all metrics compared to the prior {overview?.period.days ?? "—"} days
+                        {overview?.period?.label ?? "Loading…"} · all metrics compared to the prior {overview?.period?.days ?? "—"} days
                     </p>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -442,7 +442,7 @@ function PayoutsCeoHeader({
                         Payout flow
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                        {overview ? overview.period.label : "Loading…"} · compared to prior {overview?.period.days ?? "—"} days
+                        {overview?.period?.label ?? "Loading…"} · compared to prior {overview?.period?.days ?? "—"} days
                     </p>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">

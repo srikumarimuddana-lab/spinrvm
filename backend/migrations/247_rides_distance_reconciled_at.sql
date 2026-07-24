@@ -10,7 +10,7 @@
 -- metadata-only change (no table rewrite / no row locks on the live rides
 -- table). Existing rows read NULL = "not yet reconciled".
 --
--- Rollback plan:
+-- Rollback:
 -- Stop the reconciliation loop, then
 --   DROP INDEX CONCURRENTLY IF EXISTS public.idx_rides_distance_unreconciled;
 --   ALTER TABLE public.rides DROP COLUMN IF EXISTS distance_reconciled_at;

@@ -574,7 +574,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     _casc_skip_vals = await _casc_mget(_casc_skip_keys)
                     _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
                 except Exception as _casc_redis_exc:
-                    logger.debug("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
+                    logger.warning("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
                 # Fix 2: apply subscription filter to cascade pool when the service area
                 # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
                 if _sub_required and _casc_pool:

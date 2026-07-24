@@ -158,9 +158,7 @@ async def compute_ride_estimates(
     # systematically undercharges (0.7 km vs 1.8 km road in the reported
     # incident). ``distance_km`` / ``duration_minutes`` are set after the
     # Directions route resolves.
-    haversine_km = multi_leg_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
-    )
+    haversine_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
 
     fares = await _deps.get_fares_for_location(body.pickup_lat, body.pickup_lng)
 
@@ -465,7 +463,6 @@ async def compute_ride_estimates(
 
         # Calculate area fees + taxes so the rider sees them before booking.
         # Pass the pre-resolved area to avoid a redundant DB fetch per vehicle type.
-        fees_result = {}
         try:
             fees_result = await _deps.calculate_all_fees(
                 body.pickup_lat,
@@ -479,6 +476,10 @@ async def compute_ride_estimates(
             )
         except Exception as e:
             logger.error("[estimate] calculate_all_fees failed: %s", e, exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to calculate fare estimate. Please try again.",
+            ) from e
 
         area_fees_total = fees_result.get("fees_total", 0)
         tax_amount = fees_result.get("tax_amount", 0)

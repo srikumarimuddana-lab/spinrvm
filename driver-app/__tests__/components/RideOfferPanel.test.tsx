@@ -32,6 +32,17 @@ jest.mock('expo-linear-gradient', () => {
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 
+// expo-image is a real native module — importing it pulls in Expo's Winter
+// runtime (import.meta polyfill install), which crashes outside a real
+// device/simulator context. Stub with a plain, inert View (same convention
+// as the LinearGradient mock above) rather than react-native's real Image,
+// which schedules Animated timers that outlive the test and crash on
+// teardown.
+jest.mock('expo-image', () => {
+  const { View } = require('react-native');
+  return { Image: (props: any) => <View {...props} /> };
+});
+
 const mockRide = {
   ride_id: 'ride-001',
   pickup_address: '123 Main St',
@@ -56,6 +67,19 @@ const defaultProps = {
 };
 
 describe('RideOfferPanel', () => {
+  // The component starts Animated.spring/timing loops on mount with no
+  // cleanup on unmount (pre-existing, not this test's concern to fix).
+  // Fake timers let Jest own and safely discard those timers at teardown
+  // instead of a real setTimeout firing after the environment is torn down.
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.runOnlyPendingTimers();
+    jest.useRealTimers();
+  });
+
   it('renders without crashing', () => {
     const { toJSON } = render(<RideOfferPanel {...defaultProps} />);
     expect(toJSON()).not.toBeNull();
@@ -73,8 +97,11 @@ describe('RideOfferPanel', () => {
   });
 
   it('shows ETA when duration_minutes is provided', () => {
+    // Rendered as two sibling <Text> nodes ("10" and "min"), not one
+    // combined string — match them separately.
     const { getByText } = render(<RideOfferPanel {...defaultProps} />);
-    expect(getByText('10 min')).toBeTruthy();
+    expect(getByText('10')).toBeTruthy();
+    expect(getByText('min')).toBeTruthy();
   });
 
   it('shows countdown seconds', () => {

@@ -47,6 +47,13 @@
 -- function replace with no data migration and no downtime.
 --
 -- SAFE TO RE-RUN (CREATE OR REPLACE).
+--
+-- migration-override-ok: intentionally redefines corporate_allowance_apply_delta
+-- (last defined in 214_corporate_actor_user_id_text.sql, originally 29). This
+-- function is versioned by CREATE OR REPLACE — the established pattern for it —
+-- because the type→delta mapping lives in the function body and cannot be
+-- changed any other way. No signature change: same parameters, same RETURNS
+-- TABLE shape, so no caller is affected beyond the new p_type values.
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION corporate_allowance_apply_delta(

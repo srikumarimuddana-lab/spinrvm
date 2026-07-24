@@ -188,8 +188,10 @@ def _quality_projection(
         else None
     )
     projected = {
+        # coverage_ratio is now gap-aware (excludes mid-trip dead zones);
+        # temporal_coverage_ratio keeps the first→last span figure.
         "coverage_ratio": quality.coverage_ratio,
-        "temporal_coverage_ratio": quality.coverage_ratio,
+        "temporal_coverage_ratio": quality.span_coverage_ratio,
         "point_count": quality.point_count,
         "segment_count": quality.segment_count,
         "rejected_point_count": quality.rejected_point_count,

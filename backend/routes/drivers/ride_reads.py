@@ -29,6 +29,11 @@ from ._shared import (  # noqa: F401
 
 router = APIRouter()
 
+# Fields the driver-facing active-ride UI renders for the rider. Anything not on
+# this list (password_hash, fcm_token, email, phone, stripe_customer_id, session
+# state, …) must never reach the driver client. See get_active_ride below.
+_RIDER_PUBLIC_FIELDS = ("id", "first_name", "last_name", "name", "rating", "profile_image")
+
 
 # ==========================================
 # RIDE MANAGEMENT ENDPOINTS
@@ -140,13 +145,15 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         )
         vehicle_type = None
 
-    # R-P1-28: Strip PII fields from the rider object — drivers only need
-    # first name + profile photo for the in-app UI. Phone, email, and
-    # Stripe customer ID must never be exposed to the driver.
+    # R-P1-28 / finding 9: project the rider object down to an explicit
+    # allowlist. The old three-field blocklist over a `select("*")` row shipped
+    # every other users column — password_hash, fcm_token, session/auth state —
+    # to the driver client. An allowlist ships only what the active-ride UI
+    # renders (name + photo + rating) and can never leak a newly-added column.
     safe_rider = None
     if rider:
         raw = serialize_doc(rider)
-        safe_rider = {k: raw[k] for k in raw if k not in {"phone", "email", "stripe_customer_id"}}
+        safe_rider = {k: raw[k] for k in _RIDER_PUBLIC_FIELDS if k in raw}
 
     # Enrich with incentives + quest progress for driver_assigned rides
     # so fetchActiveRide never strips enrichment data from the offer panel.

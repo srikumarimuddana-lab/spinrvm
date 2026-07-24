@@ -25,7 +25,12 @@ try:
         collapse_stationary_clusters,
         filter_low_accuracy,
     )
-    from .route_segments import MAX_CONTINUOUS_GAP_SECONDS, SegmentedRoute, segment_route
+    from .route_segments import (
+        MAX_CONTINUOUS_GAP_SECONDS,
+        MAX_PLAUSIBLE_SPEED_KPH,
+        SegmentedRoute,
+        segment_route,
+    )
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.gps_filtering import (  # type: ignore
@@ -35,6 +40,7 @@ except ImportError:
     )
     from utils.route_segments import (  # type: ignore
         MAX_CONTINUOUS_GAP_SECONDS,
+        MAX_PLAUSIBLE_SPEED_KPH,
         SegmentedRoute,
         segment_route,
     )
@@ -434,6 +440,83 @@ def _gap_timeline(
     return gaps
 
 
+def _implied_kmh(prev: Dict[str, Any], curr: Dict[str, Any]) -> tuple[float, float | None, float | None]:
+    """Return ``(jump_metres, elapsed_seconds, implied_kmh)`` between two fixes.
+
+    ``elapsed``/``implied_kmh`` are None when a timestamp is missing; implied
+    speed is ``inf`` when two fixes share a timestamp but moved (a hard spike).
+    """
+    try:
+        jump_m = (
+            calculate_distance(float(prev["lat"]), float(prev["lng"]), float(curr["lat"]), float(curr["lng"])) * 1000.0
+        )
+    except (KeyError, TypeError, ValueError):
+        return 0.0, None, None
+    t_prev = parse_iso_utc(prev.get("captured_at") or prev.get("timestamp"))
+    t_curr = parse_iso_utc(curr.get("captured_at") or curr.get("timestamp"))
+    if t_prev is None or t_curr is None:
+        return jump_m, None, None
+    elapsed = (t_curr - t_prev).total_seconds()
+    if elapsed <= 0:
+        return jump_m, elapsed, (float("inf") if jump_m > 0 else 0.0)
+    return jump_m, elapsed, jump_m / elapsed * 3.6
+
+
+def build_outlier_table(
+    ordered_points: list[Dict[str, Any]],
+    *,
+    max_kmh: float = MAX_PLAUSIBLE_SPEED_KPH,
+) -> Dict[str, Any]:
+    """Per-fix trajectory + spike-outlier verdict for a time-ordered trace.
+
+    Mirrors the pipeline's despike exactly (measure against the last KEPT fix;
+    an into-jump above ``max_kmh`` is a ``spike_outlier`` iff skipping the fix
+    reconnects its neighbours below ``max_kmh``, otherwise ``outage_or_gap``),
+    so the table names precisely which fixes the route pipeline drops and why.
+    Coordinate-free: rows carry only index/time/jump/speed/verdict — never a
+    lat/lng — so the report stays PIPEDA-safe.
+    """
+    rows: list[Dict[str, Any]] = []
+    outlier_count = 0
+    if not ordered_points:
+        return {"outlier_count": 0, "max_plausible_kmh": max_kmh, "rows": rows}
+
+    def _row(index: int, point: Dict[str, Any], jump_m, elapsed, kmh, verdict) -> Dict[str, Any]:
+        return {
+            "index": index,
+            "timestamp": str(point.get("captured_at") or point.get("timestamp") or ""),
+            "jump_m": round(float(jump_m), 1) if jump_m is not None else None,
+            "elapsed_s": round(float(elapsed), 3) if elapsed is not None else None,
+            "implied_kmh": (None if kmh is None else (None if kmh == float("inf") else round(float(kmh), 1))),
+            "implied_speed_impossible": bool(kmh is not None and kmh > max_kmh),
+            "verdict": verdict,
+        }
+
+    rows.append(_row(0, ordered_points[0], 0.0, None, None, "start"))
+    anchor = ordered_points[0]
+    for index in range(1, len(ordered_points)):
+        current = ordered_points[index]
+        following = ordered_points[index + 1] if index + 1 < len(ordered_points) else None
+        jump_m, elapsed, kmh = _implied_kmh(anchor, current)
+        verdict = "ok"
+        if kmh is not None and kmh > max_kmh:
+            skip_ok = False
+            if following is not None:
+                _sj, _se, skip_kmh = _implied_kmh(anchor, following)
+                skip_ok = skip_kmh is not None and skip_kmh <= max_kmh
+            if skip_ok:
+                verdict = "spike_outlier"
+                outlier_count += 1
+            else:
+                verdict = "outage_or_gap"
+        rows.append(_row(index, current, jump_m, elapsed, kmh, verdict))
+        # Advance the anchor only past a KEPT fix — a dropped spike must not
+        # become the reference for the next fix (matches _despike).
+        if verdict != "spike_outlier":
+            anchor = current
+    return {"outlier_count": outlier_count, "max_plausible_kmh": max_kmh, "rows": rows}
+
+
 def build_incident_report(
     ride: Dict[str, Any],
     points: Iterable[Dict[str, Any]],
@@ -513,6 +596,7 @@ def build_incident_report(
             "filtered_delta_km": round(raw_km - filtered_km, 3),
         },
         "gap_timeline_phase3": _gap_timeline(phase3, gap_events),
+        "trajectory_outliers_phase3": build_outlier_table(phase3),
         "fare_summary": fare_summary,
         "distance_recompute_audit": [
             {

@@ -606,20 +606,40 @@ async def request_payout(
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
 
-    status = "pending"
     stripe_payout_id = None
-    # Pre-allocate the payout id so the Stripe Transfer carries a stable
-    # idempotency key — a retry of this same payout never double-transfers.
-    # (The @idempotent_endpoint decorator dedupes at the HTTP layer, but a
-    # Stripe-level key is defence in depth against any path that re-enters
-    # this block, matching the money-safety contract of request_instant_payout.)
     payout_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # WS-7 (finding 4): reserve-then-transfer. Insert the payout row with
+    # status='reserved' BEFORE the Stripe Transfer so the partial unique
+    # index (migration 250) blocks a concurrent request from also reserving.
+    # The balance deduction in get_driver_balance already excludes only
+    # 'reversed'/'failed', so a 'reserved' row reduces the payable balance
+    # for any racing request that gets past the index.
+    payout = {
+        "id": payout_id,
+        "driver_id": driver["id"],
+        "amount": req.amount,
+        "status": "reserved",
+        "stripe_payout_id": None,
+        "bank_name": account.get("bank_name") if account else "Stripe Connect",
+        "account_last4": account.get("account_last4") if account else "****",
+        "created_at": now_iso,
+    }
+    try:
+        await db_supabase.insert_one("payouts", payout)
+    except Exception as reserve_exc:
+        _exc_str = str(reserve_exc).lower()
+        if "unique" in _exc_str or "duplicate" in _exc_str or "23505" in _exc_str:
+            raise HTTPException(
+                status_code=409,
+                detail="A payout is already in progress. Please wait for it to complete.",
+            ) from reserve_exc
+        logger.exception("Failed to reserve payout row")
+        raise HTTPException(status_code=500, detail="Payout failed. Please try again.") from reserve_exc
 
     if stripe_secret and stripe_account_id:
         try:
-            # Sync Stripe SDK: run in the threadpool so the HTTP round-trip
-            # doesn't block the event loop (the idempotency key keeps a
-            # retried call from double-transferring).
             transfer = await asyncio.to_thread(
                 lambda: stripe.Transfer.create(
                     amount=dollars_to_cents(req.amount),
@@ -629,31 +649,65 @@ async def request_payout(
                     idempotency_key=f"payout-transfer-{payout_id}",
                 )
             )
-            status = RideStatus.COMPLETED
             stripe_payout_id = transfer.id
         except Exception as e:
-            # B-P3-leak-cleanup: same pattern as the subscription
-            # charge fix — Stripe transfer errors carry account IDs
-            # (acct_…), transfer IDs (tr_…), and bank-account hints
-            # we must not ship. logger.exception captures the full
-            # traceback server-side.
             logger.exception("Stripe transfer failed for driver payout")
+            try:
+                await db_supabase.update_one(
+                    "payouts",
+                    {"id": payout_id},
+                    {
+                        "status": "failed",
+                        "failure_reason": str(e)[:500],
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception:
+                logger.exception("Failed to mark reserved payout as failed")
             raise HTTPException(
                 status_code=500,
                 detail="Payout failed. Please contact support.",
             ) from e
 
-    payout = {
-        "id": payout_id,
-        "driver_id": driver["id"],
-        "amount": req.amount,
-        "status": status,
-        "stripe_payout_id": stripe_payout_id,
-        "bank_name": account.get("bank_name") if account else "Stripe Connect",
-        "account_last4": account.get("account_last4") if account else "****",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db_supabase.insert_one("payouts", payout)
+    # Terminal write: mark as completed (Stripe transferred) or pending (no Stripe).
+    final_status = RideStatus.COMPLETED if stripe_payout_id else "pending"
+    try:
+        await db_supabase.update_one(
+            "payouts",
+            {"id": payout_id},
+            {
+                "status": final_status,
+                "stripe_payout_id": stripe_payout_id,
+                "stripe_transfer_id": stripe_payout_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as terminal_exc:
+        # Terminal write failed after Stripe transferred money. Reverse the
+        # transfer so the books match — mirrors request_instant_payout.
+        if stripe_payout_id:
+            logger.exception("Terminal write failed after Stripe transfer; reversing")
+            reversal_ok = await _attempt_transfer_reversal(stripe_payout_id, stripe_secret, payout_id)
+            new_status = "reversed" if reversal_ok else "stranded"
+            try:
+                await db_supabase.update_one(
+                    "payouts",
+                    {"id": payout_id},
+                    {"status": new_status, "requires_manual_review": not reversal_ok},
+                )
+            except Exception:
+                logger.exception("Failed to update payout row after reversal")
+            raise HTTPException(
+                status_code=500,
+                detail="Payout failed. Please try again or contact support.",
+            ) from terminal_exc
+        raise HTTPException(
+            status_code=500,
+            detail="Payout failed. Please try again.",
+        ) from terminal_exc
+
+    payout["status"] = final_status
+    payout["stripe_payout_id"] = stripe_payout_id
     return {"success": True, "payout": serialize_doc(payout)}
 
 
@@ -762,14 +816,43 @@ async def request_instant_payout(
     if not stripe_secret:
         raise HTTPException(status_code=503, detail="Payouts temporarily unavailable")
 
-    # Pre-allocate the payout_id so every Stripe call carries a stable
-    # per-payout idempotency key. A retry of the same row never causes a
-    # second transfer or a second payout.
     payout_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # WS-7 (finding 4): reserve-then-transfer. Insert the payout row BEFORE
+    # any Stripe call so the partial unique index (migration 250) blocks a
+    # concurrent instant-payout request from also reserving.
+    payout = {
+        "id": payout_id,
+        "driver_id": driver["id"],
+        "amount": req.amount,
+        "fee": fee,
+        "net_amount": net_amount,
+        "payout_type": "instant",
+        "status": "reserved",
+        "stripe_transfer_id": None,
+        "stripe_payout_id": None,
+        "bank_name": account.get("bank_name") if account else "Stripe Connect",
+        "account_last4": account.get("account_last4") if account else "****",
+        "created_at": now_iso,
+    }
+    try:
+        await db_supabase.insert_one("payouts", payout)
+    except Exception as reserve_exc:
+        _exc_str = str(reserve_exc).lower()
+        if "unique" in _exc_str or "duplicate" in _exc_str or "23505" in _exc_str:
+            raise HTTPException(
+                status_code=409,
+                detail="A payout is already in progress. Please wait for it to complete.",
+            ) from reserve_exc
+        logger.exception("Failed to reserve instant payout row")
+        raise HTTPException(
+            status_code=500,
+            detail="Instant payout failed. Please try again.",
+        ) from reserve_exc
 
     # ── Step 1: Transfer platform → connect account ───────────────────
     try:
-        # Threadpool: sync Stripe SDK must not block the event loop.
         transfer = await asyncio.to_thread(
             lambda: stripe.Transfer.create(
                 amount=dollars_to_cents(req.amount),
@@ -781,41 +864,49 @@ async def request_instant_payout(
         )
         stripe_transfer_id = transfer.id
     except Exception as e:
-        # Transfer never landed — nothing to reverse, nothing to persist.
         logger.exception("Stripe transfer step failed for instant payout")
+        try:
+            await db_supabase.update_one(
+                "payouts",
+                {"id": payout_id},
+                {
+                    "status": "failed",
+                    "failure_reason": str(e)[:500],
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception:
+            logger.exception("Failed to mark reserved instant payout as failed")
         raise HTTPException(
             status_code=500,
             detail="Instant payout failed. Please try again or contact support.",
         ) from e
 
-    # ── Persist the row IMMEDIATELY so a crash before the payout step
-    #    still leaves a recoverable record of the in-flight transfer. ──
-    now_iso = datetime.now(timezone.utc).isoformat()
-    payout = {
-        "id": payout_id,
-        "driver_id": driver["id"],
-        "amount": req.amount,
-        "fee": fee,
-        "net_amount": net_amount,
-        "payout_type": "instant",
-        "status": "transfer_completed",
-        "stripe_transfer_id": stripe_transfer_id,
-        "stripe_payout_id": None,
-        "bank_name": account.get("bank_name") if account else "Stripe Connect",
-        "account_last4": account.get("account_last4") if account else "****",
-        "created_at": now_iso,
-    }
+    # Update reserved → transfer_completed so a crash between transfer and
+    # payout still leaves a recoverable record of the in-flight transfer.
     try:
-        await db_supabase.insert_one("payouts", payout)
+        await db_supabase.update_one(
+            "payouts",
+            {"id": payout_id},
+            {
+                "status": "transfer_completed",
+                "stripe_transfer_id": stripe_transfer_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
     except Exception as persist_exc:
-        # Transfer succeeded but we couldn't record it. Reverse the transfer
-        # so the books match, then fail loudly. If the reversal also fails
-        # there's no DB row to flag — log + alert ops.
-        logger.exception("Failed to persist instant payout row after transfer succeeded")
+        logger.exception("Failed to update instant payout to transfer_completed")
         reversal_ok = await _attempt_transfer_reversal(stripe_transfer_id, stripe_secret, payout_id)
-        if not reversal_ok:
+        new_status = "reversed" if reversal_ok else "stranded"
+        try:
+            await db_supabase.update_one(
+                "payouts",
+                {"id": payout_id},
+                {"status": new_status, "requires_manual_review": not reversal_ok},
+            )
+        except Exception:
             logger.error(
-                "STRANDED instant payout — DB persist failed AND reversal failed. payout_id=%s driver_id=%s amount=%s",
+                "STRANDED instant payout — persist failed AND reversal status write failed. payout_id=%s driver_id=%s amount=%s",
                 payout_id,
                 driver["id"],
                 req.amount,

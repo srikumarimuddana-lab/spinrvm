@@ -261,7 +261,7 @@ def _mock_process_payment_deps(*, allowance, membership=None):
         "routes.rides._deps.db_supabase.update_ride": AsyncMock(return_value=None),
         "routes.rides._deps.db_supabase.get_user_by_id": AsyncMock(return_value=None),
         "routes.rides._deps.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
-        "routes.rides.corporate_allowance_service.apply_rollback": AsyncMock(return_value={"transaction_id": "t1"}),
+        "routes.rides.corporate_allowance_service.apply_ride_debit": AsyncMock(return_value={"transaction_id": "t1"}),
         "routes.rides.corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
     }
 
@@ -289,7 +289,7 @@ def test_personal_ride_skips_corporate_payment_branch(test_client, rider_overrid
         ),
         patch("routes.wallet._record_transaction", AsyncMock()),
         patch(
-            "routes.rides.corporate_allowance_service.apply_rollback",
+            "routes.rides.corporate_allowance_service.apply_ride_debit",
             AsyncMock(),
         ) as mock_allowance,
     ):
@@ -319,8 +319,8 @@ def test_company_allowance_debits_allowance_fully_when_sufficient(test_client, r
         for p in patchers:
             p.stop()
 
-    mocks["routes.rides.corporate_allowance_service.apply_rollback"].assert_called_once()
-    call_kwargs = mocks["routes.rides.corporate_allowance_service.apply_rollback"].call_args.kwargs
+    mocks["routes.rides.corporate_allowance_service.apply_ride_debit"].assert_called_once()
+    call_kwargs = mocks["routes.rides.corporate_allowance_service.apply_ride_debit"].call_args.kwargs
     assert call_kwargs["amount"] == pytest.approx(25.0)
     assert call_kwargs["wallet_id"] == _WALLET_ID
     assert call_kwargs["allowance_id"] == _ALLOWANCE_ID
@@ -356,7 +356,7 @@ def test_company_allowance_splits_when_allowance_partial(test_client, rider_over
         for p in patchers:
             p.stop()
 
-    rollback_kwargs = mocks["routes.rides.corporate_allowance_service.apply_rollback"].call_args.kwargs
+    rollback_kwargs = mocks["routes.rides.corporate_allowance_service.apply_ride_debit"].call_args.kwargs
     assert rollback_kwargs["amount"] == pytest.approx(10.0)
 
     adj_kwargs = mocks["routes.rides.corporate_wallet_service.apply_adjustment"].call_args.kwargs
@@ -420,7 +420,7 @@ def test_company_allowance_unlimited_covers_full_fare(test_client, rider_overrid
         for p in patchers:
             p.stop()
 
-    mocks["routes.rides.corporate_allowance_service.apply_rollback"].assert_called_once()
+    mocks["routes.rides.corporate_allowance_service.apply_ride_debit"].assert_called_once()
     mocks["routes.rides.corporate_wallet_service.apply_adjustment"].assert_not_called()
     row = mocks["routes.rides._deps.db_supabase.insert_one"].call_args.args[1]
     assert row["master_fallback_amount"] == pytest.approx(0.0)
@@ -491,7 +491,7 @@ def _settle_patches(*, member_lookup, allowance, memberships=None):
         base + "db_supabase.get_corporate_policy": AsyncMock(return_value={}),
         base + "db_supabase.insert_one": AsyncMock(return_value=None),
         base + "db_supabase.update_ride": AsyncMock(return_value=None),
-        base + "corporate_allowance_service.apply_rollback": AsyncMock(return_value={"transaction_id": "t1"}),
+        base + "corporate_allowance_service.apply_ride_debit": AsyncMock(return_value={"transaction_id": "t1"}),
         base + "corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
     }
 
@@ -525,7 +525,7 @@ async def test_settle_uses_stamped_member_not_rider_membership():
     mocks[base + "db_supabase.get_corporate_member_by_id"].assert_called_once_with(_BOOKER_MEMBER_ID)
     mocks[base + "db_supabase.list_active_memberships_for_user"].assert_not_called()
 
-    rollback_kwargs = mocks[base + "corporate_allowance_service.apply_rollback"].call_args.kwargs
+    rollback_kwargs = mocks[base + "corporate_allowance_service.apply_ride_debit"].call_args.kwargs
     assert rollback_kwargs["member_id"] == _BOOKER_MEMBER_ID
 
     adj_kwargs = mocks[base + "corporate_wallet_service.apply_adjustment"].call_args.kwargs
@@ -548,7 +548,7 @@ async def test_settle_stamped_member_wrong_company_leaves_pending():
 
     assert result.success is False
     assert result.status_code == 400
-    mocks[base + "corporate_allowance_service.apply_rollback"].assert_not_called()
+    mocks[base + "corporate_allowance_service.apply_ride_debit"].assert_not_called()
     mocks[base + "corporate_wallet_service.apply_adjustment"].assert_not_called()
     pending_writes = [
         c
@@ -568,7 +568,7 @@ async def test_settle_stamped_member_inactive_leaves_pending():
 
     assert result.success is False
     assert result.status_code == 400
-    mocks[base + "corporate_allowance_service.apply_rollback"].assert_not_called()
+    mocks[base + "corporate_allowance_service.apply_ride_debit"].assert_not_called()
 
 
 @pytest.mark.anyio
@@ -588,5 +588,5 @@ async def test_settle_without_stamp_falls_back_to_rider_membership():
     assert result.success is True
     mocks[base + "db_supabase.get_corporate_member_by_id"].assert_not_called()
     mocks[base + "db_supabase.list_active_memberships_for_user"].assert_called_once_with("rider_1")
-    rollback_kwargs = mocks[base + "corporate_allowance_service.apply_rollback"].call_args.kwargs
+    rollback_kwargs = mocks[base + "corporate_allowance_service.apply_ride_debit"].call_args.kwargs
     assert rollback_kwargs["member_id"] == _MEMBER_ID

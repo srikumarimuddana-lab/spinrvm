@@ -84,6 +84,9 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
             message_key=ErrorKeys.PROFILE_EMAIL_IN_USE,
         )
 
+    old_email = (current_user.get("email") or "").lower()
+    email_changed = email_lower != old_email
+
     update_data = {
         "first_name": request.first_name.strip(),
         "last_name": request.last_name.strip(),
@@ -91,6 +94,9 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
         "gender": request.gender,
         "profile_complete": True,
     }
+    if email_changed:
+        update_data["email_verified"] = False
+        update_data["email_verified_at"] = None
     # Allow driver app to hint the role so onboarding status is computed.
     # We write the flag (is_driver / is_rider) rather than the role column so
     # that a user who starts driver onboarding keeps is_rider=true (dual-role).
@@ -415,6 +421,23 @@ async def link_corporate_account(request: LinkCorporateRequest, current_user: di
         if not account:
             raise HTTPException(status_code=404, detail="Corporate account not found")
 
+        # WS-18: verify the user has an active membership in this corporate
+        # account. Without this, any authenticated user could link themselves
+        # to any company and gain access to corporate-paid rides.
+        membership = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows(
+                "corporate_members",
+                {
+                    "user_id": current_user["id"],
+                    "company_id": request.corporate_account_id,
+                    "status": "active",
+                },
+                limit=1,
+            )
+        )
+        if not membership:
+            raise HTTPException(status_code=403, detail="Not a member of this corporate account")
+
     await db_supabase.update_one(
         "users",
         {"id": current_user["id"]},
@@ -457,7 +480,10 @@ async def get_emergency_contacts(current_user: dict = Depends(get_current_user))
             f"Could not fetch emergency contacts for user {current_user['id']}: {e}",
             exc_info=True,
         )
-        contacts = []
+        raise HTTPException(
+            status_code=503,
+            detail="Could not load emergency contacts. Please try again.",
+        ) from e
     return {"contacts": contacts}
 
 
@@ -466,8 +492,15 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
     """Add an emergency contact (max 3 contacts per user, matching Uber/Lyft)."""
     try:
         existing = await db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
-    except Exception:
-        existing = []
+    except Exception as e:
+        logger.error(
+            f"Could not check emergency contact count for user {current_user['id']}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Could not verify contact limit. Please try again.",
+        ) from e
 
     MAX_EMERGENCY_CONTACTS = 3
     if len(existing) >= MAX_EMERGENCY_CONTACTS:

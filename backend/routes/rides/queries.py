@@ -421,7 +421,7 @@ async def get_ride(
             else:
                 noshow_wait_seconds = int(settings.get("noshow_wait_seconds", 300))
         except Exception:
-            logger.warning("Failed to load settings or service area override for noshow_wait_seconds")
+            logger.error("Failed to load settings or service area override for noshow_wait_seconds", exc_info=True)
     ride["noshow_wait_seconds"] = noshow_wait_seconds
 
     if ride_status == RideStatus.DRIVER_ARRIVED:
@@ -539,7 +539,7 @@ async def get_ride(
         _incentive_total = sum(float(c.get("bonus_amount") or 0) for c in _claims)
         ride["incentive_amount"] = round(_incentive_total, 2)
     except Exception:
-        logger.debug("ride incentive_claims lookup failed", exc_info=True)
+        logger.error("ride incentive_claims lookup failed", exc_info=True)
         ride["incentive_amount"] = 0
 
     # Prefer the frozen driver_earnings_snapshot when available

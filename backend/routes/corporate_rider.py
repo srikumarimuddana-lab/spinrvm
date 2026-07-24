@@ -138,8 +138,12 @@ async def do_join_domain(
     body: JoinDomainBody,
     current_user: dict = Depends(get_current_user),
 ):
-    # Validate that the rider's JWT email domain is authorized for this company.
-    # body.email is not trusted for this check — we use the JWT-sourced identity.
+    if not current_user.get("email_verified"):
+        raise HTTPException(
+            status_code=403,
+            detail="ERR_EMAIL_UNVERIFIED",
+        )
+
     user_email = (current_user.get("phone_or_email") or current_user.get("email") or "").lower()
     domain = user_email.split("@")[-1] if "@" in user_email else ""
     if not domain:

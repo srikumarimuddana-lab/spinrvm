@@ -78,11 +78,7 @@ def calculate_cancellation_fee(
 
     if driver_id and ride.get("driver_accepted_at"):
         accepted_at = parse_iso_utc(ride["driver_accepted_at"])
-        time_diff = (
-            (datetime.now(timezone.utc) - accepted_at).total_seconds()
-            if accepted_at
-            else 0
-        )
+        time_diff = (datetime.now(timezone.utc) - accepted_at).total_seconds() if accepted_at else 0
         if time_diff > free_window:
             return fee_admin, fee_driver
 
@@ -169,8 +165,11 @@ async def pay_driver_cancellation_fee(
                 },
             )
         except Exception:
-            logger.warning(
-                "audit_log write failed for cancellation_fee_charged", exc_info=True
+            logger.error(
+                "[CANCEL] audit_log write failed for cancellation_fee_charged ride=%s driver=%s",
+                ride_id,
+                driver_id,
+                exc_info=True,
             )
 
         await send_push_notification(

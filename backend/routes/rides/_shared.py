@@ -330,13 +330,15 @@ def _round(v: Decimal) -> Decimal:
     return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
 
 
-def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
-    """Recalculate distance, duration, and fare after a stop mutation.
+async def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
+    """Recalculate distance, duration, fare, taxes, and earnings after a stop mutation.
 
     Derives per-km and per-minute rates from the values already stored on the
     ride row (distance_fare / (distance_km * surge) and time_fare / (duration *
-    surge)), then applies them to the new multi-leg distance.  Returns a dict
-    suitable for merging into a $set update.
+    surge)), then applies them to the new multi-leg distance.  Recomputes area
+    fees, taxes, grand_total, driver/admin earnings, and refreshes the
+    fare_breakdown_snapshot so settlement charges exactly what the rider sees.
+    Returns a dict suitable for merging into a $set update.
     """
     # Multi-leg distance pickup → stops → dropoff (shared with /rides/estimate).
     new_distance_km = multi_leg_distance(
@@ -357,18 +359,49 @@ def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
 
     new_distance_fare = _round(per_km_effective * _d(new_distance_km) * surge)
     new_time_fare = _round(per_min_effective * _d(new_duration_minutes) * surge)
-    new_total = _round(
-        _d(ride.get("base_fare", 0)) + new_distance_fare + new_time_fare + _d(ride.get("booking_fee", 0))
-    )
+    booking_fee = _d(ride.get("booking_fee", 0))
+    new_total = _round(_d(ride.get("base_fare", 0)) + new_distance_fare + new_time_fare + booking_fee)
 
-    return {
+    admin_earnings = _round(booking_fee + _d(ride.get("airport_fee", 0) or 0))
+    driver_earnings = _round(new_total - admin_earnings)
+
+    fees_result = await _deps.calculate_all_fees(
+        ride["pickup_lat"],
+        ride["pickup_lng"],
+        ride["dropoff_lat"],
+        ride["dropoff_lng"],
+        round(new_distance_km, 2),
+        float(new_total),
+    )
+    fees_total = _d(fees_result.get("fees_total", 0))
+    tax_amount = _d(fees_result.get("tax_amount", 0))
+    grand_total = _round(new_total + fees_total + tax_amount)
+
+    result = {
         "distance_km": round(new_distance_km, 2),
         "duration_minutes": new_duration_minutes,
         "distance_fare": _money_str(new_distance_fare),
         "time_fare": _money_str(new_time_fare),
         "estimated_fare": _money_str(new_total),
         "total_fare": _money_str(new_total),
+        "grand_total": _money_str(grand_total),
+        "tax_amount": float(_round(tax_amount)),
+        "tax_breakdown": fees_result.get("tax_breakdown", {}),
+        "area_fees_total": float(_round(fees_total)),
+        "area_fees_breakdown": fees_result.get("fees", []),
+        "driver_earnings": _money_str(driver_earnings),
+        "admin_earnings": _money_str(admin_earnings),
     }
+
+    virtual_ride = {**ride, **result}
+    snapshot_lines = _build_fare_breakdown(virtual_ride)
+    result["fare_breakdown_snapshot"] = {
+        "lines": snapshot_lines,
+        "grand_total": float(_round(grand_total)),
+        "updated_at": _deps.datetime.now(_deps.timezone.utc).isoformat(),
+    }
+
+    return result
 
 
 def _f(v: Decimal) -> float:

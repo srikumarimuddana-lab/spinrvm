@@ -89,3 +89,53 @@ async def test_apply_rollback_positive_delta():
     _, params = mock_sb.rpc.call_args[0]
     assert params["p_type"] == "allowance_rollback"
     assert params["p_amount"] == "50"
+
+
+@pytest.mark.asyncio
+async def test_apply_ride_debit_uses_ride_debit_type():
+    """Ride settlement must NOT use allowance_rollback — that type's master
+    delta is positive, which credited the company on every allowance-covered
+    ride instead of charging it (migration 248)."""
+    with patch("services.corporate_allowance_service.supabase") as mock_sb:
+        mock_sb.rpc.return_value.execute.return_value = _rpc_ok()
+        from services.corporate_allowance_service import apply_ride_debit
+
+        await apply_ride_debit(
+            wallet_id="w1",
+            allowance_id="a1",
+            member_id="m1",
+            amount=50,
+            actor_user_id="rider1",
+            notes="ride:r1:allowance",
+        )
+    _, params = mock_sb.rpc.call_args[0]
+    assert params["p_type"] == "ride_debit"
+    assert params["p_amount"] == "50"
+
+
+@pytest.mark.asyncio
+async def test_apply_ride_debit_rejects_non_positive():
+    from services.corporate_allowance_service import apply_ride_debit
+
+    with pytest.raises(ValueError):
+        await apply_ride_debit(wallet_id="w1", allowance_id="a1", member_id="m1", amount=0)
+
+
+@pytest.mark.asyncio
+async def test_apply_ride_debit_reversal_uses_reversal_type():
+    """Compensation must be the exact inverse of ride_debit. apply_grant would
+    debit master a second time instead of refunding it."""
+    with patch("services.corporate_allowance_service.supabase") as mock_sb:
+        mock_sb.rpc.return_value.execute.return_value = _rpc_ok()
+        from services.corporate_allowance_service import apply_ride_debit_reversal
+
+        await apply_ride_debit_reversal(
+            wallet_id="w1",
+            allowance_id="a1",
+            member_id="m1",
+            amount=50,
+            notes="ride:r1:allowance_compensation",
+        )
+    _, params = mock_sb.rpc.call_args[0]
+    assert params["p_type"] == "ride_debit_reversal"
+    assert params["p_amount"] == "50"

@@ -240,6 +240,30 @@ def resolve_booking_distance(haversine_km: float, token_payload: Optional[dict])
     return hv, int(hv / 30 * 60) + 5, "haversine"
 
 
+# Below this booked distance a ride is more likely a wrong dropoff coordinate
+# than a real hop (the incident booked 0.7 km for a 1.8 km road route).
+MIN_PLAUSIBLE_BOOKED_KM = 0.3
+
+
+def booked_distance_suspect_reason(
+    distance_km: float, distance_basis: str, *, floor_km: float = MIN_PLAUSIBLE_BOOKED_KM
+) -> Optional[str]:
+    """Why a booked distance looks suspect, or None. Detection only — never blocks.
+
+    ``"below_floor"``      implausibly short (likely a bad dropoff coordinate).
+    ``"road_route_unavailable"``  the road route couldn't be fetched, so the
+                           fare fell back to straight-line and may undercharge.
+    """
+    try:
+        if float(distance_km) < floor_km:
+            return "below_floor"
+    except (TypeError, ValueError):
+        return None
+    if distance_basis == "haversine_fallback":
+        return "road_route_unavailable"
+    return None
+
+
 async def _get_active_service_area_for_point(
     lat: float,
     lng: float,

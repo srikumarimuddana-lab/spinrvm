@@ -72,7 +72,12 @@ def _two_segment_evidence():
 @pytest.mark.asyncio
 async def test_reconstructs_missing_start_internal_gap_and_tail_in_order(monkeypatch):
     segmented, matched, completion = _two_segment_evidence()
-    assert segmented.quality.coverage_ratio == 1.0
+    # First→last span still covers the whole trip window...
+    assert segmented.quality.span_coverage_ratio == 1.0
+    # ...but coverage_ratio is now gap-aware: the deliberate internal gap in this
+    # fixture must pull it below 1.0 (that's the signal that hid the incident's
+    # missing middle when coverage was span-only).
+    assert segmented.quality.coverage_ratio < 1.0
     monkeypatch.setattr(
         reconstruction,
         "get_app_settings",
@@ -113,6 +118,14 @@ async def test_reconstructs_missing_start_internal_gap_and_tail_in_order(monkeyp
     ]
     assert result["observed_distance_km"] == 0.4
     assert result["inferred_distance_km"] == 1.15
+    # All three connectors were routed via OSRM (road-following), so the routed
+    # split carries the whole inferred distance and none is blind straight-line.
+    assert result["routed_connector_distance_km"] == 1.15
+    assert result["straight_connector_distance_km"] == 0.0
+    assert (
+        result["routed_connector_distance_km"] + result["straight_connector_distance_km"]
+        == result["inferred_distance_km"]
+    )
     assert result["distance_km"] == 1.55
     assert result["observed_distance_ratio"] == pytest.approx(0.258, abs=0.001)
     assert result["inferred_distance_ratio"] == pytest.approx(0.742, abs=0.001)

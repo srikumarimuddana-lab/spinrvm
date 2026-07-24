@@ -131,7 +131,15 @@ async def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> 
             ride.pop(key, None)
         stored_segments = route.get("road_matched_segments") or route.get("observed_segments") or []
         ride["actual_route_segments"] = _safe_route_segments(stored_segments)
-        ride["route_quality"] = route.get("route_quality") or {}
+        # Surface the measured-distance basis (from ride_metrics) into
+        # route_quality so the shared label can show "estimated from booking"
+        # when GPS was too incomplete to trust — without a separate client field.
+        _quality = dict(route.get("route_quality") or {})
+        _trip_metrics = ((ride.get("ride_metrics") or {}).get("phases") or {}).get("trip_in_progress") or {}
+        _basis = _trip_metrics.get("distance_basis")
+        if _basis is not None:
+            _quality.setdefault("distance_basis", _basis)
+        ride["route_quality"] = _quality
         ride["route_schema_version"] = schema_version
         ride["route_revision"] = int(route.get("route_revision") or 0)
         ride["route_geometry_status"] = route.get("processing_status") or "pending"

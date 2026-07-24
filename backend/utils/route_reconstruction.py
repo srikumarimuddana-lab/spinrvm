@@ -125,12 +125,18 @@ async def reconstruct_completed_route(
 
     output: list[dict] = []
     failed_gaps: list[str] = []  # Always empty — kept for API compat.
-    inferred_distance_km = 0.0
+    # Split connector distance by trustworthiness: Tier 1/2 connectors follow
+    # real roads (a believable substitute for the missing GPS), Tier 3/4 are
+    # blind straight lines. inferred_distance_km stays the sum for API compat,
+    # but the measured-distance resolver must be able to exclude straight
+    # connectors so it never bills a chord across an unrouted gap.
+    routed_connector_km = 0.0
+    straight_connector_km = 0.0
     connector_attempts = 0
 
     async def append_connector(start: list[float], end: list[float], reason: str) -> None:
         """4-tier gap fill: OSRM → Google → Haversine. Always succeeds."""
-        nonlocal connector_attempts, inferred_distance_km
+        nonlocal connector_attempts, routed_connector_km, straight_connector_km
         gap_distance = distance_m(start, end)
         if gap_distance <= CONTINUITY_TOLERANCE_M:
             return
@@ -139,7 +145,7 @@ async def reconstruct_completed_route(
 
         # If we've exceeded max connectors, use haversine (always succeeds).
         if connector_attempts > MAX_INFERRED_CONNECTORS:
-            inferred_distance_km += gap_distance / 1000.0
+            straight_connector_km += gap_distance / 1000.0
             output.append(_straight_line_segment(start, end, gap_distance, reason, connector_attempts))
             return
 
@@ -168,7 +174,7 @@ async def reconstruct_completed_route(
                     "coordinates": coordinates,
                 }
             )
-            inferred_distance_km += float(distance_km)
+            routed_connector_km += float(distance_km)
         else:
             # Tier 3/4: Haversine straight-line — pure math, cannot fail.
             logger.info(
@@ -177,7 +183,7 @@ async def reconstruct_completed_route(
                 gap_distance,
                 connector_attempts,
             )
-            inferred_distance_km += gap_distance / 1000.0
+            straight_connector_km += gap_distance / 1000.0
             output.append(_straight_line_segment(start, end, gap_distance, reason, connector_attempts))
 
     if observed_sections:
@@ -199,7 +205,9 @@ async def reconstruct_completed_route(
             await append_connector(start_anchor, end_anchor, "missing_start")
 
     observed_distance_km = round(sum(float(section.get("distance_km") or 0) for section in observed_sections), 3)
-    inferred_distance_km = round(inferred_distance_km, 3)
+    routed_connector_distance_km = round(routed_connector_km, 3)
+    straight_connector_distance_km = round(straight_connector_km, 3)
+    inferred_distance_km = round(routed_connector_km + straight_connector_km, 3)
     total_distance_km = round(observed_distance_km + inferred_distance_km, 3)
     observed_ratio = round(observed_distance_km / total_distance_km, 3) if total_distance_km > 0 else 0.0
     inferred_ratio = round(inferred_distance_km / total_distance_km, 3) if total_distance_km > 0 else 0.0
@@ -209,6 +217,8 @@ async def reconstruct_completed_route(
         "distance_km": total_distance_km,
         "observed_distance_km": observed_distance_km,
         "inferred_distance_km": inferred_distance_km,
+        "routed_connector_distance_km": routed_connector_distance_km,
+        "straight_connector_distance_km": straight_connector_distance_km,
         "observed_distance_ratio": observed_ratio,
         "inferred_distance_ratio": inferred_ratio,
         "inferred_gap_count": sum(1 for section in output if section.get("geometry_kind") == "inferred"),

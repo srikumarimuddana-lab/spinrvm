@@ -72,10 +72,13 @@ const makeRide = (status: string, overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const makeLocation = (address: string) => ({
+// Distinct coords per address so pickup and dropoff are ~1 km apart — matching
+// a real booking (and clearing the mis-resolved-dropoff guard in createRide,
+// which blocks a dropoff sitting on top of the pickup with a different address).
+const makeLocation = (address: string, lat = 43.6532, lng = -79.3832) => ({
   address,
-  lat: 43.6532,
-  lng: -79.3832,
+  lat,
+  lng,
 });
 
 const resetStore = () =>
@@ -117,7 +120,7 @@ describe('rideStore — location and vehicle selection', () => {
   });
 
   test('setDropoff stores location', () => {
-    const loc = makeLocation('200 King St');
+    const loc = makeLocation('200 King St', 43.6450, -79.3800);
     act(() => useRideStore.getState().setDropoff(loc));
     expect(useRideStore.getState().dropoff).toEqual(loc);
   });
@@ -158,7 +161,7 @@ describe('rideStore — ride lifecycle', () => {
     const vehicle = { id: 'vt-1', name: 'Spinr X', description: 'Standard', icon: 'car', capacity: 4 };
     useRideStore.setState({
       pickup: makeLocation('100 Queen St'),
-      dropoff: makeLocation('200 King St'),
+      dropoff: makeLocation('200 King St', 43.6450, -79.3800),
       selectedVehicle: vehicle,
     });
 
@@ -252,7 +255,7 @@ describe('rideStore — ride lifecycle', () => {
 
   test('clearRide nulls currentRide and currentDriver without touching pickup/dropoff', () => {
     const pickup = makeLocation('100 Queen St');
-    const dropoff = makeLocation('200 King St');
+    const dropoff = makeLocation('200 King St', 43.6450, -79.3800);
     useRideStore.setState({
       currentRide: makeRide('in_progress') as any,
       currentDriver: { id: 'drv-1' } as any,
@@ -298,7 +301,7 @@ describe('rideStore — double-booking prevention', () => {
     const vehicle = { id: 'vt-1', name: 'Spinr X', description: 'Standard', icon: 'car', capacity: 4 };
     useRideStore.setState({
       pickup: makeLocation('100 Queen St'),
-      dropoff: makeLocation('200 King St'),
+      dropoff: makeLocation('200 King St', 43.6450, -79.3800),
       selectedVehicle: vehicle,
       currentRide: makeRide('searching') as any,
     });
@@ -377,7 +380,7 @@ describe('rideStore — createRide double-booking guard', () => {
     const vehicle = { id: 'vt-1', name: 'Spinr X', description: 'Standard', icon: 'car', capacity: 4 };
     useRideStore.setState({
       pickup: makeLocation('100 Queen St'),
-      dropoff: makeLocation('200 King St'),
+      dropoff: makeLocation('200 King St', 43.6450, -79.3800),
       selectedVehicle: vehicle,
     });
 

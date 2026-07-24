@@ -27,6 +27,7 @@ import {
   stopGeofenceRecovery,
   setBackgroundTripActive,
   updateBackgroundLocationCadence,
+  recoverTripLocation,
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../utils/backgroundLocation';
@@ -873,6 +874,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           wsRef.current.send(JSON.stringify({ type: 'pong' }));
         }
         break;
+
+      // P3.2: the backend saw this active trip stop reporting GPS (P3.1 nudge).
+      // Recover the stream while the trip is still live — re-assert the dense
+      // trip cadence (restarting the task if the OS killed it) and force-flush
+      // the outbox — rather than only reconstructing the gap afterward.
+      case 'location_health': {
+        recoverTripLocation()
+          .then((running) => {
+            if (running) {
+              tripLocationRecorder
+                .flushPending(foregroundLocationTransport, { force: true })
+                .catch(() => {});
+            } else {
+              console.warn('[Location] recovery could not restart tracking — check location permission');
+            }
+          })
+          .catch(() => {});
+        break;
+      }
 
       // G3: Rider-to-driver chat messages. Backend websocket.py forwards
       // chat_message to `driver_{user_id}`. Push into driverStore so

@@ -244,6 +244,27 @@ export async function updateBackgroundLocationCadence(config: BgLocationConfig):
   );
 }
 
+/**
+ * Recover trip location tracking after a server `location_health` nudge (the
+ * backend saw the trip stop reporting). If the background task died — force
+ * quit, OS-killed — restart it at TRIP_CADENCE; if it's alive, re-assert the
+ * dense trip cadence in place. Returns whether tracking is running afterward so
+ * the caller can surface a "check location permission" banner. Never throws.
+ */
+export async function recoverTripLocation(): Promise<boolean> {
+  try {
+    const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
+    if (!isRunning) {
+      return await startBackgroundLocation(TRIP_CADENCE);
+    }
+    await updateBackgroundLocationCadence(TRIP_CADENCE);
+    return true;
+  } catch (e) {
+    console.warn('[BgLocation] recoverTripLocation failed', e);
+    return false;
+  }
+}
+
 export async function stopBackgroundLocation(): Promise<void> {
   const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (!isRunning) return;

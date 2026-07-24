@@ -46,6 +46,8 @@ from ._shared import (  # noqa: F401
     _is_corporate_paid,
     _round,
     _sum_fare_breakdown,
+    booked_distance_suspect_reason,
+    resolve_booking_distance,
 )
 
 router = APIRouter()
@@ -418,10 +420,15 @@ async def create_ride(
             message_key=ErrorKeys.PAYMENT_UNPAID_RIDE_BLOCK,
         )
 
-    # Charge the multi-leg route (pickup → stops → dropoff) so the booked fare
-    # matches the multi-stop quote shown at /rides/estimate.
-    distance_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
+    # Straight-line haversine through any stops. This is only the FALLBACK: when
+    # the rider sends back the estimate_token (below) it carries the quoted road
+    # distance, and the booking charges that instead so the booked fare matches
+    # the road-route quote shown at /rides/estimate rather than under-billing on
+    # crow-flies (0.7 km vs 1.8 km in the reported incident).
+    haversine_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
+    distance_km = round(haversine_km, 3)
     duration_minutes = int(distance_km / 30 * 60) + 5
+    distance_basis = "haversine"  # overridden from the estimate token when present
 
     # Fetch service_areas ONCE for this request and share across:
     # (1) fare resolution, (2) airport-fee lookup, (3) area-fees/taxes,
@@ -561,6 +568,15 @@ async def create_ride(
                 f"Surge locked from estimate_token for rider={current_user['id']} "
                 f"vt={body.vehicle_type_id}: {float(surge)} (current was {float(current_surge)})"
             )
+            # Charge the quoted road distance the rider was shown, not a
+            # re-derived haversine. Duration recomputed from it with the same
+            # model /estimate used, so quoted and charged time_fare agree.
+            distance_km, duration_minutes, distance_basis = resolve_booking_distance(haversine_km, payload)
+            if distance_basis != "haversine":
+                logger.info(
+                    f"Distance locked from estimate_token for rider={current_user['id']}: "
+                    f"{distance_km}km basis={distance_basis} (haversine was {round(haversine_km, 3)}km)"
+                )
         except EstimateTokenError as e:
             logger.warning(
                 f"estimate_token rejected ({e}); falling back to current surge "
@@ -885,6 +901,34 @@ async def create_ride(
         # DB-enforced idempotency: a concurrent duplicate request already
         # created this ride — return it instead of double-charging.
         return fresh_ride
+
+    # Booking distance sanity (P2.1b): a booked distance below the plausible
+    # floor (likely a wrong dropoff coordinate — the incident's 0.7 km) or a
+    # road route we couldn't fetch (haversine fallback, so possibly undercharged)
+    # is worth flagging for ops + the reconciliation job. Detection only — the
+    # booking already succeeded and short trips are legitimate.
+    try:
+        _suspect_reason = booked_distance_suspect_reason(distance_km, distance_basis)
+        if _suspect_reason and fresh_ride.get("id"):
+            try:
+                from ...utils.distance_integrity import record_integrity_event
+            except ImportError:
+                from utils.distance_integrity import record_integrity_event  # type: ignore
+            _deps.spawn(
+                record_integrity_event(
+                    fresh_ride["id"],
+                    "booked_distance_suspect",
+                    {
+                        "reason": _suspect_reason,
+                        "booked_km": round(float(distance_km), 3),
+                        "haversine_km": round(float(haversine_km), 3),
+                        "distance_basis": distance_basis,
+                    },
+                )
+            )
+            _deps._metric_inc("spinr_rides_booked_distance_suspect_total", {"reason": _suspect_reason})
+    except Exception:
+        logger.error("booking distance sanity check failed for ride %s", fresh_ride.get("id"), exc_info=True)
 
     # ── Apply promo code if provided ──
     if body.promo_code:

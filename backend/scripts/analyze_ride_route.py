@@ -22,10 +22,14 @@ from typing import Any, Sequence
 
 try:
     from .. import db_supabase
-    from ..utils.ride_route_analyzer import analyze_ride_evidence, project_phase_3_route
+    from ..utils.ride_route_analyzer import analyze_ride_evidence, build_incident_report, project_phase_3_route
 except ImportError:
     import db_supabase  # type: ignore
-    from utils.ride_route_analyzer import analyze_ride_evidence, project_phase_3_route  # type: ignore
+    from utils.ride_route_analyzer import (  # type: ignore
+        analyze_ride_evidence,
+        build_incident_report,
+        project_phase_3_route,
+    )
 
 
 _PAGE_SIZE = 1000
@@ -41,6 +45,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--route-output", help="Optional path for precise Phase 3 GeoJSON.")
     parser.add_argument("--overwrite", action="store_true", help="Allow replacing an existing route-output file.")
     parser.add_argument("--no-osrm", action="store_true", help="Skip provider projection and report observed GPS only.")
+    parser.add_argument(
+        "--incident-report",
+        action="store_true",
+        help="Emit the phase-by-phase incident report (distance ladder, accuracy histogram, gap timeline).",
+    )
     return parser
 
 
@@ -51,7 +60,21 @@ def _load_json(path: str, expected_type: type, label: str) -> Any:
     return value
 
 
-async def _load_live(ride_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+async def _load_side_rows(ride_id: str, table: str) -> list[dict[str, Any]]:
+    """Best-effort read of an auxiliary per-ride table (gap events / recomputes).
+
+    Never fatal: a missing table or empty result yields [] so the report still
+    renders. These feed the incident report's gap timeline + recompute audit.
+    """
+    try:
+        rows = await db_supabase.get_rows(table, {"ride_id": ride_id}, limit=500)
+        return list(rows or [])
+    except Exception as exc:  # noqa: BLE001 — diagnostic aux read, never fatal
+        print(f"note: could not read {table}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return []
+
+
+async def _load_live(ride_id: str) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     rides = await db_supabase.get_rows("rides", {"id": ride_id}, limit=1)
     if not rides:
         raise ValueError("ride not found")
@@ -72,7 +95,9 @@ async def _load_live(ride_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]
         if len(page) < _PAGE_SIZE:
             break
         offset += _PAGE_SIZE
-    return rides[0], points[:_MAX_POINTS]
+    gap_events = await _load_side_rows(ride_id, "ride_location_gap_events")
+    recomputes = await _load_side_rows(ride_id, "ride_distance_recomputes")
+    return rides[0], points[:_MAX_POINTS], gap_events, recomputes
 
 
 def _write_route(path: str, geojson: dict[str, Any], overwrite: bool) -> None:
@@ -84,8 +109,10 @@ def _write_route(path: str, geojson: dict[str, Any], overwrite: bool) -> None:
 
 
 async def _run(args: argparse.Namespace) -> int:
+    gap_events: list[dict[str, Any]] = []
+    recomputes: list[dict[str, Any]] = []
     if args.ride_id:
-        ride, locations = await _load_live(args.ride_id)
+        ride, locations, gap_events, recomputes = await _load_live(args.ride_id)
     else:
         if not args.locations_json:
             raise ValueError("--locations-json is required with --ride-json")
@@ -93,7 +120,10 @@ async def _run(args: argparse.Namespace) -> int:
         locations = _load_json(args.locations_json, list, "locations input")
 
     analysis = analyze_ride_evidence(ride, locations)
-    report = dict(analysis.report)
+    if args.incident_report:
+        report = build_incident_report(ride, locations, gap_events=gap_events, recomputes=recomputes)
+    else:
+        report = dict(analysis.report)
     projection = None
     if not args.no_osrm:
         projection = await project_phase_3_route(analysis, ride)

@@ -234,3 +234,73 @@ def test_module_cli_no_osrm_runs_from_repository_root(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert '"strict_phase_3_observed_km"' in completed.stdout
     assert "-104." not in completed.stdout
+
+
+# --- Incident report (P4) ----------------------------------------------------
+
+def _incident_point(seconds, lng, sequence, *, accuracy=8.0, speed=12.0):
+    return {
+        "captured_at": (BASE + timedelta(seconds=seconds)).isoformat(),
+        "recording_session_id": "session-1",
+        "sequence_number": sequence,
+        "lat": 50.45,
+        "lng": lng,
+        "tracking_phase": "trip_in_progress",
+        "accuracy": accuracy,
+        "speed": speed,
+    }
+
+
+def test_build_incident_report_distance_ladder_and_filter_effect():
+    from backend.utils.ride_route_analyzer import build_incident_report
+
+    ride = _ride()
+    # Phase-3 window is 60..180s. Build: clean eastbound movement, two garbage
+    # low-accuracy fixes, and a stationary jitter cluster.
+    points = [_incident_point(60 + i * 4, -104.61 + i * 0.001, 10 + i) for i in range(6)]
+    points.append(_incident_point(90, -104.20, 30, accuracy=90.0))   # low-accuracy
+    points.append(_incident_point(94, -104.90, 31, accuracy=120.0))  # low-accuracy
+    base_lng = -104.60
+    for k in range(5):  # stationary cluster (speed 0, tight)
+        points.append(_incident_point(120 + k * 4, base_lng + k * 0.00003, 40 + k, speed=0.0))
+
+    report = build_incident_report(ride, points, gap_events=[], recomputes=[])
+
+    assert report["incident_report"] is True
+    ladder = report["distance_ladder"]
+    # All rungs present and populated.
+    for key in ("booked_planned_km", "straight_line_pickup_dropoff_km", "raw_gps_phase3_km", "filtered_gps_phase3_km"):
+        assert key in ladder
+    assert ladder["booked_planned_km"] == 6.1
+    assert ladder["straight_line_pickup_dropoff_km"] is not None
+
+    hist = report["accuracy_histogram_phase3"]
+    assert hist["over_gate_count"] == 2  # the two >50 m fixes
+
+    effect = report["gps_filter_effect_phase3"]
+    assert effect["dropped_low_accuracy"] == 2
+    assert effect["collapsed_stationary"] >= 3   # 5-fix cluster → 2
+    # Filtering removes the garbage-fix excursions, so filtered < raw.
+    assert effect["filtered_km"] < effect["raw_km"]
+
+
+def test_build_incident_report_includes_recompute_audit_and_gaps():
+    from backend.utils.ride_route_analyzer import build_incident_report
+
+    ride = _ride()
+    # A trace with a long mid-window silence → a gap in the timeline.
+    points = [
+        _incident_point(60, -104.61, 10),
+        _incident_point(64, -104.60, 11),
+        _incident_point(170, -104.54, 12),  # ~106 s gap
+        _incident_point(174, -104.53, 13),
+    ]
+    recomputes = [
+        {"route_revision": 3, "previous_actual_distance_km": 2.6, "new_actual_distance_km": 1.8, "trigger": "reconstructed_distance"},
+    ]
+    report = build_incident_report(ride, points, gap_events=[], recomputes=recomputes)
+
+    gaps = report["gap_timeline_phase3"]
+    assert any(g["source"] == "breadcrumb_delta" and g["gap_seconds"] > 100 for g in gaps)
+    assert report["distance_recompute_audit"][0]["trigger"] == "reconstructed_distance"
+    assert report["distance_recompute_audit"][0]["new_actual_distance_km"] == 1.8

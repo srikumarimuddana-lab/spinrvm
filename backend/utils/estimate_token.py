@@ -74,6 +74,8 @@ def sign_estimate_token(
     dropoff_lng: float,
     surge_multiplier: float,
     total_fare: float,
+    distance_km: Optional[float] = None,
+    distance_basis: Optional[str] = None,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     now: Optional[float] = None,
 ) -> str:
@@ -83,6 +85,12 @@ def sign_estimate_token(
     the quoted amount against what the token promised and reject replays
     that tweak one field (e.g. change vehicle_type_id) while keeping the
     same signature.
+
+    ``distance_km`` / ``distance_basis`` carry the *quoted road distance* (and
+    how it was derived — ``road_route`` / ``haversine_fallback`` / ``haversine``)
+    from /estimate to /rides, so booking charges the exact distance the rider
+    was shown instead of recomputing straight-line haversine. Optional for
+    back-compat: older clients omit them and booking falls back to haversine.
     """
     issued = int(now if now is not None else time.time())
     payload: Dict[str, Any] = {
@@ -96,6 +104,12 @@ def sign_estimate_token(
         "iat": issued,
         "exp": issued + ttl_seconds,
     }
+    # Only stamp the distance fields when provided so tokens from callers that
+    # don't price on road distance stay byte-identical to the pre-change shape.
+    if distance_km is not None:
+        payload["dk"] = round(float(distance_km), 3)
+    if distance_basis is not None:
+        payload["db"] = str(distance_basis)
     payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     sig = _sign(payload_bytes, settings.JWT_SECRET)
     return f"{_b64url_encode(payload_bytes)}.{_b64url_encode(sig)}"

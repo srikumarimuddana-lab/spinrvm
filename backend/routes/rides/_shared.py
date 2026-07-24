@@ -163,6 +163,60 @@ async def _fetch_directions_polyline(
     return route["polyline"] if route else None
 
 
+# Fare-distance basis selection --------------------------------------------
+# Straight-line haversine is ALWAYS <= the real road distance, so pricing a
+# fare on it systematically undercharges (0.7 km billed vs 1.8 km road route
+# in the reported Wakeling->Walmart incident — a one-sided loss on every ride
+# because 100% of the fare goes to the driver). We prefer the Directions road
+# distance, guarded by a sanity band so a Maps glitch can't over/undercharge,
+# and fall back to haversine when the road distance is missing or implausible.
+FARE_ROAD_SANITY_MIN_RATIO = 0.95  # road can't be materially shorter than crow-flies (rounding slack)
+FARE_ROAD_SANITY_MAX_RATIO = 3.0  # > 3x straight-line => Directions routed somewhere wrong; distrust it
+
+
+def _road_distance_plausible(haversine_km: float, road_km: Optional[float]) -> bool:
+    """True when ``road_km`` is a believable road distance for this trip.
+
+    Guards against a Maps glitch corrupting the fare: the road route must be at
+    least ~as long as the straight line (never materially shorter) and no more
+    than 3x it. The degenerate pickup==dropoff case (haversine 0) trusts only a
+    small positive road distance.
+    """
+    if road_km is None or road_km <= 0:
+        return False
+    if haversine_km <= 0:
+        return road_km <= 1.0
+    ratio = road_km / haversine_km
+    return FARE_ROAD_SANITY_MIN_RATIO <= ratio <= FARE_ROAD_SANITY_MAX_RATIO
+
+
+def select_fare_distance(haversine_km: float, road_km: Optional[float], *, mode: str) -> tuple:
+    """Choose the distance (km) a fare is priced on and the basis label.
+
+    Returns ``(billed_km, basis)``. ``mode`` is the ``fare_distance_basis``
+    app setting:
+
+      - ``"road"``      price on the road distance when present + inside the
+                        sanity band, else haversine (``"haversine_fallback"``).
+      - ``"shadow"``    always bill haversine (no money change), but the caller
+                        still fetches the road distance to log the delta — used
+                        to de-risk the rollout before flipping to ``"road"``.
+      - ``"haversine"`` kill switch — legacy straight-line behaviour.
+
+    basis is one of: ``"road_route"``, ``"haversine_fallback"``, ``"haversine"``.
+    """
+    hv = round(float(haversine_km), 3)
+    if mode == "road" and _road_distance_plausible(hv, road_km):
+        return round(float(road_km), 3), "road_route"
+    if mode == "road":
+        # Road distance unavailable or implausible — bill haversine, but flag it
+        # so reconciliation/ops can see the road route was missing for this ride.
+        return hv, "haversine_fallback"
+    # "shadow" and "haversine" both bill on haversine (shadow logs the delta
+    # separately in the caller). Unknown modes degrade to the safe legacy path.
+    return hv, "haversine"
+
+
 async def _get_active_service_area_for_point(
     lat: float,
     lng: float,

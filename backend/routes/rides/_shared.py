@@ -73,19 +73,26 @@ def _decode_polyline(encoded: str) -> list:
     return coords
 
 
-async def _fetch_directions_polyline(
+async def _fetch_directions_route(
     pickup_lat: float,
     pickup_lng: float,
     dropoff_lat: float,
     dropoff_lng: float,
     api_key: str,
     waypoints: Optional[list] = None,
-) -> Optional[list]:
-    """Call Google Directions API and return [[lat, lng], ...] overview polyline.
+) -> Optional[dict]:
+    """Call Google Directions API and return the road route.
 
-    Returns None on any failure — callers must treat this as a soft error and
-    fall back to the client-computed polyline or the Directions API on-device.
-    Timeout is 3 s, well within the ride-creation SLA.
+    Returns ``{"polyline": [[lat, lng], ...], "distance_km": float | None,
+    "duration_s": int | None}`` or ``None`` on any failure — callers must treat
+    a ``None`` result (or ``None`` fields) as a soft error and fall back to the
+    straight-line ``multi_leg_distance`` haversine path.
+
+    ``distance_km`` / ``duration_s`` are summed across ALL legs so a multi-stop
+    route accumulates the full road path (pickup → stop → … → dropoff), not
+    just the final leg. This is the authoritative road distance the fare is
+    priced on (see ``estimates.py``); haversine is only the fallback when this
+    is unavailable. Timeout is 3 s, well within the ride-creation SLA.
     waypoints is an optional list of {lat, lng} stop dicts (multi-stop rides).
     """
     if not api_key:
@@ -106,18 +113,54 @@ async def _fetch_directions_polyline(
             data = resp.json()
         if data.get("status") != "OK" or not data.get("routes"):
             logger.warning(
-                "_fetch_directions_polyline: status=%s — no route returned",
+                "_fetch_directions_route: status=%s — no route returned",
                 data.get("status"),
             )
             return None
-        encoded = data["routes"][0].get("overview_polyline", {}).get("points", "")
+        route = data["routes"][0]
+        encoded = route.get("overview_polyline", {}).get("points", "")
         if not encoded:
             return None
         pts = _decode_polyline(encoded)
-        return pts if len(pts) >= 2 else None
+        if len(pts) < 2:
+            return None
+        # Sum distance/duration across every leg so multi-stop rides accumulate
+        # the whole road path. Guard each field: for status=OK legs are always
+        # present, but a malformed leg must degrade to the haversine fallback
+        # (distance_km=None), never poison the fare with a partial sum.
+        legs = route.get("legs") or []
+        distance_m = 0
+        duration_s = 0
+        for leg in legs:
+            distance_m += int((leg.get("distance") or {}).get("value") or 0)
+            duration_s += int((leg.get("duration") or {}).get("value") or 0)
+        return {
+            "polyline": pts,
+            "distance_km": round(distance_m / 1000.0, 3) if distance_m > 0 else None,
+            "duration_s": duration_s if duration_s > 0 else None,
+        }
     except Exception as exc:
-        logger.warning("_fetch_directions_polyline failed (non-fatal): %s", exc)
+        logger.warning("_fetch_directions_route failed (non-fatal): %s", exc)
         return None
+
+
+async def _fetch_directions_polyline(
+    pickup_lat: float,
+    pickup_lng: float,
+    dropoff_lat: float,
+    dropoff_lng: float,
+    api_key: str,
+    waypoints: Optional[list] = None,
+) -> Optional[list]:
+    """Return only the road-following overview polyline (back-compat shim).
+
+    Thin wrapper over :func:`_fetch_directions_route` for callers that render
+    the route line but do not price on it. Callers that need the road distance
+    should call ``_fetch_directions_route`` directly. Returns None on any
+    failure, same contract as before.
+    """
+    route = await _fetch_directions_route(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, api_key, waypoints)
+    return route["polyline"] if route else None
 
 
 async def _get_active_service_area_for_point(

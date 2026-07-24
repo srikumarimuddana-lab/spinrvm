@@ -821,11 +821,20 @@ async def set_default_card(
     """
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
+    user = await db_supabase.get_user_by_id(current_user["id"])
     if stripe_secret:
         try:
-            user = await db_supabase.get_user_by_id(current_user["id"])
-            cid = user.get("stripe_customer_id")
+            cid = user.get("stripe_customer_id") if user else None
             if cid:
+                # WS-18: verify the card belongs to this customer before
+                # promoting it to default. Stripe scopes the modify to the
+                # customer, but an explicit ownership check prevents a
+                # confusing error surface and guards the non-Stripe fallback.
+                methods = await asyncio.to_thread(
+                    lambda: stripe.PaymentMethod.list(customer=cid, type="card", api_key=stripe_secret)
+                )
+                if card_id not in [m.id for m in methods.data]:
+                    raise HTTPException(status_code=404, detail="Card not found")
                 await asyncio.to_thread(
                     lambda: stripe.Customer.modify(
                         cid,
@@ -833,9 +842,19 @@ async def set_default_card(
                         api_key=stripe_secret,
                     )
                 )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail="Could not update your default card. Please try again.") from e
+    else:
+        # WS-18: without Stripe, verify card_id matches the user's existing
+        # payment method. Accepting arbitrary strings here would let any
+        # caller write garbage into their own default_payment_method field.
+        if not user or user.get("default_payment_method") != card_id:
+            saved = user.get("saved_payment_methods") if user else None
+            if not saved or card_id not in (saved if isinstance(saved, list) else []):
+                raise HTTPException(status_code=404, detail="Card not found")
 
     await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
 
@@ -902,7 +921,12 @@ async def delete_card(
                 detail="You need at least one card on file. Add another card before removing this one.",
             )
 
+    # WS-18: verify the card belongs to this user before detaching.
+    # Without this, an attacker who knows another user's pm_... ID can
+    # detach it using the platform secret key.
     if stripe_secret:
+        if card_id not in saved_ids:
+            raise HTTPException(status_code=404, detail="Card not found")
         try:
             await asyncio.to_thread(lambda: stripe.PaymentMethod.detach(card_id, api_key=stripe_secret))
         except Exception as e:

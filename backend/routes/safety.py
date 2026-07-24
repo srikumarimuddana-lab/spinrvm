@@ -24,6 +24,7 @@ try:
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
+    from features import notify_safety_team
     from services.zoho_desk_integration import create_ticket_for_safety
 
 logger = logging.getLogger(__name__)

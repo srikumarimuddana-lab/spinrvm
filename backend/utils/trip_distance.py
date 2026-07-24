@@ -28,6 +28,11 @@ try:
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
 
+try:
+    from .gps_filtering import collapse_stationary_clusters, filter_low_accuracy
+except ImportError:
+    pass  # type: ignore
+
 
 logger = logging.getLogger(__name__)
 
@@ -109,36 +114,23 @@ async def load_ride_breadcrumbs(ride_id: str) -> List[Dict[str, Any]]:
     return all_breadcrumbs
 
 
-async def compute_trip_distances(
-    all_breadcrumbs: List[Dict[str, Any]],
-    *,
-    ride_id: str,
-    planned_distance: float,
-    road_snap_timeout_s: float = ROAD_SNAP_TIMEOUT_SECONDS,
-) -> TripDistanceResult:
-    """Compute per-phase and billable-portion distances from a breadcrumb trail.
+def _sum_phase_distances(
+    breadcrumbs: List[Dict[str, Any]],
+) -> "tuple[Dict[str, float], Dict[str, float], int, int]":
+    """Spike-filtered per-phase haversine sum over a breadcrumb trail.
 
-    Behaviour is identical to the historical inline block in ``complete_ride``:
-    spike-filtered haversine per phase, sparse-GPS fallback to the planned
-    distance, and an optional road-snap recompute accepted only inside the
-    1/3x-3x sanity band of the haversine baseline.
+    Attributes each consecutive segment to the current point's tracking_phase,
+    rejecting anomalous segments (distance/gap/speed caps) before adding them.
+    Returns ``(phase_totals_km, phase_seconds, rejected_segments,
+    max_segment_gap_s)``. Pure — no I/O, no mutation.
     """
-    result = TripDistanceResult(actual_distance_km=planned_distance)
-    result.gps_points_count = len(all_breadcrumbs)
-    if result.gps_points_count < 2:
-        return result
-
-    # Compute per-phase distances (attribute each segment to the current
-    # point's phase) and per-phase durations from the timestamp deltas.
-    # Phase 1 (online_idle) is not expected against a ride_id but tolerated
-    # if it shows up.
     rejected_segments = 0
     max_segment_gap_s = 0
     phase_totals: Dict[str, float] = {}
     phase_secs: Dict[str, float] = {}
-    for i in range(1, len(all_breadcrumbs)):
-        prev = all_breadcrumbs[i - 1]
-        curr = all_breadcrumbs[i]
+    for i in range(1, len(breadcrumbs)):
+        prev = breadcrumbs[i - 1]
+        curr = breadcrumbs[i]
         phase = curr.get("tracking_phase") or "unknown"
         seg_km = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
 
@@ -168,9 +160,61 @@ async def compute_trip_distances(
         # to avoid one stale breadcrumb inflating a phase by hours.
         if delta is not None and 0 < delta <= 300:
             phase_secs[phase] = phase_secs.get(phase, 0.0) + delta
+    return phase_totals, phase_secs, rejected_segments, max_segment_gap_s
+
+
+async def compute_trip_distances(
+    all_breadcrumbs: List[Dict[str, Any]],
+    *,
+    ride_id: str,
+    planned_distance: float,
+    road_snap_timeout_s: float = ROAD_SNAP_TIMEOUT_SECONDS,
+    filter_mode: str = "off",
+) -> TripDistanceResult:
+    """Compute per-phase and billable-portion distances from a breadcrumb trail.
+
+    Spike-filtered haversine per phase, sparse-GPS fallback to the planned
+    distance, and an optional road-snap recompute accepted only inside the
+    1/3x-3x sanity band of the haversine baseline.
+
+    ``filter_mode`` controls GPS noise filtering (accuracy gate + stationary
+    collapse, see ``utils/gps_filtering.py``), applied BEFORE summation and the
+    road-snap so jitter can't inflate the billed distance or be map-matched into
+    invented street loops:
+      * ``"off"``    legacy behaviour — no filtering.
+      * ``"shadow"`` bill the raw trace, but also compute the filtered value and
+                     disclose the delta (verifies the change on real traffic).
+      * ``"on"``     bill the filtered trace; keep the raw value for reference.
+    """
+    result = TripDistanceResult(actual_distance_km=planned_distance)
+    result.gps_points_count = len(all_breadcrumbs)
+    if result.gps_points_count < 2:
+        return result
+
+    # Filter GPS noise on a compute-only copy (raw breadcrumbs are the SGI audit
+    # trail and are never mutated). The filtered trace feeds billing + road-snap
+    # only in "on" mode; "shadow" bills raw but measures the filtered delta.
+    filter_stats: Dict[str, Any] = {}
+    filtered_breadcrumbs = all_breadcrumbs
+    if filter_mode in ("shadow", "on"):
+        _acc_kept, _dropped, _null = filter_low_accuracy(all_breadcrumbs)
+        filtered_breadcrumbs, _collapsed = collapse_stationary_clusters(_acc_kept)
+        filter_stats = {
+            "filter_mode": filter_mode,
+            "dropped_low_accuracy": _dropped,
+            "collapsed_stationary": _collapsed,
+            "null_accuracy_points": _null,
+        }
+
+    compute_breadcrumbs = filtered_breadcrumbs if filter_mode == "on" else all_breadcrumbs
+
+    # Compute per-phase distances (attribute each segment to the current point's
+    # phase) and per-phase durations. Phase 1 (online_idle) is not expected
+    # against a ride_id but tolerated if it shows up.
+    phase_totals, phase_secs, rejected_segments, max_segment_gap_s = _sum_phase_distances(compute_breadcrumbs)
     if rejected_segments:
         logger.info(
-            f"Ride {ride_id}: dropped {rejected_segments}/{len(all_breadcrumbs) - 1} "
+            f"Ride {ride_id}: dropped {rejected_segments}/{max(0, len(compute_breadcrumbs) - 1)} "
             "GPS segments as anomalous (speed/distance/gap caps)"
         )
     result.rejected_segments = rejected_segments
@@ -184,7 +228,7 @@ async def compute_trip_distances(
     # pickup to dropoff (equivalent to the booking-time haversine). In that
     # case keep planned_distance so the displayed km matches what the fare
     # was calculated on, rather than showing a misleadingly short GPS value.
-    result.trip_points_count = sum(1 for b in all_breadcrumbs if b.get("tracking_phase") == "trip_in_progress")
+    result.trip_points_count = sum(1 for b in compute_breadcrumbs if b.get("tracking_phase") == "trip_in_progress")
     actual_distance_km = round(result.phase_distances.get("trip_in_progress", 0.0), 2)
     if result.trip_points_count < 5:
         logger.warning(
@@ -202,6 +246,29 @@ async def compute_trip_distances(
         actual_distance_km = planned_distance
 
     result.pickup_to_driver_km = round(result.phase_distances.get("navigating_to_pickup", 0.0), 2)
+
+    # Shadow: also compute the filtered trip distance so the delta vs the
+    # (billed) raw value is observable before flipping filtering on. On: record
+    # the raw (unfiltered) value alongside the billed filtered value. Either way
+    # the numbers land in route_quality for the rollout dashboards.
+    if filter_mode == "shadow":
+        f_totals, _f_secs, _f_rej, _f_gap = _sum_phase_distances(filtered_breadcrumbs)
+        filtered_trip_km = round(f_totals.get("trip_in_progress", 0.0), 2)
+        raw_trip_km = round(result.phase_distances.get("trip_in_progress", 0.0), 2)
+        filter_stats["actual_distance_km_filtered"] = filtered_trip_km
+        filter_stats["filtered_delta_km"] = round(raw_trip_km - filtered_trip_km, 3)
+        logger.info(
+            "[trip_distance] shadow filter ride %s: raw=%.2f filtered=%.2f delta=%.3f (dropped=%d collapsed=%d)",
+            ride_id,
+            raw_trip_km,
+            filtered_trip_km,
+            filter_stats["filtered_delta_km"],
+            filter_stats["dropped_low_accuracy"],
+            filter_stats["collapsed_stationary"],
+        )
+    elif filter_mode == "on":
+        r_totals, _r_secs, _r_rej, _r_gap = _sum_phase_distances(all_breadcrumbs)
+        filter_stats["actual_distance_km_unfiltered"] = round(r_totals.get("trip_in_progress", 0.0), 2)
 
     # Road-snapped recompute (P2): the haversine sum above is already
     # spike-protected by the speed/distance/gap caps, but it still
@@ -224,7 +291,7 @@ async def compute_trip_distances(
         # timeout we settle on the spike-protected haversine value — the same
         # fallback as a provider error, and already an accepted billable
         # baseline (the 1/3x-3x sanity band treats haversine as the reference).
-        road_result = await asyncio.wait_for(compute_road_route(all_breadcrumbs), timeout=road_snap_timeout_s)
+        road_result = await asyncio.wait_for(compute_road_route(compute_breadcrumbs), timeout=road_snap_timeout_s)
     except asyncio.TimeoutError:
         logger.warning(
             f"[trip_distance] road-snap recompute exceeded {road_snap_timeout_s}s for ride {ride_id}; keeping haversine"
@@ -261,7 +328,7 @@ async def compute_trip_distances(
     # on the detail map.
     phases_to_split = ("navigating_to_pickup", "trip_in_progress")
     for phase in phases_to_split:
-        pts = [b for b in all_breadcrumbs if b.get("tracking_phase") == phase]
+        pts = [b for b in compute_breadcrumbs if b.get("tracking_phase") == phase]
         if not pts:
             continue
         step = max(1, len(pts) // MAX_PER_PHASE_POLYLINE_POINTS)
@@ -277,7 +344,7 @@ async def compute_trip_distances(
             for p in sampled
         ]
 
-    rejected_ratio = rejected_segments / max(1, len(all_breadcrumbs) - 1)
+    rejected_ratio = rejected_segments / max(1, len(compute_breadcrumbs) - 1)
     if result.trip_points_count >= 20 and rejected_ratio <= 0.1 and max_segment_gap_s <= 120:
         confidence = "high"
     elif result.trip_points_count >= 5 and rejected_ratio <= 0.25 and max_segment_gap_s <= 300:
@@ -300,4 +367,8 @@ async def compute_trip_distances(
         ),
         "road_snap_accepted": bool(result.road_polyline),
     }
+    # Disclose GPS-filtering effect (dropped/collapsed counts + shadow delta or
+    # the raw value when filtering is on) alongside the confidence signals.
+    if filter_stats:
+        result.route_quality.update(filter_stats)
     return result

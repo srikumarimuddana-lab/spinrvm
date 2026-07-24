@@ -8,23 +8,40 @@ import {
 
 jest.mock('react-native', () => {
   const RN = jest.requireActual('react-native');
-  RN.PermissionsAndroid = {
-    request: jest.fn(),
-    check: jest.fn(),
-    PERMISSIONS: {
-      POST_NOTIFICATIONS: 'android.permission.POST_NOTIFICATIONS',
+  // react-native/index.js exports PermissionsAndroid via a getter-only
+  // property (`get PermissionsAndroid() { return require(...).default }`)
+  // — a plain `RN.PermissionsAndroid = {...}` assignment silently no-ops
+  // since there's no setter. Object.defineProperty overrides it properly.
+  Object.defineProperty(RN, 'PermissionsAndroid', {
+    configurable: true,
+    writable: true,
+    value: {
+      request: jest.fn(),
+      check: jest.fn(),
+      PERMISSIONS: {
+        POST_NOTIFICATIONS: 'android.permission.POST_NOTIFICATIONS',
+      },
+      RESULTS: {
+        GRANTED: 'granted',
+        DENIED: 'denied',
+      },
     },
-    RESULTS: {
-      GRANTED: 'granted',
-      DENIED: 'denied',
-    },
-  };
+  });
   RN.Linking = {
     openSettings: jest.fn(() => Promise.resolve()),
     openURL: jest.fn(() => Promise.resolve()),
   };
   return RN;
 });
+
+// checkNotificationPermission() calls into expo-notifications (a real
+// native module) on the iOS path — mocked to avoid pulling it into the
+// test, which crashes Jest's Expo Winter-runtime polyfill outside a real
+// device/simulator context. Same pattern already used successfully in
+// hooks/__tests__/useScheduledRideReminder.test.ts.
+jest.mock('expo-notifications', () => ({
+  getPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted', granted: true, canAskAgain: true })),
+}), { virtual: true });
 
 describe('Notification Permission Service Helpers', () => {
   beforeEach(() => {

@@ -118,6 +118,14 @@ async def test_reconstructs_missing_start_internal_gap_and_tail_in_order(monkeyp
     ]
     assert result["observed_distance_km"] == 0.4
     assert result["inferred_distance_km"] == 1.15
+    # All three connectors were routed via OSRM (road-following), so the routed
+    # split carries the whole inferred distance and none is blind straight-line.
+    assert result["routed_connector_distance_km"] == 1.15
+    assert result["straight_connector_distance_km"] == 0.0
+    assert (
+        result["routed_connector_distance_km"] + result["straight_connector_distance_km"]
+        == result["inferred_distance_km"]
+    )
     assert result["distance_km"] == 1.55
     assert result["observed_distance_ratio"] == pytest.approx(0.258, abs=0.001)
     assert result["inferred_distance_ratio"] == pytest.approx(0.742, abs=0.001)

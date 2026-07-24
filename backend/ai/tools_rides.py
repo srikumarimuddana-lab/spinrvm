@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 try:
     from .tools import ToolSpec, register, register_ownership_verifier
 except ImportError:  # bare-import runtime (python -m backend.server puts backend/ on sys.path)
-    from ai.tools import ToolSpec, register
+    from ai.tools import ToolSpec, register, register_ownership_verifier
 
 try:
     from .. import db_supabase

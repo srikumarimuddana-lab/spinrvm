@@ -3153,6 +3153,8 @@ async def test_process_payment_company_allowance_unlimited_happy_path():
 
     mock_allowance_svc = MagicMock()
     mock_allowance_svc.apply_rollback = AsyncMock()
+    mock_allowance_svc.apply_ride_debit = AsyncMock()
+    mock_allowance_svc.apply_ride_debit_reversal = AsyncMock()
 
     mock_wallet_svc = MagicMock()
     mock_wallet_svc.apply_adjustment = AsyncMock()
@@ -3199,6 +3201,8 @@ async def test_process_payment_company_allowance_capped_with_master():
 
     mock_allowance_svc = MagicMock()
     mock_allowance_svc.apply_rollback = AsyncMock()
+    mock_allowance_svc.apply_ride_debit = AsyncMock()
+    mock_allowance_svc.apply_ride_debit_reversal = AsyncMock()
 
     mock_wallet_svc = MagicMock()
     mock_wallet_svc.apply_adjustment = AsyncMock()
@@ -3246,6 +3250,8 @@ async def test_process_payment_company_allowance_master_debit_fails():
 
     mock_allowance_svc = MagicMock()
     mock_allowance_svc.apply_rollback = AsyncMock()
+    mock_allowance_svc.apply_ride_debit = AsyncMock()
+    mock_allowance_svc.apply_ride_debit_reversal = AsyncMock()
     mock_allowance_svc.apply_grant = AsyncMock()
 
     mock_wallet_svc = MagicMock()

@@ -66,13 +66,63 @@ def test_driver_cancel_returns_409_when_ride_left_pretrip_state():
         patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()) as avail,
     ):
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(
-                drv.cancel_ride(ride_id="ride-1", reason="", request=None, current_user={"id": "user-1"})
-            )
+            asyncio.run(drv.cancel_ride(ride_id="ride-1", reason="", request=None, current_user={"id": "user-1"}))
 
     assert exc_info.value.status_code == 409
     assert upd.await_count == 1  # only the status-guarded claim was attempted
     avail.assert_not_awaited()  # driver cleanup never ran on the rejected claim
+
+
+def test_driver_cancel_rejects_non_owning_driver():
+    """IDOR guard (findings 5/6/7): a driver cancelling a ride assigned to
+    someone else gets 403 before any write, driver cleanup, or insurance-period
+    transition runs."""
+    from fastapi import HTTPException
+
+    from backend.routes import drivers as drv
+
+    attacker = {"id": "drv-attacker", "user_id": "user-attacker"}
+    # Ride belongs to a different driver, in a pre-trip cancellable state.
+    ride = {"id": "ride-1", "status": "driver_accepted", "rider_id": "rider-1", "driver_id": "drv-victim"}
+
+    with (
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[attacker])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=None)) as upd,
+        patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()) as avail,
+        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()) as period,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                drv.cancel_ride(ride_id="ride-1", reason="", request=None, current_user={"id": "user-attacker"})
+            )
+
+    assert exc_info.value.status_code == 403
+    upd.assert_not_awaited()  # no cancel write ever attempted against another driver's ride
+    avail.assert_not_awaited()
+    period.assert_not_awaited()  # no phantom period-1 row recorded for the attacker
+
+
+def test_driver_cancel_rejects_unassigned_searching_ride():
+    """A `searching` ride has no assigned driver — a driver-side cancel of it is
+    never legitimate and must 403 (driver_id is None != caller)."""
+    from fastapi import HTTPException
+
+    from backend.routes import drivers as drv
+
+    driver = {"id": "drv-1", "user_id": "user-1"}
+    ride = {"id": "ride-1", "status": "searching", "rider_id": "rider-1", "driver_id": None}
+
+    with (
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=None)) as upd,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(drv.cancel_ride(ride_id="ride-1", reason="", request=None, current_user={"id": "user-1"}))
+
+    assert exc_info.value.status_code == 403
+    upd.assert_not_awaited()
 
 
 def test_driver_noshow_returns_409_and_charges_nothing_on_race():

@@ -57,6 +57,123 @@ So: C3 is **not covered** by existing work and stays in this plan as WS-7.
 
 ---
 
+## Systemic themes and patterns
+
+Many findings share a root cause. Addressing these patterns centrally will clear large
+batches of individual items and prevent recurrence — point-fixing each finding without the
+central fix guarantees the next sweep finds the same classes again. Counts are the number
+of findings (across the full audit, not just the 17 critical ones above) touching each
+pattern.
+
+| Pattern / root cause | Findings | Central fix | Lands in |
+|---|---|---|---|
+| Swallowed / fail-open DB or auth errors (warn-and-continue) | 57 | Replace warn-and-continue with `logger.error` + 5xx; never fail open. | **WS-13** (new) — sweep + CI guard; WS-3 fixes the worst instance |
+| Receipts / tax lines do not reconcile (missing discount, wrong GST/PST) | 26 | Recompute tax at settlement; emit a discount line everywhere. | **WS-14** (new) — settlement-side recompute; WS-10 fixes the stops instance |
+| Filter/paginate applied after fetch; silent row caps | 16 | Push filters into the DB query; alert when a row cap is hit. | **WS-15** (new) |
+| Stripe idempotency key omits amount / missing idempotency | 15 | Include amount in every Stripe idempotency key. | **WS-16** (new) — key-builder helper; WS-9 fixes the `/rate` instance |
+| Raw GPS / PII risk in logs, analytics, or third parties | 15 | Central PII scrubber for logs/analytics; proxy 3rd-party calls. | **WS-17** (new); WS-2 fixes the driver-app leak instance |
+| Missing ownership check / IDOR on id-taking endpoints | 13 | Add an ownership guard helper and apply on all id-taking endpoints. | **WS-18** (new) — `require_ride_owner()` helper; WS-1 fixes the cancel instance |
+| Missing admin audit-log on money/config actions | 13 | Wrap admin mutations in a shared `log_admin_action` decorator. | **WS-19** (new) |
+| Background-loop replay hazard (flag/notify after side-effect, lock TTL) | 12 | Claim-before-side-effect; lock TTL below tick interval. | **WS-20** (new) — audit all 16 loops against the Background Loop Recipe |
+| Non-atomic wallet / balance writes (read-modify-write, no row lock) | 9 | Route every balance change through one row-locking Postgres function. | **WS-6** (already planned — `wallet_apply_delta` RPC + CI grep guard) |
+| Insurance-period ledger not recorded / misclassified | 6 | Record period transition on every driver state change. | **WS-12** (already planned — atomic RPC + ride-based reconciler makes every miss self-healing) |
+
+Two of the ten patterns (wallet atomicity, insurance ledger) are already fully owned by
+Phase 1/3 workstreams above — their central fixes were designed as pattern-killers, not
+point fixes. The remaining eight get dedicated hardening workstreams:
+
+**WS-13: Fail-closed error handling (57 findings)** — the largest pattern in the audit.
+1. Sweep: `grep -rn "logger.warning" backend/` filtered to DB/auth/payment/dispatch call
+   sites; classify each as (a) genuine recoverable anomaly → keep, or (b) swallowed
+   critical error → convert to `logger.error(..., exc_info=True)` + `HTTPException`
+   (503 DB / 502 upstream) per the CLAUDE.md "do not silently swallow errors" rules.
+   For `DatabaseError`, include `e.details["original"]`.
+2. CI guard: pre-commit check flagging `except ... logger.warning` (no re-raise) in
+   `routes/`, `services/`, `repositories/`, `db_supabase.py` — new instances need an
+   explicit `# fail-open-reviewed:` annotation with a reason to pass.
+3. Batch the conversions ~10 call sites per commit (batch-size rule), highest-blast-radius
+   first: auth → payments → dispatch → rest.
+
+**WS-14: Receipt/tax reconciliation at settlement (26 findings)**
+1. Single source of truth: settlement (`payment_service`) recomputes GST/PST and
+   `grand_total` from the final fare components at charge time — never trusts a
+   booking-time snapshot that mid-trip edits (stops, waypoints, promo) may have invalidated.
+   WS-10's stop-edit recompute becomes redundant defense rather than the only line.
+2. Discount/promo must appear as its own signed line item on every receipt (the "every
+   charge maps to a disclosed line item" product rule); add an invariant check
+   `sum(line_items) == grand_total == amount_charged` that logs at `error` + metric
+   `spinr_receipt_reconcile_failed_total` on mismatch.
+3. Golden-file receipt tests per fare branch: base/distance/time, surge, promo, corporate,
+   GST-only vs GST+PST.
+
+**WS-15: DB-side filtering and pagination (16 findings)**
+1. Sweep for post-fetch filtering (`[r for r in rows if ...]` after `get_rows`) and
+   unpaginated list endpoints; push predicates into the Supabase query (`.eq/.in_/.gte`)
+   and add `limit/offset` (or keyset) params to list endpoints.
+2. Every place a hard row cap exists (e.g. `limit=1000` defaults), emit
+   `spinr_db_row_cap_hit_total{site=...}` when the result size equals the cap — a silent
+   cap is a correctness bug waiting for scale (dashboards showing partial money totals).
+
+**WS-16: Stripe idempotency key discipline (15 findings)**
+1. Shared helper `stripe_idempotency_key(scope, entity_id, amount_cents, attempt_salt)` —
+   including the amount means a retried request with a *different* amount can never silently
+   reuse a stale key and charge the old amount (Stripe returns the first call's result for
+   a reused key, even if params changed — it errors, but only sometimes, and the error is
+   the good case).
+2. Sweep every `stripe.` call site: no `idempotency_key` → add one; key without amount →
+   rebuild via the helper. One commit per payment surface (charges, transfers, refunds,
+   holds).
+3. Tests: same scope+entity, changed amount → different key; genuine retry → same key.
+
+**WS-17: Central PII scrubbing (15 findings)**
+1. `utils/pii_scrubber.py`: a logging filter + Sentry `before_send` hook that redacts the
+   CLAUDE.md never-log list (raw lat/lng → geohash, phone → last-4, email/names → user_id,
+   PANs, addresses). Install on the root logger and the Sentry init so every existing and
+   future log line passes through it — the sweep then removes sources, the scrubber
+   guarantees the floor.
+2. Third-party/analytics payloads go through the same scrub function before dispatch;
+   any direct third-party SDK call that ships device/user data gets proxied through the
+   backend so the scrubber sits in the path.
+3. Tests: scrubber property tests (every never-log pattern in, redacted out); CI grep guard
+   for `latitude`/`longitude`/`phone` inside `logger.*(` calls.
+
+**WS-18: Ownership guard helper (13 findings)**
+1. `dependencies.require_ride_party(ride, user, role)` (and sibling for wallets/documents):
+   one helper that 403s unless the caller is the ride's rider / assigned driver, used both
+   as the in-memory check *and* by contributing the `driver_id`/`rider_id` predicate to the
+   atomic update filter (the WS-1 pattern, generalized).
+2. Sweep every route taking an entity id in the path (`{ride_id}`, `{wallet_id}`,
+   `{document_id}`, ...): apply the helper. Table the exceptions (admin routes) explicitly.
+3. Tests: parametrized IDOR test hitting each id-taking endpoint as a non-owner → 403/404.
+
+**WS-19: Admin audit-log decorator (13 findings)**
+1. `@log_admin_action(action, entity_type)` decorator that writes the `audit_logs` row
+   (actor, role, entity, before/after summary, reason) in the same request — applied to
+   every mutating `routes/admin/*` endpoint. The manual `insert_one("audit_logs", ...)`
+   blocks (e.g. `admin/wallet.py:170`) migrate into it so coverage can't drift.
+2. Audit-write failure = request failure for money/config actions (fail closed — an
+   unauditable admin money action must not proceed silently); log at `error`.
+3. CI guard: admin route files with a mutating verb and no decorator fail the check.
+
+**WS-20: Background-loop replay audit (12 findings)**
+1. Audit each of the 16 loops in `core/lifespan.py` against the Background Loop Recipe:
+   claim-before-side-effect ordering, idempotency key coverage, and every Redis leader
+   lock's TTL strictly below the tick interval (a TTL ≥ interval means an expired-then-
+   reacquired lock can run two leaders in the same tick).
+2. Fix ordering violations (flag/notify written *after* the side-effect → move the atomic
+   claim first); one loop per commit.
+3. Add a shared `leader_lock(name, ttl)` helper that asserts `ttl < interval` at
+   registration time, so the invariant is structural.
+
+Phase placement: WS-13 (fail-closed) and WS-18 (ownership guard) are P0-adjacent — start
+their sweeps in parallel with Phase 1, since both are exploit-class. WS-16, WS-19, WS-20
+ride with Phase 2. WS-14, WS-15, WS-17 ride with Phase 3. Every new-instance-prevention
+guard (the CI checks in WS-13/15/17/19 and WS-6's wallet grep) ships with its workstream —
+the guard is the deliverable as much as the sweep; the sweep clears today's findings, the
+guard is what stops the next audit from finding 57 more.
+
+---
+
 ## Workstreams and priority order
 
 Ordering principle: (P0-hotfix) small, migration-free, actively-exploitable or
@@ -272,6 +389,9 @@ every allowance-covered corporate ride currently credits the company instead of 
 | 1 | WS-5, WS-6, WS-7 | 248–250 | 3–4 dev-days | `spinr-money-auditor` + `spinr-migration-reviewer` agents; finance sign-off on WS-5 backfill |
 | 2 | WS-8, WS-9, WS-10 | 251 | 2–3 dev-days | money-auditor; rider-app coordination for WS-9 error codes |
 | 3 | WS-11, WS-12 | 252–253 | 2–3 dev-days | migration-reviewer; regulatory note for WS-12 backfilled-row marker |
+| P0-adjacent (parallel w/ Phase 1) | WS-13, WS-18 | none | 3–4 dev-days | security review; batched commits (~10 sites each) |
+| w/ Phase 2 | WS-16, WS-19, WS-20 | none | 2–3 dev-days | money-auditor on WS-16 |
+| w/ Phase 3 | WS-14, WS-15, WS-17 | none | 3–4 dev-days | golden-file receipt tests land before promo/discount changes ship |
 
 Cross-cutting rules for every workstream:
 - One logical change per commit; regression test in the same commit as the fix.

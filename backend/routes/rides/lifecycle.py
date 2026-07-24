@@ -233,13 +233,16 @@ async def rider_complete_ride(
                 if (not inc.get("vehicle_type_id") or inc["vehicle_type_id"] == vt_id)
                 and Decimal(str(inc.get("bonus_amount") or 0)) > 0
             )
-        except Exception:
-            _rider_incentive_total = Decimal("0")
+        except Exception as e:
             logger.error(
                 "rider_complete_ride: incentive claim failed for ride %s",
                 ride_id,
                 exc_info=True,
             )
+            raise HTTPException(
+                status_code=503,
+                detail="Could not finalize ride incentives. Please try again.",
+            ) from e
 
     # ── Driver earnings snapshot ──
     try:

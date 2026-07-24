@@ -303,7 +303,7 @@ async def cancel_ride_rider(
             },
         )
     except Exception as _col_exc:
-        logger.warning(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal")
+        logger.error(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal", exc_info=True)
         await _deps.db_supabase.update_ride(ride_id, _base_update)
 
     # Verify the cancel actually landed in the database. Same class of

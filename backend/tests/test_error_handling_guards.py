@@ -23,6 +23,12 @@ _EARNINGS_SRC = (_ROOT / "routes" / "drivers" / "earnings.py").read_text()
 _PROFILE_SRC = (_ROOT / "routes" / "drivers" / "profile.py").read_text()
 _SUBSCRIPTIONS_SRC = (_ROOT / "routes" / "drivers" / "subscriptions.py").read_text()
 _USERS_SRC = (_ROOT / "routes" / "users.py").read_text()
+_BOOKING_SRC = (_ROOT / "routes" / "rides" / "booking.py").read_text()
+_ESTIMATES_SRC = (_ROOT / "routes" / "rides" / "estimates.py").read_text()
+_LIFECYCLE_SRC = (_ROOT / "routes" / "rides" / "lifecycle.py").read_text()
+_CANCELLATION_SRC = (_ROOT / "routes" / "rides" / "cancellation.py").read_text()
+_QUERIES_SRC = (_ROOT / "routes" / "rides" / "queries.py").read_text()
+_MATCHING_SRC = (_ROOT / "routes" / "rides" / "matching.py").read_text()
 
 
 # ── CRITICAL: driver document verification must fail closed ──────────
@@ -224,3 +230,95 @@ class TestEmergencyContactsFailClosed:
 
     def test_add_contact_count_check_raises(self):
         assert _except_block_raises(_USERS_SRC, "Could not check emergency contact count")
+
+
+# ── CRITICAL: geofence must not be bypassed on DB failure ──────────
+
+
+class TestServiceAreaGeofenceFailsClosed:
+    """WS-13: service_areas DB failure in booking must raise 503, not
+    silently disable geofencing (which lets rides be booked from any
+    location with zero fees/taxes)."""
+
+    def test_service_areas_fetch_raises(self):
+        assert _except_block_raises(_BOOKING_SRC, "Failed to fetch service areas")
+
+    def test_no_all_areas_empty_fallback_in_except(self):
+        lines = _BOOKING_SRC.split("\n")
+        in_except = False
+        for line in lines:
+            if "Failed to fetch service areas" in line:
+                in_except = True
+            elif in_except and "all_areas = []" in line:
+                pytest.fail("all_areas = [] fallback found — DB failure would disable geofencing")
+            elif in_except and ("raise" in line or "def " in line):
+                break
+
+
+# ── HIGH: area fees/taxes must not be zeroed on DB failure ─────────
+
+
+class TestAreaFeesFailClosed:
+    """WS-13: calculate_all_fees failure must raise 503, not silently
+    zero out GST/PST and area fees (tax compliance violation)."""
+
+    def test_booking_fees_raises(self):
+        assert _except_block_raises(_BOOKING_SRC, "Failed to calculate area fees")
+
+    def test_estimate_fees_raises(self):
+        assert _except_block_raises(_ESTIMATES_SRC, "calculate_all_fees failed")
+
+
+# ── MEDIUM: incentive claim must not silently zero driver bonus ────
+
+
+class TestIncentiveClaimFailsClosed:
+    """WS-13: incentive claim failure on ride completion must raise 503,
+    not silently zero the driver's earned bonus."""
+
+    def test_incentive_claim_raises(self):
+        assert _except_block_raises(_LIFECYCLE_SRC, "incentive claim failed")
+
+
+# ── MEDIUM: correct log levels on DB errors in ride paths ──────────
+
+
+class TestRidePathLogLevels:
+    """WS-13: DB errors in ride paths must use logger.error (not warning
+    or debug) per CLAUDE.md convention."""
+
+    def test_fare_snapshot_uses_error(self):
+        lines = _BOOKING_SRC.split("\n")
+        for i, line in enumerate(lines):
+            if "fare snapshot save failed" in line:
+                context = "\n".join(lines[max(0, i - 3) : i + 1])
+                assert "logger.error" in context, "fare snapshot save failure must use logger.error"
+                return
+        pytest.fail("fare snapshot failure log line not found")
+
+    def test_cancel_attribution_uses_error(self):
+        lines = _CANCELLATION_SRC.split("\n")
+        for i, line in enumerate(lines):
+            if "attribution write failed" in line:
+                context = "\n".join(lines[max(0, i - 3) : i + 1])
+                assert "logger.error" in context, "cancellation attribution failure must use logger.error"
+                assert "logger.warning" not in context
+                return
+        pytest.fail("attribution write failure log line not found")
+
+    def test_incentive_claims_lookup_uses_error(self):
+        lines = _QUERIES_SRC.split("\n")
+        for i, line in enumerate(lines):
+            if "incentive_claims lookup failed" in line:
+                context = "\n".join(lines[max(0, i - 3) : i + 1])
+                assert "logger.error" in context, "incentive_claims lookup must use logger.error, not logger.debug"
+                return
+        pytest.fail("incentive_claims lookup failure log not found")
+
+    def test_cascade_redis_filter_not_debug(self):
+        lines = _MATCHING_SRC.split("\n")
+        for i, line in enumerate(lines):
+            if "cascade Redis filter skipped" in line:
+                assert "logger.debug" not in line, "cascade Redis filter failure must not use logger.debug"
+                return
+        pytest.fail("cascade Redis filter log not found")

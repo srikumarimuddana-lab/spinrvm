@@ -416,11 +416,16 @@ async def settle_corporate(
 
     allowance_applied = False
     if allowance_debit > 0 and allowance.get("id") and corp_wallet.get("id"):
-        await corporate_allowance_service.apply_rollback(
+        # ride_debit: master -amount, used +amount. This previously called
+        # apply_rollback, whose master delta is POSITIVE — so every
+        # allowance-covered corporate ride CREDITED the company's master wallet
+        # instead of charging it (migration 248).
+        await corporate_allowance_service.apply_ride_debit(
             wallet_id=corp_wallet["id"],
             allowance_id=allowance["id"],
             member_id=membership["id"],
             amount=_f(allowance_debit),
+            actor_user_id=membership.get("user_id") or ride.get("rider_id"),
             notes=f"ride:{ride_id}:allowance",
         )
         allowance_applied = True
@@ -439,7 +444,10 @@ async def settle_corporate(
         except Exception as master_err:
             if allowance_applied:
                 try:
-                    await corporate_allowance_service.apply_grant(
+                    # Exact inverse of the ride_debit above. apply_grant would
+                    # debit master a second time (its master delta is negative),
+                    # compounding the failure instead of compensating it.
+                    await corporate_allowance_service.apply_ride_debit_reversal(
                         wallet_id=corp_wallet["id"],
                         allowance_id=allowance["id"],
                         member_id=membership["id"],

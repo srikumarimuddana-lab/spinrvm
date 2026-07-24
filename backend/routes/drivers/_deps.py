@@ -81,6 +81,7 @@ try:
         paid_referral_earnings,
         resolve_referral_terms,
     )
+    from ...utils.stripe_charge import cancel_authorization
     from ...utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
@@ -131,6 +132,7 @@ except ImportError:
         paid_referral_earnings,
         resolve_referral_terms,
     )
+    from utils.stripe_charge import cancel_authorization  # type: ignore
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
 db = db_supabase  # legacy alias

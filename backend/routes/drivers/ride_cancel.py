@@ -133,6 +133,22 @@ async def cancel_ride(
             detail="Ride can no longer be cancelled (it has started or already ended)",
         )
 
+    # WS-8 (finding 11): release the booking-time pre-auth hold so the
+    # rider's card isn't blocked for up to 7 days after a driver cancel.
+    _booking_pi = ride.get("payment_intent_id")
+    _auth = (ride.get("auth_status") or "").lower()
+    if _booking_pi and _auth in ("authorized", "fare_only"):
+        try:
+            _released = await _deps.cancel_authorization(ride_id=ride_id, payment_intent_id=_booking_pi)
+            if _released:
+                logger.info("[CANCEL] released pre-auth hold ride_id=%s pi=%s", ride_id, _booking_pi)
+                try:
+                    await db_supabase.update_ride(ride_id, {"auth_status": "released"})
+                except Exception:
+                    logger.warning("[CANCEL] auth_status=released write failed ride_id=%s", ride_id)
+        except Exception as _rel_exc:
+            logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
+
     # Make driver available again
     await db_supabase.set_driver_available(driver["id"], True)
     # M-5: SGI insurance period audit — driver-side cancel after the

@@ -1280,6 +1280,18 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     try:
         current_ride = await _deps.db_supabase.get_ride(r_id)
         if current_ride and current_ride.get("status") == RideStatus.SEARCHING:
+            # WS-8 (finding 11): release the booking-time pre-auth hold
+            # so the rider's card isn't blocked for 7 days after timeout.
+            _booking_pi = current_ride.get("payment_intent_id")
+            _auth = (current_ride.get("auth_status") or "").lower()
+            if _booking_pi and _auth in ("authorized", "fare_only"):
+                try:
+                    _released = await _deps.cancel_authorization(ride_id=r_id, payment_intent_id=_booking_pi)
+                    if _released:
+                        logger.info("[AUTO-CANCEL] released pre-auth hold ride_id=%s pi=%s", r_id, _booking_pi)
+                except Exception as _rel_exc:
+                    logger.error("[AUTO-CANCEL] pre-auth release failed ride_id=%s: %s", r_id, _rel_exc, exc_info=True)
+
             now = datetime.now(timezone.utc)
             base_update = {
                 "status": RideStatus.CANCELLED,
@@ -1287,6 +1299,8 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 "cancellation_reason": "No nearby drivers found. Please try again.",
                 "updated_at": now,
             }
+            if _booking_pi and _auth in ("authorized", "fare_only"):
+                base_update["auth_status"] = "released"
             # Migration 38 adds cancelled_by / cancellation_type so the
             # admin panel can filter "No Driver Found" separately. Fall
             # back to base_update on PGRST204 ("column does not exist")

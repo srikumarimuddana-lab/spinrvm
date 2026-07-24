@@ -175,7 +175,7 @@ class TestRiderEndpointsHaveOwnershipChecks:
             'rider_id") != current_user' in src
             or 'rider_id") == current_user' in src
             or '"rider_id": current_user' in src
-            or "rider_id": current_user" in src
+            or '"rider_id": current_user' in src
             or "_require_ride_in_state_rider" in src
         )
         assert has_rider_check, f"{name} missing rider_id ownership check"
@@ -199,6 +199,6 @@ class TestDriverEndpointsHaveOwnershipChecks:
             or 'driver_id") == driver["id"]' in src
             or '"driver_id": driver["id"]' in src
             or 'driver_id"] == driver_row["id"]' in src
-            or "user_id\") != current_user" in src
+            or 'user_id") != current_user' in src
         )
         assert has_check, f"{name} missing driver_id ownership check"

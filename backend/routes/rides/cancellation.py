@@ -133,32 +133,35 @@ async def cancel_ride_rider(
             if payment_method == "wallet":
                 rider_wallet = await _deps.db_supabase.find_one("wallets", {"user_id": current_user["id"]})
                 if rider_wallet:
-                    old_balance = _round(_d(rider_wallet.get("balance", 0)))
-                    new_balance = max(_round(old_balance - total_cancel_fee), Decimal("0"))
-                    actual_charge = _round(old_balance - new_balance)
-                    if actual_charge > 0:
-                        await _deps.db_supabase.update_one(
-                            "wallets",
-                            {"id": rider_wallet["id"]},
-                            {
-                                "balance": _f(new_balance),
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            },
-                        )
-                        await _deps.db_supabase.insert_one(
-                            "wallet_transactions",
-                            {
-                                "id": str(uuid.uuid4()),
-                                "wallet_id": rider_wallet["id"],
-                                "user_id": current_user["id"],
-                                "type": "cancellation_fee",
-                                "amount": -_f(actual_charge),
-                                "balance_after": _f(new_balance),
-                                "reference_id": ride_id,
-                                "description": f"Cancellation fee for ride {ride_id[:8]}",
-                                "metadata": {"ride_id": ride_id},
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            },
+                    # WS-6 (finding 10): atomic locked debit. This previously
+                    # read the balance, computed max(balance - fee, 0) in
+                    # Python, and wrote it back filtered on {id} only — a
+                    # wallet top-up webhook or another ride's fee landing
+                    # between the read and the write was silently lost.
+                    # clamp_to_floor keeps the charge-what-they-have behaviour
+                    # inside the lock; reference_id=ride_id makes a replayed
+                    # cancellation idempotent rather than double-charging.
+                    _fee_txn = await _deps.db_supabase.wallet_apply_delta(
+                        wallet_id=rider_wallet["id"],
+                        user_id=current_user["id"],
+                        type_="cancellation_fee",
+                        delta=-total_cancel_fee,
+                        reference_id=ride_id,
+                        description=f"Cancellation fee for ride {ride_id[:8]}",
+                        metadata={"ride_id": ride_id},
+                        floor=Decimal("0"),
+                        clamp_to_floor=True,
+                    )
+                    # The RPC writes the ledger row itself, using the amount it
+                    # actually took. Surface a short-collection so the gap
+                    # between fee charged and driver payout is visible.
+                    _charged = _round(abs(_d(str(_fee_txn.get("applied_delta") or 0))))
+                    if _charged < total_cancel_fee:
+                        logger.info(
+                            "[CANCEL] partial cancellation fee collected ride_id=%s charged=%s of=%s",
+                            ride_id,
+                            _charged,
+                            total_cancel_fee,
                         )
             elif payment_method == "card":
                 # Mirrors settle_card's payment-method resolution: a card pinned

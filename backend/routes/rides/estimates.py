@@ -158,9 +158,7 @@ async def compute_ride_estimates(
     # systematically undercharges (0.7 km vs 1.8 km road in the reported
     # incident). ``distance_km`` / ``duration_minutes`` are set after the
     # Directions route resolves.
-    haversine_km = multi_leg_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
-    )
+    haversine_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
 
     fares = await _deps.get_fares_for_location(body.pickup_lat, body.pickup_lng)
 
@@ -254,7 +252,14 @@ async def compute_ride_estimates(
     # API call.
     _app_settings = await _deps.get_app_settings()
     _maps_key = (_app_settings or {}).get("google_maps_api_key", "")
-    _fare_mode = str((_app_settings or {}).get("fare_distance_basis", "shadow")).lower()
+    # Road distance is the billing basis: the rider is quoted the actual road
+    # distance before the ride and charged exactly that. Default "road" (not
+    # "shadow") so a fresh deploy bills the road route with no flag flip needed;
+    # an app_settings row can still force "shadow"/"haversine" as a kill switch.
+    # "road" keeps a safety fallback to haversine ONLY when Directions returns
+    # nothing or a physically implausible distance (a Maps glitch) — flagged as
+    # "haversine_fallback" for reconciliation, never a silent straight-line bill.
+    _fare_mode = str((_app_settings or {}).get("fare_distance_basis", "road")).lower()
 
     # Kick off the Directions road-route fetch NOW so its round-trip overlaps
     # the driver/fare work below instead of stacking on top of it (the fare

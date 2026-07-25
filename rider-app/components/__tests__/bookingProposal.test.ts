@@ -13,6 +13,7 @@ import {
   paymentMethodForProposal,
   pickEstimate,
   postBookingRoute,
+  priceChangeNotice,
   promoForProposal,
   scheduledDateForProposal,
 } from '../bookingProposal';
@@ -211,5 +212,26 @@ describe('displayFareWithPromo', () => {
 
   it('no promo → plain grand total', () => {
     expect(displayFareWithPromo(fullEst, null)).toBe('30.92');
+  });
+});
+
+describe('priceChangeNotice', () => {
+  it('fires on a real increase with both amounts', () => {
+    expect(priceChangeNotice('20.92', '39.44')).toBe('Price updated: now $39.44 (was $20.92).');
+  });
+
+  it('fires on a decrease too', () => {
+    expect(priceChangeNotice('39.44', '29.44')).toBe('Price updated: now $29.44 (was $39.44).');
+  });
+
+  it('stays silent within a cent', () => {
+    expect(priceChangeNotice('20.92', '20.92')).toBeNull();
+    expect(priceChangeNotice('20.92', '20.93')).toBeNull();
+  });
+
+  it('stays silent without a parseable reference', () => {
+    expect(priceChangeNotice(undefined, '20.92')).toBeNull();
+    expect(priceChangeNotice(null, '20.92')).toBeNull();
+    expect(priceChangeNotice('n/a', '20.92')).toBeNull();
   });
 });

@@ -93,6 +93,22 @@ export function buildQuoteBookingMessage(quote: FareQuoteAction, option: FareQuo
   );
 }
 
+/** Notice text when the card's current total drifts from what the rider last
+ * saw (the accepted quote's total on first load, then the previously
+ * displayed total across auto-refreshes). Null when within a cent or when
+ * either side is missing/unparseable. The card must never re-price silently —
+ * the incident's quote went $20.92 → $39.44 with no acknowledgement. */
+export function priceChangeNotice(
+  referenceTotal: string | null | undefined,
+  currentTotal: string,
+): string | null {
+  const ref = parseFloat(referenceTotal ?? '');
+  const cur = parseFloat(currentTotal);
+  if (!Number.isFinite(ref) || !Number.isFinite(cur)) return null;
+  if (Math.abs(cur - ref) <= 0.01) return null;
+  return `Price updated: now $${cur.toFixed(2)} (was $${ref.toFixed(2)}).`;
+}
+
 export type ProposalPaymentMethod = 'card' | 'wallet';
 
 export function paymentMethodForProposal(proposal: BookingProposal): ProposalPaymentMethod {

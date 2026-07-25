@@ -678,6 +678,7 @@ async def propose_ride_booking(
     scheduled_time: Optional[str] = None,
     payment_method: Optional[str] = None,
     confirm_same_location: bool = False,
+    quoted_total: Optional[str] = None,
 ) -> Dict[str, Any]:
     pickup_lat, pickup_lng, pickup_address, in_area, pickup_adjusted, pickup_drift_km = await _reconcile_pickup(
         pickup_lat,
@@ -716,6 +717,15 @@ async def propose_ride_booking(
         proposal["scheduled_time"] = scheduled_time
     if payment_method:
         proposal["payment_method"] = payment_method.lower()
+    if quoted_total:
+        # Display-only reference: the card compares its fresh estimate against
+        # this and shows a "price updated" notice on drift. Never charged —
+        # the server prices from the estimate engine. A junk value is dropped
+        # rather than failing the proposal.
+        try:
+            proposal["quoted_total"] = str(_money(quoted_total))
+        except Exception:
+            logger.warning("ai propose_ride_booking dropped unparseable quoted_total")
 
     message = (
         "A booking card with the exact fare is now shown to the rider. Ask them to "
@@ -857,6 +867,14 @@ register(
                     "description": (
                         "Set true ONLY after the rider explicitly confirms a trip "
                         "whose pickup and dropoff are the same place."
+                    ),
+                },
+                "quoted_total": {
+                    "type": "string",
+                    "maxLength": 16,
+                    "description": (
+                        "The total from the quote the rider accepted (e.g. '20.92'), "
+                        "so the card can warn them if the price has changed since."
                     ),
                 },
             },

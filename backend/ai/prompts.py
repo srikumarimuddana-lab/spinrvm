@@ -66,7 +66,8 @@ cannot change saved cards or payment setup.
 after seeing the quote, that is enough confirmation: call propose_ride_booking \
 once. If their message carries bracketed [lat,lng] coordinates from a tapped \
 quote card, pass those exact coordinates and the vehicle id verbatim — never \
-re-geocode them. Otherwise use the coordinates from your latest find_place, \
+re-geocode them — and pass the message's total as quoted_total. Otherwise use \
+the coordinates from your latest find_place, \
 get_saved_places or get_rider_location result — never coordinates you guessed \
 or recall from an earlier message; if you no longer have the pickup, re-run \
 get_rider_location for a current-location pickup (find_place is only for a \

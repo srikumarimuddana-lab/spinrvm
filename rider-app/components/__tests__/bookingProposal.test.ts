@@ -6,6 +6,7 @@
  * unpaid ride, missing details, generic).
  */
 import {
+  buildQuoteBookingMessage,
   displayFare,
   mapBookingError,
   paymentMethodForProposal,
@@ -14,7 +15,7 @@ import {
   promoForProposal,
   scheduledDateForProposal,
 } from '../bookingProposal';
-import type { BookingProposal } from '@shared/types/ai';
+import type { AiAction, BookingProposal, FareQuoteOption } from '@shared/types/ai';
 
 const PROPOSAL: BookingProposal = {
   pickup_lat: 52.13,
@@ -125,5 +126,53 @@ describe('mapBookingError', () => {
     const d = mapBookingError(new Error('network down'));
     expect(d.message).toContain('nothing was charged');
     expect(d.link).toBeDefined();
+  });
+});
+
+describe('buildQuoteBookingMessage', () => {
+  const quote: Extract<AiAction, { type: 'fare_quote' }> = {
+    type: 'fare_quote',
+    quotes: [],
+    pickup_address: '4500 Gordon Rd, Regina',
+    dropoff_address: '4325 Wakeling St, Regina',
+    pickup_lat: 50.4079,
+    pickup_lng: -104.6501,
+    dropoff_lat: 50.4497,
+    dropoff_lng: -104.5345,
+  };
+  const option: FareQuoteOption = {
+    vehicle_type_id: 'vt-1',
+    vehicle_type: 'Economy',
+    total: '30.92',
+    final_total: '20.92',
+    promo_code: 'SAVE75',
+  };
+
+  it('carries verbatim coordinates, vehicle id, promo and total', () => {
+    expect(buildQuoteBookingMessage(quote, option)).toBe(
+      'Book the Economy (vehicle id vt-1) from 4500 Gordon Rd, Regina [50.40790,-104.65010] ' +
+        'to 4325 Wakeling St, Regina [50.44970,-104.53450] with promo SAVE75, total $20.92.',
+    );
+  });
+
+  it('falls back to prose when the action has no coordinates (older backend)', () => {
+    const bare = { ...quote, pickup_lat: undefined, pickup_lng: undefined, dropoff_lat: undefined, dropoff_lng: undefined };
+    expect(buildQuoteBookingMessage(bare, { ...option, promo_code: undefined, final_total: '' })).toBe(
+      'Book the Economy (vehicle id vt-1) from 4500 Gordon Rd, Regina to 4325 Wakeling St, Regina.',
+    );
+  });
+
+  it('sends coordinates even without address strings', () => {
+    const coordsOnly = { ...quote, pickup_address: undefined, dropoff_address: undefined };
+    expect(buildQuoteBookingMessage(coordsOnly, { ...option, promo_code: undefined })).toBe(
+      'Book the Economy (vehicle id vt-1) from [50.40790,-104.65010] to [50.44970,-104.53450], total $20.92.',
+    );
+  });
+
+  it('degrades to the recommended option with no metadata at all', () => {
+    const bare = { type: 'fare_quote', quotes: [] } as Extract<AiAction, { type: 'fare_quote' }>;
+    expect(buildQuoteBookingMessage(bare, { total: '', final_total: '' })).toBe(
+      'Book the recommended option.',
+    );
   });
 });

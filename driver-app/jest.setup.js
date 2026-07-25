@@ -27,6 +27,35 @@ jest.mock('expo-constants', () => ({
   expoConfig: { hostUri: 'localhost:8081' },
 }));
 
+// Mock expo-location globally. Its real index.ts pulls in expo's Expo.fx.tsx
+// (app-entry / native-module registration side effects), which crashes under
+// Jest with "Cannot read properties of undefined (reading 'create')" at
+// expo/src/errors/AppEntryNotFound.tsx. Any suite that imports driverStore.ts
+// transitively pulls this in via utils/tripLocationRecorder.ts, so mock it
+// once here rather than per-test-file (some test files additionally
+// jest.mock('expo-location', ...) locally with a narrower shape — that's
+// fine, a local mock overrides this default one for that file).
+jest.mock('expo-location', () => ({
+  requestForegroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
+  requestBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
+  getBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
+  getLastKnownPositionAsync: jest.fn(() => Promise.resolve(null)),
+  getCurrentPositionAsync: jest.fn(() => Promise.resolve({
+    coords: { latitude: 0, longitude: 0, speed: 0, heading: 0, accuracy: 5, altitude: 0 },
+    mocked: false,
+    timestamp: 0,
+  })),
+  watchPositionAsync: jest.fn(() => Promise.resolve({ remove: jest.fn() })),
+  startLocationUpdatesAsync: jest.fn(() => Promise.resolve()),
+  hasStartedLocationUpdatesAsync: jest.fn(() => Promise.resolve(false)),
+  stopLocationUpdatesAsync: jest.fn(() => Promise.resolve()),
+  startGeofencingAsync: jest.fn(() => Promise.resolve()),
+  stopGeofencingAsync: jest.fn(() => Promise.resolve()),
+  Accuracy: { Lowest: 1, Low: 2, Balanced: 3, High: 4, Highest: 5, BestForNavigation: 6 },
+  ActivityType: { Other: 1, AutomotiveNavigation: 2, Fitness: 3, OtherNavigation: 4, Airborne: 5 },
+  GeofencingEventType: { Enter: 1, Exit: 2 },
+}));
+
 // Mock @react-native-async-storage/async-storage
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(() => Promise.resolve(null)),

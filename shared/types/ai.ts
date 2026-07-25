@@ -32,6 +32,10 @@ export interface BookingProposal {
   promo_code?: string;
   scheduled_time?: string;
   payment_method?: 'card' | 'wallet';
+  /** The rider explicitly confirmed a trip whose pickup and dropoff are the
+   * same place (assistant's same-location guardrail). Lets the card bypass
+   * the client-side proximity guard for this one confirmed booking. */
+  same_location_confirmed?: boolean;
 }
 
 export interface LocationSuggestionCandidate {

@@ -165,6 +165,113 @@ class TestFindPlace:
         assert ok and "error" in result
 
 
+def _patch_http_capture(payload):
+    """Like _patch_http but also hands back the client mock so tests can
+    assert on the request params."""
+    resp = MagicMock()
+    resp.json.return_value = payload
+    client = MagicMock()
+    client.get = AsyncMock(return_value=resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return patch.object(tools_booking.httpx, "AsyncClient", MagicMock(return_value=ctx)), client
+
+
+class TestGeocodeBias:
+    """The geocode branch must bias street-address lookups near the rider and
+    return candidates nearest-first (incident: '4325 wakeling st' geocoded
+    Canada-wide resolved ~12 km away and was silently quoted)."""
+
+    NEAR = {"near_lat": 50.41, "near_lng": -104.65}
+
+    @pytest.mark.anyio
+    async def test_street_address_geocode_sends_bounds(self):
+        http_patch, client = _patch_http_capture(GEOCODE_OK)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            http_patch,
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok and result["candidates"]
+        params = client.get.call_args.kwargs.get("params") or client.get.call_args.args[1]
+        assert "bounds" in params
+        south, north = params["bounds"].split("|")
+        assert float(south.split(",")[0]) < 50.41 < float(north.split(",")[0])
+
+    @pytest.mark.anyio
+    async def test_unbiased_geocode_sends_no_bounds(self):
+        http_patch, client = _patch_http_capture(GEOCODE_OK)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            http_patch,
+            _patch_area(),
+            _patch_last_ride([]),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
+        assert ok and result["candidates"]
+        params = client.get.call_args.kwargs.get("params") or client.get.call_args.args[1]
+        assert "bounds" not in params
+        assert "distance_from_search_km" not in result["candidates"][0]
+
+    @pytest.mark.anyio
+    async def test_candidates_sorted_nearest_first_with_distance(self):
+        far_first = {
+            "status": "OK",
+            "results": [
+                {  # ~12 km away but ranked first by Google relevance
+                    "formatted_address": "4325 Wakeling St (far), Regina, SK",
+                    "geometry": {"location": {"lat": 50.5177, "lng": -104.6501}},
+                },
+                {  # ~1.5 km away
+                    "formatted_address": "4325 Wakeling St, Regina, SK",
+                    "geometry": {"location": {"lat": 50.4214, "lng": -104.6641}},
+                },
+            ],
+        }
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(far_first),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok
+        cands = result["candidates"]
+        assert cands[0]["address"] == "4325 Wakeling St, Regina, SK"
+        assert cands[0]["distance_from_search_km"] <= cands[1]["distance_from_search_km"]
+        assert cands[0]["distance_from_search_km"] < 3
+
+    @pytest.mark.anyio
+    async def test_far_only_match_warns_the_model(self):
+        far_only = {
+            "status": "OK",
+            "results": [
+                {  # ~54 km from the bias point — outside the 25 km radius
+                    "formatted_address": "4325 Wakeling St, Somewhere Else, SK",
+                    "geometry": {"location": {"lat": 50.90, "lng": -104.65}},
+                }
+            ],
+        }
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(far_only),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok
+        assert "confirm the exact address" in result["note"]
+        assert "km from the rider's search area" in result["note"]
+
+
 class TestRiderLocation:
     @pytest.mark.anyio
     async def test_device_location_preferred(self):

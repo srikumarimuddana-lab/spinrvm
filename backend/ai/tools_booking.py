@@ -22,6 +22,7 @@ a rich card instead of re-reading numbers from model prose.
 
 import logging
 import math
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
@@ -237,9 +238,28 @@ async def _places_available() -> tuple:
     return api_key, None
 
 
+# A last-ride pickup older than this is not a usable "where the rider is"
+# hint — falling back to it silently pointed the assistant's pickup at an
+# address the rider may not have visited in weeks.
+_LAST_RIDE_LOCATION_MAX_AGE_DAYS = 30
+
+
+def _iso_age_days(value) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed).total_seconds() / 86400
+
+
 async def _rider_location_hint(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Rider's best-known location: the device location the app sent with
-    this chat turn, else their most recent ride's pickup. Coordinates are
+    this chat turn, else their most recent ride's pickup (only when recent
+    enough to plausibly still be "where they are"). Coordinates are
     ephemeral tool data — never logged, never persisted."""
     loc = user.get("_client_location") or {}
     if loc.get("lat") is not None and loc.get("lng") is not None:
@@ -250,12 +270,19 @@ async def _rider_location_hint(user: Dict[str, Any]) -> Optional[Dict[str, Any]]
         logger.error("ai rider location hint lookup failed", exc_info=True)
         return None
     if rows and rows[0].get("pickup_lat") is not None and rows[0].get("pickup_lng") is not None:
-        return {
+        as_of = rows[0].get("created_at")
+        age_days = _iso_age_days(as_of)
+        if age_days is not None and age_days > _LAST_RIDE_LOCATION_MAX_AGE_DAYS:
+            return None
+        hint = {
             "lat": rows[0]["pickup_lat"],
             "lng": rows[0]["pickup_lng"],
             "source": "last_ride",
             "address": rows[0].get("pickup_address"),
         }
+        if as_of:
+            hint["as_of"] = as_of
+        return hint
     return None
 
 
@@ -283,11 +310,16 @@ async def get_rider_location(user: Dict[str, Any]) -> Dict[str, Any]:
                     await record_call("geocode")
             except Exception:
                 logger.error("ai get_rider_location reverse geocode failed", exc_info=True)
-    result["note"] = (
-        "This is a recent fix from the rider's device — confirm the address with them before booking."
-        if hint["source"] == "device"
-        else "This is the pickup of their most recent ride — confirm it's still where they are."
-    )
+    if hint["source"] == "device":
+        result["note"] = "This is a recent fix from the rider's device — confirm the address with them before booking."
+    else:
+        when = f" (from {str(hint['as_of'])[:10]})" if hint.get("as_of") else ""
+        result["note"] = (
+            f"This is the pickup of their most recent ride{when} — you MUST confirm "
+            "the address with the rider before quoting or booking from it."
+        )
+        if hint.get("as_of"):
+            result["as_of"] = hint["as_of"]
     return result
 
 

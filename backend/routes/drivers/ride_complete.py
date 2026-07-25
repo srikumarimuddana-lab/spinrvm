@@ -61,6 +61,11 @@ try:
 except ImportError:
     from utils.trip_distance import compute_trip_distances, load_ride_breadcrumbs  # type: ignore
 
+try:
+    from ...utils.period_distance_audit import record_ride_period_distances
+except ImportError:
+    pass  # type: ignore
+
 
 _COMPLETION_MAX_CAPTURE_AGE_SECONDS = 120
 _COMPLETION_MAX_FUTURE_SKEW_SECONDS = 30
@@ -639,6 +644,39 @@ async def complete_ride(
         raise RideStateError(
             f"Ride {ride_id} is no longer in_progress — completion already processed by a concurrent request"
         )
+
+    # Regulatory audit (SGI / Saskatchewan Transportation Act): record the
+    # GPS-measured distance the driver actually drove in each ride-scoped
+    # insurance period — Period 2 (en route, navigating_to_pickup) and Period 3
+    # (passenger aboard, trip_in_progress). This is NOT billing (the rider is
+    # charged the road distance quoted before the ride); it is the append-only
+    # driven-distance audit. Best-effort: never fail settlement on the side write.
+    try:
+        _period2_km = phase_distances.get("navigating_to_pickup", pickup_to_driver_km)
+        _period3_km = phase_distances.get("trip_in_progress", actual_distance_km)
+        _completed_at = update_fields.get("ride_completed_at")
+        if hasattr(_completed_at, "isoformat"):
+            _completed_at = _completed_at.isoformat()
+        await record_ride_period_distances(
+            driver_id=driver["id"],
+            ride_id=ride_id,
+            phases=[
+                {
+                    "period": 2,
+                    "distance_km": _period2_km,
+                    "started_at": ride.get("driver_assigned_at") or ride.get("driver_accepted_at"),
+                    "ended_at": ride.get("ride_started_at"),
+                },
+                {
+                    "period": 3,
+                    "distance_km": _period3_km,
+                    "started_at": ride.get("ride_started_at"),
+                    "ended_at": _completed_at,
+                },
+            ],
+        )
+    except Exception:
+        logger.error("period-distance audit failed for ride %s (settlement unaffected)", ride_id, exc_info=True)
 
     # Route geometry is deliberately finalized outside the settlement request.
     # The finalizer consumes timestamp-ordered durable points, preserves every

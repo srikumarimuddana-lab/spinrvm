@@ -1,138 +1,89 @@
-# Spinr Trip State Machine (as extracted from code)
+# Trip / Ride State Machine (as extracted from code)
 
-Extracted from `backend/models/ride_status.py`, `backend/routes/rides/*.py`,
-`backend/routes/drivers/*.py`, `backend/services/dispatch_service.py`,
-`backend/utils/scheduled_rides.py`, `backend/utils/offer_expiry_reaper.py`,
-`backend/utils/stuck_ride_sweeper.py`. All states/transitions below were
-confirmed by an actual `.status = RideStatus.X` / string-literal write found
-via Grep + Read in this session; see file:line references inline.
+Read-only recon, 2026-07-25. Extracted from `backend/models/ride_status.py`,
+`backend/routes/rides/*.py`, `backend/routes/drivers/*.py`,
+`backend/services/dispatch_service.py`, `backend/utils/scheduled_rides.py`,
+`backend/utils/offer_expiry_reaper.py`, `backend/utils/stuck_ride_sweeper.py`,
+and `backend/features.py`. This is the actual set of states/transitions found
+by static reading + grep, not just the documented diagram in CLAUDE.md -
+differences from CLAUDE.md's diagram are called out explicitly below.
 
-## States (from `backend/models/ride_status.py:17-25`)
+## States found in code
 
-```
-scheduled, searching, driver_assigned, driver_accepted, driver_arrived,
-in_progress, completed, cancelled
-```
+`backend/models/ride_status.py` (`RideStatus(str, Enum)`) defines the
+canonical set, matching CLAUDE.md:
 
-`active_statuses()` (line 29-38): `{searching, driver_assigned,
-driver_accepted, driver_arrived, in_progress}` — matches CLAUDE.md exactly.
-`terminal_statuses()` (line 40-42): `{completed, cancelled}`.
+- `scheduled`
+- `searching`
+- `driver_assigned`
+- `driver_accepted`
+- `driver_arrived`
+- `in_progress`
+- `completed`
+- `cancelled`
 
-## Mermaid diagram
+`active_statuses()` / `terminal_statuses()` classmethods exist on the enum.
+
+## Mermaid state diagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> scheduled: booking with future pickup time
-    [*] --> searching: booking with immediate pickup time
+    [*] --> scheduled : booking.py (scheduled ride created)
+    [*] --> searching : booking.py (immediate ride created)
 
-    scheduled --> searching: scheduled-dispatch loop\n(utils/scheduled_rides.py)
-    scheduled --> cancelled: rider/admin cancel\n(routes/rides/cancellation.py)
+    scheduled --> searching : utils/scheduled_rides.py background loop (dispatch time reached)
+    scheduled --> cancelled : routes/rides/cancellation.py (rider/admin cancel before dispatch)
 
-    searching --> driver_assigned: DispatchService.assign_driver_to_ride\n(services/dispatch_service.py:442-454, STRING LITERAL not enum)
-    searching --> cancelled: stuck_ride_sweeper (5min timeout, system)\n(utils/stuck_ride_sweeper.py:48-65)
-    searching --> cancelled: rider cancel\n(routes/rides/cancellation.py)
+    searching --> driver_assigned : services/dispatch_service.py:448 assign_driver_to_ride (STRING LITERAL "driver_assigned", not RideStatus enum - see findings.md #2)
+    searching --> cancelled : routes/rides/cancellation.py (rider/admin cancel, pre-match)
+    searching --> cancelled : utils/stuck_ride_sweeper.py (auto-cancel, no drivers found after ~5 min; raw Supabase .eq("status","searching") claim - see findings.md #1.5)
 
-    driver_assigned --> driver_accepted: driver accepts offer\n(routes/drivers/ride_flow.py:220-227, filter status=SEARCHING**)
-    driver_assigned --> searching: offer expiry / driver declines\n(routes/rides/matching.py:1032, process_expired_offer)
-    driver_assigned --> cancelled: rider/driver/admin cancel
+    driver_assigned --> searching : routes/rides/matching.py process_expired_offer (offer timeout ~15s, releases driver) [ALSO re-invoked by utils/offer_expiry_reaper.py as a durable backstop - see "duplicate-checked transitions" below]
+    driver_assigned --> driver_accepted : routes/drivers/ride_flow.py (driver accepts offer)
+    driver_assigned --> cancelled : routes/rides/cancellation.py / routes/drivers/ride_cancel.py (pre-trip cancel)
 
-    driver_accepted --> driver_arrived: driver marks arrived\n(routes/drivers/ride_flow.py:605-609)
-    driver_accepted --> cancelled: rider/driver/admin cancel
+    driver_accepted --> driver_arrived : routes/drivers/ride_flow.py (driver marks arrived)
+    driver_accepted --> cancelled : routes/rides/cancellation.py / routes/drivers/ride_cancel.py
 
-    driver_arrived --> in_progress: driver OR rider starts ride\n(routes/drivers/ride_flow.py:670-673; routes/rides/lifecycle.py:90-98 — TWO independent call sites)
-    driver_arrived --> cancelled: rider cancel / driver no-show\n(routes/drivers/ride_cancel.py:268-269)
+    driver_arrived --> in_progress : routes/rides/lifecycle.py rider_start_ride (line ~62) AND/OR routes/drivers/ride_flow.py driver-side start (dual trigger path - see notes)
+    driver_arrived --> cancelled : routes/rides/cancellation.py / routes/drivers/ride_cancel.py (no-show handling)
 
-    in_progress --> completed: driver OR rider completes ride\n(routes/drivers/ride_complete.py:621; routes/rides/lifecycle.py:145-161 — TWO independent call sites)
+    in_progress --> completed : routes/rides/lifecycle.py rider_complete_ride (line ~126) AND routes/drivers/ride_complete.py (driver-side complete, line ~621) [two independent write paths to the same transition - see notes]
 
     completed --> [*]
     cancelled --> [*]
+
+    note right of cancelled
+      cancellation.py also writes ride status
+      back to "scheduled" in the no-show /
+      cancel-and-requeue path for scheduled
+      rides (lines ~483/491) - a re-entrant
+      edge not present in CLAUDE.md's diagram.
+    end note
 ```
 
-`**` note: `routes/drivers/ride_flow.py:220` filters the *acceptance* update
-on `{"id": ride_id, "status": RideStatus.SEARCHING, "driver_id": None}` —
-i.e. code-level evidence suggests a driver "accepts" directly from
-`searching` in one path and the `driver_assigned` step is set moments
-earlier by dispatch (`ride_flow.py:212`) as part of the same offer flow;
-both `driver_assigned` (line 212) and `driver_accepted` (line 227) writes
-appear in the same function, consistent with CLAUDE.md's diagram where
-`driver_assigned` → `driver_accepted` is a fast, same-request transition
-once a specific driver accepts an offer, rather than a separate
-rider-invisible intermediate state that persists.
+## Divergences from the CLAUDE.md-documented diagram
 
-## Discrepancies vs CLAUDE.md's documented diagram
+1. **`scheduled` -> `cancelled` -> `scheduled` (requeue) edge exists in code but not in the CLAUDE.md diagram.** `backend/routes/rides/cancellation.py:483,491` writes both `CANCELLED` and back to `SCHEDULED` in the same code path (scheduled-ride cancel-and-requeue). CLAUDE.md's diagram shows `cancelled` as a pure terminal state reachable only pre-`in_progress`; this requeue edge means `cancelled` is not always terminal in practice for scheduled rides. Needs a design-doc clarification or a fix if this is unintended (e.g. writing `SCHEDULED` should probably never pass through `CANCELLED` as an intermediate write - flagged as a state-machine documentation gap, not confirmed as a functional bug).
 
-CLAUDE.md states:
-```
-scheduled -> searching -> driver_assigned -> driver_accepted -> driver_arrived -> in_progress -> completed
-searching/driver_assigned can revert to searching on offer timeout
-cancelled only pre-trip (before in_progress)
-```
+2. **`driver_assigned` is written as a raw string literal, not the enum**, at `backend/services/dispatch_service.py:448`. Every other transition sampled in this pass uses `RideStatus.<MEMBER>` or `RideStatus.<MEMBER>.value`. See findings.md #2.
 
-What was actually found in code:
+3. **`backend/features.py` writes `IN_PROGRESS`/`SCHEDULED`/`CANCELLED`/`SEARCHING` at lines 461, 1174, 1205, 1877, 1893**, independent of the `routes/rides/` package's transitions above. Not confirmed whether these are dead/legacy call sites or still live; if live, they constitute additional, uncatalogued edges into the same states. See findings.md #5.
 
-1. **Confirmed**: the forward chain and the `driver_assigned → searching`
-   revert-on-timeout path (`routes/rides/matching.py` `process_expired_offer`,
-   invoked both in-line and durably via `utils/offer_expiry_reaper.py`).
-2. **Confirmed**: `cancelled` transitions are only ever written from
-   pre-`in_progress` states in every call site found this pass — no
-   contradicting evidence of a `in_progress → cancelled` write was found.
-3. **Partial gap in CLAUDE.md's diagram**: `scheduled → cancelled` directly
-   (without transiting `searching`) is a real path
-   (`routes/rides/cancellation.py:491` writes back to `RideStatus.SCHEDULED`,
-   implying scheduled-ride cancel/reschedule handling; CLAUDE.md's diagram
-   only shows `scheduled → cancelled (auto, no drivers found after ~5min)`,
-   which is actually the *searching* timeout, not a scheduled-specific one —
-   worth a follow-up read of `cancellation.py:470-495` to pin down exactly
-   what `SCHEDULED` write is for, since it looked more like a
-   cancel-then-requeue than a terminal cancel).
-4. **Not verified this pass**: whether `driver_assigned → cancelled` and
-   `driver_accepted → cancelled` are actually reachable from the rider side
-   specifically (vs only from driver/admin) — `cancellation.py`'s
-   `_cancellable_states` tuple (referenced at `cancellation.py:80`) was not
-   read in full this session; a follow-up should confirm its exact contents
-   match CLAUDE.md's claimed pre-`in_progress` invariant precisely.
+## Transitions implemented/checked in more than one place
 
-## Duplicate-logic call-outs (highest-value finding, cross-referenced from findings.md #1)
+These are the state-guard duplications also flagged in findings.md #1, restated here specifically as they relate to the state machine:
 
-The state machine's guard logic is implemented in **four independent
-places** rather than one:
+| Transition | Independent implementations found |
+|---|---|
+| `searching -> driver_assigned` (and the reverse, timeout) | `services/dispatch_service.py` (assign) + `routes/rides/matching.py:process_expired_offer` (revert on timeout) + `utils/offer_expiry_reaper.py` (durable backstop re-invoking the same `process_expired_offer` - a deliberate second caller of the same function, per its own docstring, rather than a second independent implementation - lower risk than the others in this table) |
+| `driver_arrived -> in_progress` | `routes/rides/lifecycle.py:rider_start_ride` (rider-triggered, inline status check + atomic update, does NOT call `_require_ride_in_state_rider`) - need to confirm whether a driver-side equivalent trigger exists in `routes/drivers/ride_flow.py`; if both rider and driver can independently trigger the same transition, that is a second implementation of the same edge and a potential double-fire race not fully traced in this pass |
+| `in_progress -> completed` | `routes/rides/lifecycle.py:rider_complete_ride` (rider-side, inline guard) + `routes/drivers/ride_complete.py:621` (driver-side, a separate inline filter-based atomic guard). Two independently written code paths converge on the same transition - if both rider and driver apps call their respective endpoints near-simultaneously (e.g. rider taps "done" while driver's app also fires an auto-complete), the atomic `.eq("status","in_progress")` filter on each individually prevents a double-write, but the *guard logic itself* (validation, side effects like receipt generation, notification fan-out) is not shared code, so any bug fixed in one path is not automatically fixed in the other. |
+| `searching -> cancelled` (auto, no-driver timeout) | `utils/stuck_ride_sweeper.py` (raw Supabase client, `.eq("status","searching").lt(...)`) - the only one of the four/five guard implementations that bypasses `db_supabase.py` entirely; also the only automatic-cancellation path for a ride stuck in `searching`, separate from the rider/admin-initiated cancellation in `routes/rides/cancellation.py`. |
+| Rider-side vs driver-side "require ride in state X" guard (used across several transitions above) | `routes/rides/_shared.py:290 _require_ride_in_state_rider` vs `routes/drivers/_shared.py:558 _require_ride_in_state` - same intent, different exception type, both hand-maintained in parallel. |
 
-| Guard style | Location | Exception raised |
-|---|---|---|
-| Structured allowed-set lookup (rider) | `routes/rides/_shared.py:290` `_require_ride_in_state_rider` | `SpinrException` (409) / `RideNotFoundException` (404) |
-| Structured allowed-set lookup (driver) | `routes/drivers/_shared.py:558` `_require_ride_in_state` | plain `HTTPException` (409/404) |
-| Inline check + atomic update_one guard | `routes/rides/lifecycle.py:82-100, 145-161` (`rider_start_ride`, `rider_complete_ride`) | `HTTPException(400)` then `HTTPException(409)` on race |
-| Raw Supabase claim query | `utils/stuck_ride_sweeper.py:57-65` | N/A (background loop, no HTTP response) |
+## Notes / follow-ups not completed in this pass
 
-Additionally, `routes/drivers/ride_complete.py:621` builds an inline filter
-dict (`{"id": ride_id, "driver_id": driver["id"], "status":
-RideStatus.IN_PROGRESS}`) as a fifth ad hoc instance of the same "atomic
-compare-and-swap on status" idiom, without going through either
-`_require_ride_in_state` helper.
-
-**Why this matters for the state machine specifically**: the actual set of
-"allowed prior states" for a given transition (e.g., what states can
-legally precede `in_progress → completed`) is defined independently in each
-of these call sites. There is no single place a reviewer can read to get
-the authoritative list of valid transitions — it must be reconstructed (as
-this document does) by grepping every status-touching file. A change to the
-state machine (e.g., adding a new pre-trip cancellation path) risks being
-applied to only one of the four/five implementations.
-
-## Insurance-period cross-mapping (for context, from `backend/utils/insurance_periods.py`)
-
-Confirmed via `routes/rides/lifecycle.py:105` (period 3 recorded on
-`rider_start_ride`'s successful `in_progress` transition) and `:168` (period
-1 recorded on `rider_complete_ride`'s successful `completed` transition):
-
-| Ride state | Insurance period | Where recorded |
-|---|---|---|
-| `driver_assigned` / `driver_accepted` / `driver_arrived` | 2 | not directly observed this pass in `lifecycle.py` (CLAUDE.md says period 2 starts on `driver_assigned`) — recommend a follow-up read of `routes/drivers/ride_flow.py` around the `driver_assigned`/`driver_accepted` writes (lines 212-227) to confirm the period-2 `record_period_transition` call site |
-| `in_progress` | 3 | `routes/rides/lifecycle.py:105` `await _deps.record_period_transition(driver_row["id"], 3, ride_id=ride_id)` |
-| back to available (post-`completed`) | 1 | `routes/rides/lifecycle.py:168` `await _deps.record_period_transition(driver_id, 1)` |
-
-This confirms the ride-lifecycle code does call into the insurance-period
-audit trail at the two transition points read in this session, consistent
-with CLAUDE.md's regulatory requirement; the period-2 call site (assigned →
-accepted → arrived) was not directly located in this pass and should be a
-follow-up check.
+- `backend/routes/admin/rides.py` (3430 lines) was only grep-sampled for status literals, not read for its own state-transition logic; admin override transitions are not represented in the diagram above and should be added in a follow-up pass.
+- Whether `routes/drivers/ride_flow.py` has an independent driver-triggered `driver_arrived -> in_progress` path (paralleling the rider-triggered one in `lifecycle.py`) was not fully confirmed - flagged in the table above as needing verification, since CLAUDE.md's Insurance Periods table treats `in_progress` entry as the Period 2 -> Period 3 boundary and a duplicate/racing trigger here has regulatory-audit relevance (`driver_insurance_periods` append-only log).
+- `backend/ai/tools_driver.py` and `backend/routes/quests.py` were grep-hit for ride-status string literals but not read this pass; unclear whether they read-only or also write status.

@@ -1,184 +1,128 @@
-# Spinr Findings / Risk Log (Recon Audit)
+# Spinr Risk Log (Recon Audit)
 
-Severity scale: **high** (correctness/compliance/money risk, or a bug class
-that could recur), **medium** (maintainability/consistency risk, plausible
-but not confirmed to have caused an incident), **low** (cosmetic / minor).
-
-All line numbers are from files actually opened with Read or matched with
-Grep in this session (paths relative to `/home/user/spinrvm`).
+Read-only static audit, 2026-07-25. Companion to `module-map.md` and
+`trip-state-machine.md`. Findings are tagged **severity**: high / medium / low,
+each with `file:line`. This is a sampled pass over a large codebase (317
+migrations, ~150 test files) - treat as a prioritized starting point, not an
+exhaustive inventory.
 
 ---
 
-## 1. Duplicated ride-state-guard logic (four independent implementations) — HIGH
+## 1. Duplicated ride-state-guard logic (4+ independent implementations)
 
-The single highest-value finding. The "load ride, verify current status is
-in an allowed set, raise 409/404 otherwise" guard is implemented **four
-separate times** with subtly different behavior:
+**Severity: high** - the single most repeated pattern-inconsistency in the codebase, directly touching the ride state machine invariants CLAUDE.md calls out as mandatory.
 
-1. `backend/routes/rides/_shared.py:290` — `_require_ride_in_state_rider(ride_id, rider_id, allowed_states)`. Raises `SpinrException`/`RideNotFoundException` (structured error codes, `ErrorKeys.RIDE_INVALID_STATUS`).
-2. `backend/routes/drivers/_shared.py:558` — `_require_ride_in_state(ride_id, driver_id, allowed_states)`. Nearly identical docstring and structure to (1), but raises plain `HTTPException` with a free-text detail string — no structured error code.
-3. `backend/routes/rides/lifecycle.py:82-100,145-161` — `rider_start_ride` and `rider_complete_ride` do **not** call either helper above. Each hand-rolls: `if ride.get("status") != RideStatus.X: raise HTTPException(400, ...)` followed by a separate atomic `update_one(filters={"status": X}, ...)` whose `None` result triggers a **409** with yet another wording ("Ride is not in driver_arrived state" / "Ride is not in progress"). This means the 400-vs-409 status code and message format for what is conceptually the same guard differs between this file and (1)/(2).
-4. `backend/utils/stuck_ride_sweeper.py:57-65` — a raw Supabase query `.eq("status", "searching").lt("ride_requested_at", cutoff_iso)` used as an atomic claim, executed directly against the `supabase` client rather than through `db_supabase`/`db` abstraction layers used everywhere else.
+There are at least four separately-written "check current status, then atomically transition" implementations, each with subtly different exception types and race-guard shapes:
 
-Risk: any future change to state-machine semantics (e.g., adding a state, or
-changing which prior states permit a transition) has four call sites to find
-and update, with three different error-shapes for API clients to handle.
-`routes/drivers/ride_complete.py:621` (`_complete_filters = {"id": ride_id,
-"driver_id": driver["id"], "status": RideStatus.IN_PROGRESS}`) is a fifth
-inline-filter pattern, reinforcing that the atomic-claim idiom is copy-pasted
-rather than centralized.
+1. `backend/routes/rides/_shared.py:290` - `_require_ride_in_state_rider` (rider-side), raises `SpinrException`/`RideNotFoundException`.
+2. `backend/routes/drivers/_shared.py:558` - a second, near-identical `_require_ride_in_state` (driver-side) with the same docstring/structure but raises `HTTPException` directly instead of the shared exception hierarchy.
+3. `backend/routes/rides/lifecycle.py:82-100,145-161` - `rider_start_ride`/`rider_complete_ride` do not call either helper above; they inline a `ride.get("status") != X` check followed by a `.update(...).eq("status", expected)` atomic guard.
+4. `backend/routes/drivers/ride_complete.py:621` - driver-side complete uses yet another inline filter-based atomic guard, also bypassing `_require_ride_in_state`.
+5. `backend/utils/stuck_ride_sweeper.py:60-62` - a raw Supabase `.eq("status","searching").lt("ride_requested_at", cutoff)` claim, written directly against the Supabase client rather than through `db_supabase.py`/`db` helpers, bypassing both guard functions entirely.
 
-Recommendation: extract one shared state-transition guard (or extend
-`_require_ride_in_state`/`_require_ride_in_state_rider` to also perform the
-atomic transition, returning a consistent exception type) and have
-`lifecycle.py` and `ride_complete.py` call it instead of re-deriving the
-pattern.
+Risk: any future change to the state-machine invariants has to be found and updated in 4-5 places by hand; the driver-side guard raising a different exception type than the rider-side one means error responses to driver vs rider clients are inconsistent for the same underlying failure mode. Recommendation: consolidate around one canonical guard + one canonical atomic-update helper.
 
-## 2. `assign_driver_to_ride` uses a bare string literal instead of `RideStatus` enum — MEDIUM
+## 2. String-literal status write bypasses the RideStatus enum
 
-`backend/services/dispatch_service.py:448`:
-```
-"status": "driver_assigned",
-```
-Every other status-mutation site sampled in this audit uses
-`RideStatus.DRIVER_ASSIGNED` etc. (see the grep hits catalogued in
-module-map.md — `routes/rides/matching.py:1032`, `routes/drivers/ride_flow.py:212`,
-`routes/rides/cancellation.py:95`, and 40+ others). A future rename or typo
-of the literal string won't be caught by any type check that would catch a
-misuse of the enum member (RideStatus is `str, Enum` so equality still works
-today, but the inconsistency is a correctness landmine for anyone doing a
-grep-based refactor of status values).
+**Severity: medium**
 
-## 3. Three parallel "Decimal money helper" definitions instead of one — MEDIUM
+`backend/services/dispatch_service.py:448` - `DispatchService.assign_driver_to_ride` writes the literal string `"driver_assigned"` rather than `RideStatus.DRIVER_ASSIGNED.value` (enum defined at `backend/models/ride_status.py`, used elsewhere e.g. `utils/scheduled_rides.py`, `routes/rides/cancellation.py`). A future rename/refactor of the enum values could silently desync this call site with no type-checker signal. No test found asserting the literal matches the enum.
 
-`backend/utils/money.py` (`to_decimal`, `dollars_to_cents`, `cents_to_dollars`)
-exists specifically, per its own docstring, "to prevent float drift" bugs.
-However:
-- `backend/services/fare_service.py:40-55` defines its own local `_d`, `_round`, `_f`, `_fd`.
-- `backend/services/payment_service.py:39-51` defines its own local `_d`, `_round`, `_f`, `_money_str`.
-- `backend/routes/rides/_shared.py:324-330` defines its own local `_d`, `_round`.
+## 3. Three independent _d/_round Decimal-helper definitions (money handling not centralized)
 
-None of these three call into `utils/money.py`. They are functionally
-similar (`Decimal(str(v))`, quantize to 2dp with `ROUND_HALF_UP`) but are
-three independent sources of truth for the exact rounding/conversion
-behavior CLAUDE.md calls out as previously having caused a real
-undercharge bug (`money.py`'s own docstring: "Riders charged $29.98 instead
-of $29.99 is a real bug we caught in payments.py"). If one of the three
-copies is ever tweaked (e.g., rounding mode) without updating the other two,
-fare, payment, and ride-adjustment math can silently diverge.
+**Severity: medium**
 
-## 4. `float(...)` used mid-calculation, not only at serialization boundary — MEDIUM
+`backend/utils/money.py` (55 lines, fully read) is the documented canonical Decimal helper module and explicitly documents the `Decimal(str(x))` vs `Decimal(x)` float-drift pitfall. However:
 
-`utils/money.py`'s own docstring implies `float()` should appear only when
-handing a value back over JSON/HTTP ("if a float is needed at a
-serialization boundary, the caller converts explicitly"). Several call
-sites instead convert to `float` and then keep computing:
+- `backend/services/fare_service.py` (top of file) defines its own local `_d`/`_round`/`_f`/`_fd`, not imported from `utils/money.py`.
+- `backend/routes/rides/_shared.py:324-330` defines a third local `_d`/`_round`.
+- `backend/services/payment_service.py` (top of file) defines a fourth set: `_d`/`_round`/`_f`/`_money_str`.
 
-- `backend/routes/rides/_shared.py:608`: `ride_fare = float(base + dist_surged + time_surged + uplift)` inside fare-breakdown assembly (surrounding context lines 580-611); the float value participates in further logic (line 611 checks `float(ride["tip_amount"]) > 0` afterward) rather than being purely the final return value.
-- `backend/routes/rides/_shared.py:357-374`: distance/time-fare math stays in Decimal (`_d`, lines 357-363) but line 374 passes `float(new_total)` into `_deps.calculate_all_fees(...)`, so an external fee/tax calculation runs on a float representation of a Decimal fare total.
-- `backend/routes/rides/matching.py:792`: `_surge_mult = float(ride.get("surge_multiplier") or 1.0)`, feeding a float surge multiplier into later fare-adjacent logic in that function.
+No call site found this pass imports `utils/money.py`. Functionally the reimplementations look similar, but a fix to the float-drift guard in one file won't propagate to the others. Recommendation: converge all three on `utils/money.py`, or confirm/remove it if genuinely unused.
 
-Not confirmed in this pass to have produced a wrong charge — flagged as
-medium because CLAUDE.md states a pre-commit hook "blocking float
-arithmetic in fare code," suggesting this is a known recurring risk area;
-worth checking whether that hook's rule-set actually catches these lines.
+## 4. Float arithmetic occurring mid-calculation, not purely at serialization boundary
 
-## 5. `backend/features.py` still contains ride-status writes alongside the newer `routes/rides/` package — MEDIUM
+**Severity: medium**
 
-`backend/features.py:461,1174,1205,1877,1893` writes `RideStatus.IN_PROGRESS`,
-`SCHEDULED`, `CANCELLED`, `SEARCHING` directly. Given `routes/rides/` is
-described in its own file docstrings as a "god-file split... pure code
-motion" refactor, `features.py` looks like a pre-refactor leftover grab-bag
-module that still independently mutates ride state outside the new package
-structure. Two places evolving the same state machine is a duplication/
-legacy-residue risk: it's easy for one to drift out of sync with the
-guard/notification side-effects (WS emit, insurance period transition) that
-CLAUDE.md requires on every status change.
+`utils/money.py`'s own stated design intent is that float conversion should happen only at serialization boundaries, not during money math. Sampled violations:
 
-Recommendation: confirm (follow-up read) whether `features.py`'s status
-writes are dead/superseded code or still-live call paths, and whether they
-also emit the required WS event + insurance-period transition.
+- `backend/routes/rides/_shared.py:608` - `ride_fare = float(base + dist_surged + time_surged + uplift)` - sums Decimal fare components then converts to float **before** further capping logic (`capped_discount = min(raw_discount, ride_fare)` at line 609) - the promo-discount cap math runs in float space.
+- `backend/routes/rides/_shared.py:599-611` - `raw_discount = float(ride["discount_amount"])`, then `min(raw_discount, ride_fare)`, with the result written directly into the fare-breakdown response as `-capped_discount` (line 609) without re-quantizing through `_round`.
+- `backend/routes/rides/queries.py:562-572` - builds a running `tax` total via `tax += float(ln.get("amount") or 0)` inside a loop (566-572) - summation happens in float space rather than Decimal-then-convert-once.
+- `backend/routes/rides/matching.py:755` - `ba = float(inc.get("bonus_amount") or 0)`, used in subsequent incentive-total arithmetic (not fully traced past this sampled pass).
 
-## 6. Coverage gaps: services without a matching unit-test file under `backend/tests/services/` — MEDIUM
+These are read-path/receipt-display cases (no direct ledger-write corruption confirmed), which is why severity is medium not high, but they are borderline violations of the stated Decimal-only convention. Recommend a `spinr-money-auditor` pass on `_shared.py:560-612` and `queries.py:500-575`.
 
-`backend/tests/services/` contains only:
-`test_corporate_allowance_service.py`, `test_corporate_membership_service.py`,
-`test_corporate_policy_service.py`, `test_corporate_wallet_service.py`,
-`test_dispatch_service.py`, `test_fare_service.py`.
+## 5. backend/features.py - legacy duplicate ride-status writes alongside routes/rides/ package
 
-`backend/services/` has 16 non-`__init__` modules. The following have **no**
-file in `tests/services/`:
-`cancellation_service.py`, `company_booking_service.py`,
-`driver_import_service.py`, `guest_notification_service.py`,
-`guest_user_service.py`, `lms_service.py`, `marketing_consent.py`,
-`payment_service.py`, `stripe_kyc_sync.py`, `zoho_desk_db.py`,
-`zoho_desk_integration.py`, `zoho_desk_service.py`,
-`zoho_ticket_service_area.py`.
+**Severity: medium**
 
-Of these, `payment_service.py` (1032 lines, the largest service file) is the
-most concerning given CLAUDE.md's stated ≥90% coverage minimum for
-`routes/payments.py` / `services/fare_service.py` / `utils/crypto.py`. A
-broader grep did find payment-related coverage scattered across top-level
-`tests/test_p0_rating_and_payment.py`, `test_e4_d10_payment_3ds_quests.py`,
-`test_cancellation_fee_card_charge.py`, `test_instant_payout.py`, and
-others — so `payment_service.py` logic is very likely exercised indirectly
-through route-level integration tests, but there is no dedicated
-`tests/services/test_payment_service.py` unit-test file the way
-`fare_service.py` and `dispatch_service.py` get. Not confirmed as an actual
-coverage hole (only a naming/organization gap) — flagged for a human to
-verify with actual `pytest --cov` output.
+`backend/features.py:461,1174,1205,1877,1893` writes `RideStatus.IN_PROGRESS`/`SCHEDULED`/`CANCELLED`/`SEARCHING` directly - a "legacy/shared grab-bag module" (per module-map.md) coexisting with the newer, purpose-split `routes/rides/` package. Two write paths for the same state machine increase the chance a future invariant change is applied to one path and not the other. Needs a follow-up to confirm whether these write paths are still reachable in production routing or are vestigial.
 
-## 7. `stuck_ride_sweeper.py` bypasses the `db_supabase`/`db` abstraction — LOW/MEDIUM
+## 6. Inconsistent exception-handling style across trip-lifecycle code
 
-`backend/utils/stuck_ride_sweeper.py:57-65` calls `supabase.table("rides")...`
-directly (via the raw `supabase_client.supabase` import) rather than going
-through `db_supabase.py`'s ~66 helper functions. The module does still route
-the *execution* of that built query through `db_supabase.run_sync(_claim,
-retry_policy="write")` (line 68), so the H2-GOAWAY retry behavior is
-preserved — but the query-building bypasses whatever validation/consistency
-helpers `db_supabase.py` centralizes for other callers. Low/medium because
-the retry wrapper is still applied; flagged mainly as an inconsistency for
-future maintainers expecting all Supabase table access to go through
-`db_supabase.py`.
+**Severity: low-medium**
 
-## 8. No stray TODO/FIXME/HACK markers found in `backend/` — LOW (informational)
+The driver-side vs rider-side state-guard divergence in Finding 1 (`HTTPException` directly vs `SpinrException`/`RideNotFoundException`) is itself evidence of inconsistent error-handling convention within the same domain. No violation of "do not silently swallow errors" was found in files read this pass - the one intentional swallow (`utils/insurance_periods.py`, DB-write failure on period-transition audit rows) is explicitly documented as a reasoned compliance trade-off, not an oversight. Recommend a dedicated grep for bare `except:`/`except Exception:` blocks across `backend/routes/` and `backend/services/` as a follow-up (not completed this pass).
 
-A repo-wide grep for `TODO|FIXME|HACK` under `backend/` returned exactly one
-hit: `backend/tests/test_p1_multi_stop.py:12` — a comment describing a test
-marked `xfail` "so CI flags the gap as a living TODO." This is not a code
-TODO but a deliberate, already-tracked test gap. No forgotten/stray
-TODO-style debt markers were found in this pass (reassuring, not a defect).
+## 7. backend/routes/admin/rides.py - largest file in the tree (3430 lines), only sampled
 
-## 9. Rider-guard vs driver-guard exception-type inconsistency — MEDIUM (subset of #1, API-contract-visible)
+**Severity: medium**
 
-Rider-side 409s raise a structured `SpinrException` with `error_code`,
-`details`, and `message_key` (`backend/routes/rides/_shared.py:305-311`).
-Driver-side 409s raise a plain `HTTPException(status_code=409, detail=f"...")`
-with no structured error code (`backend/routes/drivers/_shared.py:571-579`).
-If either client (rider app vs driver app) relies on a structured
-`error_code` field to branch UI behavior on a 409, the driver app receives a
-strictly less structured payload for the equivalent failure mode. Confirm
-with frontend code whether this asymmetry is already compensated for
-client-side.
+Given its size and that it's an admin-only surface with override capability over the trip state machine, this file was only grep-sampled for status literals, not read end-to-end. It is a plausible location for a fifth variant of Finding 1's pattern, and for the "at most one active ride" invariant to be skipped for admin overrides (which may be by design, but that exemption needs explicit verification). Flagged as a required follow-up read, not confirmed as a live bug.
 
-## 10. Files confirmed to read/write `ride.status` (compiled for downstream reference)
+## 8. Thin test coverage: routes/drivers/ride_flow.py
 
-Compiled from Grep hits actually returned in this session (not
-exhaustive — a small number of `admin/rides.py` and `features.py` sites were
-sampled rather than individually enumerated):
+**Severity: medium**
 
-- `backend/routes/rides/{booking,lifecycle,cancellation,matching,queries}.py`
-- `backend/routes/rides/_shared.py` (`_require_ride_in_state_rider`)
-- `backend/routes/drivers/{_shared,ride_flow,ride_cancel,ride_complete,earnings,referrals,payouts,subscriptions}.py`
-- `backend/services/dispatch_service.py` (`assign_driver_to_ride`)
-- `backend/utils/{offer_expiry_reaper,stuck_ride_sweeper,scheduled_rides,spinr_pass}.py`
-- `backend/features.py`
-- `backend/routes/{promotions,admin/rides}.py`
-- Tests: `backend/tests/test_ride_state_machine.py`, `test_e2e_ride_lifecycle.py`, `test_coverage_rides.py`, `test_scheduled_dispatch_cr.py`, `test_p2_scheduled_rides.py`, and ~15 more (see module-map.md).
+`ride_flow.py` (accept/arrive/start - exactly the transitions CLAUDE.md's insurance-period table maps to Period 2, TNC primary commercial liability) is referenced by only 1 test file this pass, versus 8-20+ for `dispatch_service.py`, `lifecycle.py`, `payments.py`, `payment_service.py`, `webhooks.py`. This is a coverage gap on a regulatory-adjacent code path. Recommend an explicit test (or extending `test_ride_state_machine.py`) covering accept -> arrive -> start with the race-guard conditions from Finding 1.
 
-This list itself is evidence for findings #1 and #5 — the number of
-distinct files independently touching `ride.status` is large enough that a
-single centralized transition function (even if just a thin wrapper
-enforcing the guard + WS-emit + insurance-period-transition triple that
-CLAUDE.md mandates on "every state change") would materially reduce the
-risk surface.
+## 9. GPS/location integrity check ordering
+
+**Severity: low**
+
+`backend/routes/drivers/location.py:329-359` (`update_location_batch`) selects `points[-1]` as the authoritative point before `check_location_integrity` is invoked (import at line 338, called after line 358). Not fully traced whether a failed integrity check actually blocks the write or only annotates it. Test coverage exists (`test_location_batch.py`, `test_p3_background_location.py`, `test_drivers_extended.py`), so this is a "verify the assertion path" item, not a coverage gap.
+
+## 10. utils/offer_expiry_reaper.py - inverted dependency (utils -> routes)
+
+**Severity: low**
+
+`backend/utils/offer_expiry_reaper.py` imports and calls `routes/rides/matching.py`'s `process_expired_offer` - utils importing from routes is backwards for a typical layered architecture, self-documented as deliberate in the reaper's own docstring. Flagged for architectural awareness only, not a bug.
+
+## 11. Notification/live-activity send guarantee not verified across all 5 transition-writing sites
+
+**Severity: low**
+
+`backend/utils/live_activity.py`'s `send_live_activity_update` is, per module-map.md, "called at nearly every status transition point" - but with 4+ independent state-transition implementations (Finding 1), it was not verified whether every one of those call sites correctly fires the WS event + push/live-activity update exactly once per transition, as CLAUDE.md requires. This is a plausible consequence of Finding 1 rather than an independently confirmed bug.
+
+## 12. backend/utils/money.py appears to have zero production importers
+
+**Severity: low**
+
+No call site found this pass imports `utils/money.py` despite it being the apparent canonical Decimal helper (see Finding 3). If confirmed dead in a full-tree follow-up grep, this is either genuinely dead code that should be removed, or evidence the "canonical" designation is aspirational and the three duplicate implementations are the de facto standard.
+
+## 13. Race-condition surface: driver location writes vs. dispatch claim
+
+**Severity: low-medium**
+
+`backend/services/dispatch_service.py`'s `claim_driver`/`claim_any_driver` perform an atomic `is_available=True->False` claim, but driver location writes (`routes/drivers/location.py:update_location_batch`) are a separate, unsynchronized write path against the same `drivers` row. Not confirmed as a live bug (no evidence of a column-level conflict - location fields and availability fields are logically disjoint), but flagged because CLAUDE.md's `is_available => is_online` invariant depends on multiple independent writers (`go_online`/`go_offline`, dispatch claim, presence heartbeat) touching the same row; a follow-up should confirm no code path updates `is_online`/`is_available` from the location-update handler in a way that could race with a concurrent dispatch claim.
+
+---
+
+## Test-coverage cross-check summary (money / auth / trip-state)
+
+Per-file test-file-reference counts (rough proxy for coverage breadth, not depth):
+
+| File | Referencing test files (approx) | Note |
+|---|---|---|
+| `services/payment_service.py` | 17 | Reasonable breadth |
+| `routes/payments.py` | 21 | Reasonable breadth |
+| `routes/webhooks.py` | 10 | Reasonable breadth |
+| `services/dispatch_service.py` | 8 | Moderate |
+| `routes/auth.py` | 123 | Very high (touched by most integration tests) |
+| `routes/rides/lifecycle.py` | 20 | Reasonable breadth |
+| `routes/drivers/ride_flow.py` | 1 | Thin - see Finding 8 |
+| `utils/insurance_periods.py` | 3 | Thin given regulatory significance; module is small (164 lines) so may be adequate - flag for follow-up |
+| `services/corporate_wallet_service.py` | 6 | Moderate |
+
+No Stripe webhook type was checked individually against "every Stripe webhook type before hitting production" (CLAUDE.md testing convention) - recommend a dedicated pass enumerating `routes/webhooks.py` event-type branches against `test_webhooks_main.py`/`test_stripe_*` coverage; not completed here due to scope.

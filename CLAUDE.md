@@ -43,28 +43,9 @@ Sprint-scoped and domain-deep context is loaded on demand, not baked into this f
 - `@.claude/context/domain-safety.md` — SOS, insurance periods, emergency flows
 - `@.claude/context/regulatory-sk.md` — Saskatchewan Transportation Act obligations
 
-## graphify
-
-This project has a graphify knowledge graph at graphify-out/.
-
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
-- The package is published on PyPI as `graphifyy` (double-y), but imports as `graphify`. Install with `pip install graphifyy` if the rebuild command fails with `ModuleNotFoundError`.
-- `graphify-out/cache/` is the per-file extraction cache and is gitignored (regenerated on rebuild). The tracked outputs are `graph.json`, `GRAPH_REPORT.md`, and `manifest.json`.
-
 ## Project Overview
 
-Spinr is a Canadian ride-sharing platform (Saskatchewan-first, 0% driver commission). It consists of five surfaces:
-
-| Surface | Tech | Purpose |
-|---|---|---|
-| `backend/` | Python 3.12 + FastAPI | Business logic, auth, dispatch, payments |
-| `rider-app/` | React Native (Expo SDK 54) | Passenger booking, wallet, payments |
-| `driver-app/` | React Native (Expo SDK 54) | Ride acceptance, navigation, earnings |
-| `admin-dashboard/` | Next.js 16 | Fleet ops, analytics, corporate management |
-| `shared/` | TypeScript | Shared API client, stores, types (`@spinr/shared`) |
+Spinr is a Canadian ride-sharing platform (Saskatchewan-first, 0% driver commission), split across `backend/`, `rider-app/`, `driver-app/`, `admin-dashboard/`, and `shared/` — see each surface's manifest for its tech stack.
 
 ## Commands
 
@@ -79,29 +60,6 @@ pytest -m unit                     # unit tests only
 pytest -m "not slow"               # skip slow tests
 ruff check .                       # lint
 ruff format .                      # format
-```
-
-### Rider App / Driver App
-
-```bash
-cd rider-app   # or driver-app
-yarn install
-yarn start          # Expo dev server
-yarn test           # Jest
-yarn test:coverage
-yarn lint           # ESLint via expo lint
-```
-
-### Admin Dashboard
-
-```bash
-cd admin-dashboard
-npm ci
-npm run dev         # Next.js dev server
-npm run build
-npm test            # Vitest unit tests
-npm run test:e2e    # Playwright E2E
-npm run lint
 ```
 
 ### Database Migrations
@@ -241,60 +199,9 @@ Rules:
 
 Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
 
-Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest is `144_ai_conversations_admin_actor.sql`; **next free slot is `145`** — re-verify with `ls backend/migrations | sort -V | tail -1` since this note goes stale). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. (Pre-existing duplicate prefixes at 08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58, 91, 92, 96, 138, 142, 143 are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.)
+Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number — check the current highest with `ls backend/migrations | sort -V | tail -1` before picking the next one. Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. Duplicate numeric prefixes exist from history and are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.
 
-Migration rules:
-- **Append-only**: never edit a merged migration. Schema changes go in a new file.
-- **Forward-compatible**: every migration must be safe to run against production traffic in flight. Wrap long-running `ALTER TABLE` in batched updates.
-- **Always reversible on paper**: put the rollback plan in a top comment, even if no down-migration file.
-- **RLS first**: every new table that stores user data must ship with RLS policies in the same migration.
-- **Indexes for new query patterns**: if you add a `WHERE foo = ?` or `ORDER BY foo`, add the index in the same migration.
-
-Table naming:
-- Lowercase, snake_case, plural (`rides`, `drivers`, `corporate_allowances`)
-- Junction tables: `<a>_<b>` alphabetical (`corporate_member_rides`)
-- Audit tables: `<entity>_audit` or `<entity>_events` (append-only, no updates)
-
-RLS policy pattern:
-- Every user-data table has `SELECT` restricted to `auth.uid() = user_id` or role-based equivalents
-- `INSERT` / `UPDATE` / `DELETE` explicitly enumerated — never `FOR ALL` on user-writable tables
-- Service role (backend) bypasses RLS by design; the frontend anon key must never touch user data directly
-
-Postgres functions for mutating money or credits: call from backend only, never from client. All money-touching functions must be `SECURITY DEFINER` with explicit `search_path` pinning.
-
-## Background Loop Recipe
-
-The 16 startup loops in `core/lifespan.py` all run on every replica simultaneously. A new loop must satisfy the replay-safety contract or it will cause duplicate writes, charges, or notifications.
-
-Template for a new loop:
-
-```python
-# backend/utils/my_loop.py
-async def my_loop() -> None:
-    """One-line purpose. Interval. What state it reads/writes."""
-    while True:
-        try:
-            await _tick()
-        except Exception:
-            logger.error("my_loop tick failed", exc_info=True)
-        await asyncio.sleep(INTERVAL_SECONDS)
-
-async def _tick() -> None:
-    # 1. Query candidates with a filter that excludes already-processed rows
-    # 2. For each candidate, attempt an atomic claim (UPDATE ... WHERE reminder_sent = false RETURNING *)
-    # 3. Only act on rows where the claim returned a row (other replicas got zero)
-    # 4. Do the side-effect (notify, charge, dispatch)
-    # 5. On failure, don't re-queue — idempotency key or claim flag prevents replay
-    ...
-```
-
-Replay-safety options (pick one):
-- **Claim flag column** (`reminder_sent`, `auto_approved_this_period`) — preferred for simple cases
-- **Idempotency key** (`stripe_events.event_id`) — for external-system interactions
-- **Atomic DB claim** (`UPDATE ... WHERE status='pending' RETURNING *`) — for dispatch-style work queues
-- **Redis leader lock** (`SET NX EX`) — only for loops that genuinely must run on one replica
-
-Forbidden: in-process locks, filesystem flags, "this pod is primary" environment logic.
+Full conventions (append-only rule, RLS pattern, table naming, index rules): see `backend/migrations/CLAUDE.md`.
 
 ## Observability Conventions
 
@@ -491,26 +398,7 @@ Production health is measured against these targets. Code that risks breaching t
 - **Frontend/Admin**: Vercel
 - **Mobile builds**: Expo EAS — only triggered when commit message contains `[build]`
 
-## Agent Framework (`agents/`)
-
-Python SDK for multi-agent development automation. **Not part of the production runtime** — used for code review, testing, documentation, and deployment orchestration during development.
-
-| Module | Class | Role |
-|--------|-------|------|
-| `base_agent.py` | `BaseAgent` | Abstract base: task queue, message bus, knowledge entries |
-| `orchestrator.py` | `OrchestratorAgent` | Top-level coordinator: decomposes tasks, assigns to specialists |
-| `registry.py` | `AgentRegistry` | Single entry-point: initialise all agents, submit tasks |
-| `code_reviewer.py` | `CodeReviewerAgent` | Static analysis and best-practice checks |
-| `tester.py` | `TestingAgent` | Test generation and coverage analysis |
-| `security_agent.py` | `SecurityAgent` | Vulnerability scanning |
-| `backend_agent.py` | `BackendAgent` | FastAPI / Supabase domain specialist |
-| `frontend_agent.py` | `FrontendAgent` | React Native / Expo domain specialist |
-| `deployer.py` | `DeploymentAgent` | CI/CD and Railway/EAS deployment tasks |
-| `documenter.py` | `DocumentationAgent` | Doc generation and CLAUDE.md maintenance |
-| `knowledge_base.py` | `KnowledgeBaseAgent` | Shared knowledge store for all agents |
-| `cli.py` | — | CLI entry-point (`python -m agents.cli`) |
-
-**Graphify coverage** — `OrchestratorAgent` and `AgentRegistry` are high-centrality god nodes in the graphify graph (community 0). Read `graphify-out/GRAPH_REPORT.md` before making cross-agent changes.
+Agent Framework (`agents/`) — a separate Python SDK for multi-agent development automation, **not part of the production runtime**. Conventions: `agents/CLAUDE.md`.
 
 ## Claude-Adjacent Directories
 

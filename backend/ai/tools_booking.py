@@ -21,6 +21,7 @@ a rich card instead of re-reading numbers from model prose.
 """
 
 import logging
+import math
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
@@ -112,24 +113,40 @@ async def _maps_get(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
         return resp.json()
 
 
-async def _candidates_from_results(results) -> list:
-    candidates = []
-    for result in (results or [])[:3]:
+async def _candidates_from_results(
+    results,
+    near_lat: Optional[float] = None,
+    near_lng: Optional[float] = None,
+) -> list:
+    biased = near_lat is not None and near_lng is not None
+    parsed = []
+    for result in results or []:
         loc = (result.get("geometry") or {}).get("location") or {}
         lat, lng = loc.get("lat"), loc.get("lng")
         if lat is None or lng is None:
             continue
+        distance_km = _trip_distance_km(near_lat, near_lng, lat, lng) if biased else None
+        parsed.append((distance_km, result, lat, lng))
+    if biased:
+        # Google orders by its own relevance, which can rank a far same-named
+        # match above the one beside the rider (incident: "4325 wakeling st"
+        # resolved ~12 km away). Nearest-first before the cut — the same
+        # defence as maps_proxy's autocomplete re-sort.
+        parsed.sort(key=lambda item: item[0])
+    candidates = []
+    for distance_km, result, lat, lng in parsed[:3]:
         area = await _resolve_area(lat, lng)
-        candidates.append(
-            {
-                "name": result.get("name"),
-                "address": result.get("formatted_address"),
-                "lat": lat,
-                "lng": lng,
-                "in_service_area": area is not None,
-                "service_area": (area or {}).get("name"),
-            }
-        )
+        candidate = {
+            "name": result.get("name"),
+            "address": result.get("formatted_address"),
+            "lat": lat,
+            "lng": lng,
+            "in_service_area": area is not None,
+            "service_area": (area or {}).get("name"),
+        }
+        if distance_km is not None:
+            candidate["distance_from_search_km"] = round(distance_km, 1)
+        candidates.append(candidate)
     return candidates
 
 
@@ -167,16 +184,25 @@ async def _lookup_place_candidates(
                 data = await _maps_get(_PLACES_TEXT_URL, params)
                 allowed = ("OK", "ZERO_RESULTS")
             else:
-                data = await _maps_get(
-                    _GEOCODE_URL,
-                    {
-                        "address": query,
-                        "components": "country:CA",
-                        "region": "ca",
-                        "key": api_key,
-                        "language": "en",
-                    },
-                )
+                params = {
+                    "address": query,
+                    "components": "country:CA",
+                    "region": "ca",
+                    "key": api_key,
+                    "language": "en",
+                }
+                if near_lat is not None and near_lng is not None:
+                    # ~25 km soft-bias box around the rider (matches
+                    # _PLACE_RADIUS_METERS). The Geocoding API has no
+                    # location/radius bias — bounds is all it offers, and it
+                    # is soft, so the nearest-first sort in
+                    # _candidates_from_results is the real defence. Without
+                    # this, street addresses were geocoded Canada-wide
+                    # (incident: a Regina street resolved ~12 km away).
+                    dlat = _PLACE_RADIUS_METERS / 111_000
+                    dlng = dlat / max(math.cos(math.radians(near_lat)), 0.2)
+                    params["bounds"] = f"{near_lat - dlat},{near_lng - dlng}|{near_lat + dlat},{near_lng + dlng}"
+                data = await _maps_get(_GEOCODE_URL, params)
                 allowed = ("OK", "ZERO_RESULTS")
         except Exception:
             logger.error("ai find_place maps request failed", exc_info=True)
@@ -187,7 +213,7 @@ async def _lookup_place_candidates(
             return {"error": "place lookup failed — try again or pick the location in the app"}
 
         await record_call("places_text_search" if kind == "places" else "geocode")
-        candidates = await _candidates_from_results(data.get("results") or [])
+        candidates = await _candidates_from_results(data.get("results") or [], near_lat=near_lat, near_lng=near_lng)
         if candidates:
             return {"candidates": candidates, "source": kind}
 
@@ -302,6 +328,16 @@ async def find_place(
         result = {"candidates": candidates}
     if bias_source:
         result["search_biased_by"] = bias_source
+    # A biased search whose BEST match still sits outside the bias radius is
+    # a red flag (wrong city, mis-typed address). Tell the model so it
+    # surfaces the distance to the rider instead of quoting a silent 12 km
+    # "same street" trip.
+    nearest_km = (candidates[0] or {}).get("distance_from_search_km")
+    if nearest_km is not None and nearest_km * 1000 > _PLACE_RADIUS_METERS:
+        result["note"] = (
+            f"Warning: the closest match is {nearest_km} km from the rider's search area — "
+            "confirm the exact address with them before quoting."
+        )
     return result
 
 

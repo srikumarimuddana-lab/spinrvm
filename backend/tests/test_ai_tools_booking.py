@@ -298,6 +298,29 @@ class TestRiderLocation:
             result, ok = await execute_tool("get_rider_location", {}, user=RIDER)
         assert ok and "error" in result
 
+    @pytest.mark.anyio
+    async def test_fresh_last_ride_carries_as_of_and_must_confirm_note(self):
+        from datetime import datetime, timedelta, timezone
+
+        recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        with _patch_last_ride([{**LAST_RIDE, "created_at": recent}]):
+            result, ok = await execute_tool("get_rider_location", {}, user=RIDER)
+        assert ok
+        assert result["source"] == "last_ride"
+        assert result["as_of"] == recent
+        assert "MUST confirm" in result["note"]
+
+    @pytest.mark.anyio
+    async def test_stale_last_ride_is_not_a_location(self):
+        # A pickup from a ride weeks ago is not "where the rider is" — the
+        # assistant must ask for a pickup instead of silently pointing there.
+        from datetime import datetime, timedelta, timezone
+
+        stale = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+        with _patch_last_ride([{**LAST_RIDE, "created_at": stale}]):
+            result, ok = await execute_tool("get_rider_location", {}, user=RIDER)
+        assert ok and "error" in result
+
 
 ESTIMATES = {
     "estimates": [

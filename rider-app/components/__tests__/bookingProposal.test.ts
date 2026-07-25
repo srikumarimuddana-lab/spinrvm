@@ -124,6 +124,14 @@ describe('mapBookingError', () => {
     expect(d.link?.label).toBe('Open booking');
   });
 
+  it('distance-guard rejection names the destination as the problem', () => {
+    const d = mapBookingError(
+      new Error('Your destination looks too close to your pickup. Please re-select it so we price the trip correctly.'),
+    );
+    expect(d.message).toContain('re-select the destination');
+    expect(d.link?.label).toBe('Open booking');
+  });
+
   it('generic failure reassures nothing was charged', () => {
     const d = mapBookingError(new Error('network down'));
     expect(d.message).toContain('nothing was charged');

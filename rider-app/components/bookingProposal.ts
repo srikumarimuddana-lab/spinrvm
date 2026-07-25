@@ -172,6 +172,16 @@ export function mapBookingError(error: unknown): BookingErrorDescriptor {
       link: { label: 'Open booking', href: '/(tabs)' },
     };
   }
+  if (/too close to your pickup/i.test(message)) {
+    // createRide's proximity guard (dropoffLikelyMisresolved): the dropoff
+    // pin landed on the pickup while its address says otherwise. Without this
+    // branch the rider got the generic "didn't go through" copy and no clue
+    // the destination was the problem.
+    return {
+      message: "The destination pin doesn't match its address — please re-select the destination.",
+      link: { label: 'Open booking', href: '/(tabs)' },
+    };
+  }
   return {
     message: "The booking didn't go through — nothing was charged. Try again or use the booking screen.",
     link: { label: 'Open booking', href: '/(tabs)' },

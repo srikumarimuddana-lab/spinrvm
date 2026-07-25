@@ -47,6 +47,42 @@ def test_tokenless_road_booking_prices_road_or_flags_fallback() -> None:
     assert booked_distance_suspect_reason(km, basis) == "road_route_unavailable"
 
 
+def test_pricing_wait_covers_directions_timeout() -> None:
+    """The billed distance basis must depend on whether Directions succeeded,
+    never on scheduler timing. When the pricing wait (1.5 s) sat below the
+    Directions HTTP timeout (3.0 s), a response landing in the gap silently
+    priced the SAME trip on haversine in one call and the road route in the
+    next — the incident's $30.92 → $39.44 flip between quote and confirm.
+    """
+    from routes.rides import estimates
+    from routes.rides._shared import DIRECTIONS_TIMEOUT_S
+
+    assert estimates._PRICING_ROUTE_WAIT_S >= DIRECTIONS_TIMEOUT_S
+
+
+@pytest.mark.anyio
+async def test_slow_directions_response_still_prices_road_basis() -> None:
+    """A route task that resolves just inside the HTTP timeout (simulated at
+    a scaled-down delay past the OLD 1.5 s-equivalent wait) must be awaited
+    and billed as road_route, not dropped for haversine."""
+    import asyncio
+
+    from routes.rides import estimates
+    from routes.rides._shared import select_fare_distance
+
+    async def slow_route():
+        # Longer than the old 1.5 s wait, inside the new one.
+        await asyncio.sleep(1.8)
+        return {"distance_km": 16.46, "polyline": [], "duration_s": 1500}
+
+    route_task = asyncio.ensure_future(slow_route())
+    done, _ = await asyncio.wait({route_task}, timeout=estimates._PRICING_ROUTE_WAIT_S)
+    assert route_task in done, "pricing wait must outlast a slow-but-successful Directions call"
+    road_km = (route_task.result() or {}).get("distance_km")
+    km, basis = select_fare_distance(12.116, road_km, mode="road")
+    assert (km, basis) == (16.46, "road_route")
+
+
 def test_migration_248_enables_road_billing_and_quote_lock() -> None:
     sql = MIGRATION.read_text()
     # Collect the quoted fare: never re-price on post-ride GPS.

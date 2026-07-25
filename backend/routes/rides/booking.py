@@ -42,12 +42,14 @@ from ._shared import (  # noqa: F401
     _d,
     _f,
     _fetch_directions_polyline,
+    _fetch_directions_route,
     _get_active_service_area_for_point,
     _is_corporate_paid,
     _round,
     _sum_fare_breakdown,
     booked_distance_suspect_reason,
     resolve_booking_distance,
+    select_fare_distance,
 )
 
 router = APIRouter()
@@ -581,6 +583,38 @@ async def create_ride(
             logger.warning(
                 f"estimate_token rejected ({e}); falling back to current surge "
                 f"{float(current_surge)} for rider={current_user['id']}"
+            )
+
+    # Road-basis safety net. If no valid token supplied a road distance (token
+    # absent/expired, or a non-app client), booking must STILL price on the road
+    # route when fare_distance_basis is "road" — never silently bill straight-line
+    # haversine, which systematically undercharges (0.7 km vs 1.8 km). Re-derive
+    # the road distance from a fresh Directions call; only if that is unavailable
+    # do we keep haversine, now flagged "haversine_fallback" so the booked-distance
+    # suspect check + nightly reconciliation catch it (plain "haversine" was
+    # invisible to both). Under fare-lock, settlement no longer corrects this at
+    # trip end, so booking is the only place to get it right.
+    if distance_basis == "haversine":
+        try:
+            _bk_settings = await _deps.get_app_settings() or {}
+        except Exception:
+            _bk_settings = {}
+        _bk_mode = str(_bk_settings.get("fare_distance_basis", "road")).lower()
+        if _bk_mode == "road":
+            _bk_road = await _fetch_directions_route(
+                body.pickup_lat,
+                body.pickup_lng,
+                body.dropoff_lat,
+                body.dropoff_lng,
+                _bk_settings.get("google_maps_api_key", ""),
+                waypoints=body.stops or [],
+            )
+            _bk_road_km = _bk_road.get("distance_km") if _bk_road else None
+            distance_km, distance_basis = select_fare_distance(haversine_km, _bk_road_km, mode="road")
+            duration_minutes = int(distance_km / 30 * 60) + 5
+            logger.info(
+                f"Distance re-derived at booking (no valid token) for rider={current_user['id']}: "
+                f"{distance_km}km basis={distance_basis} (haversine was {round(haversine_km, 3)}km)"
             )
 
     # Corporate surge bypass — applied AFTER estimate_token resolution so the

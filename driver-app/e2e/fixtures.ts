@@ -139,6 +139,133 @@ export async function seedAuthedDriverSession(
   );
 }
 
+/**
+ * Drives the real login flow (phone entry → send-otp → OTP verify) instead of
+ * seeding auth into storage.
+ *
+ * shared/store/authStore.ts keeps web sessions memory-only by design (no
+ * client-readable token is ever persisted — an XSS-prevention decision) and
+ * has no zustand `persist` middleware, so `storage.getItem('refresh_token')`
+ * is hardcoded to return null on web. There is no cold-start hydration path
+ * to short-circuit: `seedAuthedDriverSession`'s localStorage writes are never
+ * read by the app on web. Any spec that needs to reach an authenticated
+ * driver screen has to actually go through this flow, same as production.
+ *
+ * Call mockDriverBackend() BEFORE this so its broad `/api/v1/**` route is
+ * registered first — Playwright runs routes in reverse registration order,
+ * so the specific send-otp/verify-otp handlers registered here take
+ * priority over (and short-circuit) mockDriverBackend's generic `/auth/*`
+ * fallback.
+ */
+export async function loginAsDriver(
+  page: Page,
+  overrides: { driver?: Partial<typeof MOCK_DRIVER>; user?: Partial<typeof MOCK_DRIVER_USER> } = {}
+) {
+  const user = { ...MOCK_DRIVER_USER, ...overrides.user };
+
+  await page.addInitScript(() => {
+    // Stub Google Maps
+    (window as any).google = {
+      maps: {
+        places: {
+          AutocompleteService: class {
+            getPlacePredictions(_req: unknown, cb: Function) {
+              cb([], 'OK');
+            }
+          },
+        },
+        Geocoder: class {
+          geocode(_req: unknown, cb: Function) {
+            cb([], 'OK');
+          }
+        },
+      },
+    };
+
+    // Stub WebSocket so tests can push mock events via window.__pushWsEvent
+    const listeners: { [key: string]: Function[] } = {};
+    const sentMessages: any[] = [];
+    const OriginalWS = (window as any).WebSocket;
+    class MockWebSocket {
+      url: string;
+      readyState = 0;
+      onopen: ((ev: any) => void) | null = null;
+      onmessage: ((ev: any) => void) | null = null;
+      onclose: ((ev: any) => void) | null = null;
+      onerror: ((ev: any) => void) | null = null;
+      constructor(url: string) {
+        this.url = url;
+        (window as any).__lastWsUrl = url;
+        setTimeout(() => {
+          this.readyState = 1;
+          this.onopen && this.onopen({ type: 'open' });
+        }, 10);
+      }
+      send(data: string) {
+        sentMessages.push(data);
+        (window as any).__wsSent = sentMessages;
+      }
+      close() {
+        this.readyState = 3;
+        this.onclose && this.onclose({ type: 'close', code: 1000 });
+      }
+      addEventListener(ev: string, cb: Function) {
+        listeners[ev] = listeners[ev] || [];
+        listeners[ev].push(cb);
+      }
+    }
+    (window as any).__MockWebSocket = MockWebSocket;
+    (window as any).__OriginalWS = OriginalWS;
+    (window as any).WebSocket = MockWebSocket;
+
+    (window as any).__pushWsEvent = (event: any) => {
+      const sockets = (window as any).__mockWsInstances || [];
+      sockets.forEach((s: any) => s.onmessage && s.onmessage({ data: JSON.stringify(event) }));
+    };
+  });
+
+  // Specific overrides for the two auth calls the login screens actually
+  // make. Registered after mockDriverBackend() so they win (Playwright
+  // matches routes in reverse registration order) over its generic
+  // `/auth/*` → { token, user } fallback, which doesn't match the
+  // `{ success: true }` shape /auth/send-otp's caller checks for.
+  await page.route('**/api/v1/auth/send-otp', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true }),
+    });
+  });
+
+  await page.route('**/api/v1/auth/verify-otp', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        token: MOCK_TOKEN,
+        refresh_token: 'e2e-refresh-token',
+        expires_in: 900,
+        user,
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('phone-input').fill('3065550100');
+  await page.getByTestId('send-otp-btn').click();
+
+  // OTP screen — the code input is a hidden, autoFocus TextInput with no
+  // testID (it's covered by decorative visible "boxes"), so type via the
+  // keyboard once the screen is confirmed mounted rather than locating it.
+  await page.getByText('Verify Your Number').waitFor({ timeout: 10_000 });
+  await page.keyboard.type('1234');
+  await page.getByText('Verify & Continue').click();
+
+  // otp.tsx router.replace()s to /driver (profile_complete) once the store's
+  // `user` is set from the mocked verify-otp response.
+  await page.waitForURL(/\/driver/, { timeout: 10_000 });
+}
+
 export async function mockDriverBackend(
   page: Page,
   opts: {

@@ -16,7 +16,7 @@
  *   trip_completed        → dropoff reached, fare recorded
  */
 import { test, expect } from '@playwright/test';
-import { MOCK_RIDE_OFFER, mockDriverBackend, seedAuthedDriverSession } from './fixtures';
+import { MOCK_RIDE_OFFER, loginAsDriver, mockDriverBackend, seedAuthedDriverSession } from './fixtures';
 
 const stages = [
   { status: 'driver_assigned', label: 'offer received' },
@@ -50,35 +50,34 @@ test.describe('driver-app web: ride-offer lifecycle', () => {
   });
 
   test('earnings endpoint is called on dashboard mount', async ({ page }) => {
-    await seedAuthedDriverSession(page);
-    await mockDriverBackend(page);
+    // useDriverDashboard.ts only calls fetchEarnings('today') once the
+    // driver is online (see the `if (isOnline) fetchEarnings('today')`
+    // effect) — an offline driver has no reason to see today's earnings yet.
+    await mockDriverBackend(page, { onlineStatus: true });
 
     const earningsCalled = new Promise<boolean>((resolve) => {
       page.on('request', (req) => {
         if (/\/api\/v1\/drivers\/earnings/.test(req.url())) resolve(true);
       });
-      setTimeout(() => resolve(false), 5000);
+      setTimeout(() => resolve(false), 10_000);
     });
 
-    await page.goto('/');
-    await page.waitForTimeout(3000);
+    await loginAsDriver(page);
     const called = await earningsCalled;
     expect(called).toBe(true);
   });
 
   test('active-ride poll is made on dashboard mount', async ({ page }) => {
-    await seedAuthedDriverSession(page);
     await mockDriverBackend(page);
 
     const activePolled = new Promise<boolean>((resolve) => {
       page.on('request', (req) => {
         if (/\/api\/v1\/drivers\/rides\/active/.test(req.url())) resolve(true);
       });
-      setTimeout(() => resolve(false), 5000);
+      setTimeout(() => resolve(false), 10_000);
     });
 
-    await page.goto('/');
-    await page.waitForTimeout(3000);
+    await loginAsDriver(page);
     const called = await activePolled;
     expect(called).toBe(true);
   });

@@ -674,3 +674,100 @@ describe('driverStore — ride state machine', () => {
     );
   });
 });
+
+describe('driverStore — earnings, ride history, bank account, rating', () => {
+  test('fetchEarnings requests the given period and stores the result', async () => {
+    const mockEarnings = { period: 'day', total_earnings: 150, total_rides: 8 } as any;
+    mockApi.get.mockResolvedValueOnce({ data: mockEarnings, status: 200 } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().fetchEarnings('day');
+    });
+
+    expect(mockApi.get).toHaveBeenCalledWith('/drivers/earnings?period=day');
+    expect(useDriverStore.getState().earnings).toEqual(mockEarnings);
+  });
+
+  test('fetchRideHistory requests the given page and stores rides + total', async () => {
+    const mockHistory = { rides: [{ id: 'ride-1' }], total: 1 } as any;
+    mockApi.get.mockResolvedValueOnce({ data: mockHistory, status: 200 } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().fetchRideHistory(10, 0);
+    });
+
+    expect(mockApi.get).toHaveBeenCalledWith('/drivers/rides/history?limit=10&offset=0');
+    expect(useDriverStore.getState().rideHistory).toHaveLength(1);
+    expect(useDriverStore.getState().historyTotal).toBe(1);
+  });
+
+  test('fetchBankAccount stores hasBankAccount + bankAccount from the response', async () => {
+    mockApi.get.mockResolvedValueOnce({
+      data: { has_bank_account: true, bank_account: { bank_name: 'TD' } },
+      status: 200,
+    } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().fetchBankAccount();
+    });
+
+    const state = useDriverStore.getState();
+    expect(state.hasBankAccount).toBe(true);
+    expect(state.bankAccount?.bank_name).toBe('TD');
+  });
+
+  test('deleteBankAccount clears the stored account and resolves true', async () => {
+    useDriverStore.setState({ hasBankAccount: true, bankAccount: { bank_name: 'TD' } as any });
+    mockApi.delete.mockResolvedValueOnce({ data: {}, status: 200 } as any);
+
+    let result: boolean;
+    await act(async () => {
+      result = await useDriverStore.getState().deleteBankAccount();
+    });
+
+    expect(result!).toBe(true);
+    expect(mockApi.delete).toHaveBeenCalledWith('/drivers/bank-account');
+    const state = useDriverStore.getState();
+    expect(state.hasBankAccount).toBe(false);
+    expect(state.bankAccount).toBeNull();
+  });
+
+  test('deleteBankAccount sets error and resolves false on API failure', async () => {
+    mockApi.delete.mockRejectedValueOnce({
+      response: { status: 500, data: { detail: 'Bank service unavailable' } },
+    } as any);
+
+    let result: boolean;
+    await act(async () => {
+      result = await useDriverStore.getState().deleteBankAccount();
+    });
+
+    expect(result!).toBe(false);
+    expect(useDriverStore.getState().error).toBe('Bank service unavailable');
+  });
+
+  test('rateRider posts the rating and comment for the given ride', async () => {
+    mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().rateRider('ride-123', 5, 'Great passenger');
+    });
+
+    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/rate-rider', {
+      rating: 5,
+      comment: 'Great passenger',
+    });
+  });
+
+  test('rateRider sets error on API failure', async () => {
+    mockApi.post.mockRejectedValueOnce({
+      response: { status: 500, data: { detail: 'Rating service unavailable' } },
+    } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().rateRider('ride-123', 5);
+    });
+
+    expect(useDriverStore.getState().error).toBe('Rating service unavailable');
+  });
+});

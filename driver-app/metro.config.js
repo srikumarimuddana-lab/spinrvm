@@ -90,6 +90,19 @@ const RQ_FORCED_PATH = path.resolve(
   'node_modules/@tanstack/react-query/build/modern/index.js',
 );
 
+// ── Web build: stub native-only packages ──────────────────────────────────
+// react-native-maps and react-native-maps-directions are native-only (their
+// codegen specs call react-native-web's non-existent `codegenNativeComponent`,
+// crashing any screen that imports them — e.g. `(tabs)/index.tsx`'s MapView).
+// On web, Metro resolves them to thin stubs so `expo export --platform web`
+// compiles and renders without errors. Mirrors rider-app/metro.config.js's
+// identical stub setup. This resolveRequest ONLY activates when
+// platform === 'web'; native builds are completely unaffected.
+const WEB_STUBS = {
+  'react-native-maps': path.resolve(__dirname, 'web/stubs/react-native-maps.js'),
+  'react-native-maps-directions': path.resolve(__dirname, 'web/stubs/react-native-maps-directions.js'),
+};
+
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   // Skip @types packages during bundling — TypeScript-only, never bundled.
   if (moduleName.startsWith('@types/')) {
@@ -98,6 +111,10 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
 
   if (moduleName === '@tanstack/react-query') {
     return { type: 'sourceFile', filePath: RQ_FORCED_PATH };
+  }
+
+  if (platform === 'web' && WEB_STUBS[moduleName]) {
+    return { type: 'sourceFile', filePath: WEB_STUBS[moduleName] };
   }
 
   // index.js (our custom entry, required for FCM-handler registration

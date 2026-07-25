@@ -15,7 +15,7 @@
  *   5. No fatal JS errors on payout screen
  */
 import { test, expect } from '@playwright/test';
-import { MOCK_EARNINGS, mockDriverBackend, seedAuthedDriverSession } from './fixtures';
+import { MOCK_EARNINGS, loginAsDriver, mockDriverBackend, seedAuthedDriverSession } from './fixtures';
 
 const MOCK_T4A_2026 = {
   year: 2026,
@@ -30,18 +30,19 @@ test.describe('driver-app: payout / earnings screen', () => {
     const errors: string[] = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
-    await seedAuthedDriverSession(page);
-    await mockDriverBackend(page, { earnings: MOCK_EARNINGS });
+    // useDriverDashboard.ts only calls fetchEarnings('today') once the
+    // driver is online (see the `if (isOnline) fetchEarnings('today')`
+    // effect) — an offline driver has no reason to see today's earnings yet.
+    await mockDriverBackend(page, { earnings: MOCK_EARNINGS, onlineStatus: true });
 
     const earningsCalled = new Promise<boolean>((resolve) => {
       page.on('request', (req) => {
         if (/\/api\/v1\/drivers\/earnings/.test(req.url())) resolve(true);
       });
-      setTimeout(() => resolve(false), 6000);
+      setTimeout(() => resolve(false), 10_000);
     });
 
-    await page.goto('/');
-    await page.waitForTimeout(3500);
+    await loginAsDriver(page);
     expect(await earningsCalled).toBe(true);
 
     const fatal = errors.filter(

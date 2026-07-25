@@ -73,6 +73,14 @@ def _decode_polyline(encoded: str) -> list:
     return coords
 
 
+# Directions HTTP timeout. Pricing code that waits on the route task must
+# wait AT LEAST this long (see estimates._PRICING_ROUTE_WAIT_S) — a shorter
+# wait makes the billed distance basis a function of scheduler timing: the
+# same trip priced twice could get haversine once and the road route the
+# second time (incident: 12.12 km haversine → 16.46 km road, $30.92→$39.44).
+DIRECTIONS_TIMEOUT_S = 3.0
+
+
 async def _fetch_directions_route(
     pickup_lat: float,
     pickup_lng: float,
@@ -105,7 +113,7 @@ async def _fetch_directions_route(
         }
         if waypoints:
             params["waypoints"] = "|".join(f"{w['lat']},{w['lng']}" for w in waypoints)
-        async with _httpx.AsyncClient(timeout=3.0) as client:
+        async with _httpx.AsyncClient(timeout=DIRECTIONS_TIMEOUT_S) as client:
             resp = await client.get(
                 "https://maps.googleapis.com/maps/api/directions/json",
                 params=params,

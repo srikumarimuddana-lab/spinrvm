@@ -7,7 +7,9 @@
  * store's estimates) and books via rideStore.createRide() — the exact code
  * path of the manual booking flow. The AI never books; the rider's tap does.
  */
-import type { BookingProposal } from '@shared/types/ai';
+import type { AiAction, BookingProposal, FareQuoteOption } from '@shared/types/ai';
+
+type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 
 /** Quotes auto-refresh on this cadence so a stale estimate_token (surge
  * lock) is never submitted. Matches the booking screens' refresh habit. */
@@ -42,6 +44,33 @@ export function pickEstimate<T extends EstimateLike>(
 /** Rider-facing display amount: grand_total (fees+taxes) when present. */
 export function displayFare(estimate: EstimateLike): string {
   return estimate.grand_total ?? estimate.total_fare;
+}
+
+/** The message a tapped quote option sends back to the assistant. The next
+ * turn sees only message text, so this must be self-contained — and it must
+ * carry the quote's exact [lat,lng] coordinates and vehicle id verbatim so
+ * the model books THE priced trip instead of re-geocoding the addresses (the
+ * old prose-only message caused a third independent geocode, moving pins and
+ * prices between the quote and the confirm card). */
+export function buildQuoteBookingMessage(quote: FareQuoteAction, option: FareQuoteOption): string {
+  const endpoint = (label: 'from' | 'to', address?: string, lat?: number, lng?: number): string => {
+    const coords =
+      typeof lat === 'number' && typeof lng === 'number'
+        ? `[${lat.toFixed(5)},${lng.toFixed(5)}]`
+        : '';
+    const place = [address, coords].filter(Boolean).join(' ');
+    return place ? ` ${label} ${place}` : '';
+  };
+  const vehicle = option.vehicle_type ?? 'recommended option';
+  const vehicleId = option.vehicle_type_id ? ` (vehicle id ${option.vehicle_type_id})` : '';
+  const promo = option.promo_code ? ` with promo ${option.promo_code}` : '';
+  const total = option.final_total ? `, total $${option.final_total}` : '';
+  return (
+    `Book the ${vehicle}${vehicleId}` +
+    `${endpoint('from', quote.pickup_address, quote.pickup_lat, quote.pickup_lng)}` +
+    `${endpoint('to', quote.dropoff_address, quote.dropoff_lat, quote.dropoff_lng)}` +
+    `${promo}${total}.`
+  );
 }
 
 export type ProposalPaymentMethod = 'card' | 'wallet';

@@ -36,6 +36,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/ai';
 import { useAuthStore } from '@shared/store/authStore';
 import BookingProposalCard from '../components/BookingProposalCard';
+import { buildQuoteBookingMessage } from '../components/bookingProposal';
 import FareQuoteCard from '../components/FareQuoteCard';
 import AiAuroraBackground from '../components/AiAuroraBackground';
 import AiWelcomeOrb from '../components/AiWelcomeOrb';
@@ -317,12 +318,10 @@ export default function AiAssistantScreen() {
         <FareQuoteCard
           quote={quote}
           onSelect={(option) => {
-            // Self-contained message: the assistant's next turn sees only
-            // message text, so the tap must restate the trip context.
-            const from = quote.pickup_address ? ` from ${quote.pickup_address}` : '';
-            const to = quote.dropoff_address ? ` to ${quote.dropoff_address}` : '';
-            const promo = option.promo_code ? ` with promo ${option.promo_code}` : '';
-            handleSend(`Book the ${option.vehicle_type ?? 'recommended option'}${from}${to}${promo}.`);
+            // Self-contained message carrying the priced [lat,lng] verbatim —
+            // the assistant's next turn sees only message text, and must not
+            // re-geocode the trip the rider just saw priced.
+            handleSend(buildQuoteBookingMessage(quote, option));
           }}
         />
       );

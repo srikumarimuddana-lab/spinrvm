@@ -72,7 +72,9 @@ def _ctx(update_result, *, fare_lock=False, distances=None):
         stack.enter_context(patch("backend.utils.route_finalizer.compute_trip_distances", mocks.compute))
         stack.enter_context(patch("backend.utils.route_finalizer.db_supabase.update_one", mocks.update))
         stack.enter_context(patch("backend.utils.route_finalizer.db_supabase.insert_one", mocks.insert))
-        stack.enter_context(patch("backend.settings_loader.get_app_settings", mocks.settings))
+        # The finalizer binds get_app_settings into its own module namespace
+        # (`from ..settings_loader import get_app_settings`), so patch it there.
+        stack.enter_context(patch("backend.utils.route_finalizer.get_app_settings", mocks.settings))
         yield mocks
 
 

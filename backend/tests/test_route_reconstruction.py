@@ -186,7 +186,12 @@ async def test_does_not_route_boundaries_already_within_30_metres(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unconfigured_osrm_never_uses_public_fallback_and_reports_gaps(monkeypatch):
+async def test_unconfigured_osrm_fills_gaps_with_straight_lines_without_network(monkeypatch):
+    # With neither OSRM nor a Google key configured, reconstruction must never
+    # reach out to a network provider (no silent public-OSRM fallback). The
+    # 4-tier fill still succeeds by dropping to haversine straight-line
+    # connectors, so gaps are DISCLOSED as straight-connector distance rather
+    # than "failed" — and the measured-distance resolver excludes them.
     segmented, matched, completion = _two_segment_evidence()
     monkeypatch.setattr(reconstruction, "get_app_settings", AsyncMock(return_value={}))
     monkeypatch.setattr(reconstruction.settings, "OSRM_URL", "")
@@ -202,8 +207,13 @@ async def test_unconfigured_osrm_never_uses_public_fallback_and_reports_gaps(mon
         completion,
     )
 
-    assert result["endpoint_start_verified"] is False
-    assert result["endpoint_end_verified"] is False
-    assert result["failed_gaps"] == ["missing_start", "internal_gap", "missing_tail"]
+    # No network provider was contacted.
     snap.assert_not_awaited()
     gap_route.assert_not_awaited()
+    # The 4-tier fill always succeeds; gaps are straight-line, not failures.
+    assert result["failed_gaps"] == []
+    assert result["straight_connector_distance_km"] > 0
+    assert result["routed_connector_distance_km"] == 0
+    # Anchors still resolve from the raw pickup/completion coordinates.
+    assert result["endpoint_start_verified"] is True
+    assert result["endpoint_end_verified"] is True

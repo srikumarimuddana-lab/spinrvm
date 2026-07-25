@@ -17,9 +17,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from services.fare_service import (  # noqa: E402
     DEFAULT_FARE,
+    FareBreakdown,
     FareService,
     _fd,
     build_default_fares,
+    build_fare_breakdown_lines,
     calculate_fare,
     find_service_area_for_point,
     merge_fare_configs_with_vehicle_types,
@@ -256,6 +258,37 @@ class TestFareService:
         assert out[0]["base_fare"] == 5.00
         assert out[0]["per_km_rate"] == 2.00
 
+    async def test_returns_vehicle_pricing_fares_without_querying_fare_configs(self):
+        """A service area with its own vehicle_pricing JSONB rows short-circuits
+        before the fare_configs query — the admin Service Areas editor's
+        canonical pricing wins over the generic fare_configs table."""
+        db = _make_db(
+            vehicle_types=[{"id": "economy", "name": "Economy"}],
+            areas=[
+                {
+                    "id": "saskatoon",
+                    "surge_multiplier": 1.0,
+                    "vehicle_pricing": [
+                        {"vehicle_type": "Economy", "base_fare": 4.0, "per_km": 1.75},
+                    ],
+                    "polygon": [
+                        {"lat": 51.5, "lng": -106.5},
+                        {"lat": 51.5, "lng": -105.5},
+                        {"lat": 52.5, "lng": -105.5},
+                        {"lat": 52.5, "lng": -106.5},
+                    ],
+                }
+            ],
+            # No fare_configs side_effect queued: a call past the 2nd get_rows
+            # would raise StopAsyncIteration and fail the test.
+        )
+        svc = FareService(db)
+        out = await svc.fares_for_location(52.0, -106.0)
+        assert len(out) == 1
+        assert out[0]["base_fare"] == 4.00
+        assert out[0]["per_km_rate"] == 1.75
+        assert db.get_rows.await_count == 2
+
 
 # ── calculate_fare: earnings attribution & minimum-fare uplift ────────────────
 
@@ -351,6 +384,75 @@ class TestCalculateFare:
             assert fb.driver_earnings + fb.admin_earnings == fb.total_fare
 
 
+# ── build_fare_breakdown_lines: rider-facing receipt line items ──────────────
+
+
+class TestBuildFareBreakdownLines:
+    def test_derives_base_dt_for_legacy_breakdown_without_presurge_fields(self):
+        """A FareBreakdown built before distance_fare_base/time_fare_base
+        existed (both default to 0) must still produce a sane surge line —
+        derived from the multiplier rather than dividing by zero."""
+        fb = FareBreakdown(
+            base_fare=Decimal("3.50"),
+            distance_fare=Decimal("3.00"),  # already surged 2x
+            time_fare=Decimal("1.00"),
+            booking_fee=Decimal("2.00"),
+            airport_fee=Decimal("0"),
+            total_fare=Decimal("9.50"),
+            minimum_fare=Decimal("8.00"),
+            surge_multiplier=Decimal("2"),
+            driver_earnings=Decimal("7.50"),
+            admin_earnings=Decimal("2.00"),
+            # distance_fare_base / time_fare_base default to 0 — legacy data.
+        )
+        lines = build_fare_breakdown_lines(fb, distance_km=2.0, duration_minutes=5)
+        ride_line = next(line for line in lines if line["type"] == "ride")
+        surge_line = next(line for line in lines if line["type"] == "modifier")
+        # Ride + surge must still sum back to the total (minus fixed fees).
+        assert round(ride_line["amount"] + surge_line["amount"] + float(fb.booking_fee), 2) == float(fb.total_fare)
+
+    def test_airport_fee_gets_its_own_line(self):
+        fb = calculate_fare(_fare_info(), distance_km=5, duration_minutes=10, airport_fee=5.00)
+        lines = build_fare_breakdown_lines(fb, distance_km=5, duration_minutes=10)
+        airport_line = next(line for line in lines if line["label"] == "Airport surcharge")
+        assert airport_line["amount"] == 5.00
+        assert airport_line["type"] == "fee"
+
+    def test_no_airport_line_when_fee_is_zero(self):
+        fb = calculate_fare(_fare_info(), distance_km=5, duration_minutes=10)
+        lines = build_fare_breakdown_lines(fb, distance_km=5, duration_minutes=10)
+        assert not any(line["label"] == "Airport surcharge" for line in lines)
+
+    def test_positive_area_fees_are_included(self):
+        fb = calculate_fare(_fare_info(), distance_km=5, duration_minutes=10)
+        lines = build_fare_breakdown_lines(
+            fb,
+            distance_km=5,
+            duration_minutes=10,
+            area_fees=[
+                {"name": "Airport pickup", "calculated_value": 2.50},
+                {"name": "Zero fee", "calculated_value": 0},
+            ],
+        )
+        fee_labels = [line["label"] for line in lines if line["type"] == "fee"]
+        assert "Airport pickup" in fee_labels
+        assert "Zero fee" not in fee_labels  # zero-value fees are excluded
+
+    def test_positive_tax_lines_are_included_with_rate_in_label(self):
+        fb = calculate_fare(_fare_info(), distance_km=5, duration_minutes=10)
+        lines = build_fare_breakdown_lines(
+            fb,
+            distance_km=5,
+            duration_minutes=10,
+            tax_breakdown={
+                "GST": {"amount": 1.15, "rate": 5},
+                "PST": {"amount": 0, "rate": 6},  # zero amount — excluded
+            },
+        )
+        tax_lines = {line["label"]: line["amount"] for line in lines if line["type"] == "tax"}
+        assert tax_lines == {"GST (5%)": 1.15}
+
+
 # ── recalculate_fare_for_distance: completion-time clamp & attribution ────────
 
 
@@ -401,3 +503,37 @@ class TestRecalculateFareForDistance:
         out = recalculate_fare_for_distance(_completed_ride(), actual_distance_km=20)
         assert out["total_fare"] == 35.75  # 3.50 + 30.00 + 0.25 + 2.00
         assert out["driver_earnings"] == 33.75  # 35.75 − booking 2.00
+
+    def test_explicit_minimum_fare_wins_over_inferred_floor(self):
+        """An explicit ``minimum_fare`` argument (future callers) must apply
+        even on a ride whose stored total wasn't itself floored."""
+        # Never clamped at booking: total_fare == sum of its own components.
+        ride = _completed_ride(distance_fare=0.15, time_fare=0.25, total_fare=3.90)
+        out = recalculate_fare_for_distance(ride, actual_distance_km=0.05, minimum_fare=Decimal("10.00"))
+        assert out["total_fare"] == 10.00
+        assert out["driver_earnings"] == 8.00  # 10.00 − booking 2.00
+
+    def test_falls_back_to_default_per_km_rate_when_planned_distance_missing(self):
+        """A ride row with no stored planned distance (e.g. a corrupted/legacy
+        row) must not divide by zero — fall back to the default per-km rate,
+        scaled by the ride's own surge multiplier."""
+        ride = _completed_ride(distance_km=0, surge_multiplier=2)
+        ride.pop("distance_km")
+        out = recalculate_fare_for_distance(ride, actual_distance_km=1.0)
+        expected_per_km = round(float(DEFAULT_FARE["per_km_rate"]) * 2, 2)
+        assert out["distance_fare"] == expected_per_km
+
+    def test_area_fees_breakdown_fallback_sums_when_total_not_set(self):
+        """When area_fees_total isn't persisted on the ride row, fall back to
+        summing area_fees_breakdown so the grand total still reconciles."""
+        ride = _completed_ride(
+            area_fees_total=0,
+            area_fees_breakdown=[
+                {"name": "Airport pickup", "calculated_value": 2.50},
+                {"name": "Event surcharge", "calculated_value": 1.00},
+                "not-a-dict-entry",  # defensive: non-dict entries are skipped
+            ],
+        )
+        out = recalculate_fare_for_distance(ride, actual_distance_km=0.1)
+        # total_fare (8.00, floored) + 3.50 in area fees, no tax/discount.
+        assert out["grand_total"] == 11.50

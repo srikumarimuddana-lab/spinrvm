@@ -4,6 +4,9 @@ This file provides shared fixtures for all test modules.
 """
 
 import asyncio
+import importlib
+import importlib.abc
+import importlib.machinery
 import inspect
 import os
 import sys
@@ -61,29 +64,102 @@ sys.modules["slowapi.errors"].RateLimitExceeded = _real_RateLimitExceeded
 # qualified keys ("backend.routes.admin.auth"). Test files that do qualified
 # imports during collection would otherwise trigger a second import of those
 # files — this time with slowapi already mocked — turning @limiter.limit
-# decorators into MagicMocks. Mirroring the keys here prevents that re-import.
-for _bare_key in list(sys.modules.keys()):
-    if _bare_key.split(".")[0] in {
-        "routes",
-        "services",
-        "repositories",
-        "utils",
-        "core",
-        "documents",
-        "features",
-        "dependencies",
-        "socket_manager",
-        "db_supabase",
-        "schemas",
-        "validators",
-        "sms_service",
-        "settings_loader",
-        "logging_utils",
-        "geo_utils",
-    }:
-        _qualified_key = "backend." + _bare_key
-        if _qualified_key not in sys.modules:
-            sys.modules[_qualified_key] = sys.modules[_bare_key]
+# decorators into MagicMocks.
+#
+# A one-shot loop that mirrors sys.modules keys present at collection time is
+# not enough: some modules (e.g. utils.ws_pubsub) are only bare-imported
+# lazily, inside a function body, the first time a request/test exercises
+# that code path — well after this file has already run. A later qualified
+# import (e.g. Python resolving `unittest.mock.patch("backend.utils.ws_pubsub
+# ...")`) then finds no cached "backend.utils.ws_pubsub" entry and does a
+# genuine fresh import, producing a second, disconnected module (and a
+# disconnected singleton instance) that the mock silently patches while the
+# real code keeps calling the original bare module — no exception, just a
+# no-op mock.
+#
+# A sys.meta_path finder handles both the already-imported and the lazy case
+# uniformly: for any "backend.X" import, if a bare "X" module already exists,
+# reuse it instead of re-executing the module file. Python's import machinery
+# then does its normal setattr(parent_module, child_name, module) binding for
+# us, so attribute-walking resolvers (monkeypatch.setattr, unittest.mock.patch)
+# resolve to the same object the bare-importing code actually uses.
+_MIRRORED_BARE_ROOTS = {
+    "routes",
+    "services",
+    "repositories",
+    "utils",
+    "core",
+    "documents",
+    "features",
+    "dependencies",
+    "socket_manager",
+    "db_supabase",
+    "schemas",
+    "validators",
+    "sms_service",
+    "settings_loader",
+    "logging_utils",
+    "geo_utils",
+}
+
+
+class _BareModuleAliasLoader(importlib.abc.Loader):
+    """Loader that hands back an already-imported bare module unmodified."""
+
+    def __init__(self, bare_name: str) -> None:
+        self._bare_name = bare_name
+
+    def create_module(self, spec):  # noqa: D102
+        return sys.modules[self._bare_name]
+
+    def exec_module(self, module) -> None:  # noqa: D102
+        pass
+
+
+class _BareModuleAliasFinder(importlib.abc.MetaPathFinder):
+    """Aliases "backend.<bare>" imports to the existing bare "<bare>" module.
+
+    See the comment above this class for why a static, one-time mirror isn't
+    sufficient on its own.
+    """
+
+    def find_spec(self, fullname, path, target=None):  # noqa: D102
+        if not fullname.startswith("backend."):
+            return None
+        _bare_name = fullname[len("backend.") :]
+        if _bare_name.split(".")[0] not in _MIRRORED_BARE_ROOTS:
+            return None
+        if fullname in sys.modules:
+            return None
+        if _bare_name not in sys.modules:
+            # Whichever spelling is imported first becomes the canonical
+            # instance. Import the bare name ourselves so "backend.X" never
+            # wins that race and ends up as a second, disconnected module.
+            try:
+                importlib.import_module(_bare_name)
+            except ImportError:
+                return None
+        return importlib.machinery.ModuleSpec(fullname, _BareModuleAliasLoader(_bare_name))
+
+
+sys.meta_path.insert(0, _BareModuleAliasFinder())
+
+# Mirror what's already in sys.modules at collection time too, so code that
+# reaches straight into sys.modules (bypassing the import system, e.g. `import
+# backend.server` above having already cached these) sees the same modules.
+for _bare_key in sorted(
+    (k for k in sys.modules if k.split(".")[0] in _MIRRORED_BARE_ROOTS),
+    key=lambda k: k.count("."),
+):
+    _qualified_key = "backend." + _bare_key
+    if _qualified_key not in sys.modules:
+        sys.modules[_qualified_key] = sys.modules[_bare_key]
+    _parts = _qualified_key.split(".")
+    for _i in range(1, len(_parts)):
+        _parent_name = ".".join(_parts[:_i])
+        _parent_mod = sys.modules.get(_parent_name)
+        if _parent_mod is not None:
+            setattr(_parent_mod, _parts[_i], sys.modules[".".join(_parts[: _i + 1])])
 
 # TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
 # alongside the asyncio_mode=auto setting in pytest.ini.

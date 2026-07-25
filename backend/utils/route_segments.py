@@ -218,14 +218,29 @@ def _transition_impossible(previous: _ParsedPoint, current: _ParsedPoint) -> boo
     """True when previous→current implies a physically impossible ground speed.
 
     Mirrors the speed guard in ``_boundary_reason`` but returns a plain bool for
-    the despike pass. Legacy WebSocket-batch pairs (server receive-time, no real
-    device capture time) are exempt because their elapsed time is meaningless.
+    the despike pass.
+
+    A legacy fix (no ``recording_session_id``/``sequence_number``) still carries
+    a real device ``timestamp`` that ``_parse_points`` uses as ``captured_at``,
+    so a POSITIVE elapsed between two legacy fixes is a genuine device-time delta
+    and its implied speed is meaningful — an isolated teleport-and-return spike
+    (a stale/duplicate coordinate re-sent mid-trip) reads as thousands of km/h
+    and must be despiked, or it inflates the measured distance and draws a
+    "repeated" backtrack on the map. Only when elapsed is non-positive is legacy
+    timing truly meaningless (server-receive-time batches assigned in one insert
+    loop); there we defer to the segmentation boundary logic rather than guess.
+
+    The despike's two-sided test keeps this safe for real zero-cadence batches:
+    when every pair in a batch reads impossible, skipping one point never
+    reconnects the neighbours plausibly, so nothing is dropped.
     """
-    if previous.is_legacy and current.is_legacy:
-        return False
     elapsed_seconds = (current.captured_at - previous.captured_at).total_seconds()
     displacement_meters = _distance_meters(previous.point, current.point)
     if elapsed_seconds <= 0:
+        # Non-legacy: a zero delta with real displacement is itself impossible.
+        # Legacy: elapsed is meaningless here — cannot judge, so do not despike.
+        if previous.is_legacy and current.is_legacy:
+            return False
         return displacement_meters > 0
     return (displacement_meters / elapsed_seconds * 3.6) > MAX_PLAUSIBLE_SPEED_KPH
 

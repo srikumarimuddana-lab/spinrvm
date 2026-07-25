@@ -562,52 +562,70 @@ async def _reconcile_pickup(
     pickup_lng: float,
     pickup_address: str,
     *,
-    dropoff_lat: float,
-    dropoff_lng: float,
+    client_location: Optional[Dict[str, Any]] = None,
 ) -> tuple:
     """Re-verify the pickup coordinate against its own address before anyone
-    is dispatched. Returns ``(lat, lng, address, in_service_area)``.
+    is dispatched. Returns ``(lat, lng, address, in_service_area, adjusted,
+    drift_km)`` — ``adjusted`` is True when the supplied coordinate was
+    replaced, and callers must then TELL the rider the pin moved.
 
     The model fills pickup_lat/pickup_lng from conversation context that no
     longer holds the find_place result (history keeps only message text, not
     tool results), so a stale or hallucinated coordinate can travel alongside
     a correct address: the card shows the right street while the driver is
-    routed kilometres away. Re-geocoding the address is the authoritative
-    check — when it lands in a service area more than _PICKUP_RECONCILE_KM
-    from the supplied point (or the supplied point is out of area entirely),
-    the address wins. A coordinate that already agrees with its address is
-    left untouched so a precise pin is never snapped to a street centroid.
+    routed kilometres away.
+
+    Order of trust:
+    1. The rider's device fix — a supplied coordinate that agrees with where
+       the rider physically is needs no re-geocode at all, and must never be
+       snapped to an address centroid: the device knows which side of a
+       big-box lot the rider is standing on better than the geocoder does.
+    2. The re-geocoded address, biased on the SUPPLIED PICKUP — never the
+       dropoff, which once dragged a pickup toward whatever matched near the
+       destination — choosing the candidate NEAREST the supplied point, not
+       Google's first. A coordinate that already agrees with its address is
+       left untouched.
     """
     in_area = await _resolve_area(pickup_lat, pickup_lng) is not None
+
+    device_lat = (client_location or {}).get("lat")
+    device_lng = (client_location or {}).get("lng")
+    has_device = device_lat is not None and device_lng is not None
+    if in_area and has_device:
+        device_drift = _trip_distance_km(pickup_lat, pickup_lng, float(device_lat), float(device_lng))
+        if device_drift <= _PICKUP_RECONCILE_KM:
+            # The rider is physically at (or beside) the supplied point —
+            # nothing to verify, and no Maps budget spent.
+            return pickup_lat, pickup_lng, pickup_address, True, False, 0.0
 
     api_key, _error = await _places_available()
     if not api_key:
         # Maps unavailable (no key or budget exhausted) — can't verify; keep
         # the supplied point and let the caller's area check decide.
-        return pickup_lat, pickup_lng, pickup_address, in_area
+        return pickup_lat, pickup_lng, pickup_address, in_area, False, 0.0
 
-    lookup = await _lookup_place_candidates(
-        api_key=api_key, query=pickup_address, near_lat=dropoff_lat, near_lng=dropoff_lng
+    near_lat, near_lng = pickup_lat, pickup_lng
+    if not in_area and has_device:
+        # The supplied point is nowhere we operate — the device fix is the
+        # better bias for finding the address the rider means.
+        near_lat, near_lng = float(device_lat), float(device_lng)
+
+    lookup = await _lookup_place_candidates(api_key=api_key, query=pickup_address, near_lat=near_lat, near_lng=near_lng)
+    in_area_candidates = [c for c in lookup.get("candidates") or [] if c.get("in_service_area")]
+    if not in_area_candidates:
+        return pickup_lat, pickup_lng, pickup_address, in_area, False, 0.0
+    geocoded = min(
+        in_area_candidates,
+        key=lambda c: _trip_distance_km(pickup_lat, pickup_lng, c["lat"], c["lng"]),
     )
-    geocoded = next((c for c in lookup.get("candidates") or [] if c.get("in_service_area")), None)
-    if not geocoded:
-        return pickup_lat, pickup_lng, pickup_address, in_area
 
-    # Lazy dual import (same pattern as _resolve_area): module-level import of a
-    # sibling top-level module is fragile under the absolute-import deploy mode,
-    # so resolve it at the call site where it's used.
-    try:
-        from ..geo_utils import calculate_distance
-    except ImportError:
-        from geo_utils import calculate_distance
-
-    drift_km = calculate_distance(pickup_lat, pickup_lng, geocoded["lat"], geocoded["lng"])
+    drift_km = _trip_distance_km(pickup_lat, pickup_lng, geocoded["lat"], geocoded["lng"])
     if in_area and drift_km <= _PICKUP_RECONCILE_KM:
-        return pickup_lat, pickup_lng, pickup_address, True  # coordinate agrees with the address
+        return pickup_lat, pickup_lng, pickup_address, True, False, drift_km
 
     # Out of area, or the address geocodes far from the supplied point — trust
     # the address, which resolves into a service area.
-    return geocoded["lat"], geocoded["lng"], geocoded.get("address") or pickup_address, True
+    return geocoded["lat"], geocoded["lng"], geocoded.get("address") or pickup_address, True, True, drift_km
 
 
 async def propose_ride_booking(
@@ -624,12 +642,11 @@ async def propose_ride_booking(
     payment_method: Optional[str] = None,
     confirm_same_location: bool = False,
 ) -> Dict[str, Any]:
-    pickup_lat, pickup_lng, pickup_address, in_area = await _reconcile_pickup(
+    pickup_lat, pickup_lng, pickup_address, in_area, pickup_adjusted, pickup_drift_km = await _reconcile_pickup(
         pickup_lat,
         pickup_lng,
         pickup_address,
-        dropoff_lat=dropoff_lat,
-        dropoff_lng=dropoff_lng,
+        client_location=user.get("_client_location"),
     )
     if not in_area:
         return {"error": "pickup is outside Spinr's service areas — booking is not possible there"}
@@ -663,14 +680,22 @@ async def propose_ride_booking(
     if payment_method:
         proposal["payment_method"] = payment_method.lower()
 
+    message = (
+        "A booking card with the exact fare is now shown to the rider. Ask them to "
+        "review it and tap Confirm — do not claim the ride is booked."
+    )
+    if pickup_adjusted:
+        # Never move the pin silently — the incident's confirm screen showed a
+        # pickup kilometres from where the rider stood, with no explanation.
+        message += (
+            f" Note: the pickup pin was moved {pickup_drift_km:.1f} km to match "
+            f"'{pickup_address}' — tell the rider the exact pickup address before they confirm."
+        )
     return {
         # Lifted out by the orchestrator into an SSE `action` frame; the
         # client renders the native confirmation card from it.
         "_client_action": {"type": "booking_proposal", "proposal": proposal},
-        "message": (
-            "A booking card with the exact fare is now shown to the rider. Ask them to "
-            "review it and tap Confirm — do not claim the ride is booked."
-        ),
+        "message": message,
     }
 
 

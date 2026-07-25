@@ -46,14 +46,31 @@ const newId = () => `local-${Date.now()}-${nextId++}`;
  * rider's last ride pickup instead. */
 const LOCATION_MAX_AGE_MS = 5 * 60 * 1000;
 
-/** Last-known device position, only when permission is already granted —
- * the chat never triggers a permission prompt. Null on any failure or when
- * the only available fix is older than LOCATION_MAX_AGE_MS. */
-async function deviceLocation(): Promise<{ lat: number; lng: number } | null> {
+/** Cap on waiting for a fresh GPS fix — a cold GPS must not stall the first
+ * chat token; past this we fall back to the OS-cached position. */
+const CURRENT_POSITION_TIMEOUT_MS = 4000;
+
+/** Device position for the chat, only when permission is already granted —
+ * the chat never triggers a permission prompt. Prefers a FRESH fix
+ * (getCurrentPositionAsync, Balanced — the manual booking flow's accuracy)
+ * over the OS's last-known cache: the cached fix can be a coarse wifi/cell
+ * position from any app and drifting it between messages moved the
+ * assistant's pickup pin blocks away from the rider. Falls back to the
+ * cached fix on timeout/failure; null only when both fail.
+ * Exported for tests. */
+export async function deviceLocation(): Promise<{ lat: number; lng: number } | null> {
   try {
     const { granted } = await Location.getForegroundPermissionsAsync();
     if (!granted) return null;
-    const pos = await Location.getLastKnownPositionAsync({ maxAge: LOCATION_MAX_AGE_MS });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const fresh = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), CURRENT_POSITION_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    const pos = fresh ?? (await Location.getLastKnownPositionAsync({ maxAge: LOCATION_MAX_AGE_MS }));
     if (!pos) return null;
     return { lat: pos.coords.latitude, lng: pos.coords.longitude };
   } catch {

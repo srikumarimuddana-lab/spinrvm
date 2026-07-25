@@ -375,6 +375,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import distance reconciliation loop: {e}", exc_info=True)
 
+    # Period-1 (deadhead) distance finalizer — drains completed online-no-ride
+    # accumulators into the append-only driver_period_distances audit (period=1)
+    # once a driver leaves Period 1. Off unless period1_distance_tracking_enabled;
+    # single replica via Redis leader lock, claim-before-write for replay safety.
+    try:
+        from utils.period1_distance_finalizer import period1_distance_finalizer_loop
+
+        _spawn("period1_distance_finalizer (5min)", period1_distance_finalizer_loop)
+    except Exception as e:
+        logger.error(f"Failed to import period1 distance finalizer loop: {e}", exc_info=True)
+
     # T4A annual issuance — runs on the last day of February each year at
     # 08:00 UTC. Identifies drivers with ≥ $500 prior-year earnings, sends
     # each a push notification that their T4A slip is available, and logs

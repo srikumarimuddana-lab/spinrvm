@@ -382,6 +382,39 @@ async def update_location_batch(
             except (TypeError, ValueError):
                 pass
 
+        # Period-1 (online, no active ride) deadhead-distance scalar accumulator.
+        # Off by default; a deliberate opt-in since it measures a contractor's
+        # between-rides movement. We fold ONLY a running km total + span start
+        # into the same driver update — never the coordinates. resolve_active_ride
+        # and get_app_settings are cached, so this stays cheap on the hot path.
+        driver_row = driver_rows[0] if driver_rows else None
+        if driver_row is not None and driver_row.get("is_online"):
+            try:
+                from ...settings_loader import get_app_settings
+                from ...utils.breadcrumbs import resolve_active_ride
+                from ...utils.period1_distance import batch_incremental_distance_km
+            except ImportError:
+                from settings_loader import get_app_settings  # type: ignore
+                from utils.breadcrumbs import resolve_active_ride  # type: ignore
+                from utils.period1_distance import batch_incremental_distance_km  # type: ignore
+            try:
+                _p1_on = bool((await get_app_settings() or {}).get("period1_distance_tracking_enabled"))
+            except Exception:
+                _p1_on = False
+            if _p1_on:
+                try:
+                    _p1_active = await resolve_active_ride(driver_id)
+                except Exception:
+                    _p1_active = None
+                if _p1_active is None:
+                    _p1_delta = batch_incremental_distance_km(points)
+                    if _p1_delta > 0:
+                        update_data["period1_accum_km"] = round(
+                            float(driver_row.get("period1_accum_km") or 0) + _p1_delta, 3
+                        )
+                        if not driver_row.get("period1_accum_since"):
+                            update_data["period1_accum_since"] = datetime.now(timezone.utc)
+
         await db_supabase.update_one("drivers", {"user_id": current_user["id"]}, update_data)
         # Also sync to generic lat/lng fields if they exist to support legacy queries
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)

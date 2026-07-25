@@ -251,6 +251,7 @@ interface RideState {
     corporateAccountId?: string | null,
     paymentMethodId?: string,
     preauthorizedPaymentIntentId?: string,
+    opts?: { allowSamePlace?: boolean },
   ) => Promise<Ride | RideRequiresAction>;
   fetchRide: (rideId: string) => Promise<void>;
   cancelRide: (reason?: string) => Promise<void>;
@@ -626,7 +627,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
-  createRide: async (paymentMethod, corporateAccountId, paymentMethodId, preauthorizedPaymentIntentId) => {
+  createRide: async (paymentMethod, corporateAccountId, paymentMethodId, preauthorizedPaymentIntentId, opts) => {
     const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav, quietMode, riderNotes, routePolyline } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
@@ -634,7 +635,9 @@ export const useRideStore = create<RideState>((set, get) => ({
     // Guard a mis-resolved dropoff (a stale/wrong saved-place coordinate that
     // lands on the pickup while the address differs) BEFORE creating a ride
     // priced on a bogus coordinate. All booking entry points funnel here.
-    if (dropoffLikelyMisresolved(pickup, dropoff)) {
+    // allowSamePlace: the rider already explicitly confirmed a same-place trip
+    // (assistant guardrail) — honour that one confirmed booking.
+    if (!opts?.allowSamePlace && dropoffLikelyMisresolved(pickup, dropoff)) {
       throw new Error(
         "Your destination looks too close to your pickup. Please re-select it so we price the trip correctly.",
       );

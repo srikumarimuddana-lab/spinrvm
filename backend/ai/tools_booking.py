@@ -531,6 +531,13 @@ async def get_fare_quote(
         "distance_km": estimates[0].get("distance_km"),
         "duration_minutes": estimates[0].get("duration_minutes"),
         "currency": "CAD",
+        # The exact (post-reconcile) points this quote was priced on. They
+        # ride the card so a tapped option sends them back verbatim and the
+        # model never re-geocodes a trip the rider already saw priced.
+        "pickup_lat": pickup_lat,
+        "pickup_lng": pickup_lng,
+        "dropoff_lat": dropoff_lat,
+        "dropoff_lng": dropoff_lng,
     }
     # Addresses ride along in the card so a tapped option can send a
     # self-contained "Book the X from A to B" message — conversation history

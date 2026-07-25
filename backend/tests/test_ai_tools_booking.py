@@ -393,6 +393,12 @@ class TestFareQuote:
         assert action["distance_km"] == 6.4
         assert action["pickup_address"] == "123 Main St, Saskatoon"
         assert action["dropoff_address"] == "Saskatoon Airport"
+        # Priced coordinates travel with the card so a tapped option can pass
+        # them back verbatim instead of forcing a re-geocode.
+        assert action["pickup_lat"] == self.ARGS["pickup_lat"]
+        assert action["pickup_lng"] == self.ARGS["pickup_lng"]
+        assert action["dropoff_lat"] == self.ARGS["dropoff_lat"]
+        assert action["dropoff_lng"] == self.ARGS["dropoff_lng"]
 
     @pytest.mark.anyio
     async def test_out_of_area_pickup_refused(self):

@@ -585,6 +585,8 @@ class TestProposal:
         assert proposal["pickup_lat"] == 52.1170
         assert proposal["pickup_lng"] == -106.6345
         assert proposal["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+        # A moved pin is never silent — the model must relay it.
+        assert "pickup pin was moved" in result["message"]
 
     @pytest.mark.anyio
     async def test_proposal_corrects_pickup_coords_far_from_address_even_when_in_area(self):
@@ -620,6 +622,7 @@ class TestProposal:
         assert proposal["pickup_lat"] == 52.1170
         assert proposal["pickup_lng"] == -106.6345
         assert proposal["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+        assert "pickup pin was moved" in result["message"]
 
     @pytest.mark.anyio
     async def test_proposal_keeps_pickup_coords_that_match_address(self):
@@ -648,6 +651,57 @@ class TestProposal:
         assert proposal["pickup_lat"] == 52.1318
         assert proposal["pickup_lng"] == -106.6608
         assert proposal["pickup_address"] == "123 Main St"
+        assert "pickup pin was moved" not in result["message"]
+
+    @pytest.mark.anyio
+    async def test_device_anchor_keeps_supplied_pickup_without_maps_call(self):
+        # The rider's device fix sits ~25 m from the supplied pickup — the
+        # rider is physically there, so no re-geocode runs (no Maps budget)
+        # and the pin must not snap to an address centroid.
+        rider = {**RIDER, "_client_location": {"lat": 52.1320, "lng": -106.6609}}
+        maps = AsyncMock()
+        with _patch_area(), patch.object(tools_booking, "_places_available", maps):
+            result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=rider)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["pickup_lat"] == self.ARGS["pickup_lat"]
+        assert proposal["pickup_lng"] == self.ARGS["pickup_lng"]
+        assert "pickup pin was moved" not in result["message"]
+        maps.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_reconcile_picks_nearest_in_area_candidate(self):
+        # Google relevance ranks a far same-named street first; reconciliation
+        # must pick the candidate nearest the supplied pickup instead.
+        two = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "123 Main St (far), SK, Canada",
+                    "geometry": {"location": {"lat": 52.2680, "lng": -106.6345}},
+                },
+                {
+                    "formatted_address": "123 Main St, Saskatoon, SK, Canada",
+                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                },
+            ],
+        }
+        # ~1.9 km from the near candidate → past _PICKUP_RECONCILE_KM, so the
+        # address wins — but it must be the NEAR one.
+        args = dict(self.ARGS, pickup_lat=52.1000, pickup_lng=-106.6345)
+        with (
+            _patch_area(),
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(two),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["pickup_lat"] == 52.1170
+        assert proposal["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+        assert "pickup pin was moved" in result["message"]
 
     @pytest.mark.anyio
     async def test_out_of_area_refused(self):

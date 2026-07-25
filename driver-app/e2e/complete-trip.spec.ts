@@ -16,7 +16,7 @@
  *   5. No fatal JS errors during completion flow
  */
 import { test, expect } from '@playwright/test';
-import { MOCK_RIDE_OFFER, mockDriverBackend, seedAuthedDriverSession } from './fixtures';
+import { MOCK_RIDE_OFFER, loginAsDriver, mockDriverBackend, seedAuthedDriverSession } from './fixtures';
 
 const IN_PROGRESS_RIDE = { ...MOCK_RIDE_OFFER, status: 'in_progress' };
 
@@ -141,7 +141,6 @@ test.describe('driver-app: complete trip flow', () => {
   });
 
   test('earnings endpoint is called after completion', async ({ page }) => {
-    await seedAuthedDriverSession(page, { driver: { is_online: true } });
     await mockDriverBackend(page, { activeRide: IN_PROGRESS_RIDE, onlineStatus: true });
 
     await page.route('**/api/v1/drivers/rides/*/complete', async (route) => {
@@ -156,11 +155,10 @@ test.describe('driver-app: complete trip flow', () => {
       page.on('request', (req) => {
         if (/\/api\/v1\/drivers\/earnings/.test(req.url())) resolve(true);
       });
-      setTimeout(() => resolve(false), 6000);
+      setTimeout(() => resolve(false), 10_000);
     });
 
-    await page.goto('/');
-    await page.waitForTimeout(4000);
+    await loginAsDriver(page, { driver: { is_online: true } });
     expect(await earningsCalled).toBe(true);
   });
 

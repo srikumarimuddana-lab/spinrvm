@@ -9,22 +9,20 @@
  * WebSocket is mocked in fixtures via __MockWebSocket.
  */
 import { test, expect } from '@playwright/test';
-import { mockDriverBackend, seedAuthedDriverSession } from './fixtures';
+import { loginAsDriver, mockDriverBackend, seedAuthedDriverSession } from './fixtures';
 
 test.describe('driver-app web: online toggle', () => {
   test('driver config fetch happens on mount', async ({ page }) => {
-    await seedAuthedDriverSession(page);
     await mockDriverBackend(page);
 
     const configCalled = new Promise<boolean>((resolve) => {
       page.on('request', (req) => {
         if (/\/api\/v1\/drivers\/config/.test(req.url())) resolve(true);
       });
-      setTimeout(() => resolve(false), 5000);
+      setTimeout(() => resolve(false), 10_000);
     });
 
-    await page.goto('/');
-    await page.waitForTimeout(3000);
+    await loginAsDriver(page);
     expect(await configCalled).toBe(true);
   });
 

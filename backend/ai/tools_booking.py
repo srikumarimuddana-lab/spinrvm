@@ -53,6 +53,14 @@ _PLACE_RADIUS_METERS = 25000
 # address — the driver is dispatched to the coordinate, never the text, so the
 # two must agree before a booking card is shown.
 _PICKUP_RECONCILE_KM = 1.0
+# Pickup and dropoff closer than this are "the same place" for a rider: a
+# POI centroid vs. a GPS fix across a big-box parking lot commonly differs
+# 100-300 m, while genuinely distinct nearby destinations (the next store
+# over, a hotel across a highway) sit further apart. Below this, quoting or
+# proposing requires the rider's explicit confirmation — a false positive
+# costs one chat question, a false negative books a pointless minimum-fare
+# ride (incident: same Walmart quoted at 0.08 km with no warning).
+_SAME_PLACE_CONFIRM_KM = 0.25
 
 _COORD_PROPS = {
     "pickup_lat": {"type": "number", "minimum": -90, "maximum": 90},
@@ -327,6 +335,39 @@ def _best_promo_for(promos: list, portion: Decimal, total: Decimal) -> Optional[
     return {"code": best_code, "savings": str(_money(best_discount))}
 
 
+def _trip_distance_km(pickup_lat: float, pickup_lng: float, dropoff_lat: float, dropoff_lng: float) -> float:
+    # Lazy dual import (same pattern as _resolve_area) — module-level import of
+    # a sibling top-level module is fragile under the absolute-import deploy mode.
+    try:
+        from ..geo_utils import calculate_distance
+    except ImportError:
+        from geo_utils import calculate_distance
+    return calculate_distance(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
+
+
+def _same_place_refusal(distance_km: float, confirmed: bool) -> Optional[Dict[str, Any]]:
+    """Same-place guardrail: a needs_confirmation result the model must relay,
+    or None when the trip is far enough apart (or the rider already confirmed).
+
+    Returned as a normal tool result — not an error — so the model asks the
+    rider instead of apologizing for a failure.
+    """
+    if confirmed or distance_km >= _SAME_PLACE_CONFIRM_KM:
+        return None
+    return {
+        "needs_confirmation": "same_location",
+        "distance_meters": int(round(distance_km * 1000)),
+        "note": (
+            "Pickup and dropoff are essentially the same place — ask the rider "
+            "plainly whether they really want this trip (name both addresses). "
+            "Only after an explicit yes, call this tool again with "
+            "confirm_same_location=true. If they meant a different location "
+            "(e.g. another branch of the same store), resolve it with "
+            "find_place instead."
+        ),
+    }
+
+
 async def get_fare_quote(
     user: Dict[str, Any],
     pickup_lat: float,
@@ -335,11 +376,19 @@ async def get_fare_quote(
     dropoff_lng: float,
     pickup_address: Optional[str] = None,
     dropoff_address: Optional[str] = None,
+    confirm_same_location: bool = False,
 ) -> Dict[str, Any]:
     try:
         from ..routes.rides import estimates as _rides_estimates
     except ImportError:
         from routes.rides import estimates as _rides_estimates
+
+    refusal = _same_place_refusal(
+        _trip_distance_km(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng),
+        confirm_same_location,
+    )
+    if refusal:
+        return refusal
 
     try:
         estimate_result = await _rides_estimates.compute_ride_estimates(
@@ -537,6 +586,7 @@ async def propose_ride_booking(
     promo_code: Optional[str] = None,
     scheduled_time: Optional[str] = None,
     payment_method: Optional[str] = None,
+    confirm_same_location: bool = False,
 ) -> Dict[str, Any]:
     pickup_lat, pickup_lng, pickup_address, in_area = await _reconcile_pickup(
         pickup_lat,
@@ -548,6 +598,14 @@ async def propose_ride_booking(
     if not in_area:
         return {"error": "pickup is outside Spinr's service areas — booking is not possible there"}
 
+    # Guard AFTER reconciliation so it measures the pickup that would actually
+    # be dispatched, and on the proposal itself so skipping the quote step
+    # cannot bypass it.
+    trip_km = _trip_distance_km(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
+    refusal = _same_place_refusal(trip_km, confirm_same_location)
+    if refusal:
+        return refusal
+
     proposal = {
         "pickup_lat": pickup_lat,
         "pickup_lng": pickup_lng,
@@ -556,6 +614,10 @@ async def propose_ride_booking(
         "dropoff_lng": dropoff_lng,
         "dropoff_address": dropoff_address,
     }
+    if confirm_same_location and trip_km < _SAME_PLACE_CONFIRM_KM:
+        # The card passes this through so the client-side proximity guard
+        # honours the rider's explicit confirmation at Confirm time.
+        proposal["same_location_confirmed"] = True
     if vehicle_type_id:
         proposal["vehicle_type_id"] = vehicle_type_id
     if promo_code:
@@ -650,6 +712,13 @@ register(
                 **_COORD_PROPS,
                 "pickup_address": {"type": "string", "maxLength": 300},
                 "dropoff_address": {"type": "string", "maxLength": 300},
+                "confirm_same_location": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true ONLY after the rider explicitly confirms a trip "
+                        "whose pickup and dropoff are the same place."
+                    ),
+                },
             },
             "required": ["pickup_lat", "pickup_lng", "dropoff_lat", "dropoff_lng"],
         },
@@ -684,6 +753,13 @@ register(
                     "type": "string",
                     "enum": ["card", "wallet"],
                     "description": "Rider's stated payment preference. Omit if unknown.",
+                },
+                "confirm_same_location": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true ONLY after the rider explicitly confirms a trip "
+                        "whose pickup and dropoff are the same place."
+                    ),
                 },
             },
             "required": [

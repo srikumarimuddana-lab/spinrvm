@@ -332,6 +332,89 @@ class TestFareQuote:
         assert q["final_total"] == "0.00"
 
 
+class TestSamePlaceGuard:
+    """Pickup≈dropoff (< 250 m) must never be quoted or proposed silently —
+    the tools return needs_confirmation until the rider explicitly says yes
+    (incident: same Walmart quoted at 0.08 km with no warning)."""
+
+    # ~80 m apart — the incident geometry.
+    NEAR = {
+        "pickup_lat": 50.40790,
+        "pickup_lng": -104.65010,
+        "dropoff_lat": 50.40862,
+        "dropoff_lng": -104.65010,
+    }
+    PROPOSE_NEAR = {
+        **NEAR,
+        "pickup_address": "4500 Gordon Rd, Regina",
+        "dropoff_address": "4500 Gordon Rd, Regina, SK S4S 6H7",
+    }
+
+    def _maps_unavailable(self):
+        # _reconcile_pickup keeps the supplied coords when Maps is unavailable,
+        # isolating these tests from the geocoding path.
+        return patch.object(
+            tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))
+        )
+
+    @pytest.mark.anyio
+    async def test_quote_at_80m_requires_confirmation(self):
+        estimates = AsyncMock()
+        with patch("backend.routes.rides.estimates.compute_ride_estimates", estimates):
+            result, ok = await execute_tool("get_fare_quote", self.NEAR, user=RIDER)
+        assert ok
+        assert result["needs_confirmation"] == "same_location"
+        assert 60 <= result["distance_meters"] <= 100
+        assert "quotes" not in result
+        assert "_client_action" not in result
+        estimates.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_quote_proceeds_when_rider_confirmed(self):
+        args = dict(self.NEAR, confirm_same_location=True)
+        with _patch_estimates(ESTIMATES), _patch_promos([]):
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert "needs_confirmation" not in result
+        assert len(result["quotes"]) == 1
+
+    @pytest.mark.anyio
+    async def test_quote_at_300m_is_untouched(self):
+        args = dict(self.NEAR, dropoff_lat=50.41060)  # ~300 m
+        with _patch_estimates(ESTIMATES), _patch_promos([]):
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert "needs_confirmation" not in result
+        assert len(result["quotes"]) == 1
+
+    @pytest.mark.anyio
+    async def test_proposal_at_80m_requires_confirmation(self):
+        with _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("propose_ride_booking", self.PROPOSE_NEAR, user=RIDER)
+        assert ok
+        assert result["needs_confirmation"] == "same_location"
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_confirmed_proposal_carries_same_location_flag(self):
+        args = dict(self.PROPOSE_NEAR, confirm_same_location=True)
+        with _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["same_location_confirmed"] is True
+
+    @pytest.mark.anyio
+    async def test_normal_proposal_has_no_same_location_flag(self):
+        # confirm_same_location on a normal-distance trip must not stamp the
+        # flag — the client guard should stay active for it.
+        args = dict(self.PROPOSE_NEAR, dropoff_lat=50.44970, confirm_same_location=True)
+        with _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "same_location_confirmed" not in result["_client_action"]["proposal"]
+
+
 class TestProposal:
     ARGS = {
         "pickup_lat": 52.1318,
@@ -371,19 +454,30 @@ class TestProposal:
     @pytest.mark.anyio
     async def test_proposal_reresolves_pickup_address_when_coords_are_stale(self):
         stale_then_fixed = AsyncMock(side_effect=[None, AREA, AREA])
+        # Re-geocoded pickup must NOT coincide with the dropoff — that would
+        # (correctly) trip the same-place guard, which is not this scenario.
+        downtown = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "123 Main St, Saskatoon, SK, Canada",
+                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                }
+            ],
+        }
         with (
             patch.object(tools_booking, "_resolve_area", stale_then_fixed),
             _patch_settings(),
             _patch_budget(),
-            _patch_http(GEOCODE_OK),
+            _patch_http(downtown),
             patch.object(tools_booking, "record_call", AsyncMock()),
         ):
             result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=RIDER)
         assert ok
         proposal = result["_client_action"]["proposal"]
-        assert proposal["pickup_lat"] == 52.1708
-        assert proposal["pickup_lng"] == -106.6997
-        assert proposal["pickup_address"] == "Saskatoon Airport (YXE), SK, Canada"
+        assert proposal["pickup_lat"] == 52.1170
+        assert proposal["pickup_lng"] == -106.6345
+        assert proposal["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
 
     @pytest.mark.anyio
     async def test_proposal_corrects_pickup_coords_far_from_address_even_when_in_area(self):

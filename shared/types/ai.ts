@@ -86,9 +86,15 @@ export type AiAction =
       currency?: string;
       /** Resolved trip endpoints — included so a tapped option can send a
        * self-contained booking message (conversation history keeps only
-       * message text, never tool results). */
+       * message text, never tool results). Coordinates are the exact
+       * (post-reconcile) points the quote was priced on; the tap sends them
+       * back verbatim so the model never re-geocodes a priced trip. */
       pickup_address?: string;
       dropoff_address?: string;
+      pickup_lat?: number;
+      pickup_lng?: number;
+      dropoff_lat?: number;
+      dropoff_lng?: number;
       recommended_vehicle_type_id?: string | null;
       quotes: FareQuoteOption[];
     }

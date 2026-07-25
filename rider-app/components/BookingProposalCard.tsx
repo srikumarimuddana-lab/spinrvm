@@ -20,6 +20,7 @@ import { useRideStore } from '../store/rideStore';
 import {
   QUOTE_REFRESH_SECONDS,
   displayFare,
+  displayFareWithPromo,
   mapBookingError,
   paymentMethodForProposal,
   pickEstimate,
@@ -28,6 +29,7 @@ import {
   scheduledDateForProposal,
   type BookingErrorDescriptor,
 } from './bookingProposal';
+import { grandTotalOf, promoDiscountForEstimate, ridePortionOf } from '../utils/promoDiscount';
 
 type Phase = 'quoting' | 'ready' | 'booking' | 'booked' | 'error';
 
@@ -48,6 +50,8 @@ export default function BookingProposalCard({ proposal }: Props) {
   const applyPromo = useRideStore((s) => s.applyPromo);
   const setScheduledTime = useRideStore((s) => s.setScheduledTime);
   const estimates = useRideStore((s) => s.estimates);
+  const appliedPromo = useRideStore((s) => s.appliedPromo);
+  const fetchAvailablePromos = useRideStore((s) => s.fetchAvailablePromos);
 
   const [phase, setPhase] = useState<Phase>('quoting');
   const [errorInfo, setErrorInfo] = useState<BookingErrorDescriptor | null>(null);
@@ -82,6 +86,26 @@ export default function BookingProposalCard({ proposal }: Props) {
     if (phase === 'quoting' && estimate) setPhase('ready');
   }, [phase, estimate]);
 
+  // Load the REAL promo objects once an estimate is priced: the proposal only
+  // carries a promo code, and fetchAvailablePromos re-validates it against
+  // /promo/available (replacing the zero-discount placeholder applyPromo set
+  // in loadQuote) so the card can display the post-promo total the quote
+  // card promised. Re-fetched only when the vehicle or total changes.
+  const lastPromoKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!estimate) return;
+    const key = `${estimate.vehicle_type.id}:${grandTotalOf(estimate)}`;
+    if (lastPromoKey.current === key) return;
+    lastPromoKey.current = key;
+    fetchAvailablePromos(grandTotalOf(estimate), ridePortionOf(estimate));
+  }, [estimate, fetchAvailablePromos]);
+
+  // The proposed promo no longer applies (expired, wrong area, below the
+  // fare minimum) — say so instead of showing a chip beside an undiscounted
+  // total.
+  const promoMissing = !!proposal.promo_code && appliedPromo?.code !== proposal.promo_code;
+  const promoDiscount = estimate ? promoDiscountForEstimate(appliedPromo, estimate) : 0;
+
   const handleConfirm = useCallback(async () => {
     if (!estimate || bookedRef.current) return;
     // Card rides need an explicit card selection that can't be made from chat,
@@ -100,7 +124,11 @@ export default function BookingProposalCard({ proposal }: Props) {
       selectVehicle(estimate.vehicle_type as never);
       applyPromo(proposedPromo);
       setScheduledTime(scheduledDate);
-      const ride = await createRide(paymentMethod);
+      const ride = await createRide(paymentMethod, undefined, undefined, undefined, {
+        // The assistant only stamps this after the rider explicitly confirmed
+        // a same-place trip in chat — don't make them confirm twice.
+        allowSamePlace: !!proposal.same_location_confirmed,
+      });
       if ('requires_action' in ride) {
         // A card needing on-device 3DS returns RideRequiresAction, which this
         // in-chat card can't complete — deep-link to the standard flow per the
@@ -120,7 +148,7 @@ export default function BookingProposalCard({ proposal }: Props) {
       setErrorInfo(mapBookingError(error));
       setPhase('error');
     }
-  }, [estimate, selectVehicle, applyPromo, proposedPromo, setScheduledTime, scheduledDate, createRide, paymentMethod, router]);
+  }, [estimate, selectVehicle, applyPromo, proposedPromo, setScheduledTime, scheduledDate, createRide, paymentMethod, proposal, router]);
 
   return (
     <View style={styles.card}>
@@ -153,7 +181,10 @@ export default function BookingProposalCard({ proposal }: Props) {
         <>
           <View style={styles.fareRow}>
             <Text style={styles.vehicleName}>{estimate.vehicle_type.name}</Text>
-            <Text style={styles.fareText}>${displayFare(estimate)}</Text>
+            <View style={styles.fareAmounts}>
+              {promoDiscount > 0 && <Text style={styles.fareStruck}>${displayFare(estimate)}</Text>}
+              <Text style={styles.fareText}>${displayFareWithPromo(estimate, appliedPromo)}</Text>
+            </View>
           </View>
           <View style={styles.preferenceGrid}>
             <View style={styles.preferencePill}>
@@ -174,13 +205,21 @@ export default function BookingProposalCard({ proposal }: Props) {
               <Ionicons name={paymentMethod === 'wallet' ? 'wallet-outline' : 'card-outline'} size={12} color={colors.textDim} />
               <Text style={styles.preferenceText}>{paymentMethod === 'wallet' ? 'Wallet' : 'Card'}</Text>
             </View>
-            {proposal.promo_code ? (
+            {appliedPromo?.code && !promoMissing ? (
               <View style={styles.preferencePill}>
                 <Ionicons name="pricetag-outline" size={12} color={colors.success} />
-                <Text style={[styles.preferenceText, { color: colors.success }]}>Promo {proposal.promo_code}</Text>
+                <Text style={[styles.preferenceText, { color: colors.success }]}>Promo {appliedPromo.code}</Text>
               </View>
             ) : null}
           </View>
+          {promoMissing && (
+            <View style={styles.surgeBadge}>
+              <Ionicons name="alert-circle-outline" size={12} color={colors.warning} />
+              <Text style={styles.surgeText}>
+                Promo {proposal.promo_code} is no longer available — total shown without it.
+              </Text>
+            </View>
+          )}
           {(estimate.surge_multiplier ?? 1) > 1 && (
             <View style={styles.surgeBadge}>
               <Ionicons name="trending-up" size={12} color={colors.warning} />
@@ -270,6 +309,13 @@ const createStyles = (colors: ThemeColors) =>
       paddingTop: 4,
     },
     vehicleName: { fontSize: 14, fontWeight: '600', color: colors.text },
+    fareAmounts: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    fareStruck: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textDim,
+      textDecorationLine: 'line-through',
+    },
     fareText: { fontSize: 18, fontWeight: '700', color: colors.text },
     preferenceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
     preferencePill: {

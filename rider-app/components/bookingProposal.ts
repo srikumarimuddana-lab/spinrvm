@@ -8,6 +8,12 @@
  * path of the manual booking flow. The AI never books; the rider's tap does.
  */
 import type { AiAction, BookingProposal, FareQuoteOption } from '@shared/types/ai';
+import {
+  grandTotalOf,
+  promoDiscountForEstimate,
+  type EstimateFareLike,
+  type PromoLike,
+} from '../utils/promoDiscount';
 
 type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 
@@ -44,6 +50,20 @@ export function pickEstimate<T extends EstimateLike>(
 /** Rider-facing display amount: grand_total (fees+taxes) when present. */
 export function displayFare(estimate: EstimateLike): string {
   return estimate.grand_total ?? estimate.total_fare;
+}
+
+/** Post-promo display amount — the same math the manual booking screen uses
+ * (ride-options.tsx: grand_total − promoDiscountForEstimate). The AI quote
+ * card shows post-promo totals, so the confirm card must too: showing the
+ * pre-promo grand_total beside a promo chip overstated the fare ($20.92
+ * quoted, $39.44 on the card in the incident). Display-only — the server
+ * recomputes and enforces the discount at booking. */
+export function displayFareWithPromo(
+  estimate: EstimateFareLike,
+  promo: PromoLike | null | undefined,
+): string {
+  const discounted = Math.max(0, grandTotalOf(estimate) - promoDiscountForEstimate(promo, estimate));
+  return discounted.toFixed(2);
 }
 
 /** The message a tapped quote option sends back to the assistant. The next

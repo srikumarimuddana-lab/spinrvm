@@ -239,6 +239,7 @@ interface RideState {
   setPickup: (location: Location | null) => void;
   setDropoff: (location: Location | null) => void;
   addStop: (location: Location) => void;
+  clearStops: () => void;
   removeStop: (index: number) => void;
   updateStop: (index: number, location: Location) => void;
   fetchActiveRide: () => Promise<{ active: boolean; ride: Ride } | null>;
@@ -377,6 +378,17 @@ export const useRideStore = create<RideState>((set, get) => ({
     appliedPromo: null,
     routePolyline: [],
   })),
+  // Same invalidation block as addStop/removeStop. Stops were never reset
+  // anywhere, so a leftover manual-flow stop silently inflated every later
+  // /rides/estimate and /rides payload (the AI booking card sends whatever
+  // is in the store).
+  clearStops: () => set({
+    stops: [],
+    estimates: [],
+    availablePromos: [],
+    appliedPromo: null,
+    routePolyline: [],
+  }),
   removeStop: (index) => set((state) => ({
     stops: state.stops.filter((_, i) => i !== index),
     estimates: [],

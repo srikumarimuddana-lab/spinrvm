@@ -84,3 +84,21 @@ describe('createRide same-place guard', () => {
     expect((ride as { id: string }).id).toBe('ride-1');
   });
 });
+
+describe('clearStops', () => {
+  it('drops leftover stops so a chat booking never prices a stale detour', async () => {
+    useRideStore.setState({
+      dropoff: { address: '4325 Wakeling St', lat: 50.4497, lng: -104.5345 },
+      stops: [
+        { address: 'Old stop', lat: 50.5, lng: -104.7 },
+        { address: 'Older stop', lat: 50.6, lng: -104.8 },
+      ],
+    });
+    useRideStore.getState().clearStops();
+    expect(useRideStore.getState().stops).toEqual([]);
+
+    await useRideStore.getState().createRide('wallet');
+    const payload = (api.post as jest.Mock).mock.calls[0][1];
+    expect(payload.stops).toEqual([]);
+  });
+});

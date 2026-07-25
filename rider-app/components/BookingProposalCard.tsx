@@ -45,6 +45,7 @@ export default function BookingProposalCard({ proposal }: Props) {
 
   const setPickup = useRideStore((s) => s.setPickup);
   const setDropoff = useRideStore((s) => s.setDropoff);
+  const clearStops = useRideStore((s) => s.clearStops);
   const fetchEstimates = useRideStore((s) => s.fetchEstimates);
   const selectVehicle = useRideStore((s) => s.selectVehicle);
   const createRide = useRideStore((s) => s.createRide);
@@ -62,12 +63,15 @@ export default function BookingProposalCard({ proposal }: Props) {
   const proposedPromo = useMemo(() => promoForProposal(proposal), [proposal]);
 
   const loadQuote = useCallback(() => {
+    // A leftover stop from an earlier manual search would silently price into
+    // this chat booking — the proposal is always a two-point trip.
+    clearStops();
     setPickup({ address: proposal.pickup_address, lat: proposal.pickup_lat, lng: proposal.pickup_lng });
     setDropoff({ address: proposal.dropoff_address, lat: proposal.dropoff_lat, lng: proposal.dropoff_lng });
     applyPromo(proposedPromo);
     setScheduledTime(scheduledDate);
     fetchEstimates();
-  }, [proposal, setPickup, setDropoff, applyPromo, proposedPromo, setScheduledTime, scheduledDate, fetchEstimates]);
+  }, [proposal, clearStops, setPickup, setDropoff, applyPromo, proposedPromo, setScheduledTime, scheduledDate, fetchEstimates]);
 
   useEffect(() => {
     loadQuote();

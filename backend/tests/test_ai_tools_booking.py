@@ -714,6 +714,28 @@ class TestProposal:
         assert "pickup pin was moved" not in result["message"]
 
     @pytest.mark.anyio
+    async def test_quoted_total_passes_through_normalized(self):
+        args = dict(self.ARGS, quoted_total="20.9")
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["_client_action"]["proposal"]["quoted_total"] == "20.90"
+
+    @pytest.mark.anyio
+    async def test_junk_quoted_total_is_dropped_not_fatal(self):
+        args = dict(self.ARGS, quoted_total="twenty bucks")
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "quoted_total" not in result["_client_action"]["proposal"]
+
+    @pytest.mark.anyio
     async def test_device_anchor_keeps_supplied_pickup_without_maps_call(self):
         # The rider's device fix sits ~25 m from the supplied pickup — the
         # rider is physically there, so no re-geocode runs (no Maps budget)

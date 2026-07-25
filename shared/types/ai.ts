@@ -36,6 +36,10 @@ export interface BookingProposal {
    * same place (assistant's same-location guardrail). Lets the card bypass
    * the client-side proximity guard for this one confirmed booking. */
   same_location_confirmed?: boolean;
+  /** Total from the quote the rider accepted — display-only reference the
+   * card compares its fresh estimate against to show a "price updated"
+   * notice. Never what gets charged. */
+  quoted_total?: string;
 }
 
 export interface LocationSuggestionCandidate {

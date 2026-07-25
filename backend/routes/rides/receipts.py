@@ -21,6 +21,7 @@ from ._shared import (  # noqa: F401
     _d,
     _f,
     _sum_fare_breakdown,
+    relabel_booked_distance_lines,
 )
 
 router = APIRouter()
@@ -78,6 +79,11 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         has_tip_line = any(ln.get("type") == "tip" for ln in fare_lines)
         if ride_tip > 0 and not has_tip_line:
             fare_lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
+        # Relabel the frozen "Ride fare (X km)" line to "(X km booked)" when GPS
+        # diverged, matching get_ride / ride-history (queries.py). Without this the
+        # receipt shows the quoted road distance in the fare line but the
+        # GPS-measured distance in the top-level tile — two numbers for one trip.
+        fare_lines = relabel_booked_distance_lines(fare_lines, ride)
         receipt_grand_total = _sum_fare_breakdown(fare_lines)
     else:
         fare_lines = _build_fare_breakdown(ride)
@@ -96,7 +102,14 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         "pickup_address": ride.get("pickup_address"),
         "dropoff_address": ride.get("dropoff_address"),
         "stops": ride.get("stops", []),
-        "distance_km": ride.get("distance_km"),
+        # Under fare-lock the rider was quoted (and charged) the road distance,
+        # so the receipt's headline distance must be the quoted planned distance,
+        # not the GPS-measured value that ride_complete writes into distance_km.
+        "distance_km": (
+            ride.get("planned_distance_km")
+            if fare_locked and ride.get("planned_distance_km") is not None
+            else ride.get("distance_km")
+        ),
         "duration_minutes": ride.get("duration_minutes"),
         "base_fare": ride.get("base_fare", 0),
         "distance_fare": ride.get("distance_fare", 0),

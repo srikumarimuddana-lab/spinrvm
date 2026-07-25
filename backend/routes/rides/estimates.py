@@ -252,7 +252,14 @@ async def compute_ride_estimates(
     # API call.
     _app_settings = await _deps.get_app_settings()
     _maps_key = (_app_settings or {}).get("google_maps_api_key", "")
-    _fare_mode = str((_app_settings or {}).get("fare_distance_basis", "shadow")).lower()
+    # Road distance is the billing basis: the rider is quoted the actual road
+    # distance before the ride and charged exactly that. Default "road" (not
+    # "shadow") so a fresh deploy bills the road route with no flag flip needed;
+    # an app_settings row can still force "shadow"/"haversine" as a kill switch.
+    # "road" keeps a safety fallback to haversine ONLY when Directions returns
+    # nothing or a physically implausible distance (a Maps glitch) — flagged as
+    # "haversine_fallback" for reconciliation, never a silent straight-line bill.
+    _fare_mode = str((_app_settings or {}).get("fare_distance_basis", "road")).lower()
 
     # Kick off the Directions road-route fetch NOW so its round-trip overlaps
     # the driver/fare work below instead of stacking on top of it (the fare

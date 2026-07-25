@@ -365,7 +365,9 @@ class TestFareQuote:
     @pytest.mark.anyio
     async def test_quote_uses_estimate_engine_and_applies_best_promo(self):
         args = dict(self.ARGS, pickup_address="123 Main St, Saskatoon", dropoff_address="Saskatoon Airport")
-        with _patch_estimates(ESTIMATES), _patch_promos(PROMOS):
+        # Maps unavailable → pickup reconciliation keeps the supplied coords;
+        # the geocoding path has its own tests.
+        with _patch_estimates(ESTIMATES), _patch_promos(PROMOS), _patch_settings(key=""):
             result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
         assert ok
         # Only the available vehicle type is quoted; the other is named.
@@ -424,6 +426,58 @@ class TestFareQuote:
         assert q["final_total"] == q["total"] == "18.48"
         assert "promo_code" not in q
         assert "promo lookup failed" in result["promo_note"]
+
+    @pytest.mark.anyio
+    async def test_quote_reconciles_stale_pickup_coord_against_address(self):
+        # Same contract as propose_ride_booking: a stale coordinate riding
+        # alongside a correct address is re-anchored BEFORE pricing, so the
+        # quote card and the confirm card always price the same pickup.
+        correct = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "123 Main St, Saskatoon, SK, Canada",
+                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                }
+            ],
+        }
+        args = dict(
+            self.ARGS,
+            pickup_lat=52.2680,  # ~17 km from the real address, still "in area"
+            pickup_lng=-106.6345,
+            pickup_address="123 Main St, Saskatoon",
+            dropoff_address="Saskatoon Airport",
+        )
+        estimates_mock = AsyncMock(return_value=ESTIMATES)
+        with (
+            patch("backend.routes.rides.estimates.compute_ride_estimates", estimates_mock),
+            _patch_promos([]),
+            _patch_area(),
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(correct),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        req = estimates_mock.call_args.args[0]
+        assert req.pickup_lat == 52.1170
+        assert req.pickup_lng == -106.6345
+        assert result["pickup_note"].startswith("the pickup pin was moved")
+        assert "pickup pin was moved" in result["note"]
+        assert result["_client_action"]["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+
+    @pytest.mark.anyio
+    async def test_quote_without_address_skips_reconcile(self):
+        maps = AsyncMock()
+        with (
+            _patch_estimates(ESTIMATES),
+            _patch_promos([]),
+            patch.object(tools_booking, "_places_available", maps),
+        ):
+            result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
+        assert ok and result["quotes"]
+        maps.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_free_ride_promo_drops_total_to_zero(self):

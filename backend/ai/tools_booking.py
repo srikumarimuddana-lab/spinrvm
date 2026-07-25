@@ -419,6 +419,30 @@ async def get_fare_quote(
     except ImportError:
         from routes.rides import estimates as _rides_estimates
 
+    # Reconcile the pickup exactly like propose_ride_booking does, so the
+    # quote card and the confirm card can never be priced on different
+    # pickups (incident: the quote used the model's stale coordinate, the
+    # card used the reconciled one — $30.92 became $39.44 with no
+    # explanation). The device anchor keeps the common "my location" case
+    # free of extra Maps traffic.
+    pickup_note = None
+    if pickup_address:
+        (
+            pickup_lat,
+            pickup_lng,
+            pickup_address,
+            _in_area,
+            pickup_adjusted,
+            pickup_drift_km,
+        ) = await _reconcile_pickup(
+            pickup_lat, pickup_lng, pickup_address, client_location=user.get("_client_location")
+        )
+        if pickup_adjusted:
+            pickup_note = (
+                f"the pickup pin was moved {pickup_drift_km:.1f} km to match '{pickup_address}' — "
+                "tell the rider the exact pickup address"
+            )
+
     refusal = _same_place_refusal(
         _trip_distance_km(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng),
         confirm_same_location,
@@ -518,7 +542,7 @@ async def get_fare_quote(
         shared["dropoff_address"] = dropoff_address
 
     if not quotes:
-        return {
+        no_drivers = {
             **shared,
             "quotes": [],
             "no_drivers": True,
@@ -527,6 +551,9 @@ async def get_fare_quote(
                 "plainly and suggest trying again in a few minutes."
             ),
         }
+        if pickup_note:
+            no_drivers["pickup_note"] = pickup_note
+        return no_drivers
 
     recommended = min(quotes, key=lambda q: Decimal(q["final_total"]))
     result = {
@@ -554,6 +581,9 @@ async def get_fare_quote(
         result["unavailable_vehicle_types"] = unavailable
     if promo_note:
         result["promo_note"] = promo_note
+    if pickup_note:
+        result["pickup_note"] = pickup_note
+        result["note"] += f" IMPORTANT: {pickup_note}."
     return result
 
 

@@ -25,6 +25,7 @@ import {
   paymentMethodForProposal,
   pickEstimate,
   postBookingRoute,
+  priceChangeNotice,
   promoForProposal,
   scheduledDateForProposal,
   type BookingErrorDescriptor,
@@ -92,12 +93,15 @@ export default function BookingProposalCard({ proposal }: Props) {
   // in loadQuote) so the card can display the post-promo total the quote
   // card promised. Re-fetched only when the vehicle or total changes.
   const lastPromoKey = useRef<string | null>(null);
+  const [promosReady, setPromosReady] = useState(false);
   useEffect(() => {
     if (!estimate) return;
     const key = `${estimate.vehicle_type.id}:${grandTotalOf(estimate)}`;
     if (lastPromoKey.current === key) return;
     lastPromoKey.current = key;
-    fetchAvailablePromos(grandTotalOf(estimate), ridePortionOf(estimate));
+    fetchAvailablePromos(grandTotalOf(estimate), ridePortionOf(estimate)).finally(() =>
+      setPromosReady(true),
+    );
   }, [estimate, fetchAvailablePromos]);
 
   // The proposed promo no longer applies (expired, wrong area, below the
@@ -105,6 +109,20 @@ export default function BookingProposalCard({ proposal }: Props) {
   // total.
   const promoMissing = !!proposal.promo_code && appliedPromo?.code !== proposal.promo_code;
   const promoDiscount = estimate ? promoDiscountForEstimate(appliedPromo, estimate) : 0;
+
+  // Never re-price silently: compare each displayed total against what the
+  // rider last saw — the accepted quote's total first, then the previously
+  // displayed total across the 60 s auto-refreshes. Comparison waits for the
+  // promo fetch so a not-yet-applied discount doesn't fire a false notice.
+  const displayedTotal = estimate ? displayFareWithPromo(estimate, appliedPromo) : null;
+  const priceRef = useRef<string | null>(proposal.quoted_total ?? null);
+  const [priceNotice, setPriceNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!displayedTotal || !promosReady) return;
+    const notice = priceChangeNotice(priceRef.current, displayedTotal);
+    if (notice) setPriceNotice(notice);
+    priceRef.current = displayedTotal;
+  }, [displayedTotal, promosReady]);
 
   const handleConfirm = useCallback(async () => {
     if (!estimate || bookedRef.current) return;
@@ -226,6 +244,12 @@ export default function BookingProposalCard({ proposal }: Props) {
               <Text style={styles.surgeText}>{estimate.surge_multiplier}x surge applies</Text>
             </View>
           )}
+          {priceNotice && (
+            <View style={styles.priceNoticeRow}>
+              <Ionicons name="alert-circle-outline" size={13} color={colors.warning} />
+              <Text style={styles.priceNoticeText}>{priceNotice}</Text>
+            </View>
+          )}
           <TouchableOpacity
             style={[styles.confirmButton, phase === 'booking' && styles.confirmDisabled]}
             onPress={handleConfirm}
@@ -330,6 +354,8 @@ const createStyles = (colors: ThemeColors) =>
     preferenceText: { fontSize: 11, color: colors.textDim, fontWeight: '600' },
     surgeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     surgeText: { fontSize: 12, color: colors.warning, fontWeight: '600' },
+    priceNoticeRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    priceNoticeText: { flex: 1, fontSize: 12, color: colors.warning, fontWeight: '600' },
     confirmButton: {
       backgroundColor: colors.primary,
       borderRadius: 10,

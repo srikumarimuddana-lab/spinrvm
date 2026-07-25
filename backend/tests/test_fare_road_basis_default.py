@@ -26,6 +26,27 @@ def test_estimate_defaults_fare_basis_to_road_not_shadow() -> None:
     assert '"fare_distance_basis", "shadow"' not in src
 
 
+def test_tokenless_road_booking_prices_road_or_flags_fallback() -> None:
+    """Blocker-2 contract: a booking with no valid estimate token must still, in
+    road mode, price on the road distance — or, if Directions is unavailable,
+    fall back to a FLAGGED haversine (never silent plain 'haversine' that the
+    suspect check + reconciliation miss). This exercises the exact function pair
+    the booking safety-net calls.
+    """
+    from routes.rides._shared import booked_distance_suspect_reason, select_fare_distance
+
+    hav, road = 0.7, 1.8
+    # Road available → charge the road distance, not suspect.
+    km, basis = select_fare_distance(hav, road, mode="road")
+    assert (km, basis) == (1.8, "road_route")
+    assert booked_distance_suspect_reason(km, basis) is None
+
+    # Road unavailable → flagged fallback that the suspect check catches.
+    km, basis = select_fare_distance(hav, None, mode="road")
+    assert basis == "haversine_fallback"
+    assert booked_distance_suspect_reason(km, basis) == "road_route_unavailable"
+
+
 def test_migration_248_enables_road_billing_and_quote_lock() -> None:
     sql = MIGRATION.read_text()
     # Collect the quoted fare: never re-price on post-ride GPS.

@@ -8,6 +8,7 @@
 import {
   buildQuoteBookingMessage,
   displayFare,
+  displayFareWithPromo,
   mapBookingError,
   paymentMethodForProposal,
   pickEstimate,
@@ -174,5 +175,41 @@ describe('buildQuoteBookingMessage', () => {
     expect(buildQuoteBookingMessage(bare, { total: '', final_total: '' })).toBe(
       'Book the recommended option.',
     );
+  });
+});
+
+describe('displayFareWithPromo', () => {
+  // Manual-flow parity: grand_total − promoDiscountForEstimate (ride portion
+  // = base + distance + time; promos never discount fees or taxes).
+  const fullEst = {
+    base_fare: '3.50',
+    distance_fare: '18.17',
+    time_fare: '7.25',
+    grand_total: '30.92',
+    total_fare: '28.92',
+  };
+
+  it('subtracts a flat promo capped at the ride portion', () => {
+    const promo = { discount_type: 'flat', discount_value: 10 };
+    expect(displayFareWithPromo(fullEst, promo)).toBe('20.92');
+  });
+
+  it('applies a percentage promo to the ride portion only, honouring max_discount', () => {
+    const promo = { discount_type: 'percentage', discount_value: 75, max_discount: 10 };
+    // 75% of 28.92 = 21.69 → capped at 10 → 30.92 − 10
+    expect(displayFareWithPromo(fullEst, promo)).toBe('20.92');
+  });
+
+  it('free ride floors at zero', () => {
+    expect(displayFareWithPromo(fullEst, { free_ride: true })).toBe('0.00');
+  });
+
+  it('ignores a promo below its min_ride_fare', () => {
+    const promo = { discount_type: 'flat', discount_value: 10, min_ride_fare: 100 };
+    expect(displayFareWithPromo(fullEst, promo)).toBe('30.92');
+  });
+
+  it('no promo → plain grand total', () => {
+    expect(displayFareWithPromo(fullEst, null)).toBe('30.92');
   });
 });

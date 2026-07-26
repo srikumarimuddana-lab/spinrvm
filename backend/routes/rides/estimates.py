@@ -45,6 +45,12 @@ from ._shared import (  # noqa: F401
 # it sat below the HTTP timeout (1.5 s vs 3.0 s), the same trip priced twice
 # could bill haversine once and the road route the second time (incident:
 # 12.12 km → 16.46 km, $30.92 → $39.44 between quote and confirm card).
+#
+# Derived, never hardcoded: the invariant is wait > timeout, so the ONLY way
+# to buy latency back is to lower DIRECTIONS_TIMEOUT_S — which is why that
+# constant now sits at 1.5 s, keeping this bound at 2.0 s instead of the 3.5 s
+# a 3.0 s timeout implied. CLAUDE.md pins fare estimate P95 at 300 ms, so the
+# worst case here is a real trade and belongs on the low side of it.
 # Haversine mode skips the wait entirely; the fare_distance_basis app
 # setting remains the kill switch if Directions latency ever hurts.
 _PRICING_ROUTE_WAIT_S = DIRECTIONS_TIMEOUT_S + 0.5

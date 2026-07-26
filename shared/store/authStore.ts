@@ -197,6 +197,7 @@ interface AuthState {
   tokenExpiresAt: number | null;   // Unix ms — when the access token expires
   isLoading: boolean;
   isInitialized: boolean;
+  sessionRecoverable: boolean;     // transient refresh failure with valid refresh token in storage
   error: string | null;
 
   // Actions
@@ -231,6 +232,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   tokenExpiresAt: null,
   isLoading: false,
   isInitialized: false,
+  sessionRecoverable: false,
   error: null,
 
   // ── Token helpers ──────────────────────────────────────────────────────── //
@@ -420,6 +422,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             token: newToken,
             isInitialized: true,
             isLoading: false,
+            sessionRecoverable: false,
           });
           return;
         } catch (e) {
@@ -457,11 +460,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       //    refresh token is still valid and still in SecureStore. Do NOT
       //    delete it — the next app launch should retry.
       if (get().refreshToken || await storage.getItem('refresh_token')) {
-        if (__DEV__) console.log('[Auth] Refresh failed transiently — keeping refresh token for next launch');
-        // Ensure no in-memory auth artifacts leak into the "logged out" UI.
+        if (__DEV__) console.log('[Auth] Refresh failed transiently — session recoverable on resume');
         setInMemoryToken(null);
         setCsrfToken(null);
-        set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
+        set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false, sessionRecoverable: true });
         return;
       }
     }
@@ -630,7 +632,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await storage.deleteItem('token_expires_at');
     // Clear user cache on logout
     await appCache.clearUserCache();
-    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false });
+    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });
     // Reset all registered per-session stores (rideStore, driverStore) so a
     // subsequent login never sees ghost data from the previous user.
     await _runLogoutCallbacks();

@@ -112,6 +112,10 @@ async def admin_ai_chat(body: AdminAiChatRequest, admin: dict = Depends(get_admi
         user_message=body.message,
         audience=audience,
         admin_actor_id=admin["id"],
+        # The console renders the Drop-a-pin action (as a lat,lng entry), so
+        # it declares the capability — without it request_map_pin degrades to
+        # the old-client text fallback and the flow can't be exercised here.
+        client_capabilities=["map_pin"],
     ):
         if name == "token":
             reply_parts.append(payload.get("text", ""))

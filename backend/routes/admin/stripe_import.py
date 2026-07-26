@@ -17,8 +17,17 @@ Operator flow, CSV formats, and the same-account vs. new-account (Stripe
 support migration) scenarios live in docs/runbooks/stripe-legacy-migration.md.
 
 Reports carry only ``row_ref`` / ``field`` / ``message`` — never raw PII —
-per the PIPEDA rules in CLAUDE.md. Mounted under ``require_module("drivers")``
-(migration ops tooling, both kinds) in routes/admin/__init__.py.
+per the PIPEDA rules in CLAUDE.md.
+
+Access: strictly **super_admin** (checked per-handler, like the AI console).
+Module grants are not enough — writing ``drivers.stripe_account_id`` redirects
+a driver's payout destination, a money-moving capability no other admin screen
+exposes. The router mount in routes/admin/__init__.py adds
+``require_module("drivers")`` on top, but the super_admin check is the gate.
+
+Scope: driver rows are matchable ONLY when stamped by the legacy driver
+importer (``legacy_import_metadata.source``) — enforced in the service's
+prefetch, so a mapping CSV cannot touch natively-onboarded drivers at all.
 """
 
 import asyncio
@@ -50,6 +59,13 @@ MAX_CSV_BYTES = 1_000_000  # 1 MB
 MAX_ROWS = 200
 
 
+def _require_super_admin(admin: dict) -> None:
+    """403 unless super_admin. Payout-destination writes are above any module
+    grant — the "drivers" module also covers read-only ops screens."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Stripe mapping import requires super_admin")
+
+
 def _serialize_items(items: list[import_svc.StripeMappingErrorItem]) -> list[dict[str, str]]:
     return [{"row_ref": i.row_ref, "field": i.field, "message": i.message} for i in items]
 
@@ -75,8 +91,16 @@ async def _build_plan(kind: str, rows: list[dict[str, str]], batch: str) -> Any:
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
     # build_plan runs its own DB phase off the loop and Stripe phase bounded
-    # by a semaphore; a missing key surfaces as a stripe_not_configured error.
-    return await import_svc.build_plan(kind, rows, stripe_secret, batch)
+    # by a semaphore; a missing key surfaces as a stripe_not_configured error
+    # and per-row Stripe failures become plan errors. Anything that still
+    # escapes (DB outage during prefetch) → clean 503 so the operator retries.
+    try:
+        return await import_svc.build_plan(kind, rows, stripe_secret, batch)
+    except Exception as e:
+        logger.error("stripe mapping plan build failed", extra={"batch": batch, "kind": kind}, exc_info=True)
+        raise HTTPException(
+            status_code=503, detail="Could not validate the mapping (database/Stripe error); retry"
+        ) from e
 
 
 def _report(plan: Any, kind: str, batch: str, total_rows: int) -> dict[str, Any]:
@@ -103,6 +127,7 @@ async def validate_stripe_import(
     admin: dict = Depends(get_admin_user),
 ):
     """Dry-run: parse, match, and live-validate the mapping CSV. No writes."""
+    _require_super_admin(admin)
     batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     rows = await _read_rows(mapping_csv, kind)
     plan = await _build_plan(kind, rows, batch)
@@ -117,6 +142,7 @@ async def commit_stripe_import(
     admin: dict = Depends(get_admin_user),
 ):
     """Re-validate and, only if clean, fill the NULL Stripe ID columns."""
+    _require_super_admin(admin)
     batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     rows = await _read_rows(mapping_csv, kind)
     plan = await _build_plan(kind, rows, batch)
@@ -132,7 +158,13 @@ async def commit_stripe_import(
         result = await asyncio.to_thread(import_svc.commit_plan, plan)
     except Exception as e:
         logger.error("stripe mapping import commit failed", extra={"batch": batch}, exc_info=True)
-        raise HTTPException(status_code=502, detail="Import commit failed; no changes may have been applied") from e
+        # Per-row writes are not transactional: some rows may already be
+        # written. Safe to re-send the same CSV — written rows converge as
+        # already_mapped skips, thanks to the NULL-only guard.
+        raise HTTPException(
+            status_code=502,
+            detail="Import commit failed partway; re-send the same CSV — already-written rows are skipped",
+        ) from e
 
     kyc_sync = "not_applicable"
     if kind == import_svc.KIND_DRIVERS and driver_ids:
@@ -177,6 +209,7 @@ def _status_rows(batch: str) -> list[dict[str, Any]]:
 @router.get("/stripe/import/status")
 async def stripe_import_status(batch: str, admin: dict = Depends(get_admin_user)):
     """Aggregate a drivers batch's KYC-sync convergence. DB-only, no Stripe."""
+    _require_super_admin(admin)
     rows = await asyncio.to_thread(_status_rows, batch)
     kyc = Counter(
         (r.get("legacy_import_metadata") or {}).get("stripe_migration", {}).get("kyc_sync", "pending") for r in rows

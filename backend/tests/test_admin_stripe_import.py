@@ -187,6 +187,25 @@ def test_validate_surfaces_row_errors(test_client, super_admin_override):
     assert [e["field"] for e in body["errors"]] == ["no_match"]
 
 
+def test_non_super_admin_is_403(test_client):
+    # Module grants are not enough: writing stripe_account_id redirects a
+    # driver's payout destination, so every endpoint is super_admin-only.
+    from backend.server import app
+    from dependencies import get_admin_user
+
+    app.dependency_overrides[get_admin_user] = lambda: {"id": "admin_2", "role": "admin"}
+    try:
+        ps = _patches({"drivers": [], "users": []})
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6]:
+            for path in ("/api/admin/stripe/import/validate", "/api/admin/stripe/import/commit"):
+                resp = _post(test_client, path, DRIVERS_CSV)
+                assert resp.status_code == 403, resp.text
+            resp = test_client.get("/api/admin/stripe/import/status", params={"batch": "b1"})
+            assert resp.status_code == 403, resp.text
+    finally:
+        app.dependency_overrides.pop(get_admin_user, None)
+
+
 def test_validate_rejects_unknown_kind(test_client, super_admin_override):
     ps = _patches({"drivers": [], "users": []})
     with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6]:

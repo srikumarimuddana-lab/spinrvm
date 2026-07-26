@@ -469,7 +469,7 @@ class TestDocumentRegressions:
         mock_user = {"id": "user_777", "is_driver": False, "first_name": "A", "last_name": "B", "phone": "+1"}
         doc = LinkDocumentRequest(
             requirement_id="drivers_license",  # non-UUID service-area key → common-requirement fallback
-            document_url="https://example.com/license.jpg",
+            document_url="https://test.supabase.co/storage/v1/object/sign/driver-documents/license.jpg",
             side="front",
             document_type="image/jpeg",
         )
@@ -482,7 +482,7 @@ class TestDocumentRegressions:
         ):
             result = await link_driver_document(doc_data=doc, current_user=mock_user)
 
-        assert result["document_url"] == "https://example.com/license.jpg"
+        assert result["document_url"] == "https://test.supabase.co/storage/v1/object/sign/driver-documents/license.jpg"
         assert result["status"] == "pending"
         # A minimal drivers row must have been auto-created for this user.
         inserted_tables = [c.args[0] for c in insert_one.call_args_list]
@@ -518,7 +518,7 @@ class TestDocumentRegressions:
         mock_user = {"id": "user_1", "is_driver": True}
         doc = LinkDocumentRequest(
             requirement_id="drivers_license",
-            document_url="https://example.com/license.jpg",
+            document_url="https://test.supabase.co/storage/v1/object/sign/driver-documents/license.jpg",
             side="front",
             document_type="image/jpeg",
         )
@@ -531,7 +531,7 @@ class TestDocumentRegressions:
         ):
             result = await link_driver_document(doc_data=doc, current_user=mock_user)
 
-        assert result["document_url"] == "https://example.com/license.jpg"
+        assert result["document_url"] == "https://test.supabase.co/storage/v1/object/sign/driver-documents/license.jpg"
         # Driver already exists → no drivers row auto-created.
         inserted_tables = [c.args[0] for c in insert_one.call_args_list]
         assert "drivers" not in inserted_tables

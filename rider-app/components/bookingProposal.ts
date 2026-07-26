@@ -7,7 +7,15 @@
  * store's estimates) and books via rideStore.createRide() — the exact code
  * path of the manual booking flow. The AI never books; the rider's tap does.
  */
-import type { BookingProposal } from '@shared/types/ai';
+import type { AiAction, BookingProposal, FareQuoteOption } from '@shared/types/ai';
+import {
+  grandTotalOf,
+  promoDiscountForEstimate,
+  type EstimateFareLike,
+  type PromoLike,
+} from '../utils/promoDiscount';
+
+type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 
 /** Quotes auto-refresh on this cadence so a stale estimate_token (surge
  * lock) is never submitted. Matches the booking screens' refresh habit. */
@@ -42,6 +50,82 @@ export function pickEstimate<T extends EstimateLike>(
 /** Rider-facing display amount: grand_total (fees+taxes) when present. */
 export function displayFare(estimate: EstimateLike): string {
   return estimate.grand_total ?? estimate.total_fare;
+}
+
+/** Post-promo display amount — the same math the manual booking screen uses
+ * (ride-options.tsx: grand_total − promoDiscountForEstimate). The AI quote
+ * card shows post-promo totals, so the confirm card must too: showing the
+ * pre-promo grand_total beside a promo chip overstated the fare ($20.92
+ * quoted, $39.44 on the card in the incident). Display-only — the server
+ * recomputes and enforces the discount at booking. */
+export function displayFareWithPromo(
+  estimate: EstimateFareLike,
+  promo: PromoLike | null | undefined,
+): string {
+  const discounted = Math.max(0, grandTotalOf(estimate) - promoDiscountForEstimate(promo, estimate));
+  return discounted.toFixed(2);
+}
+
+/** Copy for the promo the rider was promised vs. the one actually applied.
+ * Null while they agree (including before the promo fetch resolves, when the
+ * placeholder still carries the proposed code) so the card stays quiet in the
+ * normal case.
+ *
+ * fetchAvailablePromos auto-applies the best eligible promo when the proposed
+ * one is gone, so "not the promo you asked for" and "no promo at all" are
+ * different states: saying "total shown without it" while a substitute is
+ * discounting the total is simply false. Name the substitute instead. */
+export function promoSubstitutionNotice(
+  proposedCode: string | null | undefined,
+  appliedCode: string | null | undefined,
+): string | null {
+  if (!proposedCode || appliedCode === proposedCode) return null;
+  return appliedCode
+    ? `Promo ${proposedCode} is no longer available — ${appliedCode} applied instead.`
+    : `Promo ${proposedCode} is no longer available — total shown without it.`;
+}
+
+/** The message a tapped quote option sends back to the assistant. The next
+ * turn sees only message text, so this must be self-contained — and it must
+ * carry the quote's exact [lat,lng] coordinates and vehicle id verbatim so
+ * the model books THE priced trip instead of re-geocoding the addresses (the
+ * old prose-only message caused a third independent geocode, moving pins and
+ * prices between the quote and the confirm card). */
+export function buildQuoteBookingMessage(quote: FareQuoteAction, option: FareQuoteOption): string {
+  const endpoint = (label: 'from' | 'to', address?: string, lat?: number, lng?: number): string => {
+    const coords =
+      typeof lat === 'number' && typeof lng === 'number'
+        ? `[${lat.toFixed(5)},${lng.toFixed(5)}]`
+        : '';
+    const place = [address, coords].filter(Boolean).join(' ');
+    return place ? ` ${label} ${place}` : '';
+  };
+  const vehicle = option.vehicle_type ?? 'recommended option';
+  const vehicleId = option.vehicle_type_id ? ` (vehicle id ${option.vehicle_type_id})` : '';
+  const promo = option.promo_code ? ` with promo ${option.promo_code}` : '';
+  const total = option.final_total ? `, total $${option.final_total}` : '';
+  return (
+    `Book the ${vehicle}${vehicleId}` +
+    `${endpoint('from', quote.pickup_address, quote.pickup_lat, quote.pickup_lng)}` +
+    `${endpoint('to', quote.dropoff_address, quote.dropoff_lat, quote.dropoff_lng)}` +
+    `${promo}${total}.`
+  );
+}
+
+/** Notice text when the card's current total drifts from what the rider last
+ * saw (the accepted quote's total on first load, then the previously
+ * displayed total across auto-refreshes). Null when within a cent or when
+ * either side is missing/unparseable. The card must never re-price silently —
+ * the incident's quote went $20.92 → $39.44 with no acknowledgement. */
+export function priceChangeNotice(
+  referenceTotal: string | null | undefined,
+  currentTotal: string,
+): string | null {
+  const ref = parseFloat(referenceTotal ?? '');
+  const cur = parseFloat(currentTotal);
+  if (!Number.isFinite(ref) || !Number.isFinite(cur)) return null;
+  if (Math.abs(cur - ref) <= 0.01) return null;
+  return `Price updated: now $${cur.toFixed(2)} (was $${ref.toFixed(2)}).`;
 }
 
 export type ProposalPaymentMethod = 'card' | 'wallet';
@@ -104,6 +188,16 @@ export function mapBookingError(error: unknown): BookingErrorDescriptor {
   if (/missing ride details/i.test(message)) {
     return {
       message: "Something's missing from this trip — use the booking screen instead.",
+      link: { label: 'Open booking', href: '/(tabs)' },
+    };
+  }
+  if (/too close to your pickup/i.test(message)) {
+    // createRide's proximity guard (dropoffLikelyMisresolved): the dropoff
+    // pin landed on the pickup while its address says otherwise. Without this
+    // branch the rider got the generic "didn't go through" copy and no clue
+    // the destination was the problem.
+    return {
+      message: "The destination pin doesn't match its address — please re-select the destination.",
       link: { label: 'Open booking', href: '/(tabs)' },
     };
   }

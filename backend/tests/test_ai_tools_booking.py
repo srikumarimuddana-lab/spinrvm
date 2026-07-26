@@ -165,6 +165,145 @@ class TestFindPlace:
         assert ok and "error" in result
 
 
+def _patch_http_capture(payload):
+    """Like _patch_http but also hands back the client mock so tests can
+    assert on the request params."""
+    resp = MagicMock()
+    resp.json.return_value = payload
+    client = MagicMock()
+    client.get = AsyncMock(return_value=resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return patch.object(tools_booking.httpx, "AsyncClient", MagicMock(return_value=ctx)), client
+
+
+class TestGeocodeBias:
+    """The geocode branch must bias street-address lookups near the rider and
+    return candidates nearest-first (incident: '4325 wakeling st' geocoded
+    Canada-wide resolved ~12 km away and was silently quoted)."""
+
+    NEAR = {"near_lat": 50.41, "near_lng": -104.65}
+
+    @pytest.mark.anyio
+    async def test_street_address_geocode_sends_bounds(self):
+        http_patch, client = _patch_http_capture(GEOCODE_OK)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            http_patch,
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok and result["candidates"]
+        params = client.get.call_args.kwargs.get("params") or client.get.call_args.args[1]
+        assert "bounds" in params
+        south, north = params["bounds"].split("|")
+        assert float(south.split(",")[0]) < 50.41 < float(north.split(",")[0])
+
+    @pytest.mark.anyio
+    async def test_unbiased_geocode_sends_no_bounds(self):
+        http_patch, client = _patch_http_capture(GEOCODE_OK)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            http_patch,
+            _patch_area(),
+            _patch_last_ride([]),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
+        assert ok and result["candidates"]
+        params = client.get.call_args.kwargs.get("params") or client.get.call_args.args[1]
+        assert "bounds" not in params
+        assert "distance_from_search_km" not in result["candidates"][0]
+
+    @pytest.mark.anyio
+    async def test_candidates_sorted_nearest_first_with_distance(self):
+        far_first = {
+            "status": "OK",
+            "results": [
+                {  # ~12 km away but ranked first by Google relevance
+                    "formatted_address": "4325 Wakeling St (far), Regina, SK",
+                    "geometry": {"location": {"lat": 50.5177, "lng": -104.6501}},
+                },
+                {  # ~1.5 km away
+                    "formatted_address": "4325 Wakeling St, Regina, SK",
+                    "geometry": {"location": {"lat": 50.4214, "lng": -104.6641}},
+                },
+            ],
+        }
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(far_first),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok
+        cands = result["candidates"]
+        assert cands[0]["address"] == "4325 Wakeling St, Regina, SK"
+        assert cands[0]["distance_from_search_km"] <= cands[1]["distance_from_search_km"]
+        assert cands[0]["distance_from_search_km"] < 3
+
+    @pytest.mark.anyio
+    async def test_far_only_match_warns_the_model(self):
+        far_only = {
+            "status": "OK",
+            "results": [
+                {  # ~54 km from the bias point — outside the 25 km radius
+                    "formatted_address": "4325 Wakeling St, Somewhere Else, SK",
+                    "geometry": {"location": {"lat": 50.90, "lng": -104.65}},
+                }
+            ],
+        }
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(far_only),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok
+        assert "confirm the exact address" in result["note"]
+        assert "km from the rider's search area" in result["note"]
+
+    @pytest.mark.anyio
+    async def test_far_warning_keeps_the_disambiguation_note(self):
+        """Ambiguous AND far is the incident's own shape. The far-match warning
+        used to overwrite result["note"], deleting 'ask which one they mean'
+        exactly when the model most needed both instructions."""
+        far_and_ambiguous = {
+            "status": "OK",
+            "results": [
+                {  # ~54 km from the bias point — both candidates are far
+                    "formatted_address": "4325 Wakeling St, Somewhere Else, SK",
+                    "geometry": {"location": {"lat": 50.90, "lng": -104.65}},
+                },
+                {  # ~65 km — a second plausible match keeps this ambiguous
+                    "formatted_address": "4325 Wakeling Ave, Elsewhere, SK",
+                    "geometry": {"location": {"lat": 51.00, "lng": -104.65}},
+                },
+            ],
+        }
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(far_and_ambiguous),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok
+        assert len(result["candidates"]) > 1
+        # Both instructions survive, and the disambiguation one still leads.
+        assert "ask the rider which one they mean" in result["note"].lower()
+        assert "km from the rider's search area" in result["note"]
+
+
 class TestRiderLocation:
     @pytest.mark.anyio
     async def test_device_location_preferred(self):
@@ -188,6 +327,29 @@ class TestRiderLocation:
     @pytest.mark.anyio
     async def test_no_known_location_is_a_clean_error(self):
         with _patch_last_ride([]):
+            result, ok = await execute_tool("get_rider_location", {}, user=RIDER)
+        assert ok and "error" in result
+
+    @pytest.mark.anyio
+    async def test_fresh_last_ride_carries_as_of_and_must_confirm_note(self):
+        from datetime import datetime, timedelta, timezone
+
+        recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        with _patch_last_ride([{**LAST_RIDE, "created_at": recent}]):
+            result, ok = await execute_tool("get_rider_location", {}, user=RIDER)
+        assert ok
+        assert result["source"] == "last_ride"
+        assert result["as_of"] == recent
+        assert "MUST confirm" in result["note"]
+
+    @pytest.mark.anyio
+    async def test_stale_last_ride_is_not_a_location(self):
+        # A pickup from a ride weeks ago is not "where the rider is" — the
+        # assistant must ask for a pickup instead of silently pointing there.
+        from datetime import datetime, timedelta, timezone
+
+        stale = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+        with _patch_last_ride([{**LAST_RIDE, "created_at": stale}]):
             result, ok = await execute_tool("get_rider_location", {}, user=RIDER)
         assert ok and "error" in result
 
@@ -258,7 +420,10 @@ class TestFareQuote:
     @pytest.mark.anyio
     async def test_quote_uses_estimate_engine_and_applies_best_promo(self):
         args = dict(self.ARGS, pickup_address="123 Main St, Saskatoon", dropoff_address="Saskatoon Airport")
-        with _patch_estimates(ESTIMATES), _patch_promos(PROMOS):
+        # Maps unavailable → pickup reconciliation keeps the supplied coords;
+        # the geocoding path has its own tests. _patch_area is required now
+        # that the quote enforces reconciliation's service-area verdict.
+        with _patch_estimates(ESTIMATES), _patch_promos(PROMOS), _patch_settings(key=""), _patch_area():
             result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
         assert ok
         # Only the available vehicle type is quoted; the other is named.
@@ -284,6 +449,12 @@ class TestFareQuote:
         assert action["distance_km"] == 6.4
         assert action["pickup_address"] == "123 Main St, Saskatoon"
         assert action["dropoff_address"] == "Saskatoon Airport"
+        # Priced coordinates travel with the card so a tapped option can pass
+        # them back verbatim instead of forcing a re-geocode.
+        assert action["pickup_lat"] == self.ARGS["pickup_lat"]
+        assert action["pickup_lng"] == self.ARGS["pickup_lng"]
+        assert action["dropoff_lat"] == self.ARGS["dropoff_lat"]
+        assert action["dropoff_lng"] == self.ARGS["dropoff_lng"]
 
     @pytest.mark.anyio
     async def test_out_of_area_pickup_refused(self):
@@ -319,6 +490,118 @@ class TestFareQuote:
         assert "promo lookup failed" in result["promo_note"]
 
     @pytest.mark.anyio
+    async def test_quote_reconciles_stale_pickup_coord_against_address(self):
+        # Same contract as propose_ride_booking: a stale coordinate riding
+        # alongside a correct address is re-anchored BEFORE pricing, so the
+        # quote card and the confirm card always price the same pickup.
+        correct = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "123 Main St, Saskatoon, SK, Canada",
+                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                }
+            ],
+        }
+        args = dict(
+            self.ARGS,
+            pickup_lat=52.2680,  # ~17 km from the real address, still "in area"
+            pickup_lng=-106.6345,
+            pickup_address="123 Main St, Saskatoon",
+            dropoff_address="Saskatoon Airport",
+        )
+        estimates_mock = AsyncMock(return_value=ESTIMATES)
+        with (
+            patch("backend.routes.rides.estimates.compute_ride_estimates", estimates_mock),
+            _patch_promos([]),
+            _patch_area(),
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(correct),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        req = estimates_mock.call_args.args[0]
+        assert req.pickup_lat == 52.1170
+        assert req.pickup_lng == -106.6345
+        assert result["pickup_note"].startswith("the pickup pin was moved")
+        assert "pickup pin was moved" in result["note"]
+        assert result["_client_action"]["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+
+    @pytest.mark.anyio
+    async def test_quote_refuses_an_out_of_area_pickup(self):
+        """propose_ride_booking already refuses these. Quoting one first shows
+        the rider a price and then takes it away — refuse at the quote too, and
+        never spend the estimate call."""
+        estimates_mock = AsyncMock(return_value=ESTIMATES)
+        with (
+            patch("backend.routes.rides.estimates.compute_ride_estimates", estimates_mock),
+            _patch_promos([]),
+            _patch_area(None),  # nothing resolves to a service area
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))),
+        ):
+            result, ok = await execute_tool(
+                "get_fare_quote", dict(self.ARGS, pickup_address="123 Main St, Nowhere"), user=RIDER
+            )
+        assert ok
+        assert result["error"] == tools_booking._OUT_OF_AREA_ERROR
+        assert "quotes" not in result
+        estimates_mock.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_same_place_refusal_still_discloses_a_moved_pin(self):
+        """A refusal the rider is asked to confirm must name the pickup we
+        actually resolved — otherwise they answer "yes, same place" about a pin
+        they were never told had moved."""
+        walmart = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "4500 Gordon Rd, Regina, SK S4S 6H7",
+                    "geometry": {"location": {"lat": 50.40790, "lng": -104.65010}},
+                }
+            ],
+        }
+        args = dict(
+            pickup_lat=50.5177,  # ~12 km north of the real address
+            pickup_lng=-104.65010,
+            pickup_address="4500 Gordon Rd, Regina",
+            dropoff_lat=50.40862,  # ~80 m from the RECONCILED pickup
+            dropoff_lng=-104.65010,
+            dropoff_address="4500 Gordon Rd, Regina",
+        )
+        estimates_mock = AsyncMock(return_value=ESTIMATES)
+        with (
+            patch("backend.routes.rides.estimates.compute_ride_estimates", estimates_mock),
+            _patch_promos([]),
+            _patch_area(),
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(walmart),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert result["needs_confirmation"] == "same_location"
+        # The guard measured the reconciled pickup, not the stale supplied one.
+        assert 60 <= result["distance_meters"] <= 100
+        assert result["pickup_note"].startswith("the pickup pin was moved")
+        estimates_mock.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_quote_without_address_skips_reconcile(self):
+        maps = AsyncMock()
+        with (
+            _patch_estimates(ESTIMATES),
+            _patch_promos([]),
+            patch.object(tools_booking, "_places_available", maps),
+        ):
+            result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
+        assert ok and result["quotes"]
+        maps.assert_not_awaited()
+
+    @pytest.mark.anyio
     async def test_free_ride_promo_drops_total_to_zero(self):
         free = [
             {"code": "FREERIDE", "free_ride": True, "discount_type": "flat", "discount_value": 0, "min_ride_fare": 0}
@@ -330,6 +613,89 @@ class TestFareQuote:
         assert q["promo_code"] == "FREERIDE"
         assert q["promo_savings"] == "18.48"
         assert q["final_total"] == "0.00"
+
+
+class TestSamePlaceGuard:
+    """Pickup≈dropoff (< 250 m) must never be quoted or proposed silently —
+    the tools return needs_confirmation until the rider explicitly says yes
+    (incident: same Walmart quoted at 0.08 km with no warning)."""
+
+    # ~80 m apart — the incident geometry.
+    NEAR = {
+        "pickup_lat": 50.40790,
+        "pickup_lng": -104.65010,
+        "dropoff_lat": 50.40862,
+        "dropoff_lng": -104.65010,
+    }
+    PROPOSE_NEAR = {
+        **NEAR,
+        "pickup_address": "4500 Gordon Rd, Regina",
+        "dropoff_address": "4500 Gordon Rd, Regina, SK S4S 6H7",
+    }
+
+    def _maps_unavailable(self):
+        # _reconcile_pickup keeps the supplied coords when Maps is unavailable,
+        # isolating these tests from the geocoding path.
+        return patch.object(
+            tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))
+        )
+
+    @pytest.mark.anyio
+    async def test_quote_at_80m_requires_confirmation(self):
+        estimates = AsyncMock()
+        with patch("backend.routes.rides.estimates.compute_ride_estimates", estimates):
+            result, ok = await execute_tool("get_fare_quote", self.NEAR, user=RIDER)
+        assert ok
+        assert result["needs_confirmation"] == "same_location"
+        assert 60 <= result["distance_meters"] <= 100
+        assert "quotes" not in result
+        assert "_client_action" not in result
+        estimates.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_quote_proceeds_when_rider_confirmed(self):
+        args = dict(self.NEAR, confirm_same_location=True)
+        with _patch_estimates(ESTIMATES), _patch_promos([]):
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert "needs_confirmation" not in result
+        assert len(result["quotes"]) == 1
+
+    @pytest.mark.anyio
+    async def test_quote_at_300m_is_untouched(self):
+        args = dict(self.NEAR, dropoff_lat=50.41060)  # ~300 m
+        with _patch_estimates(ESTIMATES), _patch_promos([]):
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert "needs_confirmation" not in result
+        assert len(result["quotes"]) == 1
+
+    @pytest.mark.anyio
+    async def test_proposal_at_80m_requires_confirmation(self):
+        with _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("propose_ride_booking", self.PROPOSE_NEAR, user=RIDER)
+        assert ok
+        assert result["needs_confirmation"] == "same_location"
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_confirmed_proposal_carries_same_location_flag(self):
+        args = dict(self.PROPOSE_NEAR, confirm_same_location=True)
+        with _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["same_location_confirmed"] is True
+
+    @pytest.mark.anyio
+    async def test_normal_proposal_has_no_same_location_flag(self):
+        # confirm_same_location on a normal-distance trip must not stamp the
+        # flag — the client guard should stay active for it.
+        args = dict(self.PROPOSE_NEAR, dropoff_lat=50.44970, confirm_same_location=True)
+        with _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "same_location_confirmed" not in result["_client_action"]["proposal"]
 
 
 class TestProposal:
@@ -371,19 +737,32 @@ class TestProposal:
     @pytest.mark.anyio
     async def test_proposal_reresolves_pickup_address_when_coords_are_stale(self):
         stale_then_fixed = AsyncMock(side_effect=[None, AREA, AREA])
+        # Re-geocoded pickup must NOT coincide with the dropoff — that would
+        # (correctly) trip the same-place guard, which is not this scenario.
+        downtown = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "123 Main St, Saskatoon, SK, Canada",
+                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                }
+            ],
+        }
         with (
             patch.object(tools_booking, "_resolve_area", stale_then_fixed),
             _patch_settings(),
             _patch_budget(),
-            _patch_http(GEOCODE_OK),
+            _patch_http(downtown),
             patch.object(tools_booking, "record_call", AsyncMock()),
         ):
             result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=RIDER)
         assert ok
         proposal = result["_client_action"]["proposal"]
-        assert proposal["pickup_lat"] == 52.1708
-        assert proposal["pickup_lng"] == -106.6997
-        assert proposal["pickup_address"] == "Saskatoon Airport (YXE), SK, Canada"
+        assert proposal["pickup_lat"] == 52.1170
+        assert proposal["pickup_lng"] == -106.6345
+        assert proposal["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+        # A moved pin is never silent — the model must relay it.
+        assert "pickup pin was moved" in result["message"]
 
     @pytest.mark.anyio
     async def test_proposal_corrects_pickup_coords_far_from_address_even_when_in_area(self):
@@ -419,6 +798,7 @@ class TestProposal:
         assert proposal["pickup_lat"] == 52.1170
         assert proposal["pickup_lng"] == -106.6345
         assert proposal["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+        assert "pickup pin was moved" in result["message"]
 
     @pytest.mark.anyio
     async def test_proposal_keeps_pickup_coords_that_match_address(self):
@@ -447,6 +827,79 @@ class TestProposal:
         assert proposal["pickup_lat"] == 52.1318
         assert proposal["pickup_lng"] == -106.6608
         assert proposal["pickup_address"] == "123 Main St"
+        assert "pickup pin was moved" not in result["message"]
+
+    @pytest.mark.anyio
+    async def test_quoted_total_passes_through_normalized(self):
+        args = dict(self.ARGS, quoted_total="20.9")
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["_client_action"]["proposal"]["quoted_total"] == "20.90"
+
+    @pytest.mark.anyio
+    async def test_junk_quoted_total_is_dropped_not_fatal(self):
+        args = dict(self.ARGS, quoted_total="twenty bucks")
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "quoted_total" not in result["_client_action"]["proposal"]
+
+    @pytest.mark.anyio
+    async def test_device_anchor_keeps_supplied_pickup_without_maps_call(self):
+        # The rider's device fix sits ~25 m from the supplied pickup — the
+        # rider is physically there, so no re-geocode runs (no Maps budget)
+        # and the pin must not snap to an address centroid.
+        rider = {**RIDER, "_client_location": {"lat": 52.1320, "lng": -106.6609}}
+        maps = AsyncMock()
+        with _patch_area(), patch.object(tools_booking, "_places_available", maps):
+            result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=rider)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["pickup_lat"] == self.ARGS["pickup_lat"]
+        assert proposal["pickup_lng"] == self.ARGS["pickup_lng"]
+        assert "pickup pin was moved" not in result["message"]
+        maps.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_reconcile_picks_nearest_in_area_candidate(self):
+        # Google relevance ranks a far same-named street first; reconciliation
+        # must pick the candidate nearest the supplied pickup instead.
+        two = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "123 Main St (far), SK, Canada",
+                    "geometry": {"location": {"lat": 52.2680, "lng": -106.6345}},
+                },
+                {
+                    "formatted_address": "123 Main St, Saskatoon, SK, Canada",
+                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                },
+            ],
+        }
+        # ~1.9 km from the near candidate → past _PICKUP_RECONCILE_KM, so the
+        # address wins — but it must be the NEAR one.
+        args = dict(self.ARGS, pickup_lat=52.1000, pickup_lng=-106.6345)
+        with (
+            _patch_area(),
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(two),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["pickup_lat"] == 52.1170
+        assert proposal["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+        assert "pickup pin was moved" in result["message"]
 
     @pytest.mark.anyio
     async def test_out_of_area_refused(self):

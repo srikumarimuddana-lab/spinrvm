@@ -21,6 +21,8 @@ a rich card instead of re-reading numbers from model prose.
 """
 
 import logging
+import math
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
@@ -53,6 +55,18 @@ _PLACE_RADIUS_METERS = 25000
 # address — the driver is dispatched to the coordinate, never the text, so the
 # two must agree before a booking card is shown.
 _PICKUP_RECONCILE_KM = 1.0
+# Pickup and dropoff closer than this are "the same place" for a rider: a
+# POI centroid vs. a GPS fix across a big-box parking lot commonly differs
+# 100-300 m, while genuinely distinct nearby destinations (the next store
+# over, a hotel across a highway) sit further apart. Below this, quoting or
+# proposing requires the rider's explicit confirmation — a false positive
+# costs one chat question, a false negative books a pointless minimum-fare
+# ride (incident: same Walmart quoted at 0.08 km with no warning).
+_SAME_PLACE_CONFIRM_KM = 0.25
+
+# Shared by get_fare_quote and propose_ride_booking so the two can never
+# disagree about whether a pickup is serviceable.
+_OUT_OF_AREA_ERROR = "pickup is outside Spinr's service areas — booking is not possible there"
 
 _COORD_PROPS = {
     "pickup_lat": {"type": "number", "minimum": -90, "maximum": 90},
@@ -104,24 +118,40 @@ async def _maps_get(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
         return resp.json()
 
 
-async def _candidates_from_results(results) -> list:
-    candidates = []
-    for result in (results or [])[:3]:
+async def _candidates_from_results(
+    results,
+    near_lat: Optional[float] = None,
+    near_lng: Optional[float] = None,
+) -> list:
+    biased = near_lat is not None and near_lng is not None
+    parsed = []
+    for result in results or []:
         loc = (result.get("geometry") or {}).get("location") or {}
         lat, lng = loc.get("lat"), loc.get("lng")
         if lat is None or lng is None:
             continue
+        distance_km = _trip_distance_km(near_lat, near_lng, lat, lng) if biased else None
+        parsed.append((distance_km, result, lat, lng))
+    if biased:
+        # Google orders by its own relevance, which can rank a far same-named
+        # match above the one beside the rider (incident: "4325 wakeling st"
+        # resolved ~12 km away). Nearest-first before the cut — the same
+        # defence as maps_proxy's autocomplete re-sort.
+        parsed.sort(key=lambda item: item[0])
+    candidates = []
+    for distance_km, result, lat, lng in parsed[:3]:
         area = await _resolve_area(lat, lng)
-        candidates.append(
-            {
-                "name": result.get("name"),
-                "address": result.get("formatted_address"),
-                "lat": lat,
-                "lng": lng,
-                "in_service_area": area is not None,
-                "service_area": (area or {}).get("name"),
-            }
-        )
+        candidate = {
+            "name": result.get("name"),
+            "address": result.get("formatted_address"),
+            "lat": lat,
+            "lng": lng,
+            "in_service_area": area is not None,
+            "service_area": (area or {}).get("name"),
+        }
+        if distance_km is not None:
+            candidate["distance_from_search_km"] = round(distance_km, 1)
+        candidates.append(candidate)
     return candidates
 
 
@@ -159,16 +189,25 @@ async def _lookup_place_candidates(
                 data = await _maps_get(_PLACES_TEXT_URL, params)
                 allowed = ("OK", "ZERO_RESULTS")
             else:
-                data = await _maps_get(
-                    _GEOCODE_URL,
-                    {
-                        "address": query,
-                        "components": "country:CA",
-                        "region": "ca",
-                        "key": api_key,
-                        "language": "en",
-                    },
-                )
+                params = {
+                    "address": query,
+                    "components": "country:CA",
+                    "region": "ca",
+                    "key": api_key,
+                    "language": "en",
+                }
+                if near_lat is not None and near_lng is not None:
+                    # ~25 km soft-bias box around the rider (matches
+                    # _PLACE_RADIUS_METERS). The Geocoding API has no
+                    # location/radius bias — bounds is all it offers, and it
+                    # is soft, so the nearest-first sort in
+                    # _candidates_from_results is the real defence. Without
+                    # this, street addresses were geocoded Canada-wide
+                    # (incident: a Regina street resolved ~12 km away).
+                    dlat = _PLACE_RADIUS_METERS / 111_000
+                    dlng = dlat / max(math.cos(math.radians(near_lat)), 0.2)
+                    params["bounds"] = f"{near_lat - dlat},{near_lng - dlng}|{near_lat + dlat},{near_lng + dlng}"
+                data = await _maps_get(_GEOCODE_URL, params)
                 allowed = ("OK", "ZERO_RESULTS")
         except Exception:
             logger.error("ai find_place maps request failed", exc_info=True)
@@ -179,7 +218,7 @@ async def _lookup_place_candidates(
             return {"error": "place lookup failed — try again or pick the location in the app"}
 
         await record_call("places_text_search" if kind == "places" else "geocode")
-        candidates = await _candidates_from_results(data.get("results") or [])
+        candidates = await _candidates_from_results(data.get("results") or [], near_lat=near_lat, near_lng=near_lng)
         if candidates:
             return {"candidates": candidates, "source": kind}
 
@@ -203,9 +242,28 @@ async def _places_available() -> tuple:
     return api_key, None
 
 
+# A last-ride pickup older than this is not a usable "where the rider is"
+# hint — falling back to it silently pointed the assistant's pickup at an
+# address the rider may not have visited in weeks.
+_LAST_RIDE_LOCATION_MAX_AGE_DAYS = 30
+
+
+def _iso_age_days(value) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed).total_seconds() / 86400
+
+
 async def _rider_location_hint(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Rider's best-known location: the device location the app sent with
-    this chat turn, else their most recent ride's pickup. Coordinates are
+    this chat turn, else their most recent ride's pickup (only when recent
+    enough to plausibly still be "where they are"). Coordinates are
     ephemeral tool data — never logged, never persisted."""
     loc = user.get("_client_location") or {}
     if loc.get("lat") is not None and loc.get("lng") is not None:
@@ -216,12 +274,19 @@ async def _rider_location_hint(user: Dict[str, Any]) -> Optional[Dict[str, Any]]
         logger.error("ai rider location hint lookup failed", exc_info=True)
         return None
     if rows and rows[0].get("pickup_lat") is not None and rows[0].get("pickup_lng") is not None:
-        return {
+        as_of = rows[0].get("created_at")
+        age_days = _iso_age_days(as_of)
+        if age_days is not None and age_days > _LAST_RIDE_LOCATION_MAX_AGE_DAYS:
+            return None
+        hint = {
             "lat": rows[0]["pickup_lat"],
             "lng": rows[0]["pickup_lng"],
             "source": "last_ride",
             "address": rows[0].get("pickup_address"),
         }
+        if as_of:
+            hint["as_of"] = as_of
+        return hint
     return None
 
 
@@ -249,11 +314,16 @@ async def get_rider_location(user: Dict[str, Any]) -> Dict[str, Any]:
                     await record_call("geocode")
             except Exception:
                 logger.error("ai get_rider_location reverse geocode failed", exc_info=True)
-    result["note"] = (
-        "This is a recent fix from the rider's device — confirm the address with them before booking."
-        if hint["source"] == "device"
-        else "This is the pickup of their most recent ride — confirm it's still where they are."
-    )
+    if hint["source"] == "device":
+        result["note"] = "This is a recent fix from the rider's device — confirm the address with them before booking."
+    else:
+        when = f" (from {str(hint['as_of'])[:10]})" if hint.get("as_of") else ""
+        result["note"] = (
+            f"This is the pickup of their most recent ride{when} — you MUST confirm "
+            "the address with the rider before quoting or booking from it."
+        )
+        if hint.get("as_of"):
+            result["as_of"] = hint["as_of"]
     return result
 
 
@@ -294,6 +364,19 @@ async def find_place(
         result = {"candidates": candidates}
     if bias_source:
         result["search_biased_by"] = bias_source
+    # A biased search whose BEST match still sits outside the bias radius is
+    # a red flag (wrong city, mis-typed address). Tell the model so it
+    # surfaces the distance to the rider instead of quoting a silent 12 km
+    # "same street" trip. APPEND — an ambiguous query whose nearest match is
+    # also far needs both instructions, and overwriting dropped the
+    # "ask which one they mean" half exactly when it mattered most.
+    nearest_km = (candidates[0] or {}).get("distance_from_search_km")
+    if nearest_km is not None and nearest_km * 1000 > _PLACE_RADIUS_METERS:
+        warning = (
+            f"Warning: the closest match is {nearest_km} km from the rider's search area — "
+            "confirm the exact address with them before quoting."
+        )
+        result["note"] = f"{result['note']} {warning}" if result.get("note") else warning
     return result
 
 
@@ -327,6 +410,39 @@ def _best_promo_for(promos: list, portion: Decimal, total: Decimal) -> Optional[
     return {"code": best_code, "savings": str(_money(best_discount))}
 
 
+def _trip_distance_km(pickup_lat: float, pickup_lng: float, dropoff_lat: float, dropoff_lng: float) -> float:
+    # Lazy dual import (same pattern as _resolve_area) — module-level import of
+    # a sibling top-level module is fragile under the absolute-import deploy mode.
+    try:
+        from ..geo_utils import calculate_distance
+    except ImportError:
+        from geo_utils import calculate_distance
+    return calculate_distance(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
+
+
+def _same_place_refusal(distance_km: float, confirmed: bool) -> Optional[Dict[str, Any]]:
+    """Same-place guardrail: a needs_confirmation result the model must relay,
+    or None when the trip is far enough apart (or the rider already confirmed).
+
+    Returned as a normal tool result — not an error — so the model asks the
+    rider instead of apologizing for a failure.
+    """
+    if confirmed or distance_km >= _SAME_PLACE_CONFIRM_KM:
+        return None
+    return {
+        "needs_confirmation": "same_location",
+        "distance_meters": int(round(distance_km * 1000)),
+        "note": (
+            "Pickup and dropoff are essentially the same place — ask the rider "
+            "plainly whether they really want this trip (name both addresses). "
+            "Only after an explicit yes, call this tool again with "
+            "confirm_same_location=true. If they meant a different location "
+            "(e.g. another branch of the same store), resolve it with "
+            "find_place instead."
+        ),
+    }
+
+
 async def get_fare_quote(
     user: Dict[str, Any],
     pickup_lat: float,
@@ -335,11 +451,53 @@ async def get_fare_quote(
     dropoff_lng: float,
     pickup_address: Optional[str] = None,
     dropoff_address: Optional[str] = None,
+    confirm_same_location: bool = False,
 ) -> Dict[str, Any]:
     try:
         from ..routes.rides import estimates as _rides_estimates
     except ImportError:
         from routes.rides import estimates as _rides_estimates
+
+    # Reconcile the pickup exactly like propose_ride_booking does, so the
+    # quote card and the confirm card can never be priced on different
+    # pickups (incident: the quote used the model's stale coordinate, the
+    # card used the reconciled one — $30.92 became $39.44 with no
+    # explanation). The device anchor keeps the common "my location" case
+    # free of extra Maps traffic.
+    pickup_note = None
+    if pickup_address:
+        (
+            pickup_lat,
+            pickup_lng,
+            pickup_address,
+            pickup_in_area,
+            pickup_adjusted,
+            pickup_drift_km,
+        ) = await _reconcile_pickup(
+            pickup_lat, pickup_lng, pickup_address, client_location=user.get("_client_location")
+        )
+        # Same verdict propose_ride_booking enforces. Quoting a pickup the
+        # booking step will refuse shows the rider a price and then takes it
+        # away — say it once, here, before any number is spoken.
+        if not pickup_in_area:
+            return {"error": _OUT_OF_AREA_ERROR}
+        if pickup_adjusted:
+            pickup_note = (
+                f"the pickup pin was moved {pickup_drift_km:.1f} km to match '{pickup_address}' — "
+                "tell the rider the exact pickup address"
+            )
+
+    refusal = _same_place_refusal(
+        _trip_distance_km(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng),
+        confirm_same_location,
+    )
+    if refusal:
+        # A moved pin still has to be disclosed even when the trip is refused —
+        # the rider needs to hear which pickup we actually resolved before they
+        # answer "yes, same place".
+        if pickup_note:
+            refusal["pickup_note"] = pickup_note
+        return refusal
 
     try:
         estimate_result = await _rides_estimates.compute_ride_estimates(
@@ -422,6 +580,13 @@ async def get_fare_quote(
         "distance_km": estimates[0].get("distance_km"),
         "duration_minutes": estimates[0].get("duration_minutes"),
         "currency": "CAD",
+        # The exact (post-reconcile) points this quote was priced on. They
+        # ride the card so a tapped option sends them back verbatim and the
+        # model never re-geocodes a trip the rider already saw priced.
+        "pickup_lat": pickup_lat,
+        "pickup_lng": pickup_lng,
+        "dropoff_lat": dropoff_lat,
+        "dropoff_lng": dropoff_lng,
     }
     # Addresses ride along in the card so a tapped option can send a
     # self-contained "Book the X from A to B" message — conversation history
@@ -433,7 +598,7 @@ async def get_fare_quote(
         shared["dropoff_address"] = dropoff_address
 
     if not quotes:
-        return {
+        no_drivers = {
             **shared,
             "quotes": [],
             "no_drivers": True,
@@ -442,6 +607,9 @@ async def get_fare_quote(
                 "plainly and suggest trying again in a few minutes."
             ),
         }
+        if pickup_note:
+            no_drivers["pickup_note"] = pickup_note
+        return no_drivers
 
     recommended = min(quotes, key=lambda q: Decimal(q["final_total"]))
     result = {
@@ -469,6 +637,9 @@ async def get_fare_quote(
         result["unavailable_vehicle_types"] = unavailable
     if promo_note:
         result["promo_note"] = promo_note
+    if pickup_note:
+        result["pickup_note"] = pickup_note
+        result["note"] += f" IMPORTANT: {pickup_note}."
     return result
 
 
@@ -477,52 +648,70 @@ async def _reconcile_pickup(
     pickup_lng: float,
     pickup_address: str,
     *,
-    dropoff_lat: float,
-    dropoff_lng: float,
+    client_location: Optional[Dict[str, Any]] = None,
 ) -> tuple:
     """Re-verify the pickup coordinate against its own address before anyone
-    is dispatched. Returns ``(lat, lng, address, in_service_area)``.
+    is dispatched. Returns ``(lat, lng, address, in_service_area, adjusted,
+    drift_km)`` — ``adjusted`` is True when the supplied coordinate was
+    replaced, and callers must then TELL the rider the pin moved.
 
     The model fills pickup_lat/pickup_lng from conversation context that no
     longer holds the find_place result (history keeps only message text, not
     tool results), so a stale or hallucinated coordinate can travel alongside
     a correct address: the card shows the right street while the driver is
-    routed kilometres away. Re-geocoding the address is the authoritative
-    check — when it lands in a service area more than _PICKUP_RECONCILE_KM
-    from the supplied point (or the supplied point is out of area entirely),
-    the address wins. A coordinate that already agrees with its address is
-    left untouched so a precise pin is never snapped to a street centroid.
+    routed kilometres away.
+
+    Order of trust:
+    1. The rider's device fix — a supplied coordinate that agrees with where
+       the rider physically is needs no re-geocode at all, and must never be
+       snapped to an address centroid: the device knows which side of a
+       big-box lot the rider is standing on better than the geocoder does.
+    2. The re-geocoded address, biased on the SUPPLIED PICKUP — never the
+       dropoff, which once dragged a pickup toward whatever matched near the
+       destination — choosing the candidate NEAREST the supplied point, not
+       Google's first. A coordinate that already agrees with its address is
+       left untouched.
     """
     in_area = await _resolve_area(pickup_lat, pickup_lng) is not None
+
+    device_lat = (client_location or {}).get("lat")
+    device_lng = (client_location or {}).get("lng")
+    has_device = device_lat is not None and device_lng is not None
+    if in_area and has_device:
+        device_drift = _trip_distance_km(pickup_lat, pickup_lng, float(device_lat), float(device_lng))
+        if device_drift <= _PICKUP_RECONCILE_KM:
+            # The rider is physically at (or beside) the supplied point —
+            # nothing to verify, and no Maps budget spent.
+            return pickup_lat, pickup_lng, pickup_address, True, False, 0.0
 
     api_key, _error = await _places_available()
     if not api_key:
         # Maps unavailable (no key or budget exhausted) — can't verify; keep
         # the supplied point and let the caller's area check decide.
-        return pickup_lat, pickup_lng, pickup_address, in_area
+        return pickup_lat, pickup_lng, pickup_address, in_area, False, 0.0
 
-    lookup = await _lookup_place_candidates(
-        api_key=api_key, query=pickup_address, near_lat=dropoff_lat, near_lng=dropoff_lng
+    near_lat, near_lng = pickup_lat, pickup_lng
+    if not in_area and has_device:
+        # The supplied point is nowhere we operate — the device fix is the
+        # better bias for finding the address the rider means.
+        near_lat, near_lng = float(device_lat), float(device_lng)
+
+    lookup = await _lookup_place_candidates(api_key=api_key, query=pickup_address, near_lat=near_lat, near_lng=near_lng)
+    in_area_candidates = [c for c in lookup.get("candidates") or [] if c.get("in_service_area")]
+    if not in_area_candidates:
+        return pickup_lat, pickup_lng, pickup_address, in_area, False, 0.0
+    geocoded = min(
+        in_area_candidates,
+        key=lambda c: _trip_distance_km(pickup_lat, pickup_lng, c["lat"], c["lng"]),
     )
-    geocoded = next((c for c in lookup.get("candidates") or [] if c.get("in_service_area")), None)
-    if not geocoded:
-        return pickup_lat, pickup_lng, pickup_address, in_area
 
-    # Lazy dual import (same pattern as _resolve_area): module-level import of a
-    # sibling top-level module is fragile under the absolute-import deploy mode,
-    # so resolve it at the call site where it's used.
-    try:
-        from ..geo_utils import calculate_distance
-    except ImportError:
-        from geo_utils import calculate_distance
-
-    drift_km = calculate_distance(pickup_lat, pickup_lng, geocoded["lat"], geocoded["lng"])
+    drift_km = _trip_distance_km(pickup_lat, pickup_lng, geocoded["lat"], geocoded["lng"])
     if in_area and drift_km <= _PICKUP_RECONCILE_KM:
-        return pickup_lat, pickup_lng, pickup_address, True  # coordinate agrees with the address
+        return pickup_lat, pickup_lng, pickup_address, True, False, drift_km
 
     # Out of area, or the address geocodes far from the supplied point — trust
     # the address, which resolves into a service area.
-    return geocoded["lat"], geocoded["lng"], geocoded.get("address") or pickup_address, True
+    return geocoded["lat"], geocoded["lng"], geocoded.get("address") or pickup_address, True, True, drift_km
 
 
 async def propose_ride_booking(
@@ -537,16 +726,25 @@ async def propose_ride_booking(
     promo_code: Optional[str] = None,
     scheduled_time: Optional[str] = None,
     payment_method: Optional[str] = None,
+    confirm_same_location: bool = False,
+    quoted_total: Optional[str] = None,
 ) -> Dict[str, Any]:
-    pickup_lat, pickup_lng, pickup_address, in_area = await _reconcile_pickup(
+    pickup_lat, pickup_lng, pickup_address, in_area, pickup_adjusted, pickup_drift_km = await _reconcile_pickup(
         pickup_lat,
         pickup_lng,
         pickup_address,
-        dropoff_lat=dropoff_lat,
-        dropoff_lng=dropoff_lng,
+        client_location=user.get("_client_location"),
     )
     if not in_area:
-        return {"error": "pickup is outside Spinr's service areas — booking is not possible there"}
+        return {"error": _OUT_OF_AREA_ERROR}
+
+    # Guard AFTER reconciliation so it measures the pickup that would actually
+    # be dispatched, and on the proposal itself so skipping the quote step
+    # cannot bypass it.
+    trip_km = _trip_distance_km(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
+    refusal = _same_place_refusal(trip_km, confirm_same_location)
+    if refusal:
+        return refusal
 
     proposal = {
         "pickup_lat": pickup_lat,
@@ -556,6 +754,10 @@ async def propose_ride_booking(
         "dropoff_lng": dropoff_lng,
         "dropoff_address": dropoff_address,
     }
+    if confirm_same_location and trip_km < _SAME_PLACE_CONFIRM_KM:
+        # The card passes this through so the client-side proximity guard
+        # honours the rider's explicit confirmation at Confirm time.
+        proposal["same_location_confirmed"] = True
     if vehicle_type_id:
         proposal["vehicle_type_id"] = vehicle_type_id
     if promo_code:
@@ -564,15 +766,32 @@ async def propose_ride_booking(
         proposal["scheduled_time"] = scheduled_time
     if payment_method:
         proposal["payment_method"] = payment_method.lower()
+    if quoted_total:
+        # Display-only reference: the card compares its fresh estimate against
+        # this and shows a "price updated" notice on drift. Never charged —
+        # the server prices from the estimate engine. A junk value is dropped
+        # rather than failing the proposal.
+        try:
+            proposal["quoted_total"] = str(_money(quoted_total))
+        except Exception:
+            logger.warning("ai propose_ride_booking dropped unparseable quoted_total")
 
+    message = (
+        "A booking card with the exact fare is now shown to the rider. Ask them to "
+        "review it and tap Confirm — do not claim the ride is booked."
+    )
+    if pickup_adjusted:
+        # Never move the pin silently — the incident's confirm screen showed a
+        # pickup kilometres from where the rider stood, with no explanation.
+        message += (
+            f" Note: the pickup pin was moved {pickup_drift_km:.1f} km to match "
+            f"'{pickup_address}' — tell the rider the exact pickup address before they confirm."
+        )
     return {
         # Lifted out by the orchestrator into an SSE `action` frame; the
         # client renders the native confirmation card from it.
         "_client_action": {"type": "booking_proposal", "proposal": proposal},
-        "message": (
-            "A booking card with the exact fare is now shown to the rider. Ask them to "
-            "review it and tap Confirm — do not claim the ride is booked."
-        ),
+        "message": message,
     }
 
 
@@ -650,6 +869,13 @@ register(
                 **_COORD_PROPS,
                 "pickup_address": {"type": "string", "maxLength": 300},
                 "dropoff_address": {"type": "string", "maxLength": 300},
+                "confirm_same_location": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true ONLY after the rider explicitly confirms a trip "
+                        "whose pickup and dropoff are the same place."
+                    ),
+                },
             },
             "required": ["pickup_lat", "pickup_lng", "dropoff_lat", "dropoff_lng"],
         },
@@ -684,6 +910,21 @@ register(
                     "type": "string",
                     "enum": ["card", "wallet"],
                     "description": "Rider's stated payment preference. Omit if unknown.",
+                },
+                "confirm_same_location": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true ONLY after the rider explicitly confirms a trip "
+                        "whose pickup and dropoff are the same place."
+                    ),
+                },
+                "quoted_total": {
+                    "type": "string",
+                    "maxLength": 16,
+                    "description": (
+                        "The total from the quote the rider accepted (e.g. '20.92'), "
+                        "so the card can warn them if the price has changed since."
+                    ),
                 },
             },
             "required": [

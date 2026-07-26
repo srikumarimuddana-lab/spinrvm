@@ -510,8 +510,18 @@ def validate_ride_location(
     if not valid_dropoff:
         return False, None
 
-    # Check that pickup and dropoff are not the same
-    if pickup_coords == dropoff_coords:
+    # Pickup and dropoff must be distinct places, not merely distinct floats:
+    # exact equality let 80 m "same parking lot" rides through. Anything under
+    # 25 m is GPS noise, never a trip — reject outright. Deliberately far
+    # below the client-side 100 m confirmable band (bookingDistanceGuard) and
+    # the assistant's 250 m ask-first band, both of which allow an explicitly
+    # confirmed same-place booking; sub-25 m has no legitimate confirmation.
+    try:
+        from .geo_utils import calculate_distance
+    except ImportError:
+        from geo_utils import calculate_distance
+
+    if calculate_distance(*pickup_coords, *dropoff_coords) < 0.025:
         if raise_exception:
             raise HTTPException(status_code=400, detail="Pickup and dropoff locations cannot be the same")
         return False, None

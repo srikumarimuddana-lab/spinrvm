@@ -82,6 +82,46 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   with in-process fallback when Redis is absent.
 - **Acceptance:** cap holds at N msg/s per user across all replicas.
 
+### B5. Migrate AI place lookup to Places API (New) with hard locationRestriction
+- [ ] **Status:** open — follow-up to the AI location/pricing incident fixes
+  (branch `claude/app-location-pricing-bugs-gxgk3z`)
+- **Why:** `backend/ai/tools_booking.py` still uses legacy Geocoding + Text
+  Search. The incident fixes added a soft `bounds` bias and nearest-first
+  sorting, but the rider app's `utils/google_places_new.py` path gets a HARD
+  `locationRestriction` circle + `origin` ranking — full parity closes the
+  remaining "Google returns only far matches" gap. Related deferred items:
+  a hard estimate_token price-lock across the chat→card gap, a blocking
+  surge sheet on the AI confirm card (parity with `ride-options.tsx`), a
+  structured (non-prose) payload for quote-card taps, and Maps budget
+  accounting for `places_text_search` + the fare Directions calls (neither
+  is a priced SKU in `utils/maps_budget.py`, so real spend is undercounted).
+- **Files:** `backend/ai/tools_booking.py`, `backend/utils/google_places_new.py`,
+  `backend/utils/maps_budget.py`
+- **Acceptance:** AI place lookups never return a candidate outside the bias
+  circle without an explicit flag, and `estimate_today_usd` counts every
+  Google call the platform makes.
+
+### B6. Measure Directions latency and re-tune the fare-estimate wait
+- [ ] **Status:** open — follow-up to the AI location/pricing incident fixes
+  (branch `claude/app-location-pricing-bugs-gxgk3z`)
+- **Why:** the billed distance basis must not depend on scheduler timing, so
+  `estimates._PRICING_ROUTE_WAIT_S` is derived as `DIRECTIONS_TIMEOUT_S + 0.5`.
+  That makes the Directions HTTP timeout the sole lever on worst-case estimate
+  latency, and CLAUDE.md pins fare estimate P95 at **300 ms**. The timeout was
+  set to 1.5 s (wait 2.0 s) on judgement, not data — nobody has measured the
+  real Directions latency distribution, so we don't know how much of the
+  road-route benefit a tighter timeout would give up.
+- **Action:** record a `spinr_fare_directions_duration_ms` histogram, then pick
+  the timeout from the observed p99 rather than by feel. If the p99 sits well
+  under 1.5 s, tighten both constants; if Directions is routinely slower than
+  the SLA allows, the honest fix is pre-warming/caching routes for common
+  origin-destination pairs, not a longer wait.
+- **Files:** `backend/routes/rides/_shared.py`, `backend/routes/rides/estimates.py`,
+  `backend/utils/metrics.py`
+- **Acceptance:** the timeout is justified by a recorded latency distribution,
+  and `test_pricing_wait_stays_within_the_estimate_latency_budget` reflects the
+  chosen ceiling.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

@@ -253,6 +253,44 @@ async def increment_promo_uses(promo_id: str, max_uses: int) -> bool:
     return await run_sync(_fn)
 
 
+async def claim_promo_user_slot(promo_id: str, user_id: str, max_per_user: int) -> bool:
+    """Atomically claim one per-user promo redemption slot (migration 257).
+
+    Returns True if the user was still under max_per_user (slot taken), False if
+    already at the cap. This is the AUTHORITATIVE per-user gate — the
+    count_documents() check in the validation path is only a friendly early
+    rejection and is racy on its own. Callers raise HTTP 400 on False.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "claim_promo_user_slot",
+            {"p_promo_id": promo_id, "p_user_id": user_id, "p_max_per_user": max_per_user},
+        ).execute()
+        data = getattr(res, "data", None)
+        return data is True or data == 1 or (isinstance(data, list) and len(data) > 0 and data[0] in (True, 1))
+
+    return await run_sync(_fn)
+
+
+async def release_promo_user_slot(promo_id: str, user_id: str) -> None:
+    """Release a per-user promo slot claimed by claim_promo_user_slot when a
+    later step of the same redemption fails (migration 257). Best-effort."""
+    if not supabase:
+        return
+
+    def _fn():
+        supabase.rpc(
+            "release_promo_user_slot",
+            {"p_promo_id": promo_id, "p_user_id": user_id},
+        ).execute()
+        return True
+
+    await run_sync(_fn)
+
+
 async def fare_split_pay_share(wallet_id: str, participant_id: str, amount: "Decimal") -> "Decimal":
     """Atomically deduct `amount` from `wallet_id` and mark `participant_id`
     as paid in a single Postgres transaction. Returns the new wallet balance.

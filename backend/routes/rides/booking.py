@@ -460,9 +460,8 @@ async def create_ride(
     # checked below with the same service-area matcher.
     if matched_area is None and all_areas:
         logger.info(
-            "[geofence] reject pickup=(%.5f,%.5f) — outside %d active service area(s)",
-            body.pickup_lat,
-            body.pickup_lng,
+            "[geofence] reject pickup=%s — outside %d active service area(s)",
+            _deps.geohash(body.pickup_lat, body.pickup_lng),
             len(all_areas),
         )
         raise HTTPException(
@@ -486,9 +485,8 @@ async def create_ride(
         )
         if _dropoff_area is None:
             logger.info(
-                "[geofence] reject dropoff=(%.5f,%.5f) — outside service areas",
-                body.dropoff_lat,
-                body.dropoff_lng,
+                "[geofence] reject dropoff=%s — outside service areas",
+                _deps.geohash(body.dropoff_lat, body.dropoff_lng),
             )
             raise HTTPException(
                 status_code=400,
@@ -510,10 +508,9 @@ async def create_ride(
             _stop_area = await _get_active_service_area_for_point(s_lat, s_lng, all_areas)
             if _stop_area is None:
                 logger.info(
-                    "[geofence] reject stop[%d]=(%.5f,%.5f) — outside service areas",
+                    "[geofence] reject stop[%d]=%s — outside service areas",
                     idx,
-                    s_lat,
-                    s_lng,
+                    _deps.geohash(s_lat, s_lng),
                 )
                 raise HTTPException(
                     status_code=400,

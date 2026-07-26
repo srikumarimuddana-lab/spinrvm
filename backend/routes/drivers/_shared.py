@@ -589,4 +589,23 @@ def serialize_doc(doc):
     return doc
 
 
+# Ride-row fields that must NEVER reach the driver client. The pickup OTP is the
+# rider's proof-of-identity handshake at pickup — a driver who can read it can
+# pass verify-pickup-otp without the rider present, defeating the right-car /
+# right-passenger safety control. serialize_doc() is an identity function, so a
+# raw `select("*")` ride row would otherwise carry this straight to the driver
+# app. The rider-facing path already strips it (routes/rides/queries.py); this
+# is the driver-side equivalent. Keep the two lists in sync.
+_DRIVER_RIDE_SECRET_FIELDS = frozenset({"pickup_otp"})
+
+
+def serialize_ride_for_driver(ride):
+    """serialize_doc() for a ride row bound for the driver client, minus any
+    rider-secret fields. Returns a shallow copy so the source row (which may be
+    reused for state transitions in the same request) is left intact."""
+    if not isinstance(ride, dict):
+        return serialize_doc(ride)
+    return {k: v for k, v in ride.items() if k not in _DRIVER_RIDE_SECRET_FIELDS}
+
+
 _STRIP_FROM_SELF_RESPONSE = {"stripe_account_id", "bank_account", "fcm_token"}

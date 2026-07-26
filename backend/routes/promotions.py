@@ -17,6 +17,7 @@ try:
     from ..dependencies import get_admin_user, get_current_user
     from ..models.ride_status import RideStatus
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.pii import geohash as _geohash
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
@@ -24,6 +25,7 @@ except ImportError:
     from dependencies import get_admin_user, get_current_user
     from models.ride_status import RideStatus
     from utils.datetime_utils import parse_iso_utc
+    from utils.pii import geohash as _geohash
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
 get_current_admin = get_admin_user
@@ -274,6 +276,20 @@ async def _record_promo_application(promo_id: str, code: str, user_id: str, disc
     Returns the application id. Raises 409 if the promo just got fully
     redeemed by a concurrent caller.
     """
+    promo_row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"id": promo_id}, limit=1))
+    max_per_user = int((promo_row or {}).get("max_uses_per_user", 1))
+
+    # AUTHORITATIVE per-user gate (migration 257). The rule-3 count_documents()
+    # check in the validation path is racy — N concurrent redemptions all read
+    # user_uses=0 and pass. This atomic row-locked claim is what actually caps
+    # per-user redemptions; raise the same 400 the pre-check would have.
+    claimed = await db_supabase.claim_promo_user_slot(promo_id, user_id, max_per_user)
+    if not claimed:
+        raise HTTPException(
+            status_code=400,
+            detail="You have already used this promo code the maximum number of times",
+        )
+
     application = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -284,10 +300,12 @@ async def _record_promo_application(promo_id: str, code: str, user_id: str, disc
     }
     await db_supabase.insert_one("promo_applications", application)
 
-    promo_row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"id": promo_id}, limit=1))
     max_uses = int((promo_row or {}).get("max_uses", 0))
     incremented = await increment_promo_uses(promo_id, max_uses)
     if not incremented:
+        # Global cap exhausted after we claimed this user's slot — release it so
+        # the user isn't charged a redemption for a promo they never got.
+        await db_supabase.release_promo_user_slot(promo_id, user_id)
         raise HTTPException(status_code=409, detail="Promo code has been fully redeemed")
     return application["id"]
 
@@ -441,9 +459,8 @@ async def list_available_promos(
                 pickup_area_id = rows[0].get("id")
         except Exception as e:
             logger.warning(
-                "Could not resolve service area for pickup (%.4f, %.4f): %s",
-                pickup_lat,
-                pickup_lng,
+                "Could not resolve service area for pickup %s: %s",
+                _geohash(pickup_lat, pickup_lng),
                 e,
             )
 

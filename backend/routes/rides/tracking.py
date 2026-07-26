@@ -43,7 +43,7 @@ async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_
         await _deps.db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
     is_driver = bool(driver_self) and ride.get("driver_id") == driver_self["id"]
-    if not (is_rider or is_driver) and current_user.get("role") != "admin":
+    if not (is_rider or is_driver) and not current_user.get("_admin_verified"):
         raise HTTPException(status_code=403, detail="Not authorized to view this ride")
 
     status = ride.get("status")

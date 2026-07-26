@@ -28,6 +28,29 @@ def _scrub(value: Any) -> Any:
     return value
 
 
+# Bound the recursion so a pathological/cyclic event can never spin the scrubber.
+_MAX_SCRUB_DEPTH = 6
+
+
+def _scrub_deep(value: Any, depth: int = 0) -> Any:
+    """Recursively scrub strings inside nested dicts/lists (event['extra'],
+    contexts, request, breadcrumb data). Sentry's LoggingIntegration populates
+    event['extra'] from record.args — exactly where the %-formatted coordinate
+    args landed, which the message-only scrub never touched. Never raises."""
+    if depth >= _MAX_SCRUB_DEPTH:
+        return value
+    try:
+        if isinstance(value, str):
+            return _scrub(value)
+        if isinstance(value, dict):
+            return {k: _scrub_deep(v, depth + 1) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return type(value)(_scrub_deep(v, depth + 1) for v in value)
+    except Exception:  # noqa: BLE001 - never let scrubbing raise
+        return value
+    return value
+
+
 def scrub_event(event: dict, hint: Optional[dict] = None) -> dict:
     """``before_send`` hook: stamp ``surface`` tag and redact PII from event text."""
     try:
@@ -46,6 +69,14 @@ def scrub_event(event: dict, hint: Optional[dict] = None) -> dict:
             for val in exc.get("values", []) or []:
                 if isinstance(val, dict) and isinstance(val.get("value"), str):
                     val["value"] = _scrub(val["value"])
+
+        # Deep-scrub the structured payloads where PII actually accumulates.
+        # LoggingIntegration copies record.args into event['extra'], so a
+        # logger.error("... %s", raw_value) call lands the raw value here even
+        # though the rendered message was clean.
+        for key in ("extra", "contexts", "request"):
+            if isinstance(event.get(key), (dict, list)):
+                event[key] = _scrub_deep(event[key])
     except Exception:  # noqa: BLE001 - never drop an event because scrubbing failed
         return event
     return event
@@ -56,6 +87,9 @@ def scrub_breadcrumb(crumb: dict, hint: Optional[dict] = None) -> dict:
     try:
         if isinstance(crumb.get("message"), str):
             crumb["message"] = _scrub(crumb["message"])
+        # Breadcrumb data carries structured args (e.g. HTTP request details).
+        if isinstance(crumb.get("data"), (dict, list)):
+            crumb["data"] = _scrub_deep(crumb["data"])
     except Exception:  # noqa: BLE001
         return crumb
     return crumb

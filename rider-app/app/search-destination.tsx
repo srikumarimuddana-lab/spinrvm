@@ -191,10 +191,18 @@ export default function SearchDestinationScreen() {
     const details = await getPlaceDetails(prediction.place_id);
     if (!details) return;
 
+    // Address AND coordinates both from the details response — one source, one
+    // moment in time. (The old code paired the autocomplete `description` with
+    // the details coords: usually consistent, but two responses from two Google
+    // products, and the description lacks the postal code so recents dedupe
+    // could never match a saved-place copy of the same address.) place_id rides
+    // along so a later tap on this recents entry can re-resolve fresh
+    // coordinates instead of trusting stored ones.
     const location = {
-      address: prediction.description,
+      address: details.address || prediction.description,
       lat: details.lat,
       lng: details.lng,
+      place_id: prediction.place_id,
     };
 
     // Save to recent searches
@@ -202,7 +210,7 @@ export default function SearchDestinationScreen() {
 
     if (activeField === 'pickup') {
       setPickup(location);
-      setPickupText(prediction.description);
+      setPickupText(location.address);
       if (stops.length > 0 && !stops[0].address) {
         setActiveField(0);
       } else if (!dropoff) {
@@ -210,7 +218,7 @@ export default function SearchDestinationScreen() {
       }
     } else if (activeField === 'dropoff') {
       setDropoff(location);
-      setDropoffText(prediction.description);
+      setDropoffText(location.address);
       // Don't auto-navigate; user clicks "Search Ride" button
       if (!pickup) {
         setActiveField('pickup');
@@ -218,7 +226,7 @@ export default function SearchDestinationScreen() {
     } else if (typeof activeField === 'number') {
       updateStop(activeField, location);
       const newTexts = [...stopTexts];
-      newTexts[activeField] = prediction.description;
+      newTexts[activeField] = location.address;
       setStopTexts(newTexts);
       if (activeField < stops.length - 1) {
         setActiveField(activeField + 1);
@@ -229,14 +237,27 @@ export default function SearchDestinationScreen() {
   };
 
   const handleTextChange = (text: string, field: 'pickup' | 'dropoff' | number) => {
+    // Editing the text ORPHANS the previously selected point: the store keeps
+    // address+coords as a pair, and a pair whose address the rider just typed
+    // over is no longer what they mean. Leaving it in place kept the Search
+    // button enabled and booked the OLD pin under the NEW text (incident: bar
+    // read "4500 Gordon Rd" while the dropoff pin sat kilometres away on a
+    // previously selected point). Clearing re-disables Search until the rider
+    // picks a suggestion, which re-binds address and coords atomically.
     if (field === 'pickup') {
       setPickupText(text);
+      if (pickup && text !== pickup.address) setPickup(null);
     } else if (field === 'dropoff') {
       setDropoffText(text);
+      if (dropoff && text !== dropoff.address) setDropoff(null);
     } else {
       const newTexts = [...stopTexts];
       newTexts[field] = text;
       setStopTexts(newTexts);
+      const stop = stops[field];
+      if (stop && stop.address && text !== stop.address) {
+        updateStop(field, { address: '', lat: 0, lng: 0 });
+      }
     }
     setActiveField(field);
     setSearchQuery(text);
@@ -268,7 +289,25 @@ export default function SearchDestinationScreen() {
     }
   };
 
-  const handleSelectLocation = (location: { address: string; lat: number; lng: number }) => {
+  const handleSelectLocation = async (stored: { address: string; lat: number; lng: number; place_id?: string }) => {
+    // A stored pair (recent or saved place) is a snapshot from an arbitrary
+    // point in the past — replaying its coordinates verbatim is how one bad
+    // write once became a permanent wrong pin (address said Gordon Rd, pin sat
+    // on Glide Crescent, forever). When the entry carries a place_id,
+    // re-resolve fresh coordinates from Google; fall back to the stored pair
+    // only when the lookup fails or the entry predates place_id tracking.
+    let location = stored;
+    if (stored.place_id) {
+      const details = await getPlaceDetails(stored.place_id);
+      if (details) {
+        location = {
+          address: details.address || stored.address,
+          lat: details.lat,
+          lng: details.lng,
+          place_id: stored.place_id,
+        };
+      }
+    }
     addRecentSearch(location);
     if (activeField === 'pickup') {
       setPickup(location);
@@ -664,7 +703,10 @@ export default function SearchDestinationScreen() {
                           key={`recent-${index}`}
                           style={styles.predictionRow}
                           onPress={() => {
-                            handleSelectLocation({ address: search.address, lat: search.lat, lng: search.lng });
+                            // Pass the WHOLE entry — rebuilding it here once
+                            // stripped place_id, which silently disabled the
+                            // re-resolve and replayed stored coordinates.
+                            handleSelectLocation(search);
                           }}
                           accessibilityRole="button"
                           accessibilityLabel={search.address}

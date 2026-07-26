@@ -59,6 +59,13 @@ export default function PickOnMapScreen() {
     })();
   }, []);
 
+  // The pin coordinates the displayed address was geocoded FOR. The reverse
+  // geocode is debounced, so `address` always describes a slightly older pin
+  // than `region`; on a fast pan-then-confirm the two can be blocks apart —
+  // the confirmed coordinate then carries the PREVIOUS spot's address, and
+  // that mismatched pair gets stored in recents and booked.
+  const addressForRef = useRef<{ lat: number; lng: number } | null>(null);
+
   const reverseGeocode = async (lat: number, lng: number) => {
     setGeocoding(true);
     try {
@@ -74,8 +81,17 @@ export default function PickOnMapScreen() {
     } catch {
       setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
     } finally {
+      addressForRef.current = { lat, lng };
       setGeocoding(false);
     }
+  };
+
+  /** ~metres between two points at city scale (equirectangular — fine under a
+   * few km, and we only compare against a 60 m threshold). */
+  const approxMeters = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
+    const dLat = (a.lat - b.lat) * 111_320;
+    const dLng = (a.lng - b.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180);
+    return Math.sqrt(dLat * dLat + dLng * dLng);
   };
 
   const handleRegionChange = (newRegion: Region) => {
@@ -89,14 +105,20 @@ export default function PickOnMapScreen() {
 
   const handleConfirm = () => {
     if (!region) return;
-    // Pass back the selected location via params
+    // Only pass the address if it was geocoded for (approximately) THIS pin.
+    // A stale label from the pre-pan position must not travel with the new
+    // coordinate — the coordinate is what gets booked, so when the two
+    // disagree the honest label is the coordinate itself.
+    const pin = { lat: region.latitude, lng: region.longitude };
+    const addressMatchesPin =
+      !!address && !geocoding && !!addressForRef.current && approxMeters(pin, addressForRef.current) <= 60;
     router.navigate({
       pathname: '/search-destination',
       params: {
         mapPickField: field,
         mapPickLat: String(region.latitude),
         mapPickLng: String(region.longitude),
-        mapPickAddress: address || `${region.latitude.toFixed(5)}, ${region.longitude.toFixed(5)}`,
+        mapPickAddress: addressMatchesPin ? address : `${region.latitude.toFixed(5)}, ${region.longitude.toFixed(5)}`,
       },
     } as any);
   };

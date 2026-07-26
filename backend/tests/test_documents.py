@@ -670,7 +670,8 @@ class TestDocumentFileAuthP0:
             "driver_id": "drv_other",
             "document_url": "https://storage.example.com/signed/licence.pdf",
         }
-        mock_user = {"id": "admin_1", "role": "admin"}
+        # Admin-ness is the verified-admin marker, not the role string.
+        mock_user = {"id": "admin_1", "role": "admin", "_admin_verified": True}
 
         async def fake_get_rows(table, filters=None, **kw):
             if table == "driver_documents":
@@ -718,8 +719,31 @@ class TestDocumentFileAuthP0:
             assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_all_admin_roles_can_access(self):
-        """Every admin-class role bypasses the ownership check."""
+    async def test_verified_admin_bypasses_ownership(self):
+        """A verified admin (marker set) can access any driver's document."""
+        from documents import get_document_file
+
+        mock_doc = {
+            "id": "doc_123",
+            "driver_id": "drv_other",
+            "document_url": "https://storage.example.com/signed/licence.pdf",
+        }
+        mock_user = {"id": "admin_1", "role": "admin", "_admin_verified": True}
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "driver_documents":
+                return [mock_doc]
+            return []
+
+        with patch("documents.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)):
+            response = await get_document_file(file_id="doc_123", current_user=mock_user)
+            assert response.status_code == 307
+
+    @pytest.mark.asyncio
+    async def test_admin_role_string_without_marker_is_not_treated_as_admin(self):
+        """REGRESSION: a users.role='admin' value with NO _admin_verified marker
+        (an ordinary token) must fall to the ownership check, not bypass it.
+        Here the fake admin owns no driver row → 404, proving no bypass."""
         from documents import get_document_file
 
         mock_doc = {
@@ -729,13 +753,15 @@ class TestDocumentFileAuthP0:
         }
 
         for role in ("admin", "super_admin", "operations", "support", "finance", "custom"):
-            mock_user = {"id": f"{role}_1", "role": role}
+            mock_user = {"id": f"{role}_1", "role": role}  # no _admin_verified
 
             async def fake_get_rows(table, filters=None, **kw):
                 if table == "driver_documents":
                     return [mock_doc]
-                return []
+                return []  # no drivers row for this user
 
             with patch("documents.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)):
-                response = await get_document_file(file_id="doc_123", current_user=mock_user)
-                assert response.status_code == 307, f"Admin role '{role}' should get 302/307 redirect"
+                with pytest.raises(HTTPException) as exc_info:
+                    await get_document_file(file_id="doc_123", current_user=mock_user)
+                # Falls to ownership path (no driver profile) → 404, NOT a bypass.
+                assert exc_info.value.status_code == 404, f"role '{role}' must not bypass ownership"

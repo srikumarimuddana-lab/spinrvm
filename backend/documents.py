@@ -878,7 +878,6 @@ files_router = APIRouter(prefix="/documents", tags=["Files"])
 upload_router = APIRouter(tags=["Upload"])
 
 
-
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
@@ -972,9 +971,6 @@ async def upload_file(
         raise HTTPException(status_code=500, detail=f"Upload failed: {e}") from e
 
 
-_ADMIN_ROLES = frozenset(("admin", "super_admin", "operations", "support", "finance", "custom"))
-
-
 @files_router.get("/{file_id}")
 async def get_document_file(
     file_id: str,
@@ -989,7 +985,10 @@ async def get_document_file(
     if not doc or not doc.get("document_url"):
         raise HTTPException(status_code=404, detail="File not found")
 
-    if current_user.get("role") not in _ADMIN_ROLES:
+    # Admin-ness is the _admin_verified marker set only by _verify_admin_payload
+    # after the full admin pipeline — never the users.role column, which an
+    # ordinary rider/driver token also carries (see get_admin_user).
+    if not current_user.get("_admin_verified"):
         driver = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
         )

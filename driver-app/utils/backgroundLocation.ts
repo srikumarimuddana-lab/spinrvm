@@ -34,77 +34,57 @@ type LocationTaskData = {
 /**
  * Get a valid access token for the background task.
  *
- * The main app keeps the access token in memory only — it's wiped when the
- * app process dies. The background task runs in a fresh JS context with no
- * shared memory, so we MUST refresh via the refresh_token (which is persisted
- * to SecureStore) to get a fresh access token.
+ * Strategy: read the foreground-persisted access token from SecureStore.
+ * The foreground proactive refresh (2-min buffer) keeps it fresh far more
+ * often than the background cadence needs. If the foreground token is
+ * expired or absent, return null — the caller defers the upload to the
+ * durable SQLite outbox, which the foreground flushes on resume.
+ *
+ * The background task NEVER calls /auth/refresh itself. Two independent
+ * refresh actors sharing one single-use rotating credential caused the
+ * foreground/background rotation race that triggered driver sign-outs —
+ * especially right after ride completion when both contexts fire
+ * concurrently during the completion burst.
  */
 export async function getBackgroundAuthToken(): Promise<string | null> {
   if (!API_URL) return null;
 
-  // First try the in-memory persisted access token (set by setTokens flow below)
+  // 1. Try the background-cached access token (set by setTokens flow
+  //    or a prior successful read below).
   try {
     const cached = await SecureStore.getItemAsync('bg_access_token');
     const cachedExpiry = await SecureStore.getItemAsync('bg_access_token_expires');
     if (cached && cachedExpiry) {
       const expiresAt = parseInt(cachedExpiry, 10);
-      // Use cached token if it has >60s left
       if (Date.now() < expiresAt - 60_000) {
         return cached;
       }
     }
   } catch {
-    // SecureStore read failed — fall through to refresh
+    // SecureStore read failed — fall through
   }
 
-  // Refresh via refresh_token
-  const refreshToken = await SecureStore.getItemAsync('refresh_token');
-  if (!refreshToken) {
-    console.warn('[BgLocation] No refresh token in SecureStore');
-    return null;
-  }
-
+  // 2. Read the foreground's persisted access token. The foreground writes
+  //    it on every setTokens() call (authStore.ts:245).
   try {
-    // App Check is enforced on /api/* in production. Initialize it here first —
-    // this headless task doesn't mount _layout, so initFirebaseServices() (which
-    // configures the App Check provider) hasn't run yet; without it
-    // getAppCheckToken() returns null. initFirebaseServices is idempotent.
-    await initFirebaseServices();
-    const appCheckToken = await getAppCheckToken();
-    const resp = await fetch(`${API_URL}/api/v1/auth/refresh`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
-      },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-    if (!resp.ok) {
-      console.warn('[BgLocation] Refresh failed:', resp.status);
-      return null;
+    const fgToken = await SecureStore.getItemAsync('fg_access_token');
+    const fgExpiry = await SecureStore.getItemAsync('token_expires_at');
+    if (fgToken && fgExpiry) {
+      const expiresAt = parseInt(fgExpiry, 10);
+      if (Date.now() < expiresAt - 30_000) {
+        // Cache it for subsequent background fires within this process
+        await SecureStore.setItemAsync('bg_access_token', fgToken);
+        await SecureStore.setItemAsync('bg_access_token_expires', fgExpiry);
+        return fgToken;
+      }
     }
-    const data = await resp.json() as {
-      token: string;
-      refresh_token: string;
-      expires_in: number;
-      access_expires_at: string;
-    };
-
-    // Persist the new refresh token (rotated) and cache the access token
-    // for subsequent background fires. The main app picks up the rotated
-    // refresh token from SecureStore on next foreground.
-    // Use relative expires_in (not the server's absolute access_expires_at)
-    // to stay immune to device-vs-server clock skew.
-    const expiresAtMs = Date.now() + (data.expires_in ?? 900) * 1000;
-    await SecureStore.setItemAsync('refresh_token', data.refresh_token);
-    await SecureStore.setItemAsync('bg_access_token', data.token);
-    await SecureStore.setItemAsync('bg_access_token_expires', String(expiresAtMs));
-
-    return data.token;
-  } catch (e) {
-    console.warn('[BgLocation] Token refresh failed:', e);
-    return null;
+  } catch {
+    // SecureStore read failed — fall through
   }
+
+  // 3. No valid token available — defer the upload. Points stay in SQLite
+  //    and the foreground flushes them on resume or next interval.
+  return null;
 }
 
 export async function handleBackgroundLocationTask({ data, error }: { data?: LocationTaskData; error?: { message?: string } | null }): Promise<void> {

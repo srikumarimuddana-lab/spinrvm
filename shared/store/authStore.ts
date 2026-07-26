@@ -237,12 +237,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setTokens: async (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => {
     const expiresAt = Date.now() + expiresIn * 1000;
-    // Access token is memory-only (wiped on restart, stays within JWT TTL).
-    // Only the refresh token is persisted to hardware-backed secure storage.
     setInMemoryToken(token);
     if (csrfToken !== undefined) setCsrfToken(csrfToken);
     await storage.setItem('refresh_token', refreshToken);
     await storage.setItem('token_expires_at', String(expiresAt));
+    // Persist the access token so the background location task (which runs
+    // in a separate JS context with no shared memory) can read it directly
+    // instead of independently rotating the shared refresh token.
+    await storage.setItem('fg_access_token', token);
     // Remove any previously-persisted access token from older app versions.
     await storage.deleteItem('auth_token');
     set({ token, refreshToken, tokenExpiresAt: expiresAt });
@@ -319,7 +321,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             // originally inferred (candidate is narrowed to non-null by the
             // guard above), so this doesn't perturb `candidate`'s type downstream.
             let latest: string = candidate;
-            for (const waitMs of [0, 150, 300]) {
+            for (const waitMs of [0, 250, 500, 1000, 2000]) {
               if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
               const v = await storage.getItem('refresh_token');
               if (v && v !== candidate) { latest = v; break; }
@@ -623,6 +625,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     setInMemoryToken(null);
     setCsrfToken(null);
     await storage.deleteItem('auth_token');
+    await storage.deleteItem('fg_access_token');
     await storage.deleteItem('refresh_token');
     await storage.deleteItem('token_expires_at');
     // Clear user cache on logout

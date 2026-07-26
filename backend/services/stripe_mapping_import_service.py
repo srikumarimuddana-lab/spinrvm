@@ -114,12 +114,11 @@ def _prefetch_drivers(
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Batched lookups for the drivers kind.
 
-    Returns (by_old_id, by_phone, by_stripe_account_id). BOTH match maps only
-    include drivers stamped by the legacy driver importer (source match) —
-    this tool exists solely for the legacy-imported cohort, and an unscoped
-    phone match would let a mapping CSV point ANY not-yet-onboarded driver's
-    payout destination at an arbitrary accessible Connect account. by_acct is
-    deliberately unscoped: it detects value collisions across the whole table.
+    Returns (by_old_id, by_phone, by_stripe_account_id). old_driver_id match
+    requires legacy-import metadata (source check). Phone match is unscoped
+    (any driver) — safety comes from the NULL-guard on commit + super_admin
+    gate + live Stripe validation. by_acct is deliberately unscoped: it
+    detects value collisions across the whole table.
     """
     old_ids = sorted({(r.get("old_driver_id") or "").strip() for r in rows} - {""})
     phones = sorted({normalize_phone(r.get("phone") or "") for r in rows if (r.get("phone") or "").strip()})
@@ -140,8 +139,6 @@ def _prefetch_drivers(
                 by_old_id[key] = d
     if phones:
         for d in _select_in("drivers", cols, "phone", phones):
-            if (d.get("legacy_import_metadata") or {}).get("source") != DRIVER_IMPORT_SOURCE:
-                continue
             key = d.get("phone")
             if key is not None and key not in by_phone:
                 by_phone[key] = d
@@ -267,7 +264,7 @@ def _build_local_driver_plan(rows: list[dict[str, str]], plan: StripeMappingPlan
         driver = matched_by_old or matched_by_phone
         if not driver:
             plan.errors.append(
-                StripeMappingErrorItem(row_ref, "no_match", "no legacy-imported driver matches this row")
+                StripeMappingErrorItem(row_ref, "no_match", "no driver with this phone/old_driver_id found")
             )
             continue
 

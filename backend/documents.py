@@ -184,11 +184,6 @@ class DriverDocument(BaseModel):
     uploaded_at: datetime
 
 
-# --- Helper: Upload Directory ---
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-
 # Map keywords in a requirement name to the legacy top-level expiry column on
 # the `drivers` row. Used so that approving a re-uploaded document refreshes
 # the expiry that `update_driver_status` (go-online) checks against.

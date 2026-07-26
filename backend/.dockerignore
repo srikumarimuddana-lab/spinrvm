@@ -41,3 +41,6 @@ Makefile
 Dockerfile*
 .dockerignore
 docker-compose*.yml
+
+# Local upload scratch — user PII must never enter the image
+uploads/

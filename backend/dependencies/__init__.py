@@ -339,6 +339,13 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
         "token_version": int(payload.get("token_version") or 0),
         "profile_complete": True,
         "is_driver": False,
+        # Proof this request came through the full admin pipeline (aud=spinr:admin
+        # + JTI + staff-active + token_version + idle timeout). get_admin_user
+        # gates on THIS marker, never on a bare `role` string — because `role`
+        # is a users-table column (admin/users.py syncs it, ops scripts set it)
+        # that an
+        # ordinary rider/driver token also carries. Only this function sets it.
+        "_admin_verified": True,
     }
 
 
@@ -417,6 +424,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
                 user["is_driver"] = True if driver else False
             _enforce_account_active(user)
+            # Defense in depth — see the JWT path: strip any stored
+            # _admin_verified so only _verify_admin_payload can grant admin.
+            user.pop("_admin_verified", None)
             return user
     except HTTPException:
         raise
@@ -512,6 +522,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         logger.error(f"Unexpected error looking up driver row: {e}", exc_info=True)
         raise DatabaseError(details={"original": str(e)}) from e
     _enforce_account_active(user)
+    # Defense in depth: the admin gate is a private marker only
+    # _verify_admin_payload sets. Strip it from any DB-sourced user row so a
+    # stored column can never forge admin status through the ordinary path.
+    user.pop("_admin_verified", None)
     return user
 
 
@@ -598,9 +612,19 @@ async def get_current_user_allow_expired(
 
 
 async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
-    """Require the caller to be an authenticated admin."""
-    role = current_user.get("role", "")
-    if role not in ("admin", "super_admin", "operations", "support", "finance", "custom"):
+    """Require the caller to be an authenticated admin.
+
+    Gates on the private ``_admin_verified`` marker that ONLY
+    _verify_admin_payload sets after the full admin pipeline (aud=spinr:admin +
+    JTI denylist + admin_staff active + token_version + idle timeout). It does
+    NOT trust the ``role`` string: `role` is a users-table column that
+    make_admin.py and admin/users.py write, and an ordinary rider/driver token
+    carries whatever that column says — so a bare `role in {...}` check let any
+    account whose users.role was ever set to an admin value pass every admin
+    endpoint using a normal 15-min mobile token, with no MFA and on a 30-day
+    refresh chain. The marker is provable proof of the admin request path.
+    """
+    if not current_user.get("_admin_verified"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 

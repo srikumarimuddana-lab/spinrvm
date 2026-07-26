@@ -314,8 +314,9 @@ async def get_ride(
     is_driver = driver and ride.get("driver_id") == driver["id"]
 
     if not (is_rider or is_driver):
-        # Admin check
-        if current_user.get("role") != "admin":
+        # Admin check — the verified-admin marker, never the users.role column
+        # (an ordinary token carries whatever role that column holds).
+        if not current_user.get("_admin_verified"):
             raise HTTPException(status_code=403, detail="Not authorized to view this ride")
 
     # Include driver details if assigned.

@@ -283,14 +283,26 @@ class TestAdminUserVerification:
     """Tests for admin user verification."""
 
     async def test_get_admin_user_is_admin(self):
-        """Test get_admin_user with admin user."""
+        """get_admin_user accepts a verified admin (marker set by
+        _verify_admin_payload). The role string alone is NOT sufficient."""
         from backend.dependencies import get_admin_user
 
-        admin_user = {"user_id": "admin_123", "phone": "+1234567890", "role": "admin"}
+        admin_user = {"user_id": "admin_123", "phone": "+1234567890", "role": "admin", "_admin_verified": True}
 
         result = await get_admin_user(admin_user)
 
         assert result == admin_user
+
+    async def test_get_admin_user_role_without_marker_rejected(self):
+        """REGRESSION: role='admin' from a DB column, no verified-admin marker →
+        403. This is the privilege-escalation path that must stay closed."""
+        from fastapi import HTTPException
+
+        from backend.dependencies import get_admin_user
+
+        with pytest.raises(HTTPException) as exc:
+            await get_admin_user({"user_id": "u1", "role": "admin"})
+        assert exc.value.status_code == 403
 
     async def test_get_admin_user_not_admin(self):
         """Test get_admin_user with non-admin user."""

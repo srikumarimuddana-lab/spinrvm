@@ -4,30 +4,35 @@ import path from 'node:path';
 const source = fs.readFileSync(path.join(__dirname, '..', 'app', 'ride-details.tsx'), 'utf8');
 
 describe('ride-details v2 route rendering contract', () => {
-  it('renders actual segments on the native map after the map is ready', () => {
-    expect(source).toContain('toReactNativeRouteSections');
+  it('draws the single uniform straight route line and shared pins after the map is ready', () => {
+    expect(source).toContain('RouteLine');
+    expect(source).toContain('RoutePins');
     expect(source).toContain('actual_route_segments');
     expect(source).toContain('const [routeMapReady, setRouteMapReady] = useState(false)');
     expect(source).toContain('if (!routeMapReady || mapCoordinates.length < 2) return');
     expect(source).toContain('setRouteMapReady(true)');
-    expect(source).toContain('actualSections.map((section) => (');
-    expect(source).toContain("section.geometryKind === 'inferred'");
-    expect(source).toContain('INFERRED_ROUTE_STROKE');
+    // No segmented / provenance-styled polylines any more.
+    expect(source).not.toContain('<Polyline');
+    expect(source).not.toContain('INFERRED_ROUTE_STROKE');
+    expect(source).not.toContain('ACTUAL_ROUTE_STROKE');
+    expect(source).not.toContain('PLANNED_ROUTE_STROKE');
     expect(source).not.toContain('{routeSnapshotUrl ? (');
-    expect(source).toContain('ride.actual_completion_point');
+    // Completion fix is handed to the shared pins.
+    expect(source).toContain('completion={ride.actual_completion_point');
     expect(source).toContain('useCompletedRouteRefresh(ride, fetchRide)');
     expect(source).not.toContain('actualSegments.flat()');
     expect(source).not.toContain('/route/v1/');
   });
 
-  it('keeps planned geometry legacy-only and never rebuilds a completed actual route with Directions', () => {
+  it('keeps the route-quality label derived from geometry but never draws planned segments', () => {
     expect(source).toContain('const isV2Route =');
-    expect(source).toContain('isV2Route ? [] : plannedSegments');
-    expect(source).toContain('{!isV2Route && !hasActualRoute && plannedSegments.map');
-    expect(source).not.toContain('{!hasActualRoute && plannedSegments.map');
+    expect(source).toContain('toReactNativeRouteSections');
+    expect(source).not.toContain('plannedSegments');
+    expect(source).not.toContain('toReactNativeSegments');
     expect(source).toContain("const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';");
     expect(source).not.toContain('decodePolyline');
     expect(source).not.toContain('fetchFallbackRoute');
+    expect(source).not.toContain('MapViewDirections');
   });
 
   it('includes revisioned snapshot and incomplete-quality copy in the client PDF HTML', () => {

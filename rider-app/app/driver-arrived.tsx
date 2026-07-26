@@ -7,8 +7,9 @@ import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import MapViewDirections from 'react-native-maps-directions';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useRideStore } from '../store/rideStore';
@@ -41,7 +42,6 @@ function DriverArrivedScreenContent() {
   const bottomSheetRef = React.useRef<any>(null);
   const snapPoints = useMemo(() => ['42%', '70%'], []);
   const resumeKey = useAppResumeKey();
-  const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
   const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
@@ -51,7 +51,6 @@ function DriverArrivedScreenContent() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', variant: 'info' });
   const [reasonVisible, setReasonVisible] = useState(false);
-  const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -165,60 +164,15 @@ function DriverArrivedScreenContent() {
           userInterfaceStyle={isDark ? "dark" : "light"}
         >
 
-          {/* Route: pickup → dropoff */}
-          {GOOGLE_MAPS_API_KEY && (
-            <MapViewDirections
-              origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
-              destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
-              apikey={GOOGLE_MAPS_API_KEY}
-              strokeWidth={0}
-              strokeColor="transparent"
-              onReady={(result: any) => {
-                setRouteCoords(result.coordinates);
-                if (mapRef.current && result.coordinates?.length > 1) {
-                  mapRef.current.fitToCoordinates(result.coordinates, {
-                    edgePadding: { top: 100, right: 60, bottom: 320, left: 60 },
-                    animated: true,
-                  });
-                }
-              }}
-            />
-          )}
-          {/* Orange → Red gradient */}
-          {routeCoords.length > 1 && (() => {
-            const total = routeCoords.length;
-            const SEGS = 15;
-            const chunk = Math.max(1, Math.floor(total / SEGS));
-            const segs: { c: any[]; color: string }[] = [];
-            for (let i = 0; i < total - 1; i += chunk) {
-              const end = Math.min(i + chunk + 1, total);
-              const t = i / Math.max(total - 1, 1);
-              const r = Math.round(255 + (238 - 255) * t);
-              const g = Math.round(149 + (43 - 149) * t);
-              const b = Math.round(0 + (43 - 0) * t);
-              segs.push({ c: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
-            }
-            return segs.map((s, idx) => (
-              <Polyline key={`rs-${idx}`} coordinates={s.c} strokeWidth={4} strokeColor={s.color} lineCap="round" lineJoin="round" />
-            ));
-          })()}
-
-          {/* Pickup pin with pulse */}
-          <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.pickupMarkerWrap}>
-              <View style={styles.pickupPulse} />
-              <View style={styles.pickupPin}>
-                <Ionicons name="location" size={18} color="#FFF" />
-              </View>
-            </View>
-          </Marker>
-
-          {/* Dropoff pin */}
-          <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.dropoffPin}>
-              <Ionicons name="flag" size={16} color="#FFF" />
-            </View>
-          </Marker>
+          {/* Uniform route: one straight orange→red gradient line pickup→dropoff. */}
+          <RouteLine
+            pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+            destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+          />
+          <RoutePins
+            pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+            dropoff={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+          />
 
           {/* Driver car at pickup */}
           {currentDriver?.lat && currentDriver?.lng && (

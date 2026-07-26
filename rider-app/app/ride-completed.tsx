@@ -7,7 +7,9 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { showToast } from '../store/toastStore';
@@ -16,12 +18,11 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
-import { ACTUAL_ROUTE_STROKE, INFERRED_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
-import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { routeQualityLabel, toReactNativeRouteSections } from '@shared/utils/routeSegments';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -85,22 +86,27 @@ function RideCompletedScreenContent() {
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
 
+  // Route geometry still feeds the quality LABEL only — the drawn line is now the
+  // uniform straight pickup→dropoff gradient (see RouteLine below), not the GPS
+  // reconstruction. actualSections is kept solely to decide the label text.
   const actualSections = useMemo(
     () => toReactNativeRouteSections(currentRide?.actual_route_segments),
     [currentRide?.actual_route_segments],
   );
-  const plannedSegments = useMemo(
-    () => toReactNativeSegments(currentRide?.planned_route_polyline ? [currentRide.planned_route_polyline] : []),
-    [currentRide?.planned_route_polyline],
-  );
   const isV2Route = toNum(currentRide?.route_schema_version) >= 2;
   const hasActualRoute = actualSections.length > 0;
-  const mapCoordinates = useMemo(
-    () => hasActualRoute
-      ? actualSections.reduce<any[]>((all, section) => all.concat(section.coordinates), [])
-      : (isV2Route ? [] : plannedSegments).reduce<any[]>((all, segment) => all.concat(segment), []),
-    [actualSections, hasActualRoute, isV2Route, plannedSegments],
-  );
+  // Frame the map on the straight route endpoints (+ completion fix if present).
+  const mapCoordinates = useMemo(() => {
+    const pts: any[] = [];
+    const pLat = Number(currentRide?.pickup_lat);
+    const pLng = Number(currentRide?.pickup_lng);
+    const dLat = Number(currentRide?.dropoff_lat);
+    const dLng = Number(currentRide?.dropoff_lng);
+    if (Number.isFinite(pLat) && Number.isFinite(pLng)) pts.push({ latitude: pLat, longitude: pLng });
+    if (Number.isFinite(dLat) && Number.isFinite(dLng)) pts.push({ latitude: dLat, longitude: dLng });
+    if (currentRide?.actual_completion_point) pts.push(currentRide.actual_completion_point);
+    return pts;
+  }, [currentRide?.pickup_lat, currentRide?.pickup_lng, currentRide?.dropoff_lat, currentRide?.dropoff_lng, currentRide?.actual_completion_point]);
   const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
   const routeQuality = routeQualityLabel(currentRide?.route_quality);
   const routeIsProcessing =
@@ -606,38 +612,16 @@ function RideCompletedScreenContent() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
-              {actualSections.map((section) => (
-                <Polyline
-                  key={section.id}
-                  coordinates={section.coordinates}
-                  {...(section.geometryKind === 'inferred' ? INFERRED_ROUTE_STROKE : ACTUAL_ROUTE_STROKE)}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              ))}
-              {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
-                <Polyline
-                  key={`planned-segment-${index}`}
-                  coordinates={coordinates}
-                  {...PLANNED_ROUTE_STROKE}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              ))}
-
-              <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}><Ionicons name="location" size={14} color="#FFF" /></View>
-              </Marker>
-              <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
-              </Marker>
-              {currentRide.actual_completion_point && (
-                <Marker coordinate={currentRide.actual_completion_point} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.mapPin, { backgroundColor: '#F59E0B' }]}>
-                    <Ionicons name="checkmark" size={14} color="#FFF" />
-                  </View>
-                </Marker>
-              )}
+              {/* Uniform route: one straight orange→red gradient line pickup→dropoff. */}
+              <RouteLine
+                pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+                destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+              />
+              <RoutePins
+                pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+                dropoff={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+                completion={currentRide.actual_completion_point ?? null}
+              />
             </MapView>
 
             {/* Address overlay */}

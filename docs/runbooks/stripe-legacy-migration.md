@@ -8,8 +8,14 @@ platform, so drivers do **not** redo onboarding and riders keep their cards.
 `POST /api/admin/stripe/import/validate`, `POST /api/admin/stripe/import/commit`,
 `GET /api/admin/stripe/import/status?batch=…`
 (`backend/routes/admin/stripe_import.py`, service:
-`backend/services/stripe_mapping_import_service.py`). Requires an admin token
-with the `drivers` module (or super_admin).
+`backend/services/stripe_mapping_import_service.py`). Requires a
+**super_admin** token — module grants are not enough, because mapping
+`stripe_account_id` sets a driver's payout destination.
+
+Only drivers stamped by the legacy bulk import
+(`legacy_import_metadata.source = legacy_saskatoon_driver_import`) are
+matchable — natively-onboarded drivers are structurally out of reach of this
+tool, by old ID and by phone alike.
 
 **Prerequisite:** customers/drivers were already imported by the bulk driver
 import (drivers matched via `legacy_import_metadata.old_driver_id`).

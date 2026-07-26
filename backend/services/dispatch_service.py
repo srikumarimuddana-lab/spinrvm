@@ -102,6 +102,9 @@ def dispatch_geo_bounds(pickup_lat: float, pickup_lng: float, radius_km: float) 
     ]
 
 
+_LOCATION_STALE_SECONDS = 120
+
+
 def _is_dispatchable_driver(driver: Dict[str, Any]) -> bool:
     """
     Return True iff this driver row should be considered for dispatch.
@@ -109,11 +112,27 @@ def _is_dispatchable_driver(driver: Dict[str, Any]) -> bool:
     Excludes:
       - Legacy demo rows without a real user_id (can never be notified)
       - Rows missing lat/lng (can't compute distance or ETA)
+      - Drivers whose last location update is older than _LOCATION_STALE_SECONDS
+        (GPS died / permission revoked while the app stayed connected)
     """
     if not driver.get("user_id"):
         return False
     if driver.get("lat") is None or driver.get("lng") is None:
         return False
+    updated_at = driver.get("updated_at")
+    if updated_at:
+        try:
+            if isinstance(updated_at, str):
+                ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            else:
+                ts = updated_at
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            if age > _LOCATION_STALE_SECONDS:
+                return False
+        except (ValueError, TypeError):
+            pass
     return True
 
 

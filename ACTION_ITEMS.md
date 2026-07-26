@@ -43,27 +43,76 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   evidence location) and a "no entries to date" first row.
 
 ### A4. 156 failing backend tests on `main`
-- [ ] **Status:** open — found while triaging PR #2377's CI failures (2026-07-26)
-- **Why:** `backend-test` job runs `156 failed, 4511 passed, 8 skipped` on plain `main`
-  (no PR-specific cause). Confirmed real test failures, not flaky infra — includes
-  `AttributeError`s for functions tests reference but that no longer exist
-  (`routes.drivers.set_presence`, `routes.wallet.wallet_increment_balance`,
-  `routes.wallet._wallet_transfer_rpc`), `StopAsyncIteration`s across
-  `test_webhooks_main.py`/`test_spinr_pass_subscription.py` (mock exhaustion —
-  likely a call-count contract drift), and wallet-transfer status-code mismatches
-  (404 vs expected 400/422). Every PR currently shows a red `backend-test` check
-  regardless of the PR's own quality, which trains reviewers to ignore CI signal —
-  a bigger risk than any single failing test.
+- [ ] **Status:** open — found while triaging PR #2377's CI failures (2026-07-26);
+  root-caused 2026-07-26 (see below). Confirmed **test drift, not a product
+  regression** — production code changed correctly; tests were never updated to
+  match. Every PR currently shows a red `backend-test` check regardless of the
+  PR's own quality, which trains reviewers to ignore CI signal — a bigger risk
+  than any single failing test.
+- **Root cause breakdown (ranked by likely share of the 156):**
+  1. **Orphaned `patch()` targets after module splits (likely >half of the 156).**
+     `routes/drivers.py` → `routes/drivers/` package, `routes/rides.py` →
+     `routes/rides/` package, and `routes/wallet.py` logic partially extracted
+     into `repositories/wallet_repo.py`. Tests still `patch()` symbols at their
+     old location (e.g. `routes.drivers.set_presence`, now `utils.driver_presence`;
+     `routes.wallet.wallet_increment_balance`, now `repositories/wallet_repo.py:31`
+     re-exported via `db_supabase.py:300,315`) — `AttributeError` on `patch()`
+     fails the test before any assertion runs. Confirmed-dead patch targets found
+     in `test_coverage_rides.py` (128 tests), `test_drivers_extended.py` (81
+     tests), `test_wallet.py`, `test_p2_promo_wallet_loyalty.py`,
+     `test_dispatch_cascade.py`, `test_dispatch_presence_failopen.py`.
+     **Fix:** mechanical sweep re-pointing each `patch()` string at the module
+     that now actually owns the symbol — no logic changes, lowest-risk bucket to
+     clear first and likely clears well over half the 156 in one pass.
+  2. **Wallet endpoints genuinely changed shape.** `POST /wallet/transfer` was
+     removed entirely (`routes/wallet.py` has no `/transfer` route — the 404s
+     in `TestTransfer` are correct current behavior, not a bug). `POST
+     /wallet/top-up` was rewritten to create a Stripe PaymentIntent +
+     EphemeralKey instead of crediting the balance synchronously — credit now
+     happens via the `payment_intent.succeeded` webhook (`wallet.py:144-227`).
+     Old tests assert the pre-rewrite synchronous-credit contract.
+     **Fix:** delete `TestTransfer` (dead feature) or replace with a real
+     transfer test if the feature is coming back; rewrite `TestTopUp` against
+     the PaymentIntent-creation response shape, add a webhook-level test for
+     the actual credit path.
+  3. **New tax computation exhausts fixed-length mocks.**
+     `_compute_subscription_tax` (`routes/drivers/subscriptions.py:237`) is new
+     code that adds 2 extra `db_supabase.find_one` calls in the one-off
+     subscription-activation path (`subscriptions.py:1285`) and the
+     `invoice.paid` webhook handler (`webhooks.py:1329`). Old tests supply a
+     3-element `side_effect` list; the 4th call raises `StopAsyncIteration`.
+     Sibling tests on the *recurring* branch (which skips this new code path)
+     still pass, confirming the new calls are additive, not broken.
+     **Fix:** add 2 more `find_one` mock responses (drivers row, service_areas
+     row) to each affected `side_effect` list.
+  4. **New guard clauses the old fixtures don't satisfy** — each deliberate,
+     correct behavior:
+     - `surge_engine.py:263` added a `surge_enabled` backstop; old
+       `TestRecalculateAllSurges` fixtures omit that field so every area is
+       skipped. Fix: add `"surge_enabled": True` to the fixtures.
+     - `verify_subscription_session` now re-reads status after activation
+       (a newer sibling test, `test_verify_session_superseded_returns_superseded`,
+       already models this correctly) — the old test's mock returns a stale
+       `"pending"` status via `return_value` instead of a `side_effect`
+       sequence. Fix: match the newer sibling test's mocking pattern.
+     - `_WSPubSub.active` (`utils/ws_pubsub.py:72-83`) now also requires
+       `_pubsub is not None` (deliberate reconnect-safety fix, documented in
+       its own docstring) — old test only stubs `_redis`/`_task`. Fix: also
+       stub `_pubsub` in the test fixture.
 - **Files:** `backend/tests/test_wallet.py`, `backend/tests/test_webhooks_main.py`,
-  `backend/tests/test_spinr_pass_subscription.py`, `backend/routes/wallet.py`,
-  `backend/routes/drivers/__init__.py` (start here; full list needs a fresh
-  `pytest -v` triage pass since this item was filed from CI log inspection, not
-  a local run)
-- **Approach:** triage in batches by failure class (AttributeError = code/test drift,
-  StopAsyncIteration = mock setup drift, status-code mismatch = real behavior change
-  or stale test expectation) rather than fixing all 156 in one pass — respects the
-  ≤3-files-per-subtask rule. Do not skip/xfail to turn CI green; fix or delete each
-  test on its merits.
+  `backend/tests/test_spinr_pass_subscription.py`, `backend/tests/test_coverage_rides.py`,
+  `backend/tests/test_drivers_extended.py`, `backend/tests/test_dispatch_cascade.py`,
+  `backend/tests/test_dispatch_presence_failopen.py`, `backend/tests/test_utils_extended.py`,
+  `backend/tests/test_websocket_token_revocation.py`, `backend/tests/test_p2_promo_wallet_loyalty.py`
+  (start with bucket 1 above; a fresh `pytest -v` pass is still needed to confirm
+  the exact full list — this breakdown was derived from a sample of 17 of the 156
+  signatures plus a static `patch()`-target scan, not a full local run)
+- **Approach:** fix bucket 1 first (pure patch-target sweep, no behavior
+  questions, respects ≤3-files-per-subtask) to see how much it clears, then
+  buckets 2–4 in order. Do not skip/xfail to turn CI green; fix or delete each
+  test on its merits. Bucket 2 (`TestTransfer`) needs a product decision first
+  — confirm wallet-to-wallet transfer is actually a dead/removed feature before
+  deleting its tests, rather than assuming.
 - **Acceptance:** `pytest` on `main` reports 0 failures; CI Guard Rails coverage gate
   stays meaningful again once the underlying suite is trustworthy.
 

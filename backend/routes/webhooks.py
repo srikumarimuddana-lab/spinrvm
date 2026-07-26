@@ -110,6 +110,70 @@ _STRIPE_IGNORED_EVENTS = frozenset(
 )
 
 
+async def _record_orphan_refund(
+    *,
+    charge: dict,
+    payment_intent_id: str | None,
+    event_id: str,
+    reason: str,
+) -> None:
+    """Persist a charge.refunded event that cannot be linked to a ride.
+
+    Without this the refund silently vanishes from the books — only a log
+    warning was left behind. The ``stripe_orphan_refunds`` table lets finance
+    reconcile or manually link these later.
+    """
+    charge_id = charge.get("id", "")
+    refunded_cents = int(charge.get("amount_refunded", 0))
+    currency = charge.get("currency", "cad")
+    meta = charge.get("metadata") or {}
+
+    try:
+        await db_supabase.insert_one(
+            "stripe_orphan_refunds",
+            {
+                "stripe_charge_id": charge_id,
+                "payment_intent_id": payment_intent_id,
+                "amount_refunded_cents": refunded_cents,
+                "currency": currency,
+                "reason": reason,
+                "stripe_event_id": event_id,
+                "raw_metadata": meta if meta else None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except DuplicateRecordError:
+        # Already recorded by an earlier delivery of this same event (see the
+        # unique index in migration 255). The row we wanted exists — that is
+        # the desired end state, not a failure worth paging on.
+        logger.info(
+            "charge.refunded orphan already recorded for event %s — skipping duplicate",
+            event_id,
+            extra={"domain": "payments", "event_id": event_id},
+        )
+        return
+    except Exception:
+        logger.error(
+            "Failed to persist orphan refund charge=%s pi=%s — refund data may be lost",
+            charge_id,
+            payment_intent_id,
+            exc_info=True,
+            extra={"domain": "payments", "event_id": event_id},
+        )
+        return
+
+    logger.error(
+        "charge.refunded orphan: charge=%s pi=%s reason=%s cents=%d — "
+        "recorded in stripe_orphan_refunds for manual reconciliation",
+        charge_id,
+        payment_intent_id,
+        reason,
+        refunded_cents,
+        extra={"domain": "payments", "event_id": event_id},
+    )
+
+
 def _extract_invoice_payment_intent(invoice: dict, stripe_secret: str = "") -> str | None:
     """Resolve the PaymentIntent id for a paid invoice across Stripe API versions.
 
@@ -895,14 +959,18 @@ async def stripe_webhook(request: Request):
                     except Exception as _e:
                         logger.debug(f"Refund push failed: {_e}")
             else:
-                logger.warning(
-                    f"charge.refunded: no ride found for payment_intent {payment_intent_id}",
-                    extra={"domain": "payments", "event_id": event_id},
+                await _record_orphan_refund(
+                    charge=charge,
+                    payment_intent_id=payment_intent_id,
+                    event_id=event_id,
+                    reason="no_ride_for_pi",
                 )
         else:
-            logger.warning(
-                "charge.refunded: charge has no payment_intent — skipping ride update",
-                extra={"domain": "payments", "event_id": event_id},
+            await _record_orphan_refund(
+                charge=charge,
+                payment_intent_id=None,
+                event_id=event_id,
+                reason="no_payment_intent",
             )
 
     elif event_type == "charge.dispute.created":

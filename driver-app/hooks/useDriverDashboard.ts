@@ -643,13 +643,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         try { locationSubRef.current.remove(); } catch {}
         locationSubRef.current = null;
       }
-      const sub = await Location.watchPositionAsync(
-        {
-          accuracy: config.accuracy,
-          timeInterval: config.timeInterval,
-          distanceInterval: config.distanceInterval,
-        },
-        (loc) => {
+      let sub: Location.LocationSubscription;
+      try {
+        sub = await Location.watchPositionAsync(
+          {
+            accuracy: config.accuracy,
+            timeInterval: config.timeInterval,
+            distanceInterval: config.distanceInterval,
+          },
+          (loc) => {
           const integrity = checkLocationIntegrity(loc);
           if (!integrity.trusted) {
             console.warn(`[Location] Spoofed/invalid fix rejected: ${integrity.reason}`);
@@ -739,7 +741,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             }));
           }
         }
-      );
+        );
+      } catch (e) {
+        console.error('[Location] watchPositionAsync failed — driver is GPS-blind:', e);
+        setWsError('Location unavailable. Check location permissions in Settings.');
+        return;
+      }
       locationSubRef.current = sub;
     })();
 

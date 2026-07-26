@@ -79,6 +79,11 @@ class StripeMappingPlan:
     #    "old_user_id", "existing_metadata"}
     warnings: list[StripeMappingErrorItem] = field(default_factory=list)
     errors: list[StripeMappingErrorItem] = field(default_factory=list)
+    needs_update: list[dict[str, Any]] = field(default_factory=list)
+    #   drivers already carrying a DIFFERENT stripe_account_id — NON-blocking.
+    #   Never auto-written by commit_plan; surfaced for an explicit, confirmed
+    #   per-driver update via update_driver_stripe_account. Items:
+    #   {"row_ref", "driver_id", "current_stripe_account_id", "new_stripe_account_id"}
 
 
 def parse_mapping_rows(text: str, kind: str) -> list[dict[str, str]]:
@@ -277,10 +282,18 @@ def _build_local_driver_plan(rows: list[dict[str, str]], plan: StripeMappingPlan
             )
             continue
         if existing:
-            plan.errors.append(
-                StripeMappingErrorItem(
-                    row_ref, "conflict_existing", "driver already has a different stripe_account_id; resolve manually"
-                )
+            # Non-blocking: a driver who already has a DIFFERENT account must
+            # not fail the batch — the rest of the CSV still commits. Surface it
+            # for an explicit, confirmed per-driver update instead (redirecting a
+            # payout destination is deliberate, never a bulk side effect). The
+            # bulk commit's NULL-only guard also refuses to touch these rows.
+            plan.needs_update.append(
+                {
+                    "row_ref": row_ref,
+                    "driver_id": driver["id"],
+                    "current_stripe_account_id": existing,
+                    "new_stripe_account_id": acct,
+                }
             )
             continue
         holder = by_acct.get(acct)
@@ -648,6 +661,133 @@ def commit_plan(plan: StripeMappingPlan) -> dict[str, Any]:
             conflicts,
         )
     return {"updated_drivers": updated_drivers, "updated_users": updated_users, "conflicts": conflicts}
+
+
+def _driver_holding_account(acct: str) -> dict[str, Any] | None:
+    """The single driver row currently carrying ``acct`` (or None)."""
+    rows = (
+        supabase.table("drivers").select("id,stripe_account_id").eq("stripe_account_id", acct).limit(1).execute().data
+        or []
+    )
+    return rows[0] if rows else None
+
+
+def _write_driver_account_update(
+    driver_id: str, new_acct: str, expected_current_acct: str, meta: dict[str, Any], now: str
+) -> bool:
+    """Overwrite one driver's account, guarded on the expected current value
+    (optimistic concurrency). Returns True iff exactly-this row was updated —
+    zero rows means the value moved since we read it (stale review screen)."""
+    res = (
+        supabase.table("drivers")
+        .update({"stripe_account_id": new_acct, "legacy_import_metadata": meta, "updated_at": now})
+        .eq("id", driver_id)
+        .eq("stripe_account_id", expected_current_acct)
+        .execute()
+    )
+    return bool(res.data)
+
+
+async def update_driver_stripe_account(
+    driver_id: str,
+    new_acct: str,
+    expected_current_acct: str,
+    batch: str,
+    stripe_secret: str,
+) -> dict[str, Any]:
+    """Redirect ONE driver's payout account to ``new_acct`` (money-moving).
+
+    Unlike ``commit_plan`` (which only fills NULL columns), this deliberately
+    OVERWRITES an existing account, so it is per-driver, explicitly confirmed at
+    the UI, and guarded three ways before it writes:
+
+    - ``new_acct`` is live-validated against Stripe (Custom stays a warning;
+      non-CA / transfers-never-requested / rejected are hard errors → refuse).
+    - the write filters on ``stripe_account_id = expected_current_acct`` so a
+      review screen that went stale can't clobber a newer value (→ ``stale``).
+    - ``new_acct`` already held by another driver → ``id_taken`` (pre-check plus
+      the migration-257 unique index as the concurrency backstop).
+
+    Returns ``{ok, status, errors, warnings}`` where errors/warnings are
+    ``(field, message)`` tuples — PII-free, same contract as plan items.
+    ``status`` ∈ updated | validation_failed | stale | id_taken | not_found |
+    bad_format | stripe_not_configured.
+    """
+    if not stripe_secret:
+        return _update_result(
+            False, "stripe_not_configured", [("stripe_not_configured", "stripe_secret_key is not set in app settings")]
+        )
+    if not ACCT_RE.match(new_acct or ""):
+        return _update_result(False, "bad_format", [("stripe_id_format", "stripe_account_id must look like acct_...")])
+
+    import stripe
+
+    payload, err = await _retrieve_stripe(stripe.Account.retrieve, new_acct, stripe_secret)
+    if err:
+        return _update_result(False, "validation_failed", [err])
+    errs, warns = _account_findings(payload)
+    livemode = _livemode_error(payload, stripe_secret)
+    if livemode:
+        errs = [*errs, livemode]
+    if errs:
+        return _update_result(False, "validation_failed", errs, warns)
+
+    def _write() -> dict[str, Any]:
+        driver_rows = (
+            supabase.table("drivers")
+            .select("id,stripe_account_id,legacy_import_metadata")
+            .eq("id", driver_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not driver_rows:
+            return _update_result(False, "not_found", warnings=warns)
+        driver = driver_rows[0]
+        if (driver.get("stripe_account_id") or "") != expected_current_acct:
+            return _update_result(False, "stale", warnings=warns)
+        holder = _driver_holding_account(new_acct)
+        if holder and holder["id"] != driver_id:
+            return _update_result(False, "id_taken", warnings=warns)
+        now = datetime.now(timezone.utc).isoformat()
+        meta = dict(driver.get("legacy_import_metadata") or {})
+        migration = dict(meta.get("stripe_migration") or {})
+        migration.update(
+            {
+                "batch": batch,
+                "source": IMPORT_SOURCE,
+                "action": "account_update",
+                "updated_at": now,
+                "previous_account_id": expected_current_acct,
+            }
+        )
+        meta["stripe_migration"] = migration
+        try:
+            wrote = _write_driver_account_update(driver_id, new_acct, expected_current_acct, meta, now)
+        except Exception as e:
+            if _is_unique_violation(e):
+                logger.error("[STRIPE-MAP] update: %s already taken by another driver (concurrent)", new_acct)
+                return _update_result(False, "id_taken", warnings=warns)
+            raise
+        if not wrote:
+            # Guarded write matched zero rows: current value moved between our
+            # read and the update (rare race) → stale, operator re-validates.
+            return _update_result(False, "stale", warnings=warns)
+        logger.info(
+            "[STRIPE-MAP] driver payout account updated batch=%s",
+            batch,
+            extra={"domain": "payments", "driver_id": driver_id},
+        )
+        return _update_result(True, "updated", warnings=warns)
+
+    return await asyncio.to_thread(_write)
+
+
+def _update_result(
+    ok: bool, status: str, errors: list[tuple[str, str]] | None = None, warnings: list[tuple[str, str]] | None = None
+) -> dict[str, Any]:
+    return {"ok": ok, "status": status, "errors": errors or [], "warnings": warnings or []}
 
 
 async def sync_kyc_after_commit(driver_ids: list[str], batch: str, *, concurrency: int = 5) -> dict[str, Any]:

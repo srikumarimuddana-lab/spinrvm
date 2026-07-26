@@ -159,6 +159,15 @@ export default function PickOnMapScreen() {
 
   const handleRecenter = async () => {
     try {
+      // The AI-mode mount skips the permission request (the map opens on the
+      // assistant's approximate point, not the device), so permission may
+      // never have been asked — request it here or the button is silently
+      // dead in exactly that flow.
+      let { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        status = (await Location.requestForegroundPermissionsAsync()).status;
+      }
+      if (status !== 'granted') return;
       const loc = await Location.getCurrentPositionAsync({});
       mapRef.current?.animateToRegion({
         latitude: loc.coords.latitude,

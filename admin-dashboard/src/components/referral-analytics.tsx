@@ -76,6 +76,7 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
             <div className="flex flex-wrap items-end gap-3">
                 <Field label="Service area">
                     <select
+                        aria-label="Service area"
                         className="border rounded-lg px-3 py-2 text-sm bg-background min-w-[160px]"
                         value={serviceAreaId}
                         onChange={(e) => setServiceAreaId(e.target.value)}

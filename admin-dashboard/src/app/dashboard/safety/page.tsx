@@ -274,7 +274,7 @@ export default function SafetyPage() {
                 </div>
                 <Filter className="h-4 w-4 text-muted-foreground ml-1" />
                 <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as SafetyStatus | "all")}>
-                    <SelectTrigger className="h-8 text-xs w-[170px]"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-8 text-xs w-[170px]" aria-label="Filter by status"><SelectValue /></SelectTrigger>
                     <SelectContent>
                         {STATUS_OPTIONS.map((o) => (
                             <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
@@ -282,7 +282,7 @@ export default function SafetyPage() {
                     </SelectContent>
                 </Select>
                 <Select value={severityFilter} onValueChange={(v) => setSeverityFilter(v as SafetySeverity | "all")}>
-                    <SelectTrigger className="h-8 text-xs w-[180px]"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-8 text-xs w-[180px]" aria-label="Filter by severity"><SelectValue /></SelectTrigger>
                     <SelectContent>
                         {SEVERITY_OPTIONS.map((o) => (
                             <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
@@ -290,7 +290,7 @@ export default function SafetyPage() {
                     </SelectContent>
                 </Select>
                 <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as SafetyRole | "all")}>
-                    <SelectTrigger className="h-8 text-xs w-[140px]"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-8 text-xs w-[140px]" aria-label="Filter by role"><SelectValue /></SelectTrigger>
                     <SelectContent>
                         {ROLE_OPTIONS.map((o) => (
                             <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>

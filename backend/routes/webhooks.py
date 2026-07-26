@@ -143,6 +143,16 @@ async def _record_orphan_refund(
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
+    except DuplicateRecordError:
+        # Already recorded by an earlier delivery of this same event (see the
+        # unique index in migration 255). The row we wanted exists — that is
+        # the desired end state, not a failure worth paging on.
+        logger.info(
+            "charge.refunded orphan already recorded for event %s — skipping duplicate",
+            event_id,
+            extra={"domain": "payments", "event_id": event_id},
+        )
+        return
     except Exception:
         logger.error(
             "Failed to persist orphan refund charge=%s pi=%s — refund data may be lost",

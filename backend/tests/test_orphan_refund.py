@@ -89,6 +89,25 @@ class TestRecordOrphanRefund:
                 reason="no_payment_intent",
             )
 
+    async def test_duplicate_event_is_benign(self):
+        """A redelivery that trips the unique index (migration 255) is the
+        desired end state — the row exists — not an error worth paging on."""
+        from backend.db_supabase import DuplicateRecordError
+        from backend.routes.webhooks import _record_orphan_refund
+
+        mock_insert = AsyncMock(side_effect=DuplicateRecordError("duplicate key"))
+        charge = {"id": "ch_dup", "amount_refunded": 900, "currency": "cad"}
+
+        with patch("backend.routes.webhooks.db_supabase.insert_one", mock_insert):
+            await _record_orphan_refund(
+                charge=charge,
+                payment_intent_id="pi_dup",
+                event_id="evt_dup",
+                reason="no_ride_for_pi",
+            )
+
+        mock_insert.assert_awaited_once()
+
     async def test_defaults_for_missing_charge_fields(self):
         from backend.routes.webhooks import _record_orphan_refund
 

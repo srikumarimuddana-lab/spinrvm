@@ -67,6 +67,7 @@ from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
 from .monitoring import router as monitoring_router
 from .promotions import router as promotions_router
+from .rider_import import router as rider_import_router
 from .rides import router as rides_router
 from .safety import router as safety_router
 from .service_areas import router as service_areas_router
@@ -111,6 +112,7 @@ admin_router.include_router(driver_import_router, dependencies=[Depends(require_
 admin_router.include_router(stripe_import_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
+admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])
 admin_router.include_router(support_router, dependencies=[Depends(require_module("support"))])
 # support_tickets sub-router enforces require_module("support_tickets") per-handler

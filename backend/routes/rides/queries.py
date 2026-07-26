@@ -334,6 +334,13 @@ async def get_ride(
             # Driver photo lives on the user row (users.profile_image), shown to
             # riders only once admin-approved.
             _drv_user = await _deps.db_supabase.get_user_by_id(assigned_driver.get("user_id"))
+            # Live driver coordinates are for the in-flight map marker only. On a
+            # terminal ride (completed/cancelled) the driver has moved on to
+            # other trips — leaking their live GPS lets a former rider poll a
+            # completed ride to track the driver indefinitely (stalking vector +
+            # PIPEDA purpose-limitation breach). The driver-side view already
+            # redacts terminal-ride location; this is the rider-side equivalent.
+            _terminal = ride.get("status") in RideStatus.terminal_statuses()
             ride["driver"] = DriverPublicView(
                 id=assigned_driver.get("id", ""),
                 name=assigned_driver.get("name", ""),
@@ -345,8 +352,8 @@ async def get_ride(
                 vehicle_color=assigned_driver.get("vehicle_color"),
                 license_plate=assigned_driver.get("license_plate"),
                 vehicle_year=assigned_driver.get("vehicle_year"),
-                lat=assigned_driver.get("lat"),
-                lng=assigned_driver.get("lng"),
+                lat=None if _terminal else assigned_driver.get("lat"),
+                lng=None if _terminal else assigned_driver.get("lng"),
             ).dict()
 
     # Derive free_cancel_seconds_remaining + cancellation_fee from app_settings (UX-001).

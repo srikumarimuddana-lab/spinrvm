@@ -131,7 +131,7 @@ export default function QuestsPage() {
     setLoading(true);
     try {
       const data = await getQuests();
-      setQuests(data);
+      setQuests(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to fetch quests:", err);
     } finally {
@@ -143,7 +143,7 @@ export default function QuestsPage() {
 
   useEffect(() => {
     getServiceAreas()
-      .then((areas) => setServiceAreas((areas || []).map((a: { id: string; name: string }) => ({ id: a.id, name: a.name }))))
+      .then((areas) => setServiceAreas((Array.isArray(areas) ? areas : []).map((a: { id: string; name: string }) => ({ id: a.id, name: a.name }))))
       .catch((err) => console.error("Failed to fetch service areas:", err));
   }, []);
 

@@ -88,7 +88,7 @@ export default function StaffPage() {
     setLoading(true);
     try {
       const data = await getStaff();
-      setStaff(data);
+      setStaff(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("Failed to load staff:", e);
     }

@@ -323,7 +323,7 @@ def test_update_driver_overwrites_and_audits(test_client, super_admin_override):
     row = store["drivers"][0]
     assert row["stripe_account_id"] == "acct_A1"
     assert row["legacy_import_metadata"]["stripe_migration"]["previous_account_id"] == "acct_OTHER"
-    kyc_sync.assert_called_once_with(["drv-1"], "batch-9")
+    kyc_sync.assert_called_once_with(["drv-1"], "batch-9", expected_account_id="acct_A1")
     audit.assert_awaited_once()
     assert audit.call_args.args[1] == "stripe_account_update"
     details = audit.call_args.args[4]

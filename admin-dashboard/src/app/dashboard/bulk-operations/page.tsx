@@ -225,11 +225,11 @@ function NeedsUpdateSection({
                                 <TableCell className="font-mono text-xs">{it.row_ref}</TableCell>
                                 <TableCell className="text-sm">
                                     <Link
-                                        href={`/dashboard/drivers/${it.driver_id}`}
+                                        href="/dashboard/drivers"
                                         target="_blank"
                                         className="text-primary underline underline-offset-2"
                                     >
-                                        View driver ↗
+                                        Drivers page ↗
                                     </Link>
                                     <div className="font-mono text-[10px] text-muted-foreground">
                                         {it.driver_id}
@@ -390,7 +390,20 @@ export default function BulkOperationsPage() {
                             : "") +
                         (res.warnings?.length ? ` ${res.warnings.length} warning(s).` : ""),
                 );
-                setReport(null);
+                const pendingUpdates = report?.needs_update ?? [];
+                if (pendingUpdates.length > 0) {
+                    setReport({
+                        batch: res.batch ?? report.batch,
+                        kind: report.kind,
+                        can_commit: false,
+                        counts: { rows: 0, to_map: 0, skipped_already_mapped: 0, needs_update: pendingUpdates.length },
+                        warnings: [],
+                        errors: [],
+                        needs_update: pendingUpdates,
+                    });
+                } else {
+                    setReport(null);
+                }
                 setFile(null);
                 if (fileInputRef.current) fileInputRef.current.value = "";
                 if (res.kyc_sync === "started") {

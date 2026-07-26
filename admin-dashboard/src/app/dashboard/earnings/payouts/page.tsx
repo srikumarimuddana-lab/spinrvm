@@ -298,7 +298,7 @@ export default function PayoutsPage() {
                 <div className="space-y-1">
                     <Label className="text-xs">Status</Label>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="w-36">
+                        <SelectTrigger className="w-36" aria-label="Status">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -325,11 +325,11 @@ export default function PayoutsPage() {
                 </div>
                 <div className="space-y-1">
                     <Label className="text-xs">From</Label>
-                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" />
+                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" aria-label="Start date" />
                 </div>
                 <div className="space-y-1">
                     <Label className="text-xs">To</Label>
-                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" />
+                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" aria-label="End date" />
                 </div>
                 {(search || dateFrom || dateTo || statusFilter !== "all") && (
                     <Button

@@ -171,8 +171,9 @@ def test_validate_clean_csv_no_writes(test_client, super_admin_override):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["can_commit"] is True
-    assert body["counts"] == {"rows": 1, "to_map": 1, "skipped_already_mapped": 0}
+    assert body["counts"] == {"rows": 1, "to_map": 1, "skipped_already_mapped": 0, "needs_update": 0}
     assert body["errors"] == []
+    assert body["needs_update"] == []
     assert store["drivers"][0]["stripe_account_id"] is None  # no writes
 
 
@@ -201,6 +202,15 @@ def test_non_super_admin_is_403(test_client):
                 resp = _post(test_client, path, DRIVERS_CSV)
                 assert resp.status_code == 403, resp.text
             resp = test_client.get("/api/admin/stripe/import/status", params={"batch": "b1"})
+            assert resp.status_code == 403, resp.text
+            resp = test_client.post(
+                "/api/admin/stripe/import/update-driver",
+                json={
+                    "driver_id": "drv-1",
+                    "new_stripe_account_id": "acct_A1",
+                    "current_stripe_account_id": "acct_OTHER",
+                },
+            )
             assert resp.status_code == 403, resp.text
     finally:
         app.dependency_overrides.pop(get_admin_user, None)
@@ -268,6 +278,77 @@ def test_row_and_size_caps(test_client, super_admin_override):
         big = b"old_driver_id,stripe_account_id\n" + b"x" * 1_000_001
         resp = _post(test_client, "/api/admin/stripe/import/validate", big)
         assert resp.status_code == 413, resp.text
+
+
+def test_validate_surfaces_needs_update_non_blocking(test_client, super_admin_override):
+    """A driver already carrying a DIFFERENT account is reported under
+    needs_update and does NOT block the batch (can_commit stays True)."""
+    driver = _driver_row()
+    driver["stripe_account_id"] = "acct_OTHER"
+    store = {"drivers": [driver], "users": []}
+    ps = _patches(store)
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6]:
+        resp = _post(test_client, "/api/admin/stripe/import/validate", DRIVERS_CSV)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["can_commit"] is True
+    assert body["errors"] == []
+    assert body["counts"]["needs_update"] == 1
+    item = body["needs_update"][0]
+    assert item["driver_id"] == "drv-1"
+    assert item["current_stripe_account_id"] == "acct_OTHER"
+    assert item["new_stripe_account_id"] == "acct_A1"
+    assert store["drivers"][0]["stripe_account_id"] == "acct_OTHER"  # no writes
+
+
+def test_update_driver_overwrites_and_audits(test_client, super_admin_override):
+    driver = _driver_row()
+    driver["stripe_account_id"] = "acct_OTHER"
+    store = {"drivers": [driver], "users": []}
+    kyc_sync = AsyncMock(return_value={"ok": 1, "failed": 0, "failed_driver_ids": []})
+    ps = _patches(store, kyc_sync=kyc_sync)
+    with ps[0], ps[1], ps[2] as audit, ps[3], ps[4], ps[5], ps[6]:
+        resp = test_client.post(
+            "/api/admin/stripe/import/update-driver",
+            json={
+                "driver_id": "drv-1",
+                "new_stripe_account_id": "acct_A1",
+                "current_stripe_account_id": "acct_OTHER",
+                "batch": "batch-9",
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True and body["status"] == "updated"
+    row = store["drivers"][0]
+    assert row["stripe_account_id"] == "acct_A1"
+    assert row["legacy_import_metadata"]["stripe_migration"]["previous_account_id"] == "acct_OTHER"
+    kyc_sync.assert_called_once_with(["drv-1"], "batch-9", expected_account_id="acct_A1")
+    audit.assert_awaited_once()
+    assert audit.call_args.args[1] == "stripe_account_update"
+    details = audit.call_args.args[4]
+    assert details["new_account_id"] == "acct_A1"
+    assert details["previous_account_id"] == "acct_OTHER"
+
+
+def test_update_driver_stale_current_is_409(test_client, super_admin_override):
+    driver = _driver_row()
+    driver["stripe_account_id"] = "acct_CURRENT"
+    store = {"drivers": [driver], "users": []}
+    ps = _patches(store)
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6]:
+        resp = test_client.post(
+            "/api/admin/stripe/import/update-driver",
+            json={
+                "driver_id": "drv-1",
+                "new_stripe_account_id": "acct_A1",
+                "current_stripe_account_id": "acct_STALE",
+            },
+        )
+    assert resp.status_code == 409, resp.text
+    # detail is a human string (not a dict) so the generic client can show it.
+    assert "changed" in resp.json()["detail"].lower()
+    assert store["drivers"][0]["stripe_account_id"] == "acct_CURRENT"  # untouched
 
 
 def test_status_aggregates_batch(test_client, super_admin_override):

@@ -111,6 +111,11 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       message,
       conversation_id: conversationId,
       stream: true,
+      // UI features this build can render. "map_pin" = the chat's Drop-a-pin
+      // card; the backend's request_map_pin tool only emits its action for
+      // clients that declare it, so older installs are never promised a
+      // button their build cannot draw.
+      capabilities: ['map_pin'],
       ...(audience ? { audience } : {}),
       ...(location ? { location } : {}),
     }),

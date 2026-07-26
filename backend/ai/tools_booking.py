@@ -393,7 +393,13 @@ async def find_place(
         return {"error": lookup["error"]}
     candidates = lookup.get("candidates") or []
     if not candidates:
-        return {"candidates": [], "note": "No matching place found — ask the rider to rephrase or pick on the map."}
+        return {
+            "candidates": [],
+            "note": (
+                "No matching place found — ask the rider to rephrase, or call "
+                "request_map_pin so they get a button to drop a pin on the map."
+            ),
+        }
     if len(candidates) > 1:
         result = {
             "candidates": candidates,
@@ -430,11 +436,62 @@ async def find_place(
             f"Warning: Google could not pin that exact street address "
             f"(match quality {best.get('match_quality')}) — the coordinate is an approximate "
             "point nearby, not the building. Do NOT quote on it. Ask the rider to confirm the "
-            "address (check the house number) or to drop a pin on the map."
+            "address (check the house number), or call request_map_pin with this candidate's "
+            "coordinates so they can drop a pin at the exact spot — the chat has no map "
+            "until you do."
         )
         result["note"] = f"{result['note']} {imprecise}" if result.get("note") else imprecise
         result["imprecise_address"] = True
     return result
+
+
+async def request_map_pin(
+    user: Dict[str, Any],
+    location_role: str,
+    approx_lat: Optional[float] = None,
+    approx_lng: Optional[float] = None,
+    label: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Show the rider a 'Drop a pin' button in the chat.
+
+    The chat surface has no map of its own — telling the rider to "drop a pin
+    on the map" without this action is a dead-end instruction (incident: the
+    imprecise-address refusal kept asking for a pin the UI had no way to
+    provide). The button opens the app's pick-on-map screen centred on the
+    approximate point; the confirmed pin comes back as the rider's next
+    message carrying exact [lat,lng] coordinates.
+
+    Capability-gated: the backend deploys ahead of mobile builds, and an app
+    installed before the card shipped renders nothing for this action — the
+    assistant would promise a button that isn't there. Clients that can draw
+    the card declare "map_pin" in the chat request's capabilities.
+    """
+    if "map_pin" not in (user.get("_client_capabilities") or ()):
+        return {
+            "shown": False,
+            "note": (
+                "This rider's app version cannot show the in-chat map button — do NOT "
+                "tell them to drop a pin or mention a map. Ask them to correct the "
+                "address in text (exact house number and postal code), or suggest "
+                "booking this trip from the app's main booking screen, which has a "
+                "map picker."
+            ),
+        }
+    action: Dict[str, Any] = {"type": "open_map_picker", "location_role": location_role}
+    if label:
+        action["label"] = label[:120]
+    if approx_lat is not None and approx_lng is not None:
+        action["approx_lat"] = approx_lat
+        action["approx_lng"] = approx_lng
+    return {
+        "shown": True,
+        "note": (
+            "A 'Drop a pin' button is now visible in the chat. Tell the rider to tap it and "
+            "place the pin at the exact spot. Their next message will carry the pin's exact "
+            "[lat,lng] coordinates — use them verbatim, never re-geocode them."
+        ),
+        "_client_action": action,
+    }
 
 
 def _ride_portion(estimate: Dict[str, Any]) -> Decimal:
@@ -558,9 +615,9 @@ def _address_mismatch_refusal(
             f"coordinates resolved {round(distance_km, 1)} km apart — one of them is almost "
             "certainly wrong, so this fare would be for a trip the rider never asked for. "
             "Do NOT quote it. Tell the rider what you resolved, ask them to confirm the exact "
-            "house numbers, and re-resolve with find_place or ask them to drop a pin. Only "
-            "call this tool again with confirm_same_location=true if they insist the distance "
-            "is genuinely correct."
+            "house numbers, and re-resolve with find_place — or call request_map_pin so they "
+            "can drop a pin at the exact spot. Only call this tool again with "
+            "confirm_same_location=true if they insist the distance is genuinely correct."
         ),
     }
 
@@ -985,6 +1042,52 @@ register(
             "required": ["query"],
         },
         handler=find_place,
+        mcp_exposed=False,
+    )
+)
+
+register(
+    ToolSpec(
+        name="request_map_pin",
+        description=(
+            "Call this whenever you need the rider to mark an exact spot on a map: an "
+            "address that only resolved approximately (imprecise_address), an "
+            "address_mismatch refusal, or a place search with no match. It shows a "
+            "'Drop a pin' button in the chat — the ONLY way the rider can reach a map "
+            "from here, so never tell them to drop a pin without calling this. Pass the "
+            "best approximate coordinates you have so the map opens near the right area, "
+            "and the address they typed as the label. Their next message returns the "
+            "pin's exact coordinates."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "location_role": {
+                    "type": "string",
+                    "enum": ["pickup", "dropoff"],
+                    "description": "Which trip endpoint the pin will set.",
+                },
+                "approx_lat": {
+                    "type": "number",
+                    "minimum": -90,
+                    "maximum": 90,
+                    "description": "Approximate latitude to centre the map on (e.g. the imprecise geocode).",
+                },
+                "approx_lng": {
+                    "type": "number",
+                    "minimum": -180,
+                    "maximum": 180,
+                    "description": "Approximate longitude to centre the map on.",
+                },
+                "label": {
+                    "type": "string",
+                    "maxLength": 120,
+                    "description": "What the rider is pinning, e.g. the address as they typed it.",
+                },
+            },
+            "required": ["location_role"],
+        },
+        handler=request_map_pin,
         mcp_exposed=False,
     )
 )

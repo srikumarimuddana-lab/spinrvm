@@ -146,6 +146,106 @@ describe('sendMessage', () => {
     expect(cards[0].action).toEqual(suggestions);
   });
 
+  it('renders the open_map_picker action as a map_picker card bubble', async () => {
+    // The "Drop a pin" bridge: without this card the assistant's "drop a pin
+    // on the map" instruction is a dead end — the chat has no map (incident:
+    // imprecise-address refusals kept asking for a pin the UI couldn't give).
+    const picker = {
+      type: 'open_map_picker' as const,
+      location_role: 'dropoff' as const,
+      approx_lat: 50.4079,
+      approx_lng: -104.6501,
+      label: '2965 Gordon Rd, Regina',
+    };
+    scriptStream([
+      { event: 'action', data: picker },
+      { event: 'token', data: { text: 'Tap the button below to drop a pin.' } },
+    ]);
+    await useAiChatStore.getState().sendMessage('quote it');
+    const cards = useAiChatStore.getState().messages.filter((m) => m.kind === 'map_picker');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].action).toEqual(picker);
+  });
+
+  it('submitMapPin sends the pin as a bracketed-coordinate user message', async () => {
+    scriptStream([{ event: 'token', data: { text: 'Got it — quoting now.' } }]);
+    await useAiChatStore.getState().submitMapPin('dropoff', {
+      lat: 50.40792,
+      lng: -104.65013,
+      address: '2965 Gordon Rd, Regina',
+    });
+    const sent = mockStream.mock.calls[0][0].message;
+    // Bracketed [lat,lng] is the format prompt rule 6b passes through
+    // verbatim and the PII scrubber exempts — both sides depend on it.
+    expect(sent).toContain('dropoff');
+    expect(sent).toContain('2965 Gordon Rd, Regina');
+    expect(sent).toContain('[50.40792,-104.65013]');
+  });
+
+  it('queues a pin confirmed mid-stream and flushes it when the turn ends', async () => {
+    // The map card is tappable the moment its action frame arrives — often
+    // while the model is still streaming its follow-up text. sendMessage
+    // refuses concurrent sends, so an immediate submit must queue, not drop.
+    let releaseStream!: () => void;
+    mockStream.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({ event: 'token', data: { text: 'Tap the button below…' } });
+      await new Promise<void>((resolve) => {
+        releaseStream = resolve;
+      });
+    });
+    mockStream.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({ event: 'token', data: { text: 'Quoting your pin now.' } });
+    });
+
+    const firstTurn = useAiChatStore.getState().sendMessage('quote 2965 Gordon Rd');
+    await Promise.resolve();
+    expect(useAiChatStore.getState().isStreaming).toBe(true);
+
+    await useAiChatStore.getState().submitMapPin('dropoff', { lat: 50.40792, lng: -104.65013 });
+    // Not sent yet — queued, not silently dropped.
+    expect(mockStream).toHaveBeenCalledTimes(1);
+    expect(useAiChatStore.getState().pendingMapPin).not.toBeNull();
+
+    releaseStream();
+    await firstTurn;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockStream).toHaveBeenCalledTimes(2);
+    expect(mockStream.mock.calls[1][0].message).toContain('[50.40792,-104.65013]');
+    expect(useAiChatStore.getState().pendingMapPin).toBeNull();
+  });
+
+  it('startNewConversation discards a queued pin instead of flushing it', async () => {
+    let releaseStream!: () => void;
+    mockStream.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({ event: 'token', data: { text: 'streaming…' } });
+      await new Promise<void>((resolve) => {
+        releaseStream = resolve;
+      });
+    });
+    const firstTurn = useAiChatStore.getState().sendMessage('quote it');
+    await Promise.resolve();
+    await useAiChatStore.getState().submitMapPin('pickup', { lat: 50.1, lng: -104.2 });
+
+    await useAiChatStore.getState().startNewConversation();
+    releaseStream();
+    await firstTurn;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The pin answered a request from the abandoned conversation.
+    expect(useAiChatStore.getState().pendingMapPin).toBeNull();
+    expect(mockStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('submitMapPin without an address sends coordinates alone', async () => {
+    scriptStream([{ event: 'token', data: { text: 'ok' } }]);
+    await useAiChatStore.getState().submitMapPin('pickup', { lat: 50.1, lng: -104.2, address: null });
+    const sent = mockStream.mock.calls[0][0].message;
+    expect(sent).toContain('[50.10000,-104.20000]');
+    expect(sent).not.toContain('undefined');
+    expect(sent).not.toContain('null');
+  });
+
   it('maps stream errors to friendly text and never leaves an empty bubble', async () => {
     scriptStream([], 'daily_cap');
     await useAiChatStore.getState().sendMessage('hello');

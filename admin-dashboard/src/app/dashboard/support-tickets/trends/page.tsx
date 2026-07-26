@@ -32,8 +32,8 @@ import { ArrowLeft, BarChart3, Info } from "lucide-react";
 
 const COLORS = ["#3b82f6", "#f59e0b", "#ef4444", "#10b981", "#8b5cf6", "#64748b"];
 
-function toSeries(rec: Record<string, number>) {
-    return Object.entries(rec).map(([name, value]) => ({ name, value }));
+function toSeries(rec: Record<string, number> | null | undefined) {
+    return Object.entries(rec ?? {}).map(([name, value]) => ({ name, value }));
 }
 
 function fmtHours(h: number | null): string {
@@ -133,11 +133,11 @@ export default function TrendsPage() {
 
                     {/* Level stats for the selected window / assignee */}
                     <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-                        <StatCard label="Opened" value={String(data.stats.opened)} />
-                        <StatCard label="Closed" value={String(data.stats.closed)} />
-                        <StatCard label="Still open" value={String(data.stats.open_now)} accent />
-                        <StatCard label="Avg resolution" value={fmtHours(data.stats.avg_resolution_hours)} />
-                        <StatCard label="Median resolution" value={fmtHours(data.stats.median_resolution_hours)} />
+                        <StatCard label="Opened" value={String(data.stats?.opened ?? 0)} />
+                        <StatCard label="Closed" value={String(data.stats?.closed ?? 0)} />
+                        <StatCard label="Still open" value={String(data.stats?.open_now ?? 0)} accent />
+                        <StatCard label="Avg resolution" value={fmtHours(data.stats?.avg_resolution_hours ?? null)} />
+                        <StatCard label="Median resolution" value={fmtHours(data.stats?.median_resolution_hours ?? null)} />
                     </div>
 
                     <Card>
@@ -211,10 +211,10 @@ export default function TrendsPage() {
                     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                         <HBarCard title="By category" rec={data.by_category} color="#8b5cf6" />
                         <ContactsCard contacts={data.top_contacts} />
-                        {Object.keys(data.by_tag).length > 0 && (
+                        {Object.keys(data.by_tag ?? {}).length > 0 && (
                             <HBarCard title="By tag" rec={data.by_tag} color="#ec4899" />
                         )}
-                        {Object.keys(data.by_classification).length > 0 && (
+                        {Object.keys(data.by_classification ?? {}).length > 0 && (
                             <HBarCard title="By classification" rec={data.by_classification} color="#0ea5e9" />
                         )}
                     </div>
@@ -225,8 +225,8 @@ export default function TrendsPage() {
 }
 
 /** Horizontal bar chart for a {label: count} map (good for long category/tag names). */
-function HBarCard({ title, rec, color }: { title: string; rec: Record<string, number>; color: string }) {
-    const data = Object.entries(rec)
+function HBarCard({ title, rec, color }: { title: string; rec: Record<string, number> | null | undefined; color: string }) {
+    const data = Object.entries(rec ?? {})
         .map(([name, value]) => ({ name, value }))
         .sort((a, b) => b.value - a.value)
         .slice(0, 10);
@@ -252,16 +252,17 @@ function HBarCard({ title, rec, color }: { title: string; rec: Record<string, nu
     );
 }
 
-function ContactsCard({ contacts }: { contacts: Array<{ name: string; count: number }> }) {
+function ContactsCard({ contacts }: { contacts: Array<{ name: string; count: number }> | null | undefined }) {
+    const rows = contacts ?? [];
     return (
         <Card>
             <CardHeader><CardTitle className="text-base">Top requesters</CardTitle></CardHeader>
             <CardContent>
-                {contacts.length === 0 ? (
+                {rows.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No data.</p>
                 ) : (
-                    <ResponsiveContainer width="100%" height={Math.max(160, contacts.length * 32)}>
-                        <BarChart data={contacts} layout="vertical" margin={{ left: 20, right: 16 }}>
+                    <ResponsiveContainer width="100%" height={Math.max(160, rows.length * 32)}>
+                        <BarChart data={rows} layout="vertical" margin={{ left: 20, right: 16 }}>
                             <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                             <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
                             <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10 }} />

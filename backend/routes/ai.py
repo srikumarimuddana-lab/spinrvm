@@ -73,6 +73,11 @@ class AiChatRequest(BaseModel):
     # from the rider app's main-screen assistant. "rider" is open to every
     # account (anyone can ride); "driver" is gated on the user row.
     audience: Optional[str] = Field(None, pattern="^(rider|driver)$")
+    # UI features this client build can render (e.g. "map_pin" → the chat's
+    # Drop-a-pin card). Tools that emit client actions check these so an
+    # older installed app is never told a button is visible that its build
+    # cannot draw. Absent list = no optional capabilities (old clients).
+    capabilities: Optional[list[str]] = Field(None, max_length=20)
 
 
 def _audience_for(user: dict) -> str:
@@ -134,6 +139,7 @@ async def ai_chat(
         user_message=body.message,
         audience=_resolve_audience(body.audience, current_user),
         client_location=body.location.model_dump() if body.location else None,
+        client_capabilities=[c[:32] for c in (body.capabilities or [])],
     )
 
     if body.stream:

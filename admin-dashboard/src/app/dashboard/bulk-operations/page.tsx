@@ -26,16 +26,19 @@ import {
     RefreshCw,
     CreditCard,
     Users,
+    ArrowRight,
 } from "lucide-react";
 import {
     adminValidateStripeImport,
     adminCommitStripeImport,
     adminStripeImportStatus,
+    adminUpdateDriverStripeAccount,
     adminValidateRiderImport,
     adminCommitRiderImport,
     type StripeImportKind,
     type StripeImportReport,
     type StripeImportReportItem,
+    type StripeImportNeedsUpdateItem,
     type StripeImportStatus,
     type RiderImportReport,
     type RiderImportReportItem,
@@ -66,6 +69,17 @@ import {
     TableRow,
     TableCell,
 } from "@/components/ui/table";
+import {
+    AlertDialog,
+    AlertDialogTrigger,
+    AlertDialogContent,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogCancel,
+    AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { exportToCsv } from "@/lib/export-csv";
 
@@ -133,6 +147,153 @@ function IssueTable({ items }: { items: StripeImportReportItem[] }) {
                     ))}
                 </TableBody>
             </Table>
+        </div>
+    );
+}
+
+/**
+ * Drivers who already carry a DIFFERENT Stripe account than the CSV. The bulk
+ * commit skips them (it only fills NULL accounts); each is resolved here one at
+ * a time. Updating OVERWRITES the payout destination, so every row goes through
+ * a confirm dialog. The name lives on the linked driver page — the import report
+ * itself is deliberately PII-free (no names), so we key on the operator's CSV
+ * row_ref + driver_id and link out.
+ */
+function NeedsUpdateSection({
+    items,
+    batch,
+}: {
+    items: StripeImportNeedsUpdateItem[];
+    batch: string;
+}) {
+    const { toast } = useToast();
+    const [done, setDone] = useState<Record<string, true>>({});
+    const [busy, setBusy] = useState<string | null>(null);
+
+    const runUpdate = async (it: StripeImportNeedsUpdateItem) => {
+        setBusy(it.driver_id);
+        try {
+            const res = await adminUpdateDriverStripeAccount({
+                driver_id: it.driver_id,
+                new_stripe_account_id: it.new_stripe_account_id,
+                current_stripe_account_id: it.current_stripe_account_id,
+                batch,
+            });
+            setDone((d) => ({ ...d, [it.driver_id]: true }));
+            const note = res.warnings?.length
+                ? ` Note: ${res.warnings.map((w) => w.message).join("; ")}`
+                : "";
+            toast({
+                title: "Payout account updated",
+                description: `Driver now paid to ${it.new_stripe_account_id}.${note}`,
+            });
+        } catch (e: unknown) {
+            toast({
+                variant: "destructive",
+                title: "Update failed",
+                description:
+                    e instanceof Error ? e.message : "Could not update this driver's Stripe account.",
+            });
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    return (
+        <div className="space-y-2">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-sky-600">
+                <RefreshCw className="h-4 w-4" /> Already mapped — review to update ({items.length})
+            </h3>
+            <p className="text-xs text-muted-foreground">
+                These drivers already have a Stripe account, so the commit above skips them. Updating
+                one <strong>redirects that driver&apos;s payouts</strong> to the new account — only do it
+                when you mean to. The new account is re-validated against Stripe and the change is logged.
+            </p>
+            <div className="overflow-x-auto rounded-md border">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead className="w-32">CSV row</TableHead>
+                            <TableHead>Driver</TableHead>
+                            <TableHead>Current → New account</TableHead>
+                            <TableHead className="w-28 text-right">Action</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {items.map((it) => (
+                            <TableRow key={it.driver_id}>
+                                <TableCell className="font-mono text-xs">{it.row_ref}</TableCell>
+                                <TableCell className="text-sm">
+                                    <Link
+                                        href="/dashboard/drivers"
+                                        target="_blank"
+                                        className="text-primary underline underline-offset-2"
+                                    >
+                                        Drivers page ↗
+                                    </Link>
+                                    <div className="font-mono text-[10px] text-muted-foreground">
+                                        {it.driver_id}
+                                    </div>
+                                </TableCell>
+                                <TableCell className="font-mono text-xs">
+                                    <span className="inline-flex items-center gap-1">
+                                        <span className="text-muted-foreground">
+                                            {it.current_stripe_account_id}
+                                        </span>
+                                        <ArrowRight className="h-3 w-3" />
+                                        <span className="font-semibold">{it.new_stripe_account_id}</span>
+                                    </span>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                    {done[it.driver_id] ? (
+                                        <span className="inline-flex items-center gap-1 text-xs font-medium text-green-600">
+                                            <CheckCircle2 className="h-4 w-4" /> Updated
+                                        </span>
+                                    ) : (
+                                        <AlertDialog>
+                                            <AlertDialogTrigger asChild>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    disabled={busy === it.driver_id}
+                                                >
+                                                    {busy === it.driver_id && (
+                                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                                    )}
+                                                    Update
+                                                </Button>
+                                            </AlertDialogTrigger>
+                                            <AlertDialogContent>
+                                                <AlertDialogHeader>
+                                                    <AlertDialogTitle>
+                                                        Redirect this driver&apos;s payouts?
+                                                    </AlertDialogTitle>
+                                                    <AlertDialogDescription>
+                                                        This changes where driver {it.driver_id} (CSV row{" "}
+                                                        {it.row_ref}) is paid. The new account is
+                                                        re-validated against Stripe before the switch, and
+                                                        the change is logged.
+                                                    </AlertDialogDescription>
+                                                </AlertDialogHeader>
+                                                <div className="rounded-md border bg-muted/40 p-3 font-mono text-xs">
+                                                    {it.current_stripe_account_id} →{" "}
+                                                    {it.new_stripe_account_id}
+                                                </div>
+                                                <AlertDialogFooter>
+                                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                                    <AlertDialogAction onClick={() => runUpdate(it)}>
+                                                        Update payout account
+                                                    </AlertDialogAction>
+                                                </AlertDialogFooter>
+                                            </AlertDialogContent>
+                                        </AlertDialog>
+                                    )}
+                                </TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </div>
         </div>
     );
 }
@@ -229,7 +390,20 @@ export default function BulkOperationsPage() {
                             : "") +
                         (res.warnings?.length ? ` ${res.warnings.length} warning(s).` : ""),
                 );
-                setReport(null);
+                const pendingUpdates = report?.needs_update ?? [];
+                if (pendingUpdates.length > 0) {
+                    setReport({
+                        batch: res.batch ?? report.batch,
+                        kind: report.kind,
+                        can_commit: false,
+                        counts: { rows: 0, to_map: 0, skipped_already_mapped: 0, needs_update: pendingUpdates.length },
+                        warnings: [],
+                        errors: [],
+                        needs_update: pendingUpdates,
+                    });
+                } else {
+                    setReport(null);
+                }
                 setFile(null);
                 if (fileInputRef.current) fileInputRef.current.value = "";
                 if (res.kyc_sync === "started") {
@@ -243,9 +417,15 @@ export default function BulkOperationsPage() {
                     batch: res.batch,
                     kind: res.kind,
                     can_commit: false,
-                    counts: res.counts ?? { rows: 0, to_map: 0, skipped_already_mapped: 0 },
+                    counts: res.counts ?? {
+                        rows: 0,
+                        to_map: 0,
+                        skipped_already_mapped: 0,
+                        needs_update: 0,
+                    },
                     warnings: res.warnings ?? [],
                     errors: res.errors ?? [],
+                    needs_update: res.needs_update ?? [],
                 });
                 toast({
                     title: "Commit refused",
@@ -392,13 +572,14 @@ export default function BulkOperationsPage() {
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-5">
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
                             <Stat label="Rows" value={counts?.rows ?? 0} />
                             <Stat label="To map" value={counts?.to_map ?? 0} />
                             <Stat
                                 label="Skipped (already mapped)"
                                 value={counts?.skipped_already_mapped ?? 0}
                             />
+                            <Stat label="Needs update" value={counts?.needs_update ?? 0} />
                             <Stat label="Warnings" value={report.warnings.length} tone="warn" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />
                         </div>
@@ -431,6 +612,10 @@ export default function BulkOperationsPage() {
                                 </h3>
                                 <IssueTable items={report.warnings} />
                             </div>
+                        )}
+
+                        {report.kind === "drivers" && report.needs_update?.length > 0 && (
+                            <NeedsUpdateSection items={report.needs_update} batch={report.batch} />
                         )}
 
                         <div className="flex items-center gap-3 pt-2">

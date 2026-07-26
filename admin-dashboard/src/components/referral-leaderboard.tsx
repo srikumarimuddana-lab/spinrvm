@@ -42,8 +42,8 @@ export default function ReferralLeaderboard({ limit = 20, source = "driver" }: {
         <div className="space-y-5">
             {/* Fleet summary */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <SummaryCard icon={Gift} label="Total Referrals" value={data.fleet_total_referrals.toLocaleString()} accent="text-violet-600 dark:text-violet-400" />
-                <SummaryCard icon={Users} label="Active Referrers" value={data.fleet_total_referrers.toLocaleString()} accent="text-sky-600 dark:text-sky-400" />
+                <SummaryCard icon={Gift} label="Total Referrals" value={(data.fleet_total_referrals ?? 0).toLocaleString()} accent="text-violet-600 dark:text-violet-400" />
+                <SummaryCard icon={Users} label="Active Referrers" value={(data.fleet_total_referrers ?? 0).toLocaleString()} accent="text-sky-600 dark:text-sky-400" />
                 <SummaryCard
                     icon={Award}
                     label="Reward Terms"

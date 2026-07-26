@@ -60,7 +60,7 @@ export default function KybQueuePage() {
                 status: "pending_verification",
                 limit: 100,
             });
-            setRows(data);
+            setRows(Array.isArray(data) ? data : []);
             setError(null);
         } catch (e: any) {
             setError(e?.message ?? "Failed to load KYB queue");

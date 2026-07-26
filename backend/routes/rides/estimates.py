@@ -26,6 +26,7 @@ from ._deps import (  # noqa: F401
     multi_leg_distance,
 )
 from ._shared import (  # noqa: F401
+    DIRECTIONS_TIMEOUT_S,
     _d,
     _f,
     _fetch_directions_route,
@@ -36,12 +37,23 @@ from ._shared import (  # noqa: F401
     select_fare_distance,
 )
 
-# Bounded wait (s) for the Directions road route before the fare loop. The
-# fetch is kicked off right after the geofence gates and overlaps the driver +
-# fee work, so by this point it is usually already done — this cap only bites
-# on a cold/slow Directions call, trading a little estimate latency for a
-# correct road-distance price. Haversine mode skips the wait entirely.
-_PRICING_ROUTE_WAIT_S = 1.5
+# Wait (s) for the Directions road route before the fare loop. The fetch is
+# kicked off right after the geofence gates and overlaps the driver + fee
+# work, so by this point it is usually already done. INVARIANT: this must
+# cover the Directions HTTP timeout — the billed distance basis has to be a
+# function of whether Directions succeeded, never of scheduler timing. When
+# it sat below the HTTP timeout (1.5 s vs 3.0 s), the same trip priced twice
+# could bill haversine once and the road route the second time (incident:
+# 12.12 km → 16.46 km, $30.92 → $39.44 between quote and confirm card).
+#
+# Derived, never hardcoded: the invariant is wait > timeout, so the ONLY way
+# to buy latency back is to lower DIRECTIONS_TIMEOUT_S — which is why that
+# constant now sits at 1.5 s, keeping this bound at 2.0 s instead of the 3.5 s
+# a 3.0 s timeout implied. CLAUDE.md pins fare estimate P95 at 300 ms, so the
+# worst case here is a real trade and belongs on the low side of it.
+# Haversine mode skips the wait entirely; the fare_distance_basis app
+# setting remains the kill switch if Directions latency ever hurts.
+_PRICING_ROUTE_WAIT_S = DIRECTIONS_TIMEOUT_S + 0.5
 
 # km buckets for the shadow-rollout delta histogram (road vs haversine).
 _FARE_DELTA_KM_BUCKETS = (0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0)

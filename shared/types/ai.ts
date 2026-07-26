@@ -32,6 +32,14 @@ export interface BookingProposal {
   promo_code?: string;
   scheduled_time?: string;
   payment_method?: 'card' | 'wallet';
+  /** The rider explicitly confirmed a trip whose pickup and dropoff are the
+   * same place (assistant's same-location guardrail). Lets the card bypass
+   * the client-side proximity guard for this one confirmed booking. */
+  same_location_confirmed?: boolean;
+  /** Total from the quote the rider accepted — display-only reference the
+   * card compares its fresh estimate against to show a "price updated"
+   * notice. Never what gets charged. */
+  quoted_total?: string;
 }
 
 export interface LocationSuggestionCandidate {
@@ -82,9 +90,15 @@ export type AiAction =
       currency?: string;
       /** Resolved trip endpoints — included so a tapped option can send a
        * self-contained booking message (conversation history keeps only
-       * message text, never tool results). */
+       * message text, never tool results). Coordinates are the exact
+       * (post-reconcile) points the quote was priced on; the tap sends them
+       * back verbatim so the model never re-geocodes a priced trip. */
       pickup_address?: string;
       dropoff_address?: string;
+      pickup_lat?: number;
+      pickup_lng?: number;
+      dropoff_lat?: number;
+      dropoff_lng?: number;
       recommended_vehicle_type_id?: string | null;
       quotes: FareQuoteOption[];
     }

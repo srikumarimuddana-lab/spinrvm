@@ -412,7 +412,9 @@ async def settle_corporate(
         master_debit = total - allowance_debit
 
     corp_policy = await db_supabase.get_corporate_policy(company_id) or {}
-    flag_violation = master_debit > 0 and corp_policy.get("allowed_payment_source") == "allowance_only"
+    # flag_violation is computed AFTER the allowance debit resolves — the cap
+    # fallback below can flip master_debit from 0 to the full fare, which is
+    # itself an allowance_only policy breach that must be flagged.
 
     allowance_applied = False
     if allowance_debit > 0 and allowance.get("id") and corp_wallet.get("id"):
@@ -420,15 +422,42 @@ async def settle_corporate(
         # apply_rollback, whose master delta is POSITIVE — so every
         # allowance-covered corporate ride CREDITED the company's master wallet
         # instead of charging it (migration 248).
-        await corporate_allowance_service.apply_ride_debit(
-            wallet_id=corp_wallet["id"],
-            allowance_id=allowance["id"],
-            member_id=membership["id"],
-            amount=_f(allowance_debit),
-            actor_user_id=membership.get("user_id") or ride.get("rider_id"),
-            notes=f"ride:{ride_id}:allowance",
-        )
-        allowance_applied = True
+        try:
+            await corporate_allowance_service.apply_ride_debit(
+                wallet_id=corp_wallet["id"],
+                allowance_id=allowance["id"],
+                member_id=membership["id"],
+                amount=_f(allowance_debit),
+                actor_user_id=membership.get("user_id") or ride.get("rider_id"),
+                notes=f"ride:{ride_id}:allowance",
+            )
+            allowance_applied = True
+        except Exception as _cap_err:
+            # The RPC enforces the per-member ceiling under its row lock
+            # (migration 258). Our allowance_debit was computed from a
+            # non-locking read, so a concurrent settle for the same member can
+            # push `used` past `amount` between our read and the lock. When that
+            # happens the RPC raises allowance_cap_exceeded — the allowance is
+            # genuinely full, so route the whole fare to the company master
+            # wallet (the existing fallback) instead of over-spending the cap.
+            _detail = ""
+            _details_attr = getattr(_cap_err, "details", None)
+            if isinstance(_details_attr, dict):
+                _detail = str(_details_attr.get("original") or "")
+            if "allowance_cap_exceeded" in f"{_cap_err} {_detail}":
+                logger.warning(
+                    "corporate allowance cap hit under contention for member %s ride %s — "
+                    "routing fare to master wallet",
+                    membership["id"],
+                    ride_id,
+                )
+                master_debit = total
+                allowance_debit = _round(Decimal("0"))
+            else:
+                raise
+
+    # Final master_debit is known now (the cap fallback may have raised it).
+    flag_violation = master_debit > 0 and corp_policy.get("allowed_payment_source") == "allowance_only"
 
     if master_debit > 0 and corp_wallet.get("id"):
         try:

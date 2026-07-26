@@ -169,7 +169,7 @@ export default function AuditLogsPage() {
                     />
                 </div>
                 <Select value={actionFilter} onValueChange={setActionFilter}>
-                    <SelectTrigger className="w-44">
+                    <SelectTrigger className="w-44" aria-label="Filter by action">
                         <SelectValue placeholder="Filter by action" />
                     </SelectTrigger>
                     <SelectContent>
@@ -182,7 +182,7 @@ export default function AuditLogsPage() {
                     </SelectContent>
                 </Select>
                 <Select value={entityFilter} onValueChange={setEntityFilter}>
-                    <SelectTrigger className="w-44">
+                    <SelectTrigger className="w-44" aria-label="Filter by entity">
                         <SelectValue placeholder="Filter by entity" />
                     </SelectTrigger>
                     <SelectContent>

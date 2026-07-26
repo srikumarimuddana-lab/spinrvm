@@ -185,7 +185,7 @@ export default function FaqsPage() {
                     />
                 </div>
                 <Select value={audienceFilter} onValueChange={setAudienceFilter}>
-                    <SelectTrigger className="w-36">
+                    <SelectTrigger className="w-36" aria-label="Audience">
                         <SelectValue placeholder="Audience" />
                     </SelectTrigger>
                     <SelectContent>

@@ -122,6 +122,7 @@ export default function RideList({
                         <div className="flex items-center gap-1.5">
                             <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
                             <select value={areaFilter} onChange={e => onAreaChange(e.target.value)}
+                                aria-label="Filter by service area"
                                 className="text-xs font-medium border rounded-lg px-2.5 py-1.5 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 transition">
                                 <option value="all">All Areas</option>
                                 {areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -163,9 +164,11 @@ export default function RideList({
                     <div className="flex items-center gap-1.5 shrink-0">
                         <CalendarRange className="h-3.5 w-3.5 text-muted-foreground" />
                         <input type="date" value={dateFrom} onChange={e => onDateFromChange(e.target.value)}
+                            aria-label="Start date"
                             className="text-xs border rounded-lg px-2 py-1.5 bg-background w-[120px]" />
                         <span className="text-xs text-muted-foreground">to</span>
                         <input type="date" value={dateTo} onChange={e => onDateToChange(e.target.value)}
+                            aria-label="End date"
                             className="text-xs border rounded-lg px-2 py-1.5 bg-background w-[120px]" />
                         {(dateFrom || dateTo) && (
                             <button onClick={() => { onDateFromChange(""); onDateToChange(""); }}
@@ -374,6 +377,7 @@ export default function RideList({
                     <select
                         value={pageSize}
                         onChange={e => onPageSizeChange(Number(e.target.value))}
+                        aria-label="Rows per page"
                         className="text-xs font-semibold border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 transition"
                     >
                         {pageSizes.map(s => (

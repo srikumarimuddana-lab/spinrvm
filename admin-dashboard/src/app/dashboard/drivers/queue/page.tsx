@@ -109,7 +109,7 @@ export default function ApprovalQueuePage() {
     }, [moduleAllowed, load]);
 
     useEffect(() => {
-        getServiceAreas().then((rows) => setServiceAreas(rows || [])).catch(() => {});
+        getServiceAreas().then((rows) => setServiceAreas(Array.isArray(rows) ? rows : [])).catch(() => {});
     }, []);
 
     const handlePhotoReview = async (driverId: string, action: "approve" | "reject") => {

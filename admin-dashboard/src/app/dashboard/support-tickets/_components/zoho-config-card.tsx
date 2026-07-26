@@ -142,7 +142,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                         <p className="font-medium">Enable integration</p>
                         <p className="text-sm text-muted-foreground">Turn the Help Desk on for staff.</p>
                     </div>
-                    <Switch checked={enabled} onCheckedChange={setEnabled} />
+                    <Switch checked={enabled} onCheckedChange={setEnabled} aria-label="Enable integration" />
                 </div>
 
                 <div className="flex items-center justify-between rounded-lg border p-3">
@@ -152,14 +152,14 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                             When off, tickets sync only when you press “Sync now”. Leave off to avoid frequent background pulls.
                         </p>
                     </div>
-                    <Switch checked={autoSync} onCheckedChange={setAutoSync} disabled={!enabled} />
+                    <Switch checked={autoSync} onCheckedChange={setAutoSync} disabled={!enabled} aria-label="Auto-sync from Zoho" />
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-1">
-                        <Label>Data center</Label>
+                        <Label htmlFor="zoho-data-center">Data center</Label>
                         <Select value={dataCenter} onValueChange={setDataCenter}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectTrigger id="zoho-data-center" aria-label="Data center"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 {DATA_CENTERS.map((d) => (
                                     <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>
@@ -168,16 +168,17 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                         </Select>
                     </div>
                     <div className="space-y-1">
-                        <Label>Org ID</Label>
-                        <Input value={orgId} onChange={(e) => setOrgId(e.target.value)} placeholder="e.g. 700123456" />
+                        <Label htmlFor="zoho-org-id">Org ID</Label>
+                        <Input id="zoho-org-id" value={orgId} onChange={(e) => setOrgId(e.target.value)} placeholder="e.g. 700123456" />
                     </div>
                     <div className="space-y-1">
-                        <Label>Default Department ID (optional)</Label>
-                        <Input value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} />
+                        <Label htmlFor="zoho-department-id">Default Department ID (optional)</Label>
+                        <Input id="zoho-department-id" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} />
                     </div>
                     <div className="space-y-1">
-                        <Label>Reply-from email</Label>
+                        <Label htmlFor="zoho-from-email">Reply-from email</Label>
                         <Input
+                            id="zoho-from-email"
                             type="email"
                             value={fromEmail}
                             onChange={(e) => setFromEmail(e.target.value)}
@@ -191,16 +192,16 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-1">
-                        <Label>Client ID {status?.has_client_id && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
-                        <Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder={status?.has_client_id ? "•••••• (unchanged)" : ""} />
+                        <Label htmlFor="zoho-client-id">Client ID {status?.has_client_id && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
+                        <Input id="zoho-client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder={status?.has_client_id ? "•••••• (unchanged)" : ""} />
                     </div>
                     <div className="space-y-1">
-                        <Label>Client Secret {status?.has_client_secret && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
-                        <Input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={status?.has_client_secret ? "•••••• (unchanged)" : ""} />
+                        <Label htmlFor="zoho-client-secret">Client Secret {status?.has_client_secret && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
+                        <Input id="zoho-client-secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={status?.has_client_secret ? "•••••• (unchanged)" : ""} />
                     </div>
                     <div className="space-y-1 sm:col-span-2">
-                        <Label>Refresh Token {status?.has_refresh_token && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
-                        <Input type="password" value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder={status?.has_refresh_token ? "•••••• (unchanged)" : ""} />
+                        <Label htmlFor="zoho-refresh-token">Refresh Token {status?.has_refresh_token && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
+                        <Input id="zoho-refresh-token" type="password" value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder={status?.has_refresh_token ? "•••••• (unchanged)" : ""} />
                         <p className="text-xs text-muted-foreground">
                             Generate a self-client refresh token in the Zoho API console with the
                             <code className="mx-1">Desk.tickets.ALL</code>,

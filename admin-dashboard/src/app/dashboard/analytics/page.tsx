@@ -108,7 +108,7 @@ export default function AnalyticsPage() {
         </div>
         <div className="flex gap-2 items-center">
           <Select value={dateRange} onValueChange={setDateRange}>
-            <SelectTrigger className="w-32">
+            <SelectTrigger className="w-32" aria-label="Date range">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

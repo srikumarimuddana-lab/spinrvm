@@ -97,7 +97,7 @@ export function MonitoringToolbar({
                     onFilterChange({ serviceAreaId: v === "all" ? null : v })
                 }
             >
-                <SelectTrigger className="h-8 w-36 text-xs">
+                <SelectTrigger className="h-8 w-36 text-xs" aria-label="Filter by service area">
                     <SelectValue placeholder="All Areas" />
                 </SelectTrigger>
                 <SelectContent>
@@ -120,7 +120,7 @@ export function MonitoringToolbar({
                 // selecting "All" here is a no-op since there are none.
                 disabled={!!filters.serviceAreaId && vehicleTypes.length === 0}
             >
-                <SelectTrigger className="h-8 w-36 text-xs">
+                <SelectTrigger className="h-8 w-36 text-xs" aria-label="Filter by vehicle type">
                     <SelectValue
                         placeholder={
                             filters.serviceAreaId && vehicleTypes.length === 0

@@ -208,7 +208,7 @@ function CeoMetricsHeader({
                     <div className="flex items-center gap-1.5">
                         <Filter className="h-3.5 w-3.5 text-muted-foreground" />
                         <Select value={serviceAreaId} onValueChange={onServiceAreaChange}>
-                            <SelectTrigger className="h-8 text-xs w-[180px]">
+                            <SelectTrigger className="h-8 text-xs w-[180px]" aria-label="All service areas">
                                 <SelectValue placeholder="All service areas" />
                             </SelectTrigger>
                             <SelectContent>
@@ -454,7 +454,7 @@ function PayoutsCeoHeader({
                     <div className="flex items-center gap-1.5">
                         <Filter className="h-3.5 w-3.5 text-muted-foreground" />
                         <Select value={serviceAreaId} onValueChange={onServiceAreaChange}>
-                            <SelectTrigger className="h-8 text-xs w-[180px]">
+                            <SelectTrigger className="h-8 text-xs w-[180px]" aria-label="All service areas">
                                 <SelectValue placeholder="All service areas" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1096,9 +1096,9 @@ function RideEarningsTab() {
         <div className="space-y-6">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
-                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 text-xs" />
+                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 text-xs" aria-label="Start date" />
                     <span className="text-muted-foreground text-sm">to</span>
-                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 text-xs" />
+                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 text-xs" aria-label="End date" />
                     {drillDownActive && (
                         <button
                             type="button"
@@ -1347,9 +1347,9 @@ function SpinrPassRevenueTab() {
                 <div className="flex-1" />
 
                 {/* Date + Export */}
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 text-xs" />
+                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 text-xs" aria-label="Start date" />
                 <span className="text-muted-foreground text-sm">to</span>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 text-xs" />
+                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 text-xs" aria-label="End date" />
                 <Button variant="outline" size="sm" onClick={() => exportToCsv("spinr-pass-transactions", transactions, [
                     { key: "driver_name", label: "Driver" }, { key: "plan_name", label: "Plan" },
                     { key: "price", label: "Amount" }, { key: "status", label: "Status" },

@@ -118,7 +118,7 @@ export default function DriverOffersPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Select value={areaId} onValueChange={setAreaId}>
-            <SelectTrigger className="w-44">
+            <SelectTrigger className="w-44" aria-label="Filter by service area">
               <span className="flex items-center gap-1.5 truncate"><MapPin className="h-3.5 w-3.5 shrink-0" /><SelectValue /></span>
             </SelectTrigger>
             <SelectContent>
@@ -129,7 +129,7 @@ export default function DriverOffersPage() {
             </SelectContent>
           </Select>
           <Select value={dateRange} onValueChange={setDateRange}>
-            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-32" aria-label="Filter by date range"><SelectValue /></SelectTrigger>
             <SelectContent>
               {DATE_RANGES.map((r) => (
                 <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>

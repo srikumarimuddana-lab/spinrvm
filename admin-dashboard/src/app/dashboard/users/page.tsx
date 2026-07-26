@@ -259,7 +259,7 @@ export default function UsersPage() {
                     </p>
                 </div>
                 <div className="flex gap-2">
-                    <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading}>
+                    <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading} aria-label="Refresh">
                         <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => {

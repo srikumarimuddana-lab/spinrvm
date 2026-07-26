@@ -204,7 +204,7 @@ export default function TicketListPage() {
                     <Button onClick={() => setCreateOpen(true)}>
                         <Plus className="mr-2 h-4 w-4" /> New ticket
                     </Button>
-                    <Button variant="outline" size="icon" onClick={load} disabled={loading}>
+                    <Button variant="outline" size="icon" onClick={load} disabled={loading} aria-label="Refresh">
                         <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                     </Button>
                 </div>
@@ -239,7 +239,7 @@ export default function TicketListPage() {
                             <div className="space-y-1">
                                 <Label>Department</Label>
                                 <Select value={form.department || undefined} onValueChange={(v) => setF("department", v)}>
-                                    <SelectTrigger><SelectValue placeholder={departments.length ? "Select" : "No departments"} /></SelectTrigger>
+                                    <SelectTrigger aria-label={departments.length ? "Select" : "No departments"}><SelectValue placeholder={departments.length ? "Select" : "No departments"} /></SelectTrigger>
                                     <SelectContent>
                                         {departments.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
                                     </SelectContent>
@@ -248,7 +248,7 @@ export default function TicketListPage() {
                             <div className="space-y-1">
                                 <Label>Priority</Label>
                                 <Select value={form.priority} onValueChange={(v) => setF("priority", v)}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectTrigger aria-label="Priority"><SelectValue /></SelectTrigger>
                                     <SelectContent>{PRIORITIES.filter((p) => p !== "All").map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
                                 </Select>
                             </div>
@@ -266,19 +266,19 @@ export default function TicketListPage() {
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-2">
                 <Select value={status} onValueChange={reset(setStatus)}>
-                    <SelectTrigger className="w-32"><SelectValue placeholder="Status" /></SelectTrigger>
+                    <SelectTrigger className="w-32" aria-label="Status"><SelectValue placeholder="Status" /></SelectTrigger>
                     <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{s === "All" ? "All status" : s}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={priority} onValueChange={reset(setPriority)}>
-                    <SelectTrigger className="w-32"><SelectValue placeholder="Priority" /></SelectTrigger>
+                    <SelectTrigger className="w-32" aria-label="Priority"><SelectValue placeholder="Priority" /></SelectTrigger>
                     <SelectContent>{PRIORITIES.map((p) => <SelectItem key={p} value={p}>{p === "All" ? "All priority" : p}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={channel} onValueChange={reset(setChannel)}>
-                    <SelectTrigger className="w-32"><SelectValue placeholder="Channel" /></SelectTrigger>
+                    <SelectTrigger className="w-32" aria-label="Channel"><SelectValue placeholder="Channel" /></SelectTrigger>
                     <SelectContent>{CHANNELS.map((c) => <SelectItem key={c} value={c}>{c === "All" ? "All channels" : c}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={assignee} onValueChange={reset(setAssignee)}>
-                    <SelectTrigger className="w-44"><SelectValue placeholder="Assignee" /></SelectTrigger>
+                    <SelectTrigger className="w-44" aria-label="Assignee"><SelectValue placeholder="Assignee" /></SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">All assignees</SelectItem>
                         {agents.map((a) => (
@@ -309,9 +309,9 @@ export default function TicketListPage() {
                 </div>
                 <div className="flex items-center gap-1 text-sm text-muted-foreground">
                     <span>Created</span>
-                    <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-40" />
+                    <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-40" aria-label="Start date" />
                     <span>→</span>
-                    <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-40" />
+                    <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-40" aria-label="End date" />
                     {(fromDate || toDate) && (
                         <Button variant="ghost" size="sm" onClick={() => { setFromDate(""); setToDate(""); }}>Clear</Button>
                     )}
@@ -375,7 +375,7 @@ export default function TicketListPage() {
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <span>Rows per page</span>
                     <Select value={String(pageSize)} onValueChange={(v) => { setPage(0); setPageSize(Number(v)); }}>
-                        <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-20" aria-label="Rows per page"><SelectValue /></SelectTrigger>
                         <SelectContent>{PAGE_SIZES.map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}</SelectContent>
                     </Select>
                     {refine && <span>· {shown.length} of {tickets.length} shown</span>}

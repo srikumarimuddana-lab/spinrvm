@@ -244,9 +244,16 @@ async def metrics(request: _Request) -> _MetricsResponse:
         if not hmac.compare_digest(presented, _token):
             raise HTTPException(status_code=401, detail="Unauthorized")
     elif settings.ENV.lower() == "production":
-        _logging.getLogger("spinr.metrics").warning(
-            "/metrics is exposed without authentication in production — set METRICS_AUTH_TOKEN to restrict it."
+        # FAIL CLOSED: an unset token in production must NOT serve error rates,
+        # traffic volume, and Redis internals to the public internet. Refuse the
+        # scrape (503) instead of warning-and-serving — the operator sets
+        # METRICS_AUTH_TOKEN to enable it. Non-production is unauthenticated by
+        # design for local Prometheus.
+        _logging.getLogger("spinr.metrics").error(
+            "/metrics requested in production without METRICS_AUTH_TOKEN set — refusing. "
+            "Set METRICS_AUTH_TOKEN to enable scraping."
         )
+        raise HTTPException(status_code=503, detail="Metrics endpoint not configured")
 
     from utils.metrics import render_prometheus, set_gauge
     from utils.redis_client import get_redis_stats

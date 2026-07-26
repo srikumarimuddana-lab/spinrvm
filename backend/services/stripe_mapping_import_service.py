@@ -26,6 +26,7 @@ number) — never phones, emails, or names — per the PIPEDA rules in CLAUDE.md
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections import Counter
@@ -378,3 +379,155 @@ def _build_local_rider_plan(rows: list[dict[str, str]], plan: StripeMappingPlan)
         )
 
     plan.user_updates = _drop_duplicate_targets(plan, plan.user_updates, "user_id")
+
+
+# ------------------------------------------------------ live Stripe phase
+
+
+def _livemode_warning(obj: dict[str, Any], stripe_secret: str) -> tuple[str, str] | None:
+    live_key = stripe_secret.startswith("sk_live_")
+    if bool(obj.get("livemode")) != live_key:
+        return ("livemode", "object livemode does not match the configured key mode")
+    return None
+
+
+def _account_findings(account: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Pure checks over a retrieved Connect account → (errors, warnings).
+
+    Incomplete onboarding is a WARNING, not an error: preserving a
+    half-onboarded account is exactly the point — the driver finishes the
+    remaining requirements via the existing in-app AccountLink flow instead
+    of starting over.
+    """
+    errors: list[tuple[str, str]] = []
+    warnings: list[tuple[str, str]] = []
+
+    country = account.get("country")
+    if country != "CA":
+        errors.append(("country", f"account country is {country}, expected CA"))
+
+    transfers = (account.get("capabilities") or {}).get("transfers")
+    if transfers is None:
+        errors.append(("capability_transfers", "transfers capability was never requested on this account"))
+    elif transfers != "active":
+        warnings.append(("capability_transfers", f"transfers capability is {transfers}; driver must finish onboarding"))
+
+    disabled = (account.get("requirements") or {}).get("disabled_reason") or ""
+    if disabled.startswith("rejected") or disabled == "platform_paused":
+        errors.append(("account_rejected", f"account is disabled ({disabled})"))
+
+    if not account.get("details_submitted") or not account.get("payouts_enabled"):
+        warnings.append(
+            (
+                "onboarding_incomplete",
+                "details_submitted/payouts_enabled not yet true; driver finishes via in-app Stripe onboarding",
+            )
+        )
+    if account.get("type") != "express":
+        warnings.append(("account_type", f"account type is {account.get('type')}, not express"))
+    if account.get("business_type") != "individual":
+        warnings.append(("business_type", f"business_type is {account.get('business_type')}, not individual"))
+
+    due = list((account.get("requirements") or {}).get("currently_due") or [])
+    if due:
+        # Requirement keys are Stripe field names (e.g. external_account), not PII.
+        warnings.append(("requirements_due", "outstanding requirements: " + ", ".join(sorted(due)[:8])))
+    return errors, warnings
+
+
+def _customer_findings(
+    customer: dict[str, Any], expected_user_id: str | None
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Pure checks over a retrieved Customer → (errors, warnings)."""
+    errors: list[tuple[str, str]] = []
+    warnings: list[tuple[str, str]] = []
+    if customer.get("deleted"):
+        errors.append(("customer_deleted", "customer is deleted in Stripe"))
+    meta_uid = (customer.get("metadata") or {}).get("user_id")
+    if meta_uid and expected_user_id and str(meta_uid) != str(expected_user_id):
+        warnings.append(("metadata_user_mismatch", "Stripe customer metadata.user_id differs from the matched user"))
+    return errors, warnings
+
+
+async def _retrieve_stripe(
+    retrieve: Any, obj_id: str, stripe_secret: str
+) -> tuple[dict[str, Any] | None, tuple[str, str] | None]:
+    """Retrieve one Stripe object off the event loop → (payload, error).
+
+    Accessibility failures are the Scenario A/B litmus test: an ID from a
+    different Stripe platform account errors here on every row. Transient
+    Stripe errors block commit too (re-run validate) — never a silent pass.
+    """
+    import stripe
+
+    try:
+        obj = await asyncio.to_thread(retrieve, obj_id, api_key=stripe_secret)
+    except (stripe.error.InvalidRequestError, stripe.error.PermissionError, stripe.error.AuthenticationError) as e:
+        logger.error("[STRIPE-MAP] %s not accessible: %s", obj_id, e)
+        return None, ("not_accessible", f"{obj_id} does not exist on this platform or is not accessible")
+    except stripe.error.StripeError:
+        logger.error("[STRIPE-MAP] transient Stripe error retrieving %s", obj_id, exc_info=True)
+        return None, ("stripe_transient", "Stripe error while validating this row; re-run validate")
+    try:
+        return obj.to_dict_recursive(), None  # type: ignore[attr-defined]
+    except AttributeError:
+        return dict(obj), None
+
+
+async def build_plan(
+    kind: str,
+    rows: list[dict[str, str]],
+    stripe_secret: str,
+    batch: str,
+    *,
+    concurrency: int = MAX_STRIPE_CONCURRENCY,
+) -> StripeMappingPlan:
+    """Full plan: local matching/guards, then live Stripe validation.
+
+    Never writes. Candidates that fail live validation are dropped from the
+    update lists and recorded as errors, so ``commit_plan`` can trust that
+    every remaining update points at a real, usable Stripe object.
+    """
+    plan = await asyncio.to_thread(_build_local_plan, kind, rows, batch)
+    updates = plan.driver_updates if kind == KIND_DRIVERS else plan.user_updates
+    if not updates:
+        return plan
+    if not stripe_secret:
+        plan.errors.append(
+            StripeMappingErrorItem("*", "stripe_not_configured", "stripe_secret_key is not set in app settings")
+        )
+        updates.clear()
+        return plan
+
+    import stripe
+
+    retrieve = stripe.Account.retrieve if kind == KIND_DRIVERS else stripe.Customer.retrieve
+    sem = asyncio.Semaphore(concurrency)
+
+    async def check(upd: dict[str, Any]) -> dict[str, Any] | None:
+        obj_id = upd.get("stripe_account_id") or upd["stripe_customer_id"]
+        async with sem:
+            payload, err = await _retrieve_stripe(retrieve, obj_id, stripe_secret)
+        if err:
+            plan.errors.append(StripeMappingErrorItem(upd["row_ref"], err[0], err[1]))
+            return None
+        if kind == KIND_DRIVERS:
+            errs, warns = _account_findings(payload)
+        else:
+            errs, warns = _customer_findings(payload, upd.get("user_id"))
+        livemode = _livemode_warning(payload, stripe_secret)
+        if livemode:
+            warns = [*warns, livemode]
+        for f, m in warns:
+            plan.warnings.append(StripeMappingErrorItem(upd["row_ref"], f, m))
+        for f, m in errs:
+            plan.errors.append(StripeMappingErrorItem(upd["row_ref"], f, m))
+        return None if errs else upd
+
+    results = await asyncio.gather(*(check(u) for u in updates))
+    kept = [u for u in results if u]
+    if kind == KIND_DRIVERS:
+        plan.driver_updates = kept
+    else:
+        plan.user_updates = kept
+    return plan

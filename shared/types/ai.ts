@@ -102,7 +102,21 @@ export type AiAction =
       recommended_vehicle_type_id?: string | null;
       quotes: FareQuoteOption[];
     }
-  | { type: 'open_support'; category: string; link: string; message?: string };
+  | { type: 'open_support'; category: string; link: string; message?: string }
+  | {
+      /** "Drop a pin" bridge: the chat has no map of its own, so when the
+       * assistant needs an exact spot (imprecise geocode, address mismatch,
+       * no match) this action renders a button that opens the pick-on-map
+       * screen. The confirmed pin returns as the rider's next message
+       * carrying exact [lat,lng] coordinates. */
+      type: 'open_map_picker';
+      location_role: 'pickup' | 'dropoff';
+      /** Approximate point to centre the map on (e.g. the imprecise geocode). */
+      approx_lat?: number;
+      approx_lng?: number;
+      /** What the rider is pinning, e.g. the address as they typed it. */
+      label?: string;
+    };
 
 export type AiSseEvent =
   | { event: 'meta'; data: { conversation_id: string; user_message_id: string } }
@@ -124,7 +138,14 @@ export type AiSseEvent =
 export interface AiChatMessage {
   id: string;
   role: 'user' | 'assistant';
-  kind: 'text' | 'booking_proposal' | 'location_suggestions' | 'fare_quote' | 'support_action' | 'ride_status';
+  kind:
+    | 'text'
+    | 'booking_proposal'
+    | 'location_suggestions'
+    | 'fare_quote'
+    | 'support_action'
+    | 'ride_status'
+    | 'map_picker';
   content: string;
   action?: AiAction;
   createdAt: number;

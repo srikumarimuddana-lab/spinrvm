@@ -34,6 +34,7 @@ const TOOL_STATUS: Record<string, string> = {
   find_place: 'Finding that place…',
   get_rider_location: 'Finding your location…',
   get_fare_quote: 'Getting exact prices…',
+  request_map_pin: 'Setting up the map…',
   propose_ride_booking: 'Preparing your booking…',
   escalate_to_support: 'Preparing a support handoff…',
 };
@@ -101,6 +102,14 @@ interface AiChatState {
   loadConfig: () => Promise<void>;
   loadHistory: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
+  /** Return leg of the "Drop a pin" card: sends the confirmed map pin back
+   * into the chat as a user message carrying exact [lat,lng] coordinates
+   * (the bracketed format the model is instructed to pass through verbatim,
+   * and the PII scrubber is taught to leave intact). */
+  submitMapPin: (
+    role: 'pickup' | 'dropoff',
+    pin: { lat: number; lng: number; address?: string | null },
+  ) => Promise<void>;
   stopStreaming: () => void;
   startNewConversation: () => Promise<void>;
 }
@@ -202,20 +211,19 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
           break;
         case 'action': {
           const action = event.data as AiAction;
+          const kindByAction: Partial<Record<AiAction['type'], AiChatMessage['kind']>> = {
+            booking_proposal: 'booking_proposal',
+            location_suggestions: 'location_suggestions',
+            fare_quote: 'fare_quote',
+            open_map_picker: 'map_picker',
+          };
           set((state) => ({
             messages: [
               ...state.messages,
               {
                 id: newId(),
                 role: 'assistant',
-                kind:
-                  action.type === 'booking_proposal'
-                    ? 'booking_proposal'
-                    : action.type === 'location_suggestions'
-                      ? 'location_suggestions'
-                      : action.type === 'fare_quote'
-                        ? 'fare_quote'
-                        : 'support_action',
+                kind: kindByAction[action.type] ?? 'support_action',
                 content: '',
                 action,
                 createdAt: Date.now(),
@@ -259,6 +267,13 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
         messages: state.messages.filter((m) => !(m.id === assistantId && m.kind === 'text' && !m.content)),
       }));
     }
+  },
+
+  submitMapPin: async (role, pin) => {
+    const place = pin.address ? `${pin.address} ` : '';
+    await get().sendMessage(
+      `I dropped a pin on the map for my ${role}: ${place}[${pin.lat.toFixed(5)},${pin.lng.toFixed(5)}]. Use these exact coordinates.`,
+    );
   },
 
   stopStreaming: () => {

@@ -146,6 +146,51 @@ describe('sendMessage', () => {
     expect(cards[0].action).toEqual(suggestions);
   });
 
+  it('renders the open_map_picker action as a map_picker card bubble', async () => {
+    // The "Drop a pin" bridge: without this card the assistant's "drop a pin
+    // on the map" instruction is a dead end — the chat has no map (incident:
+    // imprecise-address refusals kept asking for a pin the UI couldn't give).
+    const picker = {
+      type: 'open_map_picker' as const,
+      location_role: 'dropoff' as const,
+      approx_lat: 50.4079,
+      approx_lng: -104.6501,
+      label: '2965 Gordon Rd, Regina',
+    };
+    scriptStream([
+      { event: 'action', data: picker },
+      { event: 'token', data: { text: 'Tap the button below to drop a pin.' } },
+    ]);
+    await useAiChatStore.getState().sendMessage('quote it');
+    const cards = useAiChatStore.getState().messages.filter((m) => m.kind === 'map_picker');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].action).toEqual(picker);
+  });
+
+  it('submitMapPin sends the pin as a bracketed-coordinate user message', async () => {
+    scriptStream([{ event: 'token', data: { text: 'Got it — quoting now.' } }]);
+    await useAiChatStore.getState().submitMapPin('dropoff', {
+      lat: 50.40792,
+      lng: -104.65013,
+      address: '2965 Gordon Rd, Regina',
+    });
+    const sent = mockStream.mock.calls[0][0].message;
+    // Bracketed [lat,lng] is the format prompt rule 6b passes through
+    // verbatim and the PII scrubber exempts — both sides depend on it.
+    expect(sent).toContain('dropoff');
+    expect(sent).toContain('2965 Gordon Rd, Regina');
+    expect(sent).toContain('[50.40792,-104.65013]');
+  });
+
+  it('submitMapPin without an address sends coordinates alone', async () => {
+    scriptStream([{ event: 'token', data: { text: 'ok' } }]);
+    await useAiChatStore.getState().submitMapPin('pickup', { lat: 50.1, lng: -104.2, address: null });
+    const sent = mockStream.mock.calls[0][0].message;
+    expect(sent).toContain('[50.10000,-104.20000]');
+    expect(sent).not.toContain('undefined');
+    expect(sent).not.toContain('null');
+  });
+
   it('maps stream errors to friendly text and never leaves an empty bubble', async () => {
     scriptStream([], 'daily_cap');
     await useAiChatStore.getState().sendMessage('hello');

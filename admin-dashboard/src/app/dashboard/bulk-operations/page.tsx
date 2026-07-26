@@ -25,15 +25,21 @@ import {
     ShieldAlert,
     RefreshCw,
     CreditCard,
+    Users,
 } from "lucide-react";
 import {
     adminValidateStripeImport,
     adminCommitStripeImport,
     adminStripeImportStatus,
+    adminValidateRiderImport,
+    adminCommitRiderImport,
     type StripeImportKind,
     type StripeImportReport,
     type StripeImportReportItem,
     type StripeImportStatus,
+    type RiderImportReport,
+    type RiderImportReportItem,
+    type RiderImportDuplicate,
 } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
@@ -484,7 +490,331 @@ export default function BulkOperationsPage() {
                     </CardContent>
                 </Card>
             )}
+
+            {/* ── Rider Bulk Import ──────────────────── */}
+            <RiderImportSection />
         </div>
+    );
+}
+
+/* ── Rider Bulk Import Section ─────────────────────── */
+
+const RIDER_CSV_HEADER = ["customer_id", "email", "gender", "phone", "ratings", "temp_email", "timeZone"];
+const RIDER_CSV_SAMPLE = ["cus_AbC123dEf", "rider@example.com", "female", "+13065551234", "4.5", "", "America/Regina"];
+
+function downloadRiderTemplate() {
+    const csv = `${RIDER_CSV_HEADER.join(",")}\n${RIDER_CSV_SAMPLE.join(",")}\n`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "spinr-rider-import-template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+function RiderIssueTable({ items }: { items: RiderImportReportItem[] }) {
+    return (
+        <div className="overflow-x-auto rounded-md border">
+            <Table>
+                <TableHeader>
+                    <TableRow>
+                        <TableHead className="w-20">Row</TableHead>
+                        <TableHead className="w-40">Field</TableHead>
+                        <TableHead>Message</TableHead>
+                    </TableRow>
+                </TableHeader>
+                <TableBody>
+                    {items.map((it, i) => (
+                        <TableRow key={`${it.row_num}-${it.field}-${i}`}>
+                            <TableCell className="font-mono text-xs">{it.row_num}</TableCell>
+                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
+                            <TableCell className="text-sm">{it.message}</TableCell>
+                        </TableRow>
+                    ))}
+                </TableBody>
+            </Table>
+        </div>
+    );
+}
+
+function DuplicateTable({ items }: { items: RiderImportDuplicate[] }) {
+    return (
+        <div className="overflow-x-auto rounded-md border">
+            <Table>
+                <TableHeader>
+                    <TableRow>
+                        <TableHead className="w-20">Row</TableHead>
+                        <TableHead className="w-40">Phone</TableHead>
+                        <TableHead className="w-32">Match type</TableHead>
+                        <TableHead>User ID</TableHead>
+                    </TableRow>
+                </TableHeader>
+                <TableBody>
+                    {items.map((it, i) => (
+                        <TableRow key={`${it.row}-${i}`}>
+                            <TableCell className="font-mono text-xs">{it.row}</TableCell>
+                            <TableCell className="font-mono text-xs">{it.phone}</TableCell>
+                            <TableCell>
+                                <span
+                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                                        it.match_type === "driver"
+                                            ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
+                                            : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                    }`}
+                                >
+                                    {it.match_type === "driver" ? "Driver" : "Existing rider"}
+                                </span>
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">{it.existing_user_id}</TableCell>
+                        </TableRow>
+                    ))}
+                </TableBody>
+            </Table>
+        </div>
+    );
+}
+
+function RiderImportSection() {
+    const { toast } = useToast();
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const [file, setFile] = useState<File | null>(null);
+    const [batch, setBatch] = useState("");
+    const [report, setReport] = useState<RiderImportReport | null>(null);
+    const [validating, setValidating] = useState(false);
+    const [committing, setCommitting] = useState(false);
+    const [committedSummary, setCommittedSummary] = useState<string | null>(null);
+
+    const resetReport = () => {
+        setReport(null);
+        setCommittedSummary(null);
+    };
+
+    const handleValidate = async () => {
+        if (!file) return;
+        setValidating(true);
+        setCommittedSummary(null);
+        try {
+            const rep = await adminValidateRiderImport(file, batch || undefined);
+            setReport(rep);
+        } catch (e) {
+            toast({
+                title: "Validation failed",
+                description: e instanceof Error ? e.message : "Could not validate the CSV",
+                variant: "destructive",
+            });
+        } finally {
+            setValidating(false);
+        }
+    };
+
+    const handleCommit = async () => {
+        if (!file || !report?.can_commit) return;
+        setCommitting(true);
+        try {
+            const res = await adminCommitRiderImport(file, report.batch);
+            if (res.committed) {
+                const created = res.created_users ?? 0;
+                const updated = res.updated_users ?? 0;
+                setCommittedSummary(
+                    `Created ${created} rider(s), updated ${updated} existing user(s).` +
+                        (res.duplicates?.length
+                            ? ` ${res.duplicates.length} duplicate(s) detected (${res.duplicates.filter((d) => d.match_type === "driver").length} are drivers).`
+                            : ""),
+                );
+                setReport(null);
+                setFile(null);
+                if (fileInputRef.current) fileInputRef.current.value = "";
+                toast({ title: "Rider import committed", description: `${created + updated} record(s) processed.` });
+            } else {
+                setReport({
+                    batch: res.batch,
+                    can_commit: false,
+                    counts: res.counts ?? { rows: 0, to_create: 0, to_update: 0, duplicates: 0, duplicate_drivers: 0 },
+                    duplicates: res.duplicates ?? [],
+                    warnings: res.warnings ?? [],
+                    errors: res.errors ?? [],
+                });
+                toast({
+                    title: "Commit refused",
+                    description: "The CSV has validation errors. Fix them and try again.",
+                    variant: "destructive",
+                });
+            }
+        } catch (e) {
+            toast({
+                title: "Commit failed",
+                description: e instanceof Error ? e.message : "Could not commit the import",
+                variant: "destructive",
+            });
+        } finally {
+            setCommitting(false);
+        }
+    };
+
+    const counts = report?.counts;
+
+    return (
+        <>
+            <div className="flex items-center gap-2 pt-6 text-sm font-medium text-muted-foreground">
+                <Users className="h-4 w-4" />
+                Bulk Rider Import — create rider accounts from a CSV with phone-number duplicate
+                detection against existing users and drivers
+            </div>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>1. Prepare your rider CSV</CardTitle>
+                    <CardDescription>
+                        Columns: customer_id (Stripe cus_…), email, gender, phone (required), ratings,
+                        temp_email, timeZone. You may also include name / first_name / last_name. Max
+                        500 rows per file.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <Button variant="outline" onClick={downloadRiderTemplate}>
+                        <FileDown className="mr-2 h-4 w-4" />
+                        Download CSV template
+                    </Button>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>2. Upload &amp; validate</CardTitle>
+                    <CardDescription>
+                        Validation is a dry run — phones are checked against existing users and drivers,
+                        nothing is written until you commit.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-1">
+                            <label htmlFor="rider-csv" className="text-sm font-medium">
+                                Rider CSV
+                            </label>
+                            <Input
+                                id="rider-csv"
+                                ref={fileInputRef}
+                                type="file"
+                                accept=".csv,text/csv"
+                                onChange={(e) => {
+                                    setFile(e.target.files?.[0] ?? null);
+                                    resetReport();
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label htmlFor="rider-batch" className="text-sm font-medium">
+                                Batch name (optional)
+                            </label>
+                            <Input
+                                id="rider-batch"
+                                placeholder="e.g. riders-batch-1"
+                                value={batch}
+                                onChange={(e) => {
+                                    setBatch(e.target.value);
+                                    resetReport();
+                                }}
+                            />
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <Button onClick={handleValidate} disabled={!file || validating || committing}>
+                            {validating ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <Upload className="mr-2 h-4 w-4" />
+                            )}
+                            Validate
+                        </Button>
+                        {file && <span className="text-sm text-muted-foreground">{file.name}</span>}
+                    </div>
+                </CardContent>
+            </Card>
+
+            {committedSummary && (
+                <Card className="border-emerald-300 dark:border-emerald-800">
+                    <CardContent className="flex items-center gap-3 py-4">
+                        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                        <span className="text-sm">{committedSummary}</span>
+                    </CardContent>
+                </Card>
+            )}
+
+            {report && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>3. Review &amp; commit</CardTitle>
+                        <CardDescription>
+                            {report.can_commit
+                                ? "No errors — you can commit this import. Duplicates will be updated, new riders will be created."
+                                : "Fix the errors below, re-export your CSV, and validate again."}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-5">
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                            <Stat label="Rows" value={counts?.rows ?? 0} />
+                            <Stat label="New riders" value={counts?.to_create ?? 0} />
+                            <Stat label="To update" value={counts?.to_update ?? 0} />
+                            <Stat label="Duplicate (driver)" value={counts?.duplicate_drivers ?? 0} tone="warn" />
+                            <Stat label="Errors" value={report.errors.length} tone="error" />
+                        </div>
+
+                        {report.duplicates.length > 0 && (
+                            <div className="space-y-2">
+                                <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-600">
+                                    <Info className="h-4 w-4" /> Phone duplicates ({report.duplicates.length})
+                                </h3>
+                                <p className="text-xs text-muted-foreground">
+                                    These phone numbers already exist in the system. Riders will have their
+                                    Stripe customer ID and missing fields updated. Drivers are flagged — they
+                                    already have accounts.
+                                </p>
+                                <DuplicateTable items={report.duplicates} />
+                            </div>
+                        )}
+
+                        {report.errors.length > 0 && (
+                            <div className="space-y-2">
+                                <h3 className="flex items-center gap-2 text-sm font-semibold text-red-600">
+                                    <AlertTriangle className="h-4 w-4" /> Errors ({report.errors.length})
+                                </h3>
+                                <RiderIssueTable items={report.errors} />
+                            </div>
+                        )}
+
+                        {report.warnings.length > 0 && (
+                            <div className="space-y-2">
+                                <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-600">
+                                    <Info className="h-4 w-4" /> Warnings ({report.warnings.length})
+                                </h3>
+                                <RiderIssueTable items={report.warnings} />
+                            </div>
+                        )}
+
+                        <div className="flex items-center gap-3 pt-2">
+                            <Button onClick={handleCommit} disabled={!report.can_commit || committing}>
+                                {committing ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                                )}
+                                Commit rider import
+                            </Button>
+                            {!report.can_commit && (
+                                <span className="text-sm text-muted-foreground">
+                                    Resolve all errors to enable commit.
+                                </span>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+        </>
     );
 }
 

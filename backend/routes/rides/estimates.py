@@ -192,9 +192,8 @@ async def compute_ride_estimates(
         )
     else:
         logger.info(
-            "[estimate] no service area matched pickup (%.5f, %.5f) — area fees will be empty",
-            body.pickup_lat,
-            body.pickup_lng,
+            "[estimate] no service area matched pickup %s — area fees will be empty",
+            _deps.geohash(body.pickup_lat, body.pickup_lng),
         )
 
     # Geofence gates — pickup, dropoff, and every stop must be inside an
@@ -220,9 +219,8 @@ async def compute_ride_estimates(
         )
         if _dropoff_area is None:
             logger.info(
-                "[estimate] reject dropoff=(%.5f,%.5f) — outside service areas",
-                body.dropoff_lat,
-                body.dropoff_lng,
+                "[estimate] reject dropoff=%s — outside service areas",
+                _deps.geohash(body.dropoff_lat, body.dropoff_lng),
             )
             raise HTTPException(
                 status_code=400,
@@ -241,10 +239,9 @@ async def compute_ride_estimates(
             _stop_area = await _get_active_service_area_for_point(s_lat, s_lng, _est_all_areas)
             if _stop_area is None:
                 logger.info(
-                    "[estimate] reject stop[%d]=(%.5f,%.5f) — outside service areas",
+                    "[estimate] reject stop[%d]=%s — outside service areas",
                     idx,
-                    s_lat,
-                    s_lng,
+                    _deps.geohash(s_lat, s_lng),
                 )
                 raise HTTPException(
                     status_code=400,

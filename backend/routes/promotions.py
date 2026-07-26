@@ -17,6 +17,7 @@ try:
     from ..dependencies import get_admin_user, get_current_user
     from ..models.ride_status import RideStatus
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.pii import geohash as _geohash
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
@@ -24,6 +25,7 @@ except ImportError:
     from dependencies import get_admin_user, get_current_user
     from models.ride_status import RideStatus
     from utils.datetime_utils import parse_iso_utc
+    from utils.pii import geohash as _geohash
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
 get_current_admin = get_admin_user
@@ -457,9 +459,8 @@ async def list_available_promos(
                 pickup_area_id = rows[0].get("id")
         except Exception as e:
             logger.warning(
-                "Could not resolve service area for pickup (%.4f, %.4f): %s",
-                pickup_lat,
-                pickup_lng,
+                "Could not resolve service area for pickup %s: %s",
+                _geohash(pickup_lat, pickup_lng),
                 e,
             )
 

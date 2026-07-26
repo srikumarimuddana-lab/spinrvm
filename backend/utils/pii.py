@@ -7,6 +7,55 @@ Use these helpers at every emission site.
 
 from __future__ import annotations
 
+_GEOHASH_BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz"
+
+
+def geohash(lat: float | None, lng: float | None, precision: int = 5) -> str:
+    """Encode a coordinate as a short geohash for logs (PIPEDA: never emit raw
+    lat/lng; "log geohashed area at most" — CLAUDE.md).
+
+    precision=5 ≈ a 4.9km × 4.9km cell — enough to correlate a rough area for
+    debugging (which service area, roughly where a geofence tripped) without
+    pinpointing a rider/driver. Returns ``"?"`` for missing/invalid input.
+    """
+    try:
+        latf = float(lat)  # type: ignore[arg-type]
+        lngf = float(lng)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "?"
+    if not (-90.0 <= latf <= 90.0 and -180.0 <= lngf <= 180.0):
+        return "?"
+    lat_range = [-90.0, 90.0]
+    lng_range = [-180.0, 180.0]
+    out: list[str] = []
+    bit = 0
+    ch = 0
+    even = True
+    while len(out) < precision:
+        if even:
+            mid = (lng_range[0] + lng_range[1]) / 2
+            if lngf >= mid:
+                ch = (ch << 1) | 1
+                lng_range[0] = mid
+            else:
+                ch = ch << 1
+                lng_range[1] = mid
+        else:
+            mid = (lat_range[0] + lat_range[1]) / 2
+            if latf >= mid:
+                ch = (ch << 1) | 1
+                lat_range[0] = mid
+            else:
+                ch = ch << 1
+                lat_range[1] = mid
+        even = not even
+        bit += 1
+        if bit == 5:
+            out.append(_GEOHASH_BASE32[ch])
+            bit = 0
+            ch = 0
+    return "".join(out)
+
 
 def redact_phone(phone: str | None) -> str:
     """Return ``****1234`` style mask. Empty/short input returns ``****``."""

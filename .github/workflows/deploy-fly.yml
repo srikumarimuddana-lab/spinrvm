@@ -10,6 +10,15 @@ on:
       - '.github/workflows/deploy-fly.yml'
   workflow_dispatch:
 
+# Serialize deploys: rapid successive merges to main (or a manual dispatch racing
+# a push) otherwise launch overlapping `flyctl deploy` runs against the same app,
+# and the second one gets superseded mid-rollout and Fly marks the release failed.
+# Queue instead of cancel — never abort an in-flight production rollout, and never
+# skip a commit's deploy (cancel-in-progress would drop the queued newer commit).
+concurrency:
+  group: deploy-fly-${{ github.ref }}
+  cancel-in-progress: false
+
 # Fly.io runs the backend in yyz (Toronto) alongside Railway. Both providers
 # deploy from main in parallel so the Fly app never drifts behind the primary.
 # See docs/runbooks/railway-fly-failover.md and docs/adr/007-fly-primary-railway-standby.md.

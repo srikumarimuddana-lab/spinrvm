@@ -182,6 +182,61 @@ describe('sendMessage', () => {
     expect(sent).toContain('[50.40792,-104.65013]');
   });
 
+  it('queues a pin confirmed mid-stream and flushes it when the turn ends', async () => {
+    // The map card is tappable the moment its action frame arrives — often
+    // while the model is still streaming its follow-up text. sendMessage
+    // refuses concurrent sends, so an immediate submit must queue, not drop.
+    let releaseStream!: () => void;
+    mockStream.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({ event: 'token', data: { text: 'Tap the button below…' } });
+      await new Promise<void>((resolve) => {
+        releaseStream = resolve;
+      });
+    });
+    mockStream.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({ event: 'token', data: { text: 'Quoting your pin now.' } });
+    });
+
+    const firstTurn = useAiChatStore.getState().sendMessage('quote 2965 Gordon Rd');
+    await Promise.resolve();
+    expect(useAiChatStore.getState().isStreaming).toBe(true);
+
+    await useAiChatStore.getState().submitMapPin('dropoff', { lat: 50.40792, lng: -104.65013 });
+    // Not sent yet — queued, not silently dropped.
+    expect(mockStream).toHaveBeenCalledTimes(1);
+    expect(useAiChatStore.getState().pendingMapPin).not.toBeNull();
+
+    releaseStream();
+    await firstTurn;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockStream).toHaveBeenCalledTimes(2);
+    expect(mockStream.mock.calls[1][0].message).toContain('[50.40792,-104.65013]');
+    expect(useAiChatStore.getState().pendingMapPin).toBeNull();
+  });
+
+  it('startNewConversation discards a queued pin instead of flushing it', async () => {
+    let releaseStream!: () => void;
+    mockStream.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({ event: 'token', data: { text: 'streaming…' } });
+      await new Promise<void>((resolve) => {
+        releaseStream = resolve;
+      });
+    });
+    const firstTurn = useAiChatStore.getState().sendMessage('quote it');
+    await Promise.resolve();
+    await useAiChatStore.getState().submitMapPin('pickup', { lat: 50.1, lng: -104.2 });
+
+    await useAiChatStore.getState().startNewConversation();
+    releaseStream();
+    await firstTurn;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The pin answered a request from the abandoned conversation.
+    expect(useAiChatStore.getState().pendingMapPin).toBeNull();
+    expect(mockStream).toHaveBeenCalledTimes(1);
+  });
+
   it('submitMapPin without an address sends coordinates alone', async () => {
     scriptStream([{ event: 'token', data: { text: 'ok' } }]);
     await useAiChatStore.getState().submitMapPin('pickup', { lat: 50.1, lng: -104.2, address: null });

@@ -26,6 +26,38 @@ _WIDTH = 640
 _HEIGHT = 320
 _STATIC_MAPS_URL = "https://maps.googleapis.com/maps/api/staticmap"
 
+# Uniform route line — mirrors shared/constants/routeMapStyle.ts so the receipt
+# PNG matches every in-app map: ONE straight pickup→destination line drawn as an
+# orange→red gradient. GPS reconstruction still feeds distance + the SGI audit;
+# it no longer changes the drawn picture.
+_ROUTE_STROKE_WIDTH = 4
+_GRADIENT_START_RGB = (255, 149, 0)  # #FF9500 orange (pickup end)
+_GRADIENT_END_RGB = (238, 43, 43)  # #EE2B2B red (destination end)
+_ROUTE_GRADIENT_SEGMENTS = 12  # fewer than the apps' 24 to keep the URL short
+
+
+def _gradient_at(t: float) -> tuple[int, int, int]:
+    t = 0.0 if t != t else max(0.0, min(1.0, t))  # NaN → 0
+    return tuple(round(_GRADIENT_START_RGB[i] + (_GRADIENT_END_RGB[i] - _GRADIENT_START_RGB[i]) * t) for i in range(3))  # type: ignore[return-value]
+
+
+def _straight_gradient(
+    pickup: tuple[float, float],
+    dropoff: tuple[float, float],
+    n: int = _ROUTE_GRADIENT_SEGMENTS,
+) -> list[tuple[tuple[float, float], tuple[float, float], tuple[int, int, int]]]:
+    """Straight pickup→dropoff line split into n colour-interpolated (lat,lng) sub-segments."""
+    (plat, plng), (dlat, dlng) = pickup, dropoff
+    if plat == dlat and plng == dlng:
+        return []
+    out = []
+    for i in range(max(1, n)):
+        t0, t1 = i / n, (i + 1) / n
+        a = (plat + (dlat - plat) * t0, plng + (dlng - plng) * t0)
+        b = (plat + (dlat - plat) * t1, plng + (dlng - plng) * t1)
+        out.append((a, b, _gradient_at((t0 + t1) / 2)))
+    return out
+
 
 async def render_ride_snapshot_google(
     *,
@@ -57,22 +89,16 @@ async def render_ride_snapshot_google(
     if completion:
         params.append(f"markers=color:orange|label:C|{completion[0]},{completion[1]}")
 
-    # New route contracts preserve boundaries explicitly. Never flatten them:
-    # flattening caused the exact first-five-minutes-plus-straight-chord issue
-    # this pipeline replaces.
-    segmented_trails = _extract_segment_trails(route_segments)
-    if route_segments is not None:
-        _append_segmented_paths(params, segmented_trails)
-    else:
-        _append_legacy_paths(params, phase_polylines, route_polyline)
-
-    logger.info(
-        "render_ride_snapshot_google: route_segments=%d, route_polyline=%s (len=%d), phase_polylines keys=%s",
-        len(segmented_trails),
-        type(route_polyline).__name__ if route_polyline else "None",
-        len(route_polyline) if isinstance(route_polyline, list) else 0,
-        list((phase_polylines or {}).keys()),
-    )
+    # Uniform route line: one straight pickup→destination line, orange→red
+    # gradient, drawn as colour-interpolated `path` segments. route_segments /
+    # phase_polylines / route_polyline are intentionally no longer drawn — the
+    # map is the same on every surface regardless of GPS provenance.
+    for (a_lat, a_lng), (b_lat, b_lng), (r, g, b) in _straight_gradient(
+        (pickup_lat, pickup_lng), (dropoff_lat, dropoff_lng)
+    ):
+        params.append(
+            f"path=color:0x{r:02X}{g:02X}{b:02X}FF|weight:{_ROUTE_STROKE_WIDTH}|{a_lat},{a_lng}|{b_lat},{b_lng}"
+        )
 
     params.append(f"key={api_key}")
     url = f"{_STATIC_MAPS_URL}?{'&'.join(params)}"
@@ -280,20 +306,6 @@ def render_ride_snapshot(
 
     import io
 
-    # Trip leg only — see render_ride_snapshot_google for why the
-    # navigating_to_pickup leg is excluded from the snapshot.
-    trip_trail = _coerce_polyline((phase_polylines or {}).get("trip_in_progress"))
-
-    legacy_trail: list[tuple[float, float]] = []
-    if not trip_trail and route_polyline:
-        for pt in route_polyline:
-            try:
-                lat = float(pt[0])
-                lng = float(pt[1])
-            except (TypeError, ValueError, IndexError):
-                continue
-            legacy_trail.append((lng, lat))
-
     try:
         _OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         m = StaticMap(640, 320, url_template=_OSM_TILE_URL, padding_x=30, padding_y=30)
@@ -307,22 +319,13 @@ def render_ride_snapshot(
             m.add_marker(CircleMarker((completion_lng, completion_lat), "#ffffff", 14))
             m.add_marker(CircleMarker((completion_lng, completion_lat), "#f59e0b", 10))
 
-        # Same gap guard as the Google renderer: draw each contiguous run on
-        # its own so a GPS dropout / matching jump doesn't get bridged by a
-        # straight chord that reads as a second route. staticmap uses
-        # (lng, lat); _split_on_gaps works in (lat, lng), so convert in/out.
-        def _add_split_line(coords_lnglat: list[tuple[float, float]]) -> None:
-            latlng = [(la, ln) for ln, la in coords_lnglat]
-            for run in _split_on_gaps(latlng):
-                m.add_line(Line([(ln, la) for la, ln in run], "#3b82f6", 4))
-
-        if route_segments is not None:
-            for trail in _extract_segment_trails(route_segments):
-                _add_split_line([(lng, lat) for lat, lng in trail])
-        elif trip_trail:
-            _add_split_line(trip_trail)
-        elif legacy_trail:
-            _add_split_line(legacy_trail)
+        # Uniform route line: one straight pickup→destination line drawn as an
+        # orange→red gradient (matches the Google renderer + every in-app map).
+        # GPS trails are no longer drawn. staticmap uses (lng, lat).
+        for (a_lat, a_lng), (b_lat, b_lng), (r, g, b) in _straight_gradient(
+            (pickup_lat, pickup_lng), (dropoff_lat, dropoff_lng)
+        ):
+            m.add_line(Line([(a_lng, a_lat), (b_lng, b_lat)], f"#{r:02x}{g:02x}{b:02x}", _ROUTE_STROKE_WIDTH))
 
         image = m.render()
         buf = io.BytesIO()

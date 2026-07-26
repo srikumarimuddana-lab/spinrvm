@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState, Modal } from 'react-native';
-import MapView, { Marker, Polyline, Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
-import MapViewDirections from 'react-native-maps-directions';
+import MapView, { Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
+import RouteLine from '@shared/components/RouteLine';
+import RoutePins from '@shared/components/RoutePins';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore, type OffRouteConfirmation } from '../../../store/driverStore';
@@ -28,24 +29,8 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@shared/api/queryClient';
 
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
-
-// Distance in metres between two lat/lng pairs. Used by the Directions
-// refresh ticker to decide whether the driver has moved far enough to
-// warrant a new API call.
-function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000;
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
 
 function DriverDashboard() {
   const { colors, isDark } = useTheme();
@@ -180,14 +165,6 @@ function DriverDashboard() {
     };
   }, [driverData?.service_area_id]);
 
-  // Route polyline coordinates for active rides
-  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
-  // True when the Google Directions API call failed (no network, quota,
-  // invalid key, etc.). When set, the offer panel renders a dashed
-  // straight-line polyline from origin to destination so the driver
-  // still sees pickup → dropoff geometry instead of an empty map.
-  const [directionsFailed, setDirectionsFailed] = useState(false);
-
   // MapView remount key. Bumped when a ride ends so Android's Google Maps
   // native layer fully drops leftover polyline overlays and the CarMarker
   // re-snapshots cleanly. Without this, after rating/Done the driver sees
@@ -202,54 +179,11 @@ function DriverDashboard() {
     prevRideStateRef.current = rideState;
   }, [rideState]);
 
-  // Live ETA from Google Directions — refreshed every 60s, with a stationary
-  // skip so a parked driver doesn't burn API calls when nothing has changed.
+  // Live ETA + distance for the active ride, surfaced in the ActiveRidePanel.
+  // Fed by the backend's OSRM live-route poll below (road-matched ETA at zero
+  // metered cost); the map itself draws only the uniform straight RouteLine.
   const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
-
-  // Last origin actually fetched + a mirror of the live driver location, both
-  // held in refs so the interval callback sees fresh values without
-  // re-subscribing on every render.
-  const lastDirectionsFetchRef = useRef<{ lat: number; lng: number; ts: number } | null>(null);
-  const currentLocationRef = useRef<{ lat: number; lng: number } | null>(null);
-  useEffect(() => {
-    if (location?.coords?.latitude != null && location?.coords?.longitude != null) {
-      currentLocationRef.current = { lat: location.coords.latitude, lng: location.coords.longitude };
-    }
-  }, [location]);
-
-  // Force MapViewDirections to re-compute by changing a key prop. Only
-  // runs for navigating_to_pickup (driver → pickup needs live Directions).
-  // ride_offered and trip_in_progress use the saved planned_route_polyline
-  // instead — zero Directions API calls for those phases.
-  const [directionsKey, setDirectionsKey] = useState(0);
-
-  // True while the backend's OSRM live-route poll is delivering routes. When
-  // OSRM is healthy we suppress Google Directions entirely (render + 60s
-  // refresh ticker) — OSRM already redraws driver → destination every 20s at
-  // zero metered cost. Flips back false if a live-route fetch fails so Google
-  // resumes as the fallback. Mirrored in a ref so the interval callback sees
-  // the current value without re-subscribing.
-  const [osrmRouteActive, setOsrmRouteActive] = useState(false);
-  const osrmRouteActiveRef = useRef(false);
-  useEffect(() => { osrmRouteActiveRef.current = osrmRouteActive; }, [osrmRouteActive]);
-
-  useEffect(() => {
-    if (rideState !== 'navigating_to_pickup') return;
-    const interval = setInterval(() => {
-      if (osrmRouteActiveRef.current) return;
-      const now = Date.now();
-      const last = lastDirectionsFetchRef.current;
-      const cur = currentLocationRef.current;
-      if (last && cur) {
-        const movedMeters = haversineMeters(last.lat, last.lng, cur.lat, cur.lng);
-        const elapsedMs = now - last.ts;
-        if (movedMeters < 100 && elapsedMs < 5 * 60_000) return;
-      }
-      setDirectionsKey((k) => k + 1);
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [rideState]);
 
   // Demand heatmap — controlled by admin per service area
   const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
@@ -338,12 +272,11 @@ function DriverDashboard() {
   // stays framed on the pickup/dropoff bounding box from the previous ride
   // and the driver marker ends up off-screen.
   useEffect(() => {
-    setDirectionsFailed(false);
     setRouteEtaMinutes(null);
     setRouteDistanceKm(null);
-    setDirectionsKey(0);
-    setOsrmRouteActive(false);
 
+    // Frame the map on the saved pickup→dropoff bounding box when a ride is
+    // active so both endpoints of the uniform RouteLine are on screen.
     const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
     const canUseSaved = Array.isArray(savedPoly) && savedPoly.length >= 2;
 
@@ -351,19 +284,12 @@ function DriverDashboard() {
       const coords = savedPoly
         .filter((p: any) => Array.isArray(p) && p.length >= 2)
         .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
-      if (coords.length >= 2) {
-        setRouteCoords(coords);
-        if (mapRef.current) {
-          mapRef.current.fitToCoordinates(coords, {
-            edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
-            animated: true,
-          });
-        }
-      } else {
-        setRouteCoords([]);
+      if (coords.length >= 2 && mapRef.current) {
+        mapRef.current.fitToCoordinates(coords, {
+          edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
+          animated: true,
+        });
       }
-    } else {
-      setRouteCoords([]);
     }
 
     if (rideState === 'idle' && mapRef.current && location?.coords) {
@@ -384,11 +310,11 @@ function DriverDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState, _hasRidePolyline]);
 
-  // OSRM live route + ETA. Google stays the map canvas; during active phases we
-  // poll the backend's OSRM route from the driver's live position to the current
-  // destination and draw that road-matched line + live ETA, replacing the static
-  // planned polyline. Falls back to the saved polyline / existing ETA if OSRM is
-  // unreachable. Avoids per-ride Google Directions calls.
+  // OSRM live ETA + distance. During active phases we poll the backend's OSRM
+  // route from the driver's live position to the current destination purely for
+  // the road-matched ETA/distance shown in the ActiveRidePanel — the map draws
+  // only the uniform straight RouteLine, so the returned road geometry is not
+  // rendered. Keeps the previous ETA if OSRM is unreachable.
   useEffect(() => {
     const rid = activeRide?.ride?.id;
     if (!rid || !['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'].includes(rideState)) return;
@@ -396,15 +322,10 @@ function DriverDashboard() {
     const fetchLiveRoute = async () => {
       try {
         const { data } = await api.get<{
-          polyline: [number, number][];
           eta_seconds: number | null;
           distance_km: number | null;
         }>(`/rides/${rid}/live-route`);
         if (cancelled || !data) return;
-        if (Array.isArray(data.polyline) && data.polyline.length > 1) {
-          setRouteCoords(data.polyline.map((p) => ({ latitude: p[0], longitude: p[1] })));
-          setOsrmRouteActive(true);
-        }
         if (typeof data.eta_seconds === 'number' && data.eta_seconds > 0) {
           setRouteEtaMinutes(Math.max(1, Math.ceil(data.eta_seconds / 60)));
         }
@@ -412,9 +333,8 @@ function DriverDashboard() {
           setRouteDistanceKm(data.distance_km);
         }
       } catch {
-        // OSRM unavailable — keep the saved-polyline route + existing ETA and
-        // let Google Directions resume as the live-route fallback.
-        if (!cancelled) setOsrmRouteActive(false);
+        // OSRM unavailable — keep the existing ETA/distance; the straight
+        // RouteLine still renders from the ride's pickup/dropoff.
       }
     };
     fetchLiveRoute();
@@ -474,47 +394,13 @@ function DriverDashboard() {
   const pickupLng = ride?.pickup_lng;
   const dropoffLat = ride?.dropoff_lat;
   const dropoffLng = ride?.dropoff_lng;
-  const pickupAddress = ride?.pickup_address;
-  const dropoffAddress = ride?.dropoff_address;
 
-  const mapMarkers = useMemo(() => {
-    const markers: any[] = [];
-    if (pickupLat && pickupLng) {
-      markers.push(
-        <Marker
-          key="pickup"
-          coordinate={{ latitude: pickupLat, longitude: pickupLng }}
-          title="Pickup"
-          description={pickupAddress}
-          tracksViewChanges={false}
-        >
-          <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
-              <Ionicons name="location" size={16} color="#fff" />
-            </View>
-          </View>
-        </Marker>
-      );
-    }
-    if (dropoffLat && dropoffLng) {
-      markers.push(
-        <Marker
-          key="dropoff"
-          coordinate={{ latitude: dropoffLat, longitude: dropoffLng }}
-          title="Dropoff"
-          description={dropoffAddress}
-          tracksViewChanges={false}
-        >
-          <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: '#EF4444' }]}>
-              <Ionicons name="flag" size={16} color="#fff" />
-            </View>
-          </View>
-        </Marker>
-      );
-    }
-    return markers;
-  }, [pickupLat, pickupLng, dropoffLat, dropoffLng, pickupAddress, dropoffAddress, styles]);
+  // Endpoints for the uniform route line + shared pins. Present whenever there
+  // is an offered/active ride; null otherwise (the idle map draws neither).
+  const pickupPoint =
+    pickupLat != null && pickupLng != null ? { latitude: pickupLat, longitude: pickupLng } : null;
+  const dropoffPoint =
+    dropoffLat != null && dropoffLng != null ? { latitude: dropoffLat, longitude: dropoffLng } : null;
 
   // Ride Offer Panel
   const renderRideOfferPanel = () => {
@@ -733,135 +619,13 @@ function DriverDashboard() {
             imageUri={markerImageUri}
           />
         )}
-        {mapMarkers}
-
-        {/* Route polyline.
-            - ride_offered / trip_in_progress: reuse planned_route_polyline
-              saved at ride creation (pickup → dropoff). Zero API calls.
-            - navigating_to_pickup / arrived_at_pickup: driver → pickup,
-              needs a live Directions call (not in saved polyline).
-            Snap the driver's GPS to a 3-decimal grid (~110 m) so small
-            jitter doesn't refetch the Directions API. */}
-        {ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
-          const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
-          const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
-          const useSavedRoute = hasSavedRoute;
-          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive;
-
-          const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
-          const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;
-
-          // Road-snapped pickup the driver can actually reach (fallback to pin).
-          const pNavLat = (ride as any).pickup_nav_lat ?? ride.pickup_lat;
-          const pNavLng = (ride as any).pickup_nav_lng ?? ride.pickup_lng;
-          let origin: { latitude: number; longitude: number };
-          let destination: { latitude: number; longitude: number };
-          if (rideState === 'ride_offered') {
-            origin = { latitude: pNavLat, longitude: pNavLng };
-            destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
-          } else if (rideState === 'trip_in_progress') {
-            origin = driverLat != null && driverLng != null
-              ? { latitude: driverLat, longitude: driverLng }
-              : { latitude: pNavLat, longitude: pNavLng };
-            destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
-          } else {
-            origin = driverLat != null && driverLng != null
-              ? { latitude: driverLat, longitude: driverLng }
-              : { latitude: pNavLat, longitude: pNavLng };
-            destination = { latitude: pNavLat, longitude: pNavLng };
-          }
-
-          return (
-            <React.Fragment key={`route-${rideState}`}>
-              {needsDirections && (
-              <MapViewDirections
-                key={directionsKey}
-                origin={origin}
-                destination={destination}
-                apikey={GOOGLE_MAPS_API_KEY}
-                strokeWidth={0}
-                strokeColor="transparent"
-                onReady={(result) => {
-                  setRouteCoords(result.coordinates);
-                  setDirectionsFailed(false);
-                  if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
-                  if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
-                  lastDirectionsFetchRef.current = {
-                    lat: origin.latitude,
-                    lng: origin.longitude,
-                    ts: Date.now(),
-                  };
-                  if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
-                    mapRef.current.fitToCoordinates(result.coordinates, {
-                      edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
-                      animated: true,
-                    });
-                  }
-                }}
-                onError={(err) => {
-                  console.warn('Directions error — falling back to straight line:', err);
-                  setDirectionsFailed(true);
-                  if (mapRef.current) {
-                    mapRef.current.fitToCoordinates([origin, destination], {
-                      edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
-                      animated: true,
-                    });
-                  }
-                }}
-              />
-              )}
-              {/* Fallback polyline: a dashed straight line drawn when the
-                  Directions API can't return a route (no network, quota
-                  exceeded, invalid key). Better than a blank map — the
-                  driver can still see roughly where they're being asked
-                  to go. */}
-              {directionsFailed && routeCoords.length === 0 && (
-                <Polyline
-                  coordinates={[origin, destination]}
-                  strokeWidth={4}
-                  strokeColor="#FF9500"
-                  lineDashPattern={[6, 6]}
-                  lineCap="round"
-                />
-              )}
-              {routeCoords.length > 1 && (() => {
-                const total = routeCoords.length;
-                const SEGS = 20;
-                const chunk = Math.max(1, Math.floor(total / SEGS));
-                const segments: { coords: any[]; color: string }[] = [];
-                for (let i = 0; i < total - 1; i += chunk) {
-                  const end = Math.min(i + chunk + 1, total);
-                  const t = i / Math.max(total - 1, 1);
-                  // Interpolate: #FF9500 (orange) → #EE2B2B (red)
-                  const r = Math.round(255 + (238 - 255) * t);
-                  const g = Math.round(149 + (43 - 149) * t);
-                  const b = Math.round(0 + (43 - 0) * t);
-                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
-                }
-                return (
-                  <>
-                    {/* Outer glow */}
-                    <Polyline
-                      coordinates={routeCoords}
-                      strokeWidth={9}
-                      strokeColor="rgba(238, 43, 43, 0.12)"
-                    />
-                    {segments.map((seg, idx) => (
-                      <Polyline
-                        key={`route-seg-${idx}`}
-                        coordinates={seg.coords}
-                        strokeWidth={5}
-                        strokeColor={seg.color}
-                        lineCap="round"
-                        lineJoin="round"
-                      />
-                    ))}
-                  </>
-                );
-              })()}
-            </React.Fragment>
-          );
-        })()}
+        {/* Uniform route: one straight orange→red pickup→dropoff line plus the
+            shared green/red pins. Drawn whenever there's an offered/active ride;
+            the idle map shows just the car marker. */}
+        {pickupPoint && dropoffPoint && (
+          <RouteLine pickup={pickupPoint} destination={dropoffPoint} />
+        )}
+        <RoutePins pickup={pickupPoint} dropoff={dropoffPoint} />
 
         {/* Service area boundary polygon */}
         {(() => {
@@ -1092,18 +856,6 @@ function createStyles(colors: ThemeColors) {
     },
     locationFallbackBtnTextSecondary: {
       color: colors.text,
-    },
-    markerContainer: {
-      alignItems: 'center',
-    },
-    markerDot: {
-      width: 32,
-      height: 32,
-      borderRadius: 16,
-      justifyContent: 'center',
-      alignItems: 'center',
-      borderWidth: 2,
-      borderColor: '#fff',
     },
     // ── Rich Ride Offer Panel ──
     rideOfferOverlay: {

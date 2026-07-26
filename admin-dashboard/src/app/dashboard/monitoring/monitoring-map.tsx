@@ -11,52 +11,40 @@ import {
     fitBoundsToGeoJSON,
     makeCircleMarkerEl,
 } from "@/lib/map/maplibre-base";
+import {
+    buildStraightRouteGradient,
+    ROUTE_PIN_COLORS,
+    ROUTE_STROKE_WIDTH,
+} from "@spinr/shared/constants/routeMapStyle";
 import { MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
 
 const DEFAULT_ZOOM = 12;
 
-// Cache OSRM route lookups per ride_id so panning / re-renders don't re-fetch.
-// In-memory only — clears on hard reload, which is the desired behaviour
-// (refetches a fresh route if pickup/dropoff coords ever change).
-const routeCache = new Map<string, [number, number][]>();
-const routeInFlight = new Set<string>();
-
 /**
- * Fetch a road-following polyline between pickup and dropoff from OSRM
- * (free OpenStreetMap routing server). Returns the coordinate list as
- * [lng, lat] pairs ready for a GeoJSON LineString, or null on failure.
- *
- * Used by the Live Monitoring map so the ride route renders along the
- * actual streets instead of a straight line between pickup and dropoff.
- * The OSRM demo server is rate-limited but our admin volume is tiny —
- * one request per ride per page load, deduplicated by the in-memory cache.
+ * Build the uniform straight pickup→dropoff route as a GeoJSON FeatureCollection
+ * of per-segment coloured LineStrings (orange→red gradient — the shared route
+ * spec). Inputs are [lng, lat]; the shared helper works in [lat, lng], so we
+ * swap on the way in and back out.
  */
-async function fetchOSRMRoute(
-    rideId: string,
+function straightRouteFeatureCollection(
     pickup: [number, number],
     dropoff: [number, number],
-): Promise<[number, number][] | null> {
-    if (routeCache.has(rideId)) return routeCache.get(rideId)!;
-    if (routeInFlight.has(rideId)) return null;
-    routeInFlight.add(rideId);
-    try {
-        const url =
-            `https://router.project-osrm.org/route/v1/driving/` +
-            `${pickup[0]},${pickup[1]};${dropoff[0]},${dropoff[1]}` +
-            `?overview=full&geometries=geojson`;
-        const res = await fetch(url);
-        if (!res.ok) return null;
-        const data = await res.json();
-        const coords: [number, number][] | undefined =
-            data?.routes?.[0]?.geometry?.coordinates;
-        if (!coords || coords.length < 2) return null;
-        routeCache.set(rideId, coords);
-        return coords;
-    } catch {
-        return null;
-    } finally {
-        routeInFlight.delete(rideId);
-    }
+): GeoJSON.FeatureCollection {
+    const segments = buildStraightRouteGradient(
+        [pickup[1], pickup[0]],
+        [dropoff[1], dropoff[0]],
+    );
+    return {
+        type: "FeatureCollection",
+        features: segments.map((seg) => ({
+            type: "Feature",
+            properties: { color: seg.color },
+            geometry: {
+                type: "LineString",
+                coordinates: seg.coordinates.map(([lat, lng]) => [lng, lat]),
+            },
+        })),
+    };
 }
 
 // Colour tokens for driver markers
@@ -234,7 +222,7 @@ export function MonitoringMap({
 
         if (!entry) {
             const pickupEl = makeCircleMarkerEl({
-                color: "#3b82f6",
+                color: ROUTE_PIN_COLORS.pickup,
                 label: "P",
                 title: `Pickup: ${ride.pickup_address ?? ""}`,
                 size: 20,
@@ -243,7 +231,7 @@ export function MonitoringMap({
             const pickup = new maplibregl.Marker({ element: pickupEl }).setLngLat(pickupLngLat);
 
             const dropoffEl = makeCircleMarkerEl({
-                color: "#ef4444",
+                color: ROUTE_PIN_COLORS.dropoff,
                 label: "D",
                 title: `Dropoff: ${ride.dropoff_address ?? ""}`,
                 size: 20,
@@ -254,16 +242,10 @@ export function MonitoringMap({
             const sourceId = rideLineSourceId(ride.id);
             const layerId = rideLineLayerId(ride.id);
 
+            // Single straight pickup→dropoff route as an orange→red gradient.
             mapRef.current.addSource(sourceId, {
                 type: "geojson",
-                data: {
-                    type: "Feature",
-                    properties: {},
-                    geometry: {
-                        type: "LineString",
-                        coordinates: [pickupLngLat, dropoffLngLat],
-                    },
-                },
+                data: straightRouteFeatureCollection(pickupLngLat, dropoffLngLat),
             });
             mapRef.current.addLayer({
                 id: layerId,
@@ -271,9 +253,9 @@ export function MonitoringMap({
                 source: sourceId,
                 layout: { "line-cap": "round", "line-join": "round" },
                 paint: {
-                    "line-color": "#3b82f6",
-                    "line-width": 3,
-                    "line-opacity": 0.75,
+                    "line-color": ["get", "color"],
+                    "line-width": ROUTE_STROKE_WIDTH,
+                    "line-opacity": 0.9,
                 },
             });
 
@@ -286,37 +268,14 @@ export function MonitoringMap({
             } else {
                 mapRef.current.setLayoutProperty(layerId, "visibility", "none");
             }
-
-            // Kick off async OSRM lookup; when it returns, replace the straight
-            // pickup→dropoff line with a road-following polyline. The line
-            // already shows as straight in the meantime so the rider is never
-            // staring at a blank map waiting for routing.
-            void fetchOSRMRoute(ride.id, pickupLngLat, dropoffLngLat).then((coords) => {
-                if (!coords || !mapRef.current) return;
-                const src = mapRef.current.getSource(sourceId);
-                if (src && "setData" in src) {
-                    (src as maplibregl.GeoJSONSource).setData({
-                        type: "Feature",
-                        properties: {},
-                        geometry: { type: "LineString", coordinates: coords },
-                    });
-                }
-            });
         } else {
             entry.pickup.setLngLat(pickupLngLat);
             entry.dropoff.setLngLat(dropoffLngLat);
             const src = mapRef.current.getSource(entry.sourceId);
             if (src && "setData" in src) {
-                // Prefer the cached OSRM route when we have one — keeps the
-                // road-following line stable across panel updates. Falls
-                // back to the straight line until OSRM responds.
-                const cached = routeCache.get(ride.id);
-                const coords: [number, number][] = cached ?? [pickupLngLat, dropoffLngLat];
-                (src as maplibregl.GeoJSONSource).setData({
-                    type: "Feature",
-                    properties: {},
-                    geometry: { type: "LineString", coordinates: coords },
-                });
+                (src as maplibregl.GeoJSONSource).setData(
+                    straightRouteFeatureCollection(pickupLngLat, dropoffLngLat),
+                );
             }
             setRideVisible(ride.id, filters.showRides);
         }

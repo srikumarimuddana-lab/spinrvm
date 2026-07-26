@@ -288,10 +288,12 @@ except ImportError:
 
 try:
     from .repositories.wallet_repo import (  # noqa: F401 — re-exported
+        claim_promo_user_slot,
         claim_stripe_event,
         fare_split_pay_share,
         increment_promo_uses,
         mark_stripe_event_processed,
+        release_promo_user_slot,
         unclaim_stripe_event,
         wallet_apply_credit,
         wallet_apply_delta,
@@ -301,10 +303,12 @@ try:
     )
 except ImportError:
     from repositories.wallet_repo import (  # type: ignore  # noqa: F401
+        claim_promo_user_slot,
         claim_stripe_event,
         fare_split_pay_share,
         increment_promo_uses,
         mark_stripe_event_processed,
+        release_promo_user_slot,
         unclaim_stripe_event,
         wallet_apply_credit,
         wallet_apply_delta,

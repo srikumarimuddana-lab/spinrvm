@@ -1324,6 +1324,74 @@ export const adminCommitDriverImport = (file: File, opts?: DriverImportOptions) 
         body: driverImportFormData(file, opts),
     });
 
+/* ── Legacy Stripe Mapping Import (CSV) ───── */
+// Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
+// old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout
+// destination) / users.stripe_customer_id (saved cards).
+export type StripeImportKind = "drivers" | "riders";
+export interface StripeImportReportItem {
+    row_ref: string;
+    field: string;
+    message: string;
+}
+export interface StripeImportReport {
+    batch: string;
+    kind: StripeImportKind;
+    can_commit: boolean;
+    counts: { rows: number; to_map: number; skipped_already_mapped: number };
+    warnings: StripeImportReportItem[];
+    errors: StripeImportReportItem[];
+}
+export interface StripeImportCommitResult {
+    batch: string;
+    kind: StripeImportKind;
+    committed: boolean;
+    updated_drivers?: number;
+    updated_users?: number;
+    conflicts?: string[];
+    kyc_sync?: "started" | "not_applicable";
+    warnings?: StripeImportReportItem[];
+    // Present (with can_commit=false) when the commit was refused on errors.
+    can_commit?: boolean;
+    counts?: StripeImportReport["counts"];
+    errors?: StripeImportReportItem[];
+}
+export interface StripeImportStatus {
+    batch: string;
+    drivers: number;
+    kyc_sync: Record<string, number>;
+    payouts_enabled: number;
+    details_submitted: number;
+}
+
+function stripeImportFormData(file: File, kind: StripeImportKind, batch?: string): FormData {
+    const fd = new FormData();
+    fd.append("mapping_csv", file);
+    fd.append("kind", kind);
+    if (batch) fd.append("batch", batch);
+    return fd;
+}
+
+/** Dry-run: parse, match, and live-validate the mapping CSV (no writes). */
+export const adminValidateStripeImport = (file: File, kind: StripeImportKind, batch?: string) =>
+    request<StripeImportReport>("/api/admin/stripe/import/validate", {
+        method: "POST",
+        body: stripeImportFormData(file, kind, batch),
+    });
+
+/** Commit the mapping. Returns committed=false + errors if the CSV no longer validates. */
+export const adminCommitStripeImport = (file: File, kind: StripeImportKind, batch?: string) =>
+    request<StripeImportCommitResult>("/api/admin/stripe/import/commit", {
+        method: "POST",
+        body: stripeImportFormData(file, kind, batch),
+    });
+
+/** Per-batch KYC-sync convergence (drivers kind only). DB-only, cheap to poll. */
+export const adminStripeImportStatus = (batch: string) =>
+    request<StripeImportStatus>(
+        `/api/admin/stripe/import/status?batch=${encodeURIComponent(batch)}`,
+    );
+
 /* ── Manual Admin Document Upload ─────────── */
 export interface AdminUploadDocumentInput {
     driverId: string;

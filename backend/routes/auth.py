@@ -590,9 +590,12 @@ async def _issue_company_email_session(
 @limiter.limit("3/minute")
 async def send_company_email_otp(request: Request, body: CompanyEmailOtpSendRequest):
     email = _normalize_company_email(str(body.email))
-    lockout_key = _synthetic_phone_for_company_email(email)
-    await _check_otp_lockout(lockout_key)
-    await _enforce_otp_send_cap(lockout_key)
+    # Send cap only — deliberately NOT _check_otp_lockout, matching the phone
+    # send_otp path. The lockout is enforced at verify, so gating send buys no
+    # security: an attacker who can request codes still cannot verify one.
+    # It would only strip the recovery path from a legitimate user whose
+    # address someone else mistyped into the lockout.
+    await _enforce_otp_send_cap(_synthetic_phone_for_company_email(email))
     otp_code = generate_otp()
     otp_row = {
         "id": str(uuid.uuid4()),

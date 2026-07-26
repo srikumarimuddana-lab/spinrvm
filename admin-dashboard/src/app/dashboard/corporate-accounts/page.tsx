@@ -253,7 +253,7 @@ export default function CorporateAccountsPage() {
                             <ShieldCheck className="mr-2 h-4 w-4" /> KYB Queue
                         </Link>
                     </Button>
-                    <Button variant="outline" size="icon" onClick={fetchAccounts}>
+                    <Button variant="outline" size="icon" onClick={fetchAccounts} aria-label="Refresh">
                         <RefreshCw className="h-4 w-4" />
                     </Button>
                     <Button onClick={handleOpenCreate}>
@@ -276,7 +276,7 @@ export default function CorporateAccountsPage() {
                     value={statusFilter}
                     onValueChange={(v) => setStatusFilter(v as CompanyStatus | "all")}
                 >
-                    <SelectTrigger className="w-52">
+                    <SelectTrigger className="w-52" aria-label="Filter by status">
                         <SelectValue placeholder="Filter by status" />
                     </SelectTrigger>
                     <SelectContent>

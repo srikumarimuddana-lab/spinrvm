@@ -380,6 +380,7 @@ export default function SettingsPage() {
                                                 </p>
                                             </div>
                                             <Switch
+                                                aria-label="Enable AI assistant"
                                                 checked={!!settings.ai_assistant_enabled}
                                                 onCheckedChange={(v) => update("ai_assistant_enabled", v)}
                                             />
@@ -396,7 +397,7 @@ export default function SettingsPage() {
                                                     value={settings.ai_disabled_mode || "coming_soon"}
                                                     onValueChange={(v) => update("ai_disabled_mode", v)}
                                                 >
-                                                    <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                                                    <SelectTrigger className="w-44" aria-label="While disabled, show"><SelectValue /></SelectTrigger>
                                                     <SelectContent>
                                                         <SelectItem value="coming_soon">Coming-soon placeholder</SelectItem>
                                                         <SelectItem value="hidden">Hide the icon entirely</SelectItem>
@@ -415,7 +416,7 @@ export default function SettingsPage() {
                                                         if (next?.models?.length) update("ai_model", next.models[0].id);
                                                     }}
                                                 >
-                                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                                    <SelectTrigger aria-label="Provider"><SelectValue /></SelectTrigger>
                                                     <SelectContent>
                                                         {(aiCatalog.length ? aiCatalog : [{ provider: "anthropic", label: "Anthropic (Claude)", key_field: "ai_api_key_anthropic", models: [] }]).map((p) => (
                                                             <SelectItem key={p.provider} value={p.provider}>{p.label}</SelectItem>
@@ -429,7 +430,7 @@ export default function SettingsPage() {
                                                     value={modelSelectValue}
                                                     onValueChange={(v) => update("ai_model", v === "__custom__" ? "" : v)}
                                                 >
-                                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                                    <SelectTrigger aria-label="Model"><SelectValue /></SelectTrigger>
                                                     <SelectContent>
                                                         {suggestions.map((m) => (
                                                             <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
@@ -460,16 +461,18 @@ export default function SettingsPage() {
                                         </div>
                                         <div className="grid grid-cols-2 gap-4">
                                             <div className="space-y-2">
-                                                <Label>Daily messages per user</Label>
+                                                <Label htmlFor="ai_daily_message_cap">Daily messages per user</Label>
                                                 <Input
+                                                    id="ai_daily_message_cap"
                                                     type="number" min={1} max={500}
                                                     value={settings.ai_daily_message_cap ?? 50}
                                                     onChange={(e) => update("ai_daily_message_cap", parseInt(e.target.value))}
                                                 />
                                             </div>
                                             <div className="space-y-2">
-                                                <Label>Max output tokens</Label>
+                                                <Label htmlFor="ai_max_output_tokens">Max output tokens</Label>
                                                 <Input
+                                                    id="ai_max_output_tokens"
                                                     type="number" min={128} max={4096}
                                                     value={settings.ai_max_output_tokens ?? 1024}
                                                     onChange={(e) => update("ai_max_output_tokens", parseInt(e.target.value))}
@@ -484,6 +487,7 @@ export default function SettingsPage() {
                                                 </p>
                                             </div>
                                             <Switch
+                                                aria-label="MCP server (/mcp)"
                                                 checked={!!settings.ai_mcp_enabled}
                                                 onCheckedChange={(v) => update("ai_mcp_enabled", v)}
                                             />
@@ -496,6 +500,7 @@ export default function SettingsPage() {
                                                 </p>
                                             </div>
                                             <Switch
+                                                aria-label="AI escalation opens Zoho tickets"
                                                 checked={!!settings.ai_escalation_creates_ticket}
                                                 onCheckedChange={(v) => update("ai_escalation_creates_ticket", v)}
                                             />

@@ -53,26 +53,41 @@ def test_pricing_wait_covers_directions_timeout() -> None:
     Directions HTTP timeout (3.0 s), a response landing in the gap silently
     priced the SAME trip on haversine in one call and the road route in the
     next — the incident's $30.92 → $39.44 flip between quote and confirm.
+
+    Strictly greater, not >=: at equality the two deadlines race and the gap
+    reopens.
     """
     from routes.rides import estimates
     from routes.rides._shared import DIRECTIONS_TIMEOUT_S
 
-    assert estimates._PRICING_ROUTE_WAIT_S >= DIRECTIONS_TIMEOUT_S
+    assert estimates._PRICING_ROUTE_WAIT_S > DIRECTIONS_TIMEOUT_S
+
+
+def test_pricing_wait_stays_within_the_estimate_latency_budget() -> None:
+    """The determinism invariant above is satisfied by raising the wait, which
+    makes it a one-way ratchet on rider-visible latency: CLAUDE.md pins fare
+    estimate P95 at 300 ms, and the wait is the worst case a rider can feel on
+    "tap → price shown". Ceiling here so a future bump to DIRECTIONS_TIMEOUT_S
+    has to come with a deliberate decision rather than silently costing 2 s.
+    """
+    from routes.rides import estimates
+
+    assert estimates._PRICING_ROUTE_WAIT_S <= 2.0
 
 
 @pytest.mark.anyio
 async def test_slow_directions_response_still_prices_road_basis() -> None:
-    """A route task that resolves just inside the HTTP timeout (simulated at
-    a scaled-down delay past the OLD 1.5 s-equivalent wait) must be awaited
+    """A route task that resolves just inside the HTTP timeout must be awaited
     and billed as road_route, not dropped for haversine."""
     import asyncio
 
     from routes.rides import estimates
-    from routes.rides._shared import select_fare_distance
+    from routes.rides._shared import DIRECTIONS_TIMEOUT_S, select_fare_distance
 
     async def slow_route():
-        # Longer than the old 1.5 s wait, inside the new one.
-        await asyncio.sleep(1.8)
+        # Derived from the timeout rather than hardcoded, so this keeps testing
+        # "landed just before the HTTP deadline" whatever the constants become.
+        await asyncio.sleep(DIRECTIONS_TIMEOUT_S * 0.9)
         return {"distance_km": 16.46, "polyline": [], "duration_s": 1500}
 
     route_task = asyncio.ensure_future(slow_route())

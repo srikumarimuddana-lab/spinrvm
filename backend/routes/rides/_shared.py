@@ -78,7 +78,13 @@ def _decode_polyline(encoded: str) -> list:
 # wait makes the billed distance basis a function of scheduler timing: the
 # same trip priced twice could get haversine once and the road route the
 # second time (incident: 12.12 km haversine → 16.46 km road, $30.92→$39.44).
-DIRECTIONS_TIMEOUT_S = 3.0
+#
+# It also bounds the worst-case fare estimate, because _PRICING_ROUTE_WAIT_S
+# is derived from it: raising this raises the P95 the rider feels on "tap →
+# price shown", which CLAUDE.md pins at 300 ms. 1.5 s already sits well past
+# the p99 for a warm Directions call; anything slower is a degraded upstream
+# we would rather fall back on than wait for.
+DIRECTIONS_TIMEOUT_S = 1.5
 
 
 async def _fetch_directions_route(

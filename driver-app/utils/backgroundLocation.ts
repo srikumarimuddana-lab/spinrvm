@@ -86,13 +86,16 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
     const data = await resp.json() as {
       token: string;
       refresh_token: string;
+      expires_in: number;
       access_expires_at: string;
     };
 
     // Persist the new refresh token (rotated) and cache the access token
     // for subsequent background fires. The main app picks up the rotated
     // refresh token from SecureStore on next foreground.
-    const expiresAtMs = new Date(data.access_expires_at).getTime();
+    // Use relative expires_in (not the server's absolute access_expires_at)
+    // to stay immune to device-vs-server clock skew.
+    const expiresAtMs = Date.now() + (data.expires_in ?? 900) * 1000;
     await SecureStore.setItemAsync('refresh_token', data.refresh_token);
     await SecureStore.setItemAsync('bg_access_token', data.token);
     await SecureStore.setItemAsync('bg_access_token_expires', String(expiresAtMs));

@@ -159,6 +159,31 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** each vehicle type quotes from its own configured rates, and a
   missing pricing row surfaces loudly instead of silently defaulting.
 
+### B9. Address+coordinate pairs are stored server-side with zero consistency validation
+- [ ] **Status:** open — follow-up to the Glide Crescent wrong-pin incident
+- **Why:** the client-side carriers of mismatched pairs are fixed (recents v2,
+  search-screen pin integrity, map-pick label binding), but the backend still
+  accepts and replays unvalidated pairs:
+  - `POST /addresses` (`backend/routes/addresses.py:29-42`) stores any
+    `{address, lat, lng}` triple — no address↔coordinate cross-check, no
+    service-area check, no expiry. Saved places render in the destination
+    picker and are trusted verbatim.
+  - `POST /favorites/from-ride/{ride_id}` (`backend/routes/favorites.py:135-158`)
+    copies a ride's stored pair verbatim into a permanent favorite — a poisoned
+    ride row gets laundered into a never-expiring replay source. (Unwired in
+    rider-app today, but a live trap.) Its dedupe also compares `pickup_lat`
+    and `dropoff_lat` only — longitude never (`favorites.py:71-72`).
+  - `CreateRideRequest` (`backend/schemas.py:426-433`) persists client-supplied
+    address strings beside coordinates with no cross-field validation, making
+    the rides table itself a durable record of whatever pair the client sent.
+- **Action:** store `place_id` with saved addresses and re-resolve on save;
+  geocode-verify pairs at write time (reject > ~1 km mismatch); fix the
+  favorites dedupe to compare both axes of both endpoints.
+- **Files:** `backend/routes/addresses.py`, `backend/routes/favorites.py`,
+  `backend/schemas.py`
+- **Acceptance:** no endpoint persists an address whose stored coordinate is
+  more than ~1 km from where that address geocodes.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

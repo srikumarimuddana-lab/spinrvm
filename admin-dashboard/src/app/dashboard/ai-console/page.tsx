@@ -43,6 +43,65 @@ interface ChatBubble {
     action?: AiAction;
 }
 
+/** The rider sees a "Drop a pin" button that opens the map screen; the
+ * console has no map, so it offers a lat,lng entry that sends the identical
+ * bracketed-coordinate message the app's confirmed pin would (the format
+ * prompt rule 6b passes through verbatim). Pre-filled with the assistant's
+ * approximate point when it supplied one. */
+function MapPinBubble({
+    action,
+    onQuickSend,
+}: {
+    action: Extract<AiAction, { type: "open_map_picker" }>;
+    onQuickSend: (text: string) => void;
+}) {
+    const [coords, setCoords] = useState(
+        action.approx_lat != null && action.approx_lng != null
+            ? `${action.approx_lat}, ${action.approx_lng}`
+            : "",
+    );
+    const parsed = useMemo(() => {
+        const match = coords.match(/^\s*(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
+        if (!match) return null;
+        const lat = Number(match[1]);
+        const lng = Number(match[2]);
+        if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+        return { lat, lng };
+    }, [coords]);
+    const sendPin = () => {
+        if (!parsed) return;
+        const place = action.label ? `${action.label} ` : "";
+        onQuickSend(
+            `I dropped a pin on the map for my ${action.location_role}: ${place}[${parsed.lat.toFixed(5)},${parsed.lng.toFixed(5)}]. Use these exact coordinates.`,
+        );
+    };
+    return (
+        <div className="max-w-[75%] rounded-lg border bg-muted px-3 py-2 text-sm space-y-2">
+            <div className="flex items-center gap-2 font-semibold">
+                <MapPin className="h-4 w-4 text-primary" />
+                Drop-a-pin request ({action.location_role})
+            </div>
+            {action.label && <p className="text-xs text-muted-foreground">{action.label}</p>}
+            <div className="flex items-center gap-2">
+                <Input
+                    value={coords}
+                    onChange={(e) => setCoords(e.target.value)}
+                    placeholder="lat, lng"
+                    className="h-8 text-xs"
+                    aria-label="Pin coordinates (lat, lng)"
+                />
+                <Button size="sm" className="h-8" onClick={sendPin} disabled={!parsed}>
+                    Send pin
+                </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+                The rider sees a button that opens the map; enter lat, lng to stand in for their
+                confirmed pin.
+            </p>
+        </div>
+    );
+}
+
 /** Mirrors the rider app's action cards so the console shows exactly what
  * the rider would see (shared/types/ai.ts is the contract for both). */
 function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: (text: string) => void }) {
@@ -190,6 +249,9 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                 </p>
             </div>
         );
+    }
+    if (action.type === "open_map_picker") {
+        return <MapPinBubble action={action} onQuickSend={onQuickSend} />;
     }
     if (action.type === "open_support") {
         return (

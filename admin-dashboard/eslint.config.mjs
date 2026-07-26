@@ -38,6 +38,8 @@ const eslintConfig = defineConfig([
       "react-hooks/static-components": "warn",
       "react-hooks/immutability": "warn",
       "react-hooks/purity": "warn",
+      "react-hooks/refs": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
     },
   },
   // WCAG 2.1 AA accessibility rules (AODA compliance)

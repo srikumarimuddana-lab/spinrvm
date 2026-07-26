@@ -128,6 +128,14 @@ export default function BookingProposalCard({ proposal }: Props) {
     priceRef.current = displayedTotal;
   }, [displayedTotal, promosReady]);
 
+  // NEVER re-apply the proposal's promo here. loadQuote seeds a zero-discount
+  // placeholder from proposal.promo_code, and fetchAvailablePromos then
+  // replaces it with the authoritative promo (or an eligible substitute, or
+  // null). createRide bills `get().appliedPromo?.code`, which is the SAME value
+  // this card renders through displayFareWithPromo — leave it alone and the
+  // displayed total is by construction the charged total. Re-applying the
+  // placeholder here used to overwrite the resolved promo, so a card showing a
+  // discounted price booked at full fare.
   const handleConfirm = useCallback(async () => {
     if (!estimate || bookedRef.current) return;
     // Card rides need an explicit card selection that can't be made from chat,
@@ -136,7 +144,6 @@ export default function BookingProposalCard({ proposal }: Props) {
     // the rider can pick a card and book there. Wallet proposals book inline.
     if (paymentMethod === 'card') {
       selectVehicle(estimate.vehicle_type as never);
-      applyPromo(proposedPromo);
       setScheduledTime(scheduledDate);
       router.push('/ride-options' as never);
       return;
@@ -144,7 +151,6 @@ export default function BookingProposalCard({ proposal }: Props) {
     setPhase('booking');
     try {
       selectVehicle(estimate.vehicle_type as never);
-      applyPromo(proposedPromo);
       setScheduledTime(scheduledDate);
       const ride = await createRide(paymentMethod, undefined, undefined, undefined, {
         // The assistant only stamps this after the rider explicitly confirmed
@@ -170,7 +176,7 @@ export default function BookingProposalCard({ proposal }: Props) {
       setErrorInfo(mapBookingError(error));
       setPhase('error');
     }
-  }, [estimate, selectVehicle, applyPromo, proposedPromo, setScheduledTime, scheduledDate, createRide, paymentMethod, proposal, router]);
+  }, [estimate, selectVehicle, setScheduledTime, scheduledDate, createRide, paymentMethod, proposal, router]);
 
   return (
     <View style={styles.card}>

@@ -57,7 +57,7 @@ export default function HeatMapPage() {
         ])
             .then(([settingsData, areasData]) => {
                 setSettings(settingsData);
-                setServiceAreas(areasData);
+                setServiceAreas(Array.isArray(areasData) ? areasData : []);
 
                 // Set defaults from settings
                 if (settingsData.heat_map_default_range) {

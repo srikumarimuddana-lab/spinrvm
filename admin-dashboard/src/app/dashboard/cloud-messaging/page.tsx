@@ -156,7 +156,7 @@ export default function CloudMessagingPage() {
     });
 
     useEffect(() => { fetchData(); }, []);
-    useEffect(() => { getServiceAreas().then((a) => setServiceAreas(a || [])).catch(() => setServiceAreas([])); }, []);
+    useEffect(() => { getServiceAreas().then((a) => setServiceAreas(Array.isArray(a) ? a : [])).catch(() => setServiceAreas([])); }, []);
 
     const fetchData = async () => {
         setLoading(true);
@@ -166,7 +166,7 @@ export default function CloudMessagingPage() {
                 getCloudMessageStats().catch(() => null),
             ]);
             setMessages(md && Array.isArray(md) ? md : []);
-            setStats(sd || emptyStats);
+            setStats(sd ? { ...emptyStats, ...sd } : emptyStats);
         } catch {
             setMessages([]);
             setStats(emptyStats);
@@ -233,7 +233,7 @@ export default function CloudMessagingPage() {
         }
         let cancelled = false;
         getCloudMessageAudiencePreview(form.audience, form.service_area_id || undefined)
-            .then((p) => { if (!cancelled) setPreview(p); })
+            .then((p) => { if (!cancelled) setPreview(p && typeof p.audience_total === "number" ? p : null); })
             .catch(() => { if (!cancelled) setPreview(null); });
         return () => { cancelled = true; };
     }, [form.audience, form.service_area_id]);

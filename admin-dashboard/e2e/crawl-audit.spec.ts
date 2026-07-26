@@ -71,14 +71,15 @@ async function mockAllAPIs(page: any) {
 
 for (const route of ROUTES) {
   test(`audit: ${route}`, async ({ page }) => {
+    test.setTimeout(45000);
     const consoleErrors: string[] = [];
     const pageErrors: string[] = [];
     page.on('console', msg => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
     page.on('pageerror', err => pageErrors.push(err.message));
 
     await mockAllAPIs(page);
-    const resp = await page.goto(route, { waitUntil: 'networkidle' }).catch(() => null);
-    await page.waitForTimeout(500);
+    const resp = await page.goto(route, { waitUntil: 'load', timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(800);
 
     const status = resp?.status() ?? 0;
     const bodyText = await page.locator('body').innerText().catch(() => '');

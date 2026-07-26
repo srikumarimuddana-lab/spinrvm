@@ -27,6 +27,7 @@ import {
   postBookingRoute,
   priceChangeNotice,
   promoForProposal,
+  promoSubstitutionNotice,
   scheduledDateForProposal,
   type BookingErrorDescriptor,
 } from './bookingProposal';
@@ -108,10 +109,9 @@ export default function BookingProposalCard({ proposal }: Props) {
     );
   }, [estimate, fetchAvailablePromos]);
 
-  // The proposed promo no longer applies (expired, wrong area, below the
-  // fare minimum) — say so instead of showing a chip beside an undiscounted
-  // total.
-  const promoMissing = !!proposal.promo_code && appliedPromo?.code !== proposal.promo_code;
+  // The proposed promo no longer applies (expired, wrong area, below the fare
+  // minimum) — say so, naming the substitute when the store auto-applied one.
+  const promoNotice = promoSubstitutionNotice(proposal.promo_code, appliedPromo?.code);
   const promoDiscount = estimate ? promoDiscountForEstimate(appliedPromo, estimate) : 0;
 
   // Never re-price silently: compare each displayed total against what the
@@ -233,19 +233,17 @@ export default function BookingProposalCard({ proposal }: Props) {
               <Ionicons name={paymentMethod === 'wallet' ? 'wallet-outline' : 'card-outline'} size={12} color={colors.textDim} />
               <Text style={styles.preferenceText}>{paymentMethod === 'wallet' ? 'Wallet' : 'Card'}</Text>
             </View>
-            {appliedPromo?.code && !promoMissing ? (
+            {appliedPromo?.code ? (
               <View style={styles.preferencePill}>
                 <Ionicons name="pricetag-outline" size={12} color={colors.success} />
                 <Text style={[styles.preferenceText, { color: colors.success }]}>Promo {appliedPromo.code}</Text>
               </View>
             ) : null}
           </View>
-          {promoMissing && (
+          {promoNotice && (
             <View style={styles.surgeBadge}>
               <Ionicons name="alert-circle-outline" size={12} color={colors.warning} />
-              <Text style={styles.surgeText}>
-                Promo {proposal.promo_code} is no longer available — total shown without it.
-              </Text>
+              <Text style={styles.surgeText}>{promoNotice}</Text>
             </View>
           )}
           {(estimate.surge_multiplier ?? 1) > 1 && (

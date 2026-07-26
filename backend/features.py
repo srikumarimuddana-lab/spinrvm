@@ -39,6 +39,7 @@ try:
     from .services.fare_service import DEFAULT_FARE, calculate_fare
     from .services.fare_service import _d as _fare_d
     from .services.fare_service import _f as _fare_f
+    from .utils.pii import geohash as _geohash
     from .utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
@@ -48,6 +49,7 @@ except ImportError:
     from services.fare_service import DEFAULT_FARE, calculate_fare
     from services.fare_service import _d as _fare_d
     from services.fare_service import _f as _fare_f
+    from utils.pii import geohash as _geohash
     from utils.surge_engine import SURGE_CAP
 
 # Legacy alias for call sites that still reference the pre-refactor ``db`` module.
@@ -145,11 +147,9 @@ async def calculate_airport_fee(
     # but a ride still shows airport_fee, the value is frozen on the ride
     # row from before the removal — historical rides don't get retro-fixed.
     logger.info(
-        "[AIRPORT_FEE] check pickup=(%.5f,%.5f) dropoff=(%.5f,%.5f) areas=%d",
-        pickup_lat,
-        pickup_lng,
-        dropoff_lat,
-        dropoff_lng,
+        "[AIRPORT_FEE] check pickup=%s dropoff=%s areas=%d",
+        _geohash(pickup_lat, pickup_lng),
+        _geohash(dropoff_lat, dropoff_lng),
         len(areas),
     )
 
@@ -188,7 +188,7 @@ async def calculate_airport_fee(
             logger.info(
                 "[AIRPORT_FEE] applied $%.2f for zone %r (id=%s): "
                 "pickup_in=%s dropoff_in=%s stop_in=%s | "
-                "pickup=(%.5f,%.5f) dropoff=(%.5f,%.5f) | "
+                "pickup=%s dropoff=%s | "
                 "polygon vertices=%d bbox lat=[%.5f,%.5f] lng=[%.5f,%.5f]",
                 fee,
                 area.get("name", "Airport"),
@@ -196,10 +196,8 @@ async def calculate_airport_fee(
                 pickup_in,
                 dropoff_in,
                 stop_in,
-                pickup_lat,
-                pickup_lng,
-                dropoff_lat,
-                dropoff_lng,
+                _geohash(pickup_lat, pickup_lng),
+                _geohash(dropoff_lat, dropoff_lng),
                 len(polygon),
                 min(lats),
                 max(lats),

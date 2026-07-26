@@ -121,6 +121,9 @@ const NAV_GROUPS: NavGroup[] = [
             // the isSuperAdmin bypass this makes the entry super-admin-only;
             // the page and the backend re-check the role themselves.
             { href: "/dashboard/ai-console", label: "AI Console", icon: Sparkles, module: "ai_console" },
+            // Same super-admin-only mechanism: "bulk_operations" is granted to
+            // no staff role; the page + backend enforce strict super_admin.
+            { href: "/dashboard/bulk-operations", label: "Bulk Operations", icon: Upload, module: "bulk_operations" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
         ],
     },

@@ -178,9 +178,19 @@ export async function ensureFreshToken(): Promise<void> {
 
   try {
     _refreshPromise = _refreshCallback();
-    await _refreshPromise;
+    const success = await _refreshPromise;
+    if (success) {
+      // Flush any 401 subscribers that queued while this proactive refresh
+      // was in flight — without this they hang forever because only the
+      // 401 handler called _onRefreshed, creating a deadlock.
+      _onRefreshed(_inMemoryToken ?? '');
+    } else {
+      _onRefreshed('');
+    }
   } catch {
-    // Proactive refresh failed — the reactive 401 handler will catch it.
+    // Proactive refresh failed — flush subscribers so they fail fast
+    // instead of hanging. The reactive 401 handler will catch them.
+    _onRefreshed('');
   } finally {
     _refreshPromise = null;
   }
@@ -723,6 +733,13 @@ const isSosUrl = (url: string): boolean => /^\/rides\/[^/]+\/emergency$/.test(ur
 // concurrent requests share the slot, which at worst skips a retry.
 const _inflight503Retries = new Set<string>();
 
+// Same pattern for 401 refresh-retries. Without this, a retryFn that re-enters
+// the public method mints a fresh closure on each recursion — an endpoint that
+// persistently 401s for a non-expiry reason (suspended user, role mismatch)
+// while /auth/refresh succeeds loops forever: hung spinners, backend hammering,
+// battery drain. One refresh-retry per logical request path.
+const _inflight401Retries = new Set<string>();
+
 const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<unknown>): Promise<never> => {
   // Set when this 401 went through the silent-refresh path below. Once
   // refreshTokens() has run, IT owns the logout decision (it logs out on a
@@ -771,13 +788,15 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // On 401, attempt a single silent token refresh then retry the original request.
   // SOS is exempt (see isSosUrl) — its backend route tolerates expired tokens,
   // so the refresh round-trip only adds failure modes during an emergency.
-  if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url)) {
+  if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url) && !_inflight401Retries.has(`${method} ${url}`)) {
     // Set before any await, so the fall-through to the G2 backstop below
     // always sees it — covers both the first-caller path and the
     // queued-subscriber path (a queued request whose shared refresh fails
     // rejects inside this try and would otherwise fall through to G2 and
     // get logged out).
     refreshAttempted = true;
+    const retryKey = `${method} ${url}`;
+    _inflight401Retries.add(retryKey);
     try {
       if (_refreshPromise) {
         // A refresh is already in-flight — queue this request and wait for
@@ -820,6 +839,8 @@ const handleApiError = async (response: Response, method: string, url: string, r
     } catch {
       _refreshPromise = null;
       _onRefreshed('');
+    } finally {
+      _inflight401Retries.delete(retryKey);
     }
   }
 

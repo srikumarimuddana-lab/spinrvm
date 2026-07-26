@@ -64,6 +64,10 @@ _PICKUP_RECONCILE_KM = 1.0
 # ride (incident: same Walmart quoted at 0.08 km with no warning).
 _SAME_PLACE_CONFIRM_KM = 0.25
 
+# Shared by get_fare_quote and propose_ride_booking so the two can never
+# disagree about whether a pickup is serviceable.
+_OUT_OF_AREA_ERROR = "pickup is outside Spinr's service areas — booking is not possible there"
+
 _COORD_PROPS = {
     "pickup_lat": {"type": "number", "minimum": -90, "maximum": 90},
     "pickup_lng": {"type": "number", "minimum": -180, "maximum": 180},
@@ -466,12 +470,17 @@ async def get_fare_quote(
             pickup_lat,
             pickup_lng,
             pickup_address,
-            _in_area,
+            pickup_in_area,
             pickup_adjusted,
             pickup_drift_km,
         ) = await _reconcile_pickup(
             pickup_lat, pickup_lng, pickup_address, client_location=user.get("_client_location")
         )
+        # Same verdict propose_ride_booking enforces. Quoting a pickup the
+        # booking step will refuse shows the rider a price and then takes it
+        # away — say it once, here, before any number is spoken.
+        if not pickup_in_area:
+            return {"error": _OUT_OF_AREA_ERROR}
         if pickup_adjusted:
             pickup_note = (
                 f"the pickup pin was moved {pickup_drift_km:.1f} km to match '{pickup_address}' — "
@@ -483,6 +492,11 @@ async def get_fare_quote(
         confirm_same_location,
     )
     if refusal:
+        # A moved pin still has to be disclosed even when the trip is refused —
+        # the rider needs to hear which pickup we actually resolved before they
+        # answer "yes, same place".
+        if pickup_note:
+            refusal["pickup_note"] = pickup_note
         return refusal
 
     try:
@@ -722,7 +736,7 @@ async def propose_ride_booking(
         client_location=user.get("_client_location"),
     )
     if not in_area:
-        return {"error": "pickup is outside Spinr's service areas — booking is not possible there"}
+        return {"error": _OUT_OF_AREA_ERROR}
 
     # Guard AFTER reconciliation so it measures the pickup that would actually
     # be dispatched, and on the proposal itself so skipping the quote step

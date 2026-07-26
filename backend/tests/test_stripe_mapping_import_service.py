@@ -254,11 +254,42 @@ def test_already_mapped_is_warning_and_skipped(monkeypatch):
     assert not plan.driver_updates
 
 
-def test_conflict_existing_different_id(monkeypatch):
+def test_different_existing_id_is_needs_update_not_error(monkeypatch):
+    """A driver already carrying a DIFFERENT account is non-blocking: it lands
+    in needs_update (for an explicit per-driver update), never in errors, so it
+    cannot block the rest of the batch."""
     _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_OTHER")])
     rows = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"}]
     plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
-    assert [e.field for e in plan.errors] == ["conflict_existing"]
+    assert not plan.errors
+    assert not plan.driver_updates
+    assert len(plan.needs_update) == 1
+    item = plan.needs_update[0]
+    assert item["driver_id"] == "drv-1"
+    assert item["current_stripe_account_id"] == "acct_OTHER"
+    assert item["new_stripe_account_id"] == "acct_A1"
+    assert item["row_ref"] == "OLD-1"
+
+
+def test_needs_update_does_not_block_null_rows_in_same_batch(monkeypatch):
+    """One already-mapped driver must not stop a NULL-account driver in the same
+    CSV from importing — the original bug this feature fixes."""
+    already = _driver(id="drv-1", stripe_account_id="acct_OTHER")
+    fresh = _driver(
+        id="drv-2",
+        phone="+13065550002",
+        stripe_account_id=None,
+        legacy_import_metadata={"source": svc.DRIVER_IMPORT_SOURCE, "old_driver_id": "OLD-2"},
+    )
+    _install_fake(monkeypatch, drivers=[already, fresh])
+    rows = [
+        {"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"},
+        {"old_driver_id": "OLD-2", "stripe_account_id": "acct_B2"},
+    ]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert not plan.errors
+    assert [u["driver_id"] for u in plan.driver_updates] == ["drv-2"]
+    assert [n["driver_id"] for n in plan.needs_update] == ["drv-1"]
 
 
 def test_id_taken_by_other_driver(monkeypatch):
@@ -478,6 +509,70 @@ async def test_build_plan_without_stripe_secret_refuses(monkeypatch):
     plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, "", "b1")
     assert [e.field for e in plan.errors] == ["stripe_not_configured"]
     assert not plan.driver_updates
+
+
+# ------------------------------------------ per-driver account update (overwrite)
+
+
+@pytest.mark.anyio
+async def test_update_driver_success_records_provenance(monkeypatch):
+    store = _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_OTHER")])
+    _patch_account_retrieve(monkeypatch, _acct_payload(id="acct_A1"))
+    res = await svc.update_driver_stripe_account("drv-1", "acct_A1", "acct_OTHER", "b1", SECRET)
+    assert res["ok"] and res["status"] == "updated"
+    migration = store["drivers"][0]["legacy_import_metadata"]["stripe_migration"]
+    assert store["drivers"][0]["stripe_account_id"] == "acct_A1"
+    assert migration["previous_account_id"] == "acct_OTHER"
+    assert migration["action"] == "account_update"
+
+
+@pytest.mark.anyio
+async def test_update_driver_stale_current_refuses(monkeypatch):
+    """Review screen went stale: the driver's current account is no longer what
+    the operator saw → no write, status stale."""
+    store = _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_CURRENT")])
+    _patch_account_retrieve(monkeypatch, _acct_payload(id="acct_A1"))
+    res = await svc.update_driver_stripe_account("drv-1", "acct_A1", "acct_STALE", "b1", SECRET)
+    assert not res["ok"] and res["status"] == "stale"
+    assert store["drivers"][0]["stripe_account_id"] == "acct_CURRENT"
+
+
+@pytest.mark.anyio
+async def test_update_driver_id_taken_by_another(monkeypatch):
+    holder = _driver(id="drv-2", phone="+13065550000", stripe_account_id="acct_A1", legacy_import_metadata={})
+    store = _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_OTHER"), holder])
+    _patch_account_retrieve(monkeypatch, _acct_payload(id="acct_A1"))
+    res = await svc.update_driver_stripe_account("drv-1", "acct_A1", "acct_OTHER", "b1", SECRET)
+    assert not res["ok"] and res["status"] == "id_taken"
+    assert store["drivers"][0]["stripe_account_id"] == "acct_OTHER"
+
+
+@pytest.mark.anyio
+async def test_update_driver_bad_format_refuses(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_OTHER")])
+    res = await svc.update_driver_stripe_account("drv-1", "not_an_acct", "acct_OTHER", "b1", SECRET)
+    assert not res["ok"] and res["status"] == "bad_format"
+
+
+@pytest.mark.anyio
+async def test_update_driver_custom_account_succeeds_with_warning(monkeypatch):
+    """Custom accounts are a warning, not a blocker — the update still lands."""
+    store = _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_OTHER")])
+    _patch_account_retrieve(monkeypatch, _acct_payload(id="acct_A1", type="custom"))
+    res = await svc.update_driver_stripe_account("drv-1", "acct_A1", "acct_OTHER", "b1", SECRET)
+    assert res["ok"] and res["status"] == "updated"
+    assert ("account_type", "account type is custom, not express") in res["warnings"]
+    assert store["drivers"][0]["stripe_account_id"] == "acct_A1"
+
+
+@pytest.mark.anyio
+async def test_update_driver_validation_failure_blocks_write(monkeypatch):
+    store = _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_OTHER")])
+    _patch_account_retrieve(monkeypatch, _acct_payload(id="acct_A1", country="US"))
+    res = await svc.update_driver_stripe_account("drv-1", "acct_A1", "acct_OTHER", "b1", SECRET)
+    assert not res["ok"] and res["status"] == "validation_failed"
+    assert any(f == "country" for f, _ in res["errors"])
+    assert store["drivers"][0]["stripe_account_id"] == "acct_OTHER"
 
 
 # ---------------------------------------------------------------- commit

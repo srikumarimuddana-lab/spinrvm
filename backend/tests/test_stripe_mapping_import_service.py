@@ -169,15 +169,15 @@ def test_driver_phone_fallback(monkeypatch):
     assert plan.driver_updates[0]["row_ref"] == "row-2"  # header is line 1
 
 
-def test_driver_phone_match_never_targets_native_drivers(monkeypatch):
-    # Payout-hijack guard: a driver who onboarded natively (no legacy import
-    # provenance) must be unreachable by phone-matched mapping rows, even
-    # with a NULL stripe_account_id.
+def test_driver_phone_match_works_without_legacy_metadata(monkeypatch):
+    # Phone match is unscoped — any driver with a matching phone can be
+    # targeted. Safety comes from the NULL-guard on commit (can't overwrite
+    # existing stripe_account_id) + super_admin gate + live Stripe validation.
     _install_fake(monkeypatch, drivers=[_driver(legacy_import_metadata={})])
     rows = [{"phone": "3065551234", "stripe_account_id": "acct_A1"}]
     plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
-    assert [e.field for e in plan.errors] == ["no_match"]
-    assert not plan.driver_updates
+    assert not plan.errors
+    assert [u["driver_id"] for u in plan.driver_updates] == ["drv-1"]
 
 
 def test_driver_ambiguous_match(monkeypatch):

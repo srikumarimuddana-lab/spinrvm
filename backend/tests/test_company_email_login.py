@@ -32,7 +32,6 @@ class TestCompanyEmailOtpSend:
             return row
 
         with (
-            _LOCKOUT_NOOP,
             _SEND_CAP_NOOP,
             patch("backend.routes.auth.generate_otp", return_value="1234"),
             patch("backend.routes.auth.db_supabase.delete_many", AsyncMock()),
@@ -287,26 +286,31 @@ class TestCompanyEmailOtpLockout:
 
         clear_failures.assert_awaited_once()
 
-    def test_send_locked_out_email_returns_429(self):
-        from fastapi import HTTPException
-
+    def test_send_does_not_check_lockout(self):
+        """Parity with the phone send_otp path: a locked-out destination may
+        still REQUEST a code. The lockout is enforced at verify, so gating send
+        buys no security — it would only strip the recovery path from a user
+        whose address someone else mistyped into the lockout."""
         from backend.routes.auth import CompanyEmailOtpSendRequest, send_company_email_otp
 
-        lockout_exc = HTTPException(status_code=429, detail="Too many failed attempts")
+        check_lockout = AsyncMock()
         with (
-            patch("backend.routes.auth._check_otp_lockout", AsyncMock(side_effect=lockout_exc)),
-            patch("backend.routes.auth.generate_otp") as gen_otp,
-            pytest.raises(HTTPException) as excinfo,
+            patch("backend.routes.auth._check_otp_lockout", check_lockout),
+            _SEND_CAP_NOOP,
+            patch("backend.routes.auth.generate_otp", return_value="1234"),
+            patch("backend.routes.auth.db_supabase.delete_many", AsyncMock()),
+            patch("backend.routes.auth.db_supabase.insert_one", AsyncMock()),
+            patch("backend.routes.auth.send_transactional_email", AsyncMock(return_value=True)),
         ):
-            asyncio.run(
+            result = asyncio.run(
                 send_company_email_otp(
                     _request(),
                     CompanyEmailOtpSendRequest(email=EMAIL),
                 )
             )
 
-        assert excinfo.value.status_code == 429
-        gen_otp.assert_not_called()
+        assert result == {"success": True, "message": "Verification code sent"}
+        check_lockout.assert_not_called()
 
     def test_send_enforces_send_cap(self):
         from fastapi import HTTPException
@@ -315,7 +319,6 @@ class TestCompanyEmailOtpLockout:
 
         cap_exc = HTTPException(status_code=429, detail="Too many code requests")
         with (
-            _LOCKOUT_NOOP,
             patch("backend.routes.auth._enforce_otp_send_cap", AsyncMock(side_effect=cap_exc)),
             patch("backend.routes.auth.generate_otp") as gen_otp,
             pytest.raises(HTTPException) as excinfo,

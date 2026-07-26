@@ -15,13 +15,22 @@ import * as Location from 'expo-location';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
+import { useAiChatStore } from '../store/aiChatStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
 export default function PickOnMapScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ field?: string }>();
+  // ai='1': opened from the assistant's "Drop a pin" card. The confirmed pin
+  // goes back into the chat (as a coordinate-carrying message) instead of the
+  // manual booking flow, and aiLat/aiLng centre the map on the approximate
+  // geocode the assistant is trying to pin down.
+  const params = useLocalSearchParams<{ field?: string; ai?: string; aiLat?: string; aiLng?: string }>();
   const field = params.field || 'dropoff';
+  const aiMode = params.ai === '1';
+  const approxLat = Number(params.aiLat);
+  const approxLng = Number(params.aiLng);
+  const hasApprox = Number.isFinite(approxLat) && Number.isFinite(approxLng);
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -34,6 +43,16 @@ export default function PickOnMapScreen() {
 
   useEffect(() => {
     (async () => {
+      // The assistant supplied an approximate point — start there instead of
+      // the device GPS (the whole reason we're here is to refine THAT spot),
+      // and geocode it immediately so the confirm button isn't stuck waiting
+      // for a map interaction.
+      if (hasApprox) {
+        setRegion({ latitude: approxLat, longitude: approxLng, latitudeDelta: 0.008, longitudeDelta: 0.008 });
+        setLoading(false);
+        reverseGeocode(approxLat, approxLng);
+        return;
+      }
       let { status } = await Location.getForegroundPermissionsAsync();
       if (status !== 'granted') {
         const res = await Location.requestForegroundPermissionsAsync();
@@ -112,6 +131,21 @@ export default function PickOnMapScreen() {
     const pin = { lat: region.latitude, lng: region.longitude };
     const addressMatchesPin =
       !!address && !geocoding && !!addressForRef.current && approxMeters(pin, addressForRef.current) <= 60;
+    if (aiMode) {
+      // Return leg of the assistant's "Drop a pin" card: the pin goes back
+      // into the chat as a coordinate-carrying message. A stale label still
+      // must not travel — without a matching address the message carries the
+      // coordinates alone, which is exactly what the model needs.
+      void useAiChatStore
+        .getState()
+        .submitMapPin(field === 'pickup' ? 'pickup' : 'dropoff', {
+          lat: pin.lat,
+          lng: pin.lng,
+          address: addressMatchesPin ? address : null,
+        });
+      router.back();
+      return;
+    }
     router.navigate({
       pathname: '/search-destination',
       params: {
@@ -125,6 +159,15 @@ export default function PickOnMapScreen() {
 
   const handleRecenter = async () => {
     try {
+      // The AI-mode mount skips the permission request (the map opens on the
+      // assistant's approximate point, not the device), so permission may
+      // never have been asked — request it here or the button is silently
+      // dead in exactly that flow.
+      let { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        status = (await Location.requestForegroundPermissionsAsync()).status;
+      }
+      if (status !== 'granted') return;
       const loc = await Location.getCurrentPositionAsync({});
       mapRef.current?.animateToRegion({
         latitude: loc.coords.latitude,

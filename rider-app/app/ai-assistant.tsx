@@ -309,6 +309,36 @@ export default function AiAssistantScreen() {
         </TouchableOpacity>
       );
     }
+    if (item.kind === 'map_picker' && item.action?.type === 'open_map_picker') {
+      const picker = item.action;
+      const hasApprox = typeof picker.approx_lat === 'number' && typeof picker.approx_lng === 'number';
+      return (
+        <TouchableOpacity
+          style={styles.actionCard}
+          onPress={() =>
+            router.push({
+              pathname: '/pick-on-map',
+              params: {
+                field: picker.location_role,
+                ai: '1',
+                ...(hasApprox
+                  ? { aiLat: String(picker.approx_lat), aiLng: String(picker.approx_lng) }
+                  : {}),
+              },
+            } as never)
+          }
+          accessibilityRole="button"
+          accessibilityLabel={`Drop a pin for your ${picker.location_role}`}
+          accessibilityHint="Opens a map — place the pin at the exact spot and confirm"
+        >
+          <Ionicons name="location-outline" size={18} color={colors.primary} />
+          <Text style={styles.actionCardText} numberOfLines={2}>
+            {picker.label ? `Drop a pin — ${picker.label}` : `Drop a pin for your ${picker.location_role}`}
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+        </TouchableOpacity>
+      );
+    }
     if (item.kind === 'booking_proposal' && item.action?.type === 'booking_proposal') {
       return <BookingProposalCard proposal={item.action.proposal} />;
     }

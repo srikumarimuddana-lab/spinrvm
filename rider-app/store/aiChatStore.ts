@@ -34,6 +34,7 @@ const TOOL_STATUS: Record<string, string> = {
   find_place: 'Finding that place…',
   get_rider_location: 'Finding your location…',
   get_fare_quote: 'Getting exact prices…',
+  request_map_pin: 'Setting up the map…',
   propose_ride_booking: 'Preparing your booking…',
   escalate_to_support: 'Preparing a support handoff…',
 };
@@ -90,6 +91,13 @@ interface AiChatState {
   conversationId: string | null;
   isStreaming: boolean;
   toolStatus: string | null;
+  /** Pin confirmed while the previous turn was still streaming — sendMessage
+   * refuses concurrent sends, so the pin waits here and flushes the moment
+   * the stream ends (silently dropping it lost the rider's selection). */
+  pendingMapPin: {
+    role: 'pickup' | 'dropoff';
+    pin: { lat: number; lng: number; address?: string | null };
+  } | null;
   enabled: boolean;
   /** How to present the AI entry point while disabled: 'coming_soon' (show a
    * "coming soon" hint) or 'hidden' (don't render the icon at all). 'enabled'
@@ -101,6 +109,14 @@ interface AiChatState {
   loadConfig: () => Promise<void>;
   loadHistory: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
+  /** Return leg of the "Drop a pin" card: sends the confirmed map pin back
+   * into the chat as a user message carrying exact [lat,lng] coordinates
+   * (the bracketed format the model is instructed to pass through verbatim,
+   * and the PII scrubber is taught to leave intact). */
+  submitMapPin: (
+    role: 'pickup' | 'dropoff',
+    pin: { lat: number; lng: number; address?: string | null },
+  ) => Promise<void>;
   stopStreaming: () => void;
   startNewConversation: () => Promise<void>;
 }
@@ -110,6 +126,7 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
   conversationId: null,
   isStreaming: false,
   toolStatus: null,
+  pendingMapPin: null,
   enabled: false,
   mode: 'coming_soon',
   disclaimer: '',
@@ -202,20 +219,19 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
           break;
         case 'action': {
           const action = event.data as AiAction;
+          const kindByAction: Partial<Record<AiAction['type'], AiChatMessage['kind']>> = {
+            booking_proposal: 'booking_proposal',
+            location_suggestions: 'location_suggestions',
+            fare_quote: 'fare_quote',
+            open_map_picker: 'map_picker',
+          };
           set((state) => ({
             messages: [
               ...state.messages,
               {
                 id: newId(),
                 role: 'assistant',
-                kind:
-                  action.type === 'booking_proposal'
-                    ? 'booking_proposal'
-                    : action.type === 'location_suggestions'
-                      ? 'location_suggestions'
-                      : action.type === 'fare_quote'
-                        ? 'fare_quote'
-                        : 'support_action',
+                kind: kindByAction[action.type] ?? 'support_action',
                 content: '',
                 action,
                 createdAt: Date.now(),
@@ -258,12 +274,43 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
         abortController: null,
         messages: state.messages.filter((m) => !(m.id === assistantId && m.kind === 'text' && !m.content)),
       }));
+      // Flush a pin confirmed while this turn was streaming — it queued
+      // instead of being dropped by the isStreaming guard. Skip aborted
+      // turns: stopStreaming flushes explicitly, and startNewConversation is
+      // discarding this conversation (its clear may not have landed yet).
+      const queued = get().pendingMapPin;
+      if (queued && !abortController.signal.aborted) {
+        set({ pendingMapPin: null });
+        void get().submitMapPin(queued.role, queued.pin);
+      }
     }
+  },
+
+  submitMapPin: async (role, pin) => {
+    // Confirmed while the emitting turn is still streaming (rider beat the
+    // model's follow-up text): queue it — sendMessage would silently refuse a
+    // concurrent send, and the pick-on-map screen has already navigated back.
+    // Latest confirmation wins if somehow queued twice.
+    if (get().isStreaming) {
+      set({ pendingMapPin: { role, pin } });
+      return;
+    }
+    const place = pin.address ? `${pin.address} ` : '';
+    await get().sendMessage(
+      `I dropped a pin on the map for my ${role}: ${place}[${pin.lat.toFixed(5)},${pin.lng.toFixed(5)}]. Use these exact coordinates.`,
+    );
   },
 
   stopStreaming: () => {
     get().abortController?.abort();
     set({ isStreaming: false, toolStatus: null, abortController: null });
+    // The rider halted the turn deliberately — a pin they confirmed during it
+    // is still theirs to send. Flush now rather than surprising them later.
+    const queued = get().pendingMapPin;
+    if (queued) {
+      set({ pendingMapPin: null });
+      void get().submitMapPin(queued.role, queued.pin);
+    }
   },
 
   startNewConversation: async () => {
@@ -275,6 +322,9 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
       isStreaming: false,
       toolStatus: null,
       abortController: null,
+      // A queued pin answers a request from the abandoned conversation —
+      // flushing it into the fresh one would be a context-free non sequitur.
+      pendingMapPin: null,
     });
   },
 }));

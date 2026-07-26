@@ -22,6 +22,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Batch size rule
 - Limit each commit to one logical change. If a diff exceeds ~200 lines, split it.
 
+### Bug/gap fix documentation (mandatory)
+Whenever you identify and fix a bug, gap, or issue — whether from a user report, a Codex comment, an audit, or something you found while doing something else — produce an **Impact & Risk Record** as part of that PR's description (append it under a `## Impact & Risk Record` heading; do not create a separate file per fix). This is in addition to, not a replacement for, the standard PR template's Tier 1–4 fields.
+
+Required table, one row per file touched:
+
+| File | Path | What changed | Risk to existing functionality | UX effect | Verified how |
+|---|---|---|---|---|---|
+| `page.tsx` | `admin-dashboard/src/app/dashboard/x/page.tsx` | one-line description | none / isolated / shared-component blast radius — name every other consumer of a shared component you touched | none (invisible fix) / visible change a user will notice, described | unit test / e2e / manual crawl / **production build run** — say which, don't assume |
+
+For every row, include a **before/after code snippet** (not the full diff — just the changed lines with 1–2 lines of surrounding context) directly under the table, fenced as ` ```diff ` or paired before/after blocks.
+
+Then answer explicitly, in prose, not just checkboxes:
+- **What could this break that isn't covered by an existing test?** Grep for other consumers of anything shared you touched (components, hooks, utility functions) — list them by name, not just "checked, looks fine."
+- **Did you run a production build (`npm run build` / equivalent)?** A passing dev server or `tsc --noEmit` is not the same thing — say explicitly whether you ran it and what happened.
+- **What did you NOT verify, and why is that acceptable?** Every fix has a real boundary of what was checked (e.g. "not tested against live Supabase, only mocked API responses" or "no visual regression tooling exists in this repo, so a visually-invisible change like `aria-label` was reasoned about, not screenshotted"). State it — don't let silence imply full coverage.
+
+The point is to make risk and "what wasn't checked" visible to a human reviewer before merge, not after a rollback.
+
+### Pre-merge quality gates (live app testing phase — proactive, not reactive)
+The product is in live app testing. A change that ships and then gets rolled back after a user hits it is a worse outcome than one that's caught in review — prefer gates over rollbacks. When you finish a fix, before considering it done:
+
+1. **Run a real production build**, not just `tsc --noEmit` or the dev server — `next dev`'s fast refresh tolerates things a production build won't. This is non-negotiable for any `admin-dashboard`/`rider-app`/`driver-app` change.
+2. **Trace blast radius for shared components/hooks/utilities.** `grep -rn` for every other file that imports the thing you changed, and confirm each consumer still works — don't assume "it's just an aria-label" is safe without checking whether any test hardcodes the old markup or stubs the component out entirely (a stubbed-out component in a test gives zero real coverage of your change — say so if you find it, don't count it as "tested").
+3. **If there's no automated visual/snapshot regression tooling for the surface you're touching, say so explicitly** rather than silently relying on "no visible diff" reasoning. Flag it as a standing gap (see `ACTION_ITEMS.md`) rather than re-discovering it every session.
+4. **Prefer additive/flagged rollout for anything touching a shared component used by 3+ pages.** If the platform supports feature flags or a staged rollout, use one instead of a direct `main` merge for cross-cutting UI changes — ask the user if unsure whether that mechanism exists here.
+5. **A CI check that's red for a reason unrelated to your diff is not "not my problem" — it's a signal the gate itself has decayed.** File a `[CR]` (see `.github/ISSUE_TEMPLATE/ci_change_request.yml`) for a documented accepted-risk finding rather than leaving a permanently-red gate unexplained; don't force a fix that breaks something else just to turn a check green (verify newer/patched dependency versions actually work before pinning them — a version bump that "should" fix an audit finding can break the tool it's supposed to fix, confirm before committing).
+6. **Escalate before merging, don't roll back after:** if a fix touches a shared component/hook used by other pages and you can't verify all its consumers (no time, no test coverage, unclear ownership), say so and ask before merging — that's cheaper than a live rollback.
+
 ### PR review handling (Codex auto-review)
 - When subscribed to a PR (or asked to look at one), **do not chase CI checks** — skip `yarn audit` / `npm audit` / lint / deploy status unless the user explicitly asks. Pre-existing dependency-audit failures on surfaces a PR doesn't touch are not this PR's job.
 - **Always** check the PR's review comments from Codex (`chatgpt-codex-connector`) and act on them without being reminded:

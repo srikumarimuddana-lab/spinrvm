@@ -1093,6 +1093,8 @@ class TestRequestMapPin:
     "drop a pin on the map" instruction is a dead end the rider cannot act
     on — the incident this flow exists to fix)."""
 
+    CAPABLE_RIDER = {**RIDER, "_client_capabilities": frozenset({"map_pin"})}
+
     @pytest.mark.anyio
     async def test_action_carries_role_approx_and_label(self):
         result, ok = await execute_tool(
@@ -1103,7 +1105,7 @@ class TestRequestMapPin:
                 "approx_lng": -104.6501,
                 "label": "2965 Gordon Rd, Regina",
             },
-            user=RIDER,
+            user=self.CAPABLE_RIDER,
         )
         assert ok
         assert result["shown"] is True
@@ -1118,10 +1120,22 @@ class TestRequestMapPin:
 
     @pytest.mark.anyio
     async def test_approx_optional(self):
-        result, ok = await execute_tool("request_map_pin", {"location_role": "pickup"}, user=RIDER)
+        result, ok = await execute_tool("request_map_pin", {"location_role": "pickup"}, user=self.CAPABLE_RIDER)
         assert ok
         assert result["_client_action"]["location_role"] == "pickup"
         assert "approx_lat" not in result["_client_action"]
+
+    @pytest.mark.anyio
+    async def test_no_button_for_clients_without_the_capability(self):
+        # The backend deploys ahead of mobile builds. An app installed before
+        # the Drop-a-pin card shipped renders nothing for the action — the
+        # assistant must not promise a button that isn't there. Old clients
+        # send no capabilities at all.
+        result, ok = await execute_tool("request_map_pin", {"location_role": "dropoff"}, user=RIDER)
+        assert ok
+        assert result["shown"] is False
+        assert "_client_action" not in result
+        assert "do NOT" in result["note"]
 
     def test_refusal_notes_point_at_this_tool(self):
         import inspect

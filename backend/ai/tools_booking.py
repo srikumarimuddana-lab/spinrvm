@@ -460,7 +460,23 @@ async def request_map_pin(
     provide). The button opens the app's pick-on-map screen centred on the
     approximate point; the confirmed pin comes back as the rider's next
     message carrying exact [lat,lng] coordinates.
+
+    Capability-gated: the backend deploys ahead of mobile builds, and an app
+    installed before the card shipped renders nothing for this action — the
+    assistant would promise a button that isn't there. Clients that can draw
+    the card declare "map_pin" in the chat request's capabilities.
     """
+    if "map_pin" not in (user.get("_client_capabilities") or ()):
+        return {
+            "shown": False,
+            "note": (
+                "This rider's app version cannot show the in-chat map button — do NOT "
+                "tell them to drop a pin or mention a map. Ask them to correct the "
+                "address in text (exact house number and postal code), or suggest "
+                "booking this trip from the app's main booking screen, which has a "
+                "map picker."
+            ),
+        }
     action: Dict[str, Any] = {"type": "open_map_picker", "location_role": location_role}
     if label:
         action["label"] = label[:120]

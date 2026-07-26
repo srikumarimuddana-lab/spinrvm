@@ -461,3 +461,156 @@ async def test_build_plan_without_stripe_secret_refuses(monkeypatch):
     plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, "", "b1")
     assert [e.field for e in plan.errors] == ["stripe_not_configured"]
     assert not plan.driver_updates
+
+
+# ---------------------------------------------------------------- commit
+
+
+def test_commit_plan_refuses_on_errors(monkeypatch):
+    store = _install_fake(monkeypatch, drivers=[_driver()])
+    plan = svc.StripeMappingPlan(kind=svc.KIND_DRIVERS, batch="b1")
+    plan.errors.append(svc.StripeMappingErrorItem("OLD-1", "no_match", "boom"))
+    plan.driver_updates.append(
+        {"driver_id": "drv-1", "stripe_account_id": "acct_A1", "row_ref": "OLD-1", "existing_metadata": {}}
+    )
+    with pytest.raises(RuntimeError, match="refusing to commit"):
+        svc.commit_plan(plan)
+    assert store["drivers"][0]["stripe_account_id"] is None  # zero writes
+
+
+def test_commit_plan_writes_id_and_merges_provenance(monkeypatch):
+    existing_meta = {"source": svc.DRIVER_IMPORT_SOURCE, "old_driver_id": "OLD-1"}
+    store = _install_fake(monkeypatch, drivers=[_driver(legacy_import_metadata=dict(existing_meta))])
+    plan = svc.StripeMappingPlan(kind=svc.KIND_DRIVERS, batch="b1")
+    plan.driver_updates.append(
+        {
+            "driver_id": "drv-1",
+            "stripe_account_id": "acct_A1",
+            "row_ref": "OLD-1",
+            "old_stripe_account_id": "acct_OLDPLATFORM",
+            "existing_metadata": dict(existing_meta),
+        }
+    )
+    result = svc.commit_plan(plan)
+    assert result == {"updated_drivers": 1, "updated_users": 0, "conflicts": []}
+    row = store["drivers"][0]
+    assert row["stripe_account_id"] == "acct_A1"
+    meta = row["legacy_import_metadata"]
+    # Driver-importer provenance keys survive the merge.
+    assert meta["source"] == svc.DRIVER_IMPORT_SOURCE
+    assert meta["old_driver_id"] == "OLD-1"
+    migration = meta["stripe_migration"]
+    assert migration["batch"] == "b1"
+    assert migration["source"] == svc.IMPORT_SOURCE
+    assert migration["old_stripe_account_id"] == "acct_OLDPLATFORM"
+    assert migration["imported_at"]
+
+
+def test_commit_plan_null_guard_reports_conflict(monkeypatch):
+    # Column got filled between validate and commit → guarded update matches
+    # zero rows → surfaced as a conflict, never clobbered.
+    store = _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_RACED")])
+    plan = svc.StripeMappingPlan(kind=svc.KIND_DRIVERS, batch="b1")
+    plan.driver_updates.append(
+        {"driver_id": "drv-1", "stripe_account_id": "acct_A1", "row_ref": "OLD-1", "existing_metadata": {}}
+    )
+    result = svc.commit_plan(plan)
+    assert result["updated_drivers"] == 0
+    assert result["conflicts"] == ["OLD-1"]
+    assert store["drivers"][0]["stripe_account_id"] == "acct_RACED"
+
+
+def test_commit_plan_writes_rider_customer(monkeypatch):
+    store = _install_fake(monkeypatch, users=[_user()])
+    plan = svc.StripeMappingPlan(kind=svc.KIND_RIDERS, batch="b2")
+    plan.user_updates.append(
+        {
+            "user_id": "usr-1",
+            "stripe_customer_id": "cus_C1",
+            "row_ref": "U-77",
+            "old_stripe_customer_id": None,
+            "old_user_id": "U-77",
+            "existing_metadata": {},
+        }
+    )
+    result = svc.commit_plan(plan)
+    assert result == {"updated_drivers": 0, "updated_users": 1, "conflicts": []}
+    row = store["users"][0]
+    assert row["stripe_customer_id"] == "cus_C1"
+    assert row["legacy_import_metadata"]["stripe_migration"]["old_user_id"] == "U-77"
+
+
+# ------------------------------------------------------------- KYC sync
+
+
+@pytest.mark.anyio
+async def test_sync_kyc_after_commit_stamps_status(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from backend import db_supabase
+    from backend.services import stripe_kyc_sync
+
+    driver = _driver(
+        stripe_account_id="acct_A1",
+        legacy_import_metadata={"stripe_migration": {"batch": "b1", "source": svc.IMPORT_SOURCE}},
+    )
+    monkeypatch.setattr(db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+    update_one = AsyncMock()
+    monkeypatch.setattr(db_supabase, "update_one", update_one)
+    monkeypatch.setattr(stripe_kyc_sync, "refresh_driver_kyc", AsyncMock(return_value={"status": "ok"}))
+
+    result = await svc.sync_kyc_after_commit(["drv-1"], "b1")
+    assert result == {"ok": 1, "failed": 0, "failed_driver_ids": []}
+    _table, _filters, updates = update_one.call_args.args
+    migration = updates["legacy_import_metadata"]["stripe_migration"]
+    assert migration["kyc_sync"] == "ok"
+    assert migration["kyc_synced_at"]
+    assert migration["batch"] == "b1"  # existing provenance preserved
+
+
+@pytest.mark.anyio
+async def test_sync_kyc_one_failure_does_not_halt_batch(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from backend import db_supabase
+    from backend.services import stripe_kyc_sync
+
+    d1 = _driver(id="drv-1", stripe_account_id="acct_A1", legacy_import_metadata={})
+    d2 = _driver(id="drv-2", stripe_account_id="acct_A2", legacy_import_metadata={})
+
+    async def fake_get_rows(_table, filters, limit=1):
+        return [d1] if filters["id"] == "drv-1" else [d2]
+
+    async def fake_refresh(driver):
+        if driver["id"] == "drv-1":
+            raise RuntimeError("stripe exploded")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(db_supabase, "get_rows", fake_get_rows)
+    monkeypatch.setattr(db_supabase, "update_one", AsyncMock())
+    monkeypatch.setattr(stripe_kyc_sync, "refresh_driver_kyc", fake_refresh)
+
+    result = await svc.sync_kyc_after_commit(["drv-1", "drv-2"], "b1")
+    assert result["ok"] == 1
+    assert result["failed"] == 1
+    assert result["failed_driver_ids"] == ["drv-1"]
+
+
+@pytest.mark.anyio
+async def test_sync_kyc_non_ok_status_recorded_as_failure(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from backend import db_supabase
+    from backend.services import stripe_kyc_sync
+
+    driver = _driver(stripe_account_id="acct_A1", legacy_import_metadata={})
+    monkeypatch.setattr(db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+    update_one = AsyncMock()
+    monkeypatch.setattr(db_supabase, "update_one", update_one)
+    monkeypatch.setattr(stripe_kyc_sync, "refresh_driver_kyc", AsyncMock(return_value={"status": "stripe_error"}))
+
+    result = await svc.sync_kyc_after_commit(["drv-1"], "b1")
+    assert result["failed_driver_ids"] == ["drv-1"]
+    # Status still stamped so the operator sees which drivers need a retry.
+    _t, _f, updates = update_one.call_args.args
+    assert updates["legacy_import_metadata"]["stripe_migration"]["kyc_sync"] == "stripe_error"

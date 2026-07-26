@@ -72,6 +72,7 @@ from .safety import router as safety_router
 from .service_areas import router as service_areas_router
 from .settings import router as settings_router
 from .staff import router as staff_router
+from .stripe_import import router as stripe_import_router
 from .subscriptions import offer_analytics_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
@@ -105,6 +106,9 @@ admin_router.include_router(venues_router, dependencies=[Depends(require_module(
 admin_router.include_router(vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))])
 admin_router.include_router(drivers_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(driver_import_router, dependencies=[Depends(require_module("drivers"))])
+# Legacy Stripe mapping import (drivers + riders kinds) — migration ops
+# tooling, gated like the bulk driver import it mirrors.
+admin_router.include_router(stripe_import_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])

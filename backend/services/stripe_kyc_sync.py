@@ -16,6 +16,7 @@ Sources:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -161,7 +162,9 @@ async def refresh_driver_kyc(driver: Dict[str, Any]) -> Dict[str, Any]:
     import stripe
 
     try:
-        account = stripe.Account.retrieve(account_id, api_key=stripe_secret)
+        # to_thread: the Stripe SDK is blocking; batch callers (legacy Stripe
+        # mapping import) refresh many drivers concurrently on the event loop.
+        account = await asyncio.to_thread(stripe.Account.retrieve, account_id, api_key=stripe_secret)
     except Exception:
         logger.error(
             "[STRIPE-KYC] refresh: Account.retrieve failed for %s",

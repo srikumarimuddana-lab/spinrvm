@@ -479,10 +479,13 @@ async def _retrieve_stripe(
     except stripe.error.StripeError:
         logger.error("[STRIPE-MAP] transient Stripe error retrieving %s", obj_id, exc_info=True)
         return None, ("stripe_transient", "Stripe error while validating this row; re-run validate")
-    try:
-        return obj.to_dict_recursive(), None  # type: ignore[attr-defined]
-    except AttributeError:
-        return dict(obj), None
+    fn = getattr(obj, "_to_dict_recursive", None) or getattr(obj, "to_dict_recursive", None)
+    if callable(fn):
+        try:
+            return fn(), None
+        except Exception:  # noqa: S110
+            pass
+    return dict(obj), None
 
 
 async def build_plan(

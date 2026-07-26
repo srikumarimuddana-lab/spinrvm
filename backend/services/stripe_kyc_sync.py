@@ -173,9 +173,13 @@ async def refresh_driver_kyc(driver: Dict[str, Any]) -> Dict[str, Any]:
         )
         return {"status": "stripe_error"}
 
-    try:
-        payload = account.to_dict_recursive()  # type: ignore[attr-defined]
-    except AttributeError:
+    fn = getattr(account, "_to_dict_recursive", None) or getattr(account, "to_dict_recursive", None)
+    if callable(fn):
+        try:
+            payload = fn()
+        except Exception:
+            payload = dict(account)
+    else:
         payload = dict(account)
 
     updates = _kyc_mirror_fields(payload)

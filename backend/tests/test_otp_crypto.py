@@ -2,9 +2,12 @@
 
 Covers the OTP-hashing helpers used by the auth flow:
 
-  - ``hash_otp(code)`` returns a deterministic SHA-256 hex digest.
+  - ``hash_otp(code)`` returns a deterministic KEYED HMAC-SHA256 hex digest
+    (peppered with the server secret so the 4-digit space can't be
+    rainbow-tabled from a leaked otp_records table).
   - ``verify_otp_hash(stored_hash, input_otp)`` compares hashes via
-    ``hmac.compare_digest`` so verification is constant-time.
+    ``hmac.compare_digest`` so verification is constant-time, accepting the
+    legacy unsalted digest during the deploy-transition TTL window.
 
 Why this matters: OTPs are the second factor for rider/driver login.
 A timing-side-channel in verification would let an attacker probe valid
@@ -25,18 +28,22 @@ except ImportError:
 
 
 class TestHashOtpDeterministic:
-    """``hash_otp`` must be a pure SHA-256 of the OTP bytes — no salt, no nonce.
+    """``hash_otp`` must be a KEYED HMAC-SHA256 of the OTP bytes.
 
-    Storing an unsalted SHA-256 is acceptable here only because OTPs are
-    short-lived (5 min TTL) and the search space is bounded by the
-    5-failures-per-hour lockout. If that policy ever changes this whole
-    test file gets revisited.
+    A plain digest over a 4-digit OTP has only 10,000 possible values — a
+    precomputed table maps every hash back to its code. Keying with the server
+    pepper defeats that offline recovery from a leaked otp_records table.
     """
 
-    def test_hash_otp_matches_sha256_hex(self):
+    def test_hash_otp_is_keyed_hmac_not_plain_sha256(self):
+        import hmac as _hmac
+
+        from backend.utils.crypto import _otp_pepper
+
         code = "123456"
-        expected = hashlib.sha256(code.encode()).hexdigest()
-        assert hash_otp(code) == expected
+        # Peppered: keyed HMAC, NOT a plain digest an attacker could rainbow-table.
+        assert hash_otp(code) == _hmac.new(_otp_pepper(), code.encode(), hashlib.sha256).hexdigest()
+        assert hash_otp(code) != hashlib.sha256(code.encode()).hexdigest()
 
     def test_hash_otp_is_deterministic_across_calls(self):
         # Two calls with the same input must produce byte-identical output —
@@ -93,7 +100,8 @@ class TestVerifyOtpHashTimingSafe:
         args, _ = cd.call_args
         assert len(args) == 2
         assert args[0] == stored
-        assert args[1] == hashlib.sha256(b"555444").hexdigest()
+        # args[1] is the freshly-computed KEYED hash of the input, not raw sha256.
+        assert args[1] == hash_otp("555444")
 
     def test_verify_returns_compare_digest_result(self):
         # If compare_digest returns False, verify must return False even when
@@ -107,11 +115,14 @@ class TestEdgeCases:
     """Boundary inputs the auth code might plausibly pass through."""
 
     def test_hash_empty_string(self):
-        # SHA-256 of the empty string is a well-known constant; the function
-        # must not raise on empty input (defense in depth — the auth route
-        # rejects empty OTPs before this, but the helper shouldn't crash).
-        expected = hashlib.sha256(b"").hexdigest()
-        assert hash_otp("") == expected
+        # The helper must not raise on empty input (defense in depth — the auth
+        # route rejects empty OTPs before this). Keyed HMAC of "" is stable and
+        # is NOT the plain sha256 of "".
+        import hmac as _hmac
+
+        from backend.utils.crypto import _otp_pepper
+
+        assert hash_otp("") == _hmac.new(_otp_pepper(), b"", hashlib.sha256).hexdigest()
 
     def test_verify_empty_otp_against_empty_hash_of_empty(self):
         # Hashing "" then verifying "" yields True — because both sides are
@@ -148,3 +159,19 @@ class TestEdgeCases:
         stored = hash_otp("000000")
         with pytest.raises(AttributeError):
             verify_otp_hash(stored, 0)  # type: ignore[arg-type]
+
+
+class TestLegacyTransitionFallback:
+    """During the ~5-min TTL window straddling a deploy, codes hashed with the
+    old unsalted SHA-256 must still verify so in-flight OTPs don't all fail."""
+
+    def test_verify_accepts_legacy_sha256_hash(self):
+        legacy = hashlib.sha256(b"246810").hexdigest()
+        assert verify_otp_hash(legacy, "246810") is True
+
+    def test_verify_accepts_new_keyed_hash(self):
+        assert verify_otp_hash(hash_otp("135790"), "135790") is True
+
+    def test_verify_rejects_wrong_code_against_both(self):
+        assert verify_otp_hash(hash_otp("111111"), "222222") is False
+        assert verify_otp_hash(hashlib.sha256(b"111111").hexdigest(), "222222") is False

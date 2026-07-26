@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Script from 'next/script';
+import { buildStraightRouteGradient, ROUTE_STROKE_WIDTH } from '@spinr/shared/constants/routeMapStyle';
 
 // Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
 // Same value as EXPO_PUBLIC_GOOGLE_MAPS_API_KEY used by the mobile apps;
@@ -48,14 +49,6 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   cancelled:        { label: 'Trip cancelled',     color: '#B91C1C' },
 };
 
-// Statuses where the driver is heading to pickup (route: driver → pickup).
-// Once in_progress the driver heads to dropoff (route: driver → dropoff).
-const EN_ROUTE_TO_PICKUP = new Set(['driver_assigned', 'driver_accepted', 'driver_arrived']);
-
-// Minimum distance (degrees ~= ~10m) the driver must move before we re-fetch
-// the OSRM route — avoids hammering the public router on every poll tick.
-const ROUTE_REROUTE_THRESHOLD = 0.0001;
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type G = any;
 
@@ -73,11 +66,8 @@ export default function TrackRide() {
   const driverMarkerRef  = useRef<G>(null);
   const pickupMarkerRef  = useRef<G>(null);
   const dropoffMarkerRef = useRef<G>(null);
-  const routePolylinesRef = useRef<G[]>([]);  // OSRM gradient route (array of coloured segments)
+  const routePolylinesRef = useRef<G[]>([]);  // straight pickup→dropoff gradient (array of coloured segments)
   const didFitRef    = useRef(false);
-  // Last driver position used for the current route line — used to decide
-  // whether to re-fetch from OSRM when the driver moves.
-  const lastRoutedDriverRef = useRef<{ lat: number; lng: number } | null>(null);
 
   // ── Poll the public backend endpoint every 5 s ──────────────────────────────
   useEffect(() => {
@@ -242,70 +232,29 @@ export default function TrackRide() {
       if (pts >= 2) { map.fitBounds(bounds, 80); didFitRef.current = true; }
     }
 
-    // ── OSRM route: recalculate from driver's current position ─────────────────
-    // Route origin = driver (when assigned) or pickup (no driver yet).
-    // Route destination = pickup (driver en route to pickup) or dropoff (trip in progress).
-    const hasDriver = d?.lat != null && d?.lng != null;
-    const driverMoved =
-      !lastRoutedDriverRef.current ||
-      (hasDriver && (
-        Math.abs(d!.lat! - lastRoutedDriverRef.current.lat) > ROUTE_REROUTE_THRESHOLD ||
-        Math.abs(d!.lng! - lastRoutedDriverRef.current.lng) > ROUTE_REROUTE_THRESHOLD
-      ));
+    // ── Route: one straight pickup→dropoff line, orange→red gradient ───────────
+    // Uniform spec (@spinr/shared/constants/routeMapStyle) — the same single
+    // straight line every surface draws. Rebuilt whenever pickup/dropoff change.
+    if (ride.pickup_lat != null && ride.pickup_lng != null && ride.dropoff_lat != null && ride.dropoff_lng != null) {
+      // Clear previous gradient segments.
+      routePolylinesRef.current.forEach(l => l.setMap(null));
+      routePolylinesRef.current = [];
 
-    if (driverMoved && ride.pickup_lat != null && ride.dropoff_lat != null) {
-      const originLat  = hasDriver ? d!.lat!  : ride.pickup_lat;
-      const originLng  = hasDriver ? d!.lng!  : ride.pickup_lng!;
-      const destLat    = EN_ROUTE_TO_PICKUP.has(ride.status) ? ride.pickup_lat  : ride.dropoff_lat;
-      const destLng    = EN_ROUTE_TO_PICKUP.has(ride.status) ? ride.pickup_lng! : ride.dropoff_lng!;
-
-      if (hasDriver) {
-        lastRoutedDriverRef.current = { lat: d!.lat!, lng: d!.lng! };
+      const segments = buildStraightRouteGradient(
+        [ride.pickup_lat, ride.pickup_lng],
+        [ride.dropoff_lat, ride.dropoff_lng],
+      );
+      for (const seg of segments) {
+        const path = seg.coordinates.map(([lat, lng]) => ({ lat, lng }));
+        routePolylinesRef.current.push(new g.Polyline({
+          map: mapRef.current,
+          path,
+          strokeColor: seg.color,
+          strokeWeight: ROUTE_STROKE_WIDTH,
+          strokeOpacity: 0.9,
+          zIndex: 1,
+        }));
       }
-
-      const url =
-        `https://router.project-osrm.org/route/v1/driving/` +
-        `${originLng},${originLat};${destLng},${destLat}` +
-        `?overview=full&geometries=geojson`;
-
-      fetch(url)
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          const coords: [number, number][] | undefined = data?.routes?.[0]?.geometry?.coordinates;
-          if (!coords || !mapRef.current) return;
-
-          // Clear previous gradient segments.
-          routePolylinesRef.current.forEach(l => l.setMap(null));
-          routePolylinesRef.current = [];
-
-          // OSRM returns [lng, lat]; Google Maps needs {lat, lng}.
-          const path = coords.map(([lng, lat]) => ({ lat, lng }));
-
-          // Draw the route as N coloured segments blending orange → red.
-          const SEGMENTS = 14;
-          const segLen = Math.max(1, Math.floor(path.length / SEGMENTS));
-          for (let i = 0; i < SEGMENTS; i++) {
-            const t = i / Math.max(SEGMENTS - 1, 1);          // 0 → 1
-            // Interpolate #F97316 (orange-500) → #DC2626 (red-600)
-            const rv = Math.round(249 + (220 - 249) * t);
-            const gv = Math.round(115 + ( 38 - 115) * t);
-            const bv = Math.round( 22 + ( 38 -  22) * t);
-            const color = `#${rv.toString(16).padStart(2, '0')}${gv.toString(16).padStart(2, '0')}${bv.toString(16).padStart(2, '0')}`;
-            const start = i * segLen;
-            const end   = i === SEGMENTS - 1 ? path.length : (i + 1) * segLen + 1;
-            const seg   = path.slice(start, end);
-            if (seg.length < 2) continue;
-            routePolylinesRef.current.push(new g.Polyline({
-              map: mapRef.current,
-              path: seg,
-              strokeColor: color,
-              strokeWeight: 4,
-              strokeOpacity: 0.9,
-              zIndex: 1,
-            }));
-          }
-        })
-        .catch(() => { /* silent — markers remain visible without a route line */ });
     }
   }, [ride, mapsReady]);
 

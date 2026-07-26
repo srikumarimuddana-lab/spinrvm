@@ -46,6 +46,23 @@ class TestCoordinates:
         # A fare like 18.50 must not be mistaken for a coordinate.
         assert "[COORDS]" not in scrub_pii("the fare was 18.50, tip 3.00")
 
+    def test_bracketed_app_coordinates_survive(self):
+        # Machine-generated trip endpoints from the quote-card tap and the
+        # map-pin picker — "[lat,lng]" — must reach the model verbatim.
+        # Scrubbing them re-introduced the re-geocode drift the bracketed
+        # format exists to prevent (rule 6/6b coordinates arrived as
+        # "[COORDS]" and the model silently re-geocoded the trip).
+        text = "Book the Economy from 4325 Wakeling St [50.42140,-104.66410] to 4500 Gordon Rd [50.40790,-104.65010], total $5.27."
+        assert scrub_pii(text) == text
+
+    def test_bracketed_exemption_is_narrow(self):
+        # Free-text coordinates still scrub even when a bracketed pair is in
+        # the same message; brackets without a coordinate pair get no pass.
+        scrubbed = scrub_pii("pin [50.40790,-104.65010] but I'm at 52.131802, -106.660767")
+        assert "[50.40790,-104.65010]" in scrubbed
+        assert "[COORDS]" in scrubbed
+        assert "52.13" not in scrubbed
+
 
 class TestPostalCodes:
     @pytest.mark.parametrize("code", ["S7K 3R5", "S7K3R5", "s7k-3r5"])

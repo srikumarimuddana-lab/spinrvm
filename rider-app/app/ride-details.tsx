@@ -5,14 +5,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
-import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
-import { ACTUAL_ROUTE_STROKE, INFERRED_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
+import { routeQualityLabel, toReactNativeRouteSections } from '@shared/utils/routeSegments';
 import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -213,25 +214,24 @@ export default function RideDetailsScreen() {
     [ride]
   );
 
+  // Route geometry still feeds the quality LABEL only — the drawn line is now the
+  // uniform straight pickup→dropoff gradient (see RouteLine below), not the GPS
+  // reconstruction. actualSections is kept solely to decide the label text.
   const actualSections = useMemo(() => toReactNativeRouteSections(ride?.actual_route_segments), [ride?.actual_route_segments]);
-  const plannedSegments = useMemo(
-    () => toReactNativeSegments(ride?.planned_route_polyline ? [ride.planned_route_polyline] : []),
-    [ride?.planned_route_polyline],
-  );
   const isV2Route = _num(ride?.route_schema_version) >= 2;
   const hasActualRoute = actualSections.length > 0;
-  const mapCoordinates = useMemo(
-    () => hasActualRoute
-      ? actualSections.reduce(
-          (coordinates, section) => coordinates.concat(section.coordinates),
-          [] as { latitude: number; longitude: number }[],
-        )
-      : (isV2Route ? [] : plannedSegments).reduce(
-          (coordinates, segment) => coordinates.concat(segment),
-          [] as { latitude: number; longitude: number }[],
-        ),
-    [actualSections, hasActualRoute, isV2Route, plannedSegments],
-  );
+  // Frame the map on the straight route endpoints (+ completion fix if present).
+  const mapCoordinates = useMemo(() => {
+    const pts: { latitude: number; longitude: number }[] = [];
+    const pLat = Number(ride?.pickup_lat);
+    const pLng = Number(ride?.pickup_lng);
+    const dLat = Number(ride?.dropoff_lat);
+    const dLng = Number(ride?.dropoff_lng);
+    if (Number.isFinite(pLat) && Number.isFinite(pLng)) pts.push({ latitude: pLat, longitude: pLng });
+    if (Number.isFinite(dLat) && Number.isFinite(dLng)) pts.push({ latitude: dLat, longitude: dLng });
+    if (ride?.actual_completion_point) pts.push(ride.actual_completion_point);
+    return pts;
+  }, [ride?.pickup_lat, ride?.pickup_lng, ride?.dropoff_lat, ride?.dropoff_lng, ride?.actual_completion_point]);
   const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
   const routeQuality = routeQualityLabel(ride?.route_quality);
   const routeIsProcessing =
@@ -324,41 +324,16 @@ export default function RideDetailsScreen() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
-                  {hasActualRoute && actualSections.map((section) => (
-                      <Polyline
-                        key={section.id}
-                        coordinates={section.coordinates}
-                        {...(section.geometryKind === 'inferred' ? INFERRED_ROUTE_STROKE : ACTUAL_ROUTE_STROKE)}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                ))}
-              {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
-                <Polyline
-                  key={`planned-route-${index}`}
-                  coordinates={coordinates}
-                  {...PLANNED_ROUTE_STROKE}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              ))}
-              <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
-                  <Ionicons name="location" size={14} color="#FFF" />
-                </View>
-              </Marker>
-              <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
-                  <Ionicons name="flag" size={14} color="#FFF" />
-                </View>
-              </Marker>
-              {ride.actual_completion_point && (
-                <Marker coordinate={ride.actual_completion_point} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.completion }]}>
-                    <Ionicons name="checkmark" size={14} color="#FFF" />
-                  </View>
-                </Marker>
-              )}
+              {/* Uniform route: one straight orange→red gradient line pickup→dropoff. */}
+              <RouteLine
+                pickup={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
+                destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
+              />
+              <RoutePins
+                pickup={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
+                dropoff={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
+                completion={ride.actual_completion_point ?? null}
+              />
             </MapView>
           </View>
         )}

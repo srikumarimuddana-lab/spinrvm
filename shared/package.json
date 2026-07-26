@@ -24,6 +24,7 @@
     "./errors/errorPresentation": "./errors/errorPresentation.ts",
     "./utils/responsive": "./utils/responsive.ts",
     "./utils/routeSegments": "./utils/routeSegments.ts",
+    "./constants/routeMapStyle": "./constants/routeMapStyle.ts",
     "./cache": "./cache/index.ts",
     "./types": "./types/index.ts",
     "./types/*": "./types/*.ts",

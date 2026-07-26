@@ -26,7 +26,7 @@ GEOCODE_OK = {
     "results": [
         {
             "formatted_address": "Saskatoon Airport (YXE), SK, Canada",
-            "geometry": {"location": {"lat": 52.1708, "lng": -106.6997}},
+            "geometry": {"location_type": "ROOFTOP", "location": {"lat": 52.1708, "lng": -106.6997}},
         }
     ],
 }
@@ -37,17 +37,17 @@ PLACES_OK = {
         {
             "name": "Walmart Supercentre",
             "formatted_address": "4500 Gordon Rd, Regina, SK, Canada",
-            "geometry": {"location": {"lat": 50.4079, "lng": -104.6501}},
+            "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.4079, "lng": -104.6501}},
         },
         {
             "name": "Walmart East",
             "formatted_address": "2150 Prince of Wales Dr, Regina, SK, Canada",
-            "geometry": {"location": {"lat": 50.4497, "lng": -104.5345}},
+            "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.4497, "lng": -104.5345}},
         },
         {
             "name": "Walmart Rochdale",
             "formatted_address": "3939 Rochdale Blvd, Regina, SK, Canada",
-            "geometry": {"location": {"lat": 50.4966, "lng": -104.6401}},
+            "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.4966, "lng": -104.6401}},
         },
     ],
 }
@@ -226,11 +226,11 @@ class TestGeocodeBias:
             "results": [
                 {  # ~12 km away but ranked first by Google relevance
                     "formatted_address": "4325 Wakeling St (far), Regina, SK",
-                    "geometry": {"location": {"lat": 50.5177, "lng": -104.6501}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.5177, "lng": -104.6501}},
                 },
                 {  # ~1.5 km away
                     "formatted_address": "4325 Wakeling St, Regina, SK",
-                    "geometry": {"location": {"lat": 50.4214, "lng": -104.6641}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.4214, "lng": -104.6641}},
                 },
             ],
         }
@@ -255,7 +255,7 @@ class TestGeocodeBias:
             "results": [
                 {  # ~54 km from the bias point — outside the 25 km radius
                     "formatted_address": "4325 Wakeling St, Somewhere Else, SK",
-                    "geometry": {"location": {"lat": 50.90, "lng": -104.65}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.90, "lng": -104.65}},
                 }
             ],
         }
@@ -281,11 +281,11 @@ class TestGeocodeBias:
             "results": [
                 {  # ~54 km from the bias point — both candidates are far
                     "formatted_address": "4325 Wakeling St, Somewhere Else, SK",
-                    "geometry": {"location": {"lat": 50.90, "lng": -104.65}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.90, "lng": -104.65}},
                 },
                 {  # ~65 km — a second plausible match keeps this ambiguous
                     "formatted_address": "4325 Wakeling Ave, Elsewhere, SK",
-                    "geometry": {"location": {"lat": 51.00, "lng": -104.65}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 51.00, "lng": -104.65}},
                 },
             ],
         }
@@ -302,6 +302,170 @@ class TestGeocodeBias:
         # Both instructions survive, and the disambiguation one still leads.
         assert "ask the rider which one they mean" in result["note"].lower()
         assert "km from the rider's search area" in result["note"]
+
+
+class TestAddressPrecision:
+    """Google flags its own guesses; we used to discard the flag and quote on a
+    neighbourhood centroid wearing a confident formatted_address (incident:
+    '4321 Wakeling St' — a house number Google lacks — priced 8.78 km from
+    '4325 Wakeling St')."""
+
+    NEAR = {"near_lat": 50.4079, "near_lng": -104.6501}
+
+    def _geocode(self, **geometry_extra):
+        return {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "4321 Wakeling St, Regina, SK, Canada",
+                    "geometry": {"location": {"lat": 50.4214, "lng": -104.6641}, **geometry_extra},
+                }
+            ],
+        }
+
+    async def _find(self, payload, query="4321 wakeling st"):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(payload),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            return await execute_tool("find_place", {"query": query, **self.NEAR}, user=RIDER)
+
+    @pytest.mark.anyio
+    async def test_rooftop_match_is_precise_and_unflagged(self):
+        result, ok = await self._find(self._geocode(location_type="ROOFTOP"))
+        assert ok
+        assert result["candidates"][0]["precise"] is True
+        assert result["candidates"][0]["match_quality"] == "ROOFTOP"
+        assert "imprecise_address" not in result
+
+    @pytest.mark.anyio
+    async def test_interpolated_match_is_still_precise_enough(self):
+        # Interpolated between two known house numbers on the block — good
+        # enough to send a driver to; must not trigger a false confirmation.
+        result, ok = await self._find(self._geocode(location_type="RANGE_INTERPOLATED"))
+        assert ok
+        assert result["candidates"][0]["precise"] is True
+        assert "imprecise_address" not in result
+
+    @pytest.mark.anyio
+    async def test_approximate_match_on_a_numbered_address_is_flagged(self):
+        result, ok = await self._find(self._geocode(location_type="APPROXIMATE"))
+        assert ok
+        assert result["candidates"][0]["precise"] is False
+        assert result["imprecise_address"] is True
+        assert "Do NOT quote on it" in result["note"]
+
+    @pytest.mark.anyio
+    async def test_partial_match_outranks_a_precise_looking_location_type(self):
+        """Google says ROOFTOP but admits partial_match: the house number was
+        ignored, so the rooftop it pinned is someone else's."""
+        payload = self._geocode(location_type="ROOFTOP")
+        payload["results"][0]["partial_match"] = True
+        result, ok = await self._find(payload)
+        assert ok
+        assert result["candidates"][0]["match_quality"] == "PARTIAL_MATCH"
+        assert result["candidates"][0]["precise"] is False
+        assert result["imprecise_address"] is True
+
+    @pytest.mark.anyio
+    async def test_poi_search_is_never_flagged_for_imprecision(self):
+        """Places Text Search carries no location_type at all. A POI query has
+        no house number to miss, so it must not inherit the warning — that
+        would fire on every 'walmart' lookup."""
+        result, ok = await self._find(PLACES_OK, query="walmart")
+        assert ok
+        assert "imprecise_address" not in result
+
+
+class TestSameStreetGuard:
+    """4325 Wakeling St → 4321 Wakeling St, adjacent houses, quoted 8.78 km /
+    22 min. Every prior guard passed: the same-place check saw 8.78 km, and the
+    road/haversine band only validates the route BETWEEN two points, never
+    whether the points themselves are right."""
+
+    # ~8.8 km apart — the reported geometry.
+    WAKELING = {
+        "pickup_lat": 50.4214,
+        "pickup_lng": -104.6641,
+        "pickup_address": "4325 Wakeling St, Regina, SK",
+        "dropoff_lat": 50.4966,
+        "dropoff_lng": -104.6401,
+        "dropoff_address": "4321 Wakeling St, Regina, SK",
+    }
+
+    def _maps_unavailable(self):
+        return patch.object(
+            tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))
+        )
+
+    @pytest.mark.anyio
+    async def test_same_street_kilometres_apart_is_refused(self):
+        estimates = AsyncMock()
+        with (
+            patch("backend.routes.rides.estimates.compute_ride_estimates", estimates),
+            _patch_area(),
+            self._maps_unavailable(),
+        ):
+            result, ok = await execute_tool("get_fare_quote", self.WAKELING, user=RIDER)
+        assert ok
+        assert result["needs_confirmation"] == "address_mismatch"
+        assert result["distance_km"] > 2
+        assert "same street" in result["note"]
+        assert "quotes" not in result
+        estimates.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_proposal_refuses_the_same_trip(self):
+        with _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("propose_ride_booking", self.WAKELING, user=RIDER)
+        assert ok
+        assert result["needs_confirmation"] == "address_mismatch"
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_explicit_confirmation_lets_it_through(self):
+        args = dict(self.WAKELING, confirm_same_location=True)
+        with _patch_estimates(ESTIMATES), _patch_promos([]), _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert "needs_confirmation" not in result
+        assert len(result["quotes"]) == 1
+
+    @pytest.mark.anyio
+    async def test_different_streets_far_apart_quote_normally(self):
+        """The guard keys on street identity, not distance — a genuine
+        cross-town trip must be unaffected."""
+        args = dict(self.WAKELING, dropoff_address="3939 Rochdale Blvd, Regina, SK")
+        with _patch_estimates(ESTIMATES), _patch_promos([]), _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert "needs_confirmation" not in result
+        assert len(result["quotes"]) == 1
+
+    @pytest.mark.anyio
+    async def test_same_street_short_trip_is_untouched(self):
+        """Two ends of one long street, legitimately 1 km apart — under the
+        2 km band, so no confirmation is demanded."""
+        args = dict(self.WAKELING, dropoff_lat=50.4304, dropoff_lng=-104.6641)  # ~1 km
+        with _patch_estimates(ESTIMATES), _patch_promos([]), _patch_area(), self._maps_unavailable():
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert "needs_confirmation" not in result
+
+    def test_street_key_normalizes_suffixes_and_house_numbers(self):
+        key = tools_booking._street_key
+        assert key("4325 Wakeling St, Regina, SK S4T 1B2") == ("wakeling st", "regina")
+        assert key("4321 wakeling street, Regina") == ("wakeling st", "regina")
+        assert key("4325 Wakeling St, Regina") == key("4321 Wakeling Street, regina")
+        # Same street name, different city → not the same street.
+        assert key("100 Main St, Regina") != key("100 Main St, Saskatoon")
+        # No house number, or nothing street-shaped → no opinion.
+        assert key("Wakeling St, Regina") is None
+        assert key("Saskatoon Airport") is None
+        assert key(None) is None
 
 
 class TestRiderLocation:
@@ -499,7 +663,7 @@ class TestFareQuote:
             "results": [
                 {
                     "formatted_address": "123 Main St, Saskatoon, SK, Canada",
-                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 52.1170, "lng": -106.6345}},
                 }
             ],
         }
@@ -559,7 +723,7 @@ class TestFareQuote:
             "results": [
                 {
                     "formatted_address": "4500 Gordon Rd, Regina, SK S4S 6H7",
-                    "geometry": {"location": {"lat": 50.40790, "lng": -104.65010}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.40790, "lng": -104.65010}},
                 }
             ],
         }
@@ -744,7 +908,7 @@ class TestProposal:
             "results": [
                 {
                     "formatted_address": "123 Main St, Saskatoon, SK, Canada",
-                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 52.1170, "lng": -106.6345}},
                 }
             ],
         }
@@ -775,7 +939,7 @@ class TestProposal:
             "results": [
                 {
                     "formatted_address": "123 Main St, Saskatoon, SK, Canada",
-                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 52.1170, "lng": -106.6345}},
                 }
             ],
         }
@@ -809,7 +973,7 @@ class TestProposal:
             "results": [
                 {
                     "formatted_address": "123 Main St, Saskatoon, SK, Canada",
-                    "geometry": {"location": {"lat": 52.1325, "lng": -106.6610}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 52.1325, "lng": -106.6610}},
                 }
             ],
         }
@@ -876,11 +1040,11 @@ class TestProposal:
             "results": [
                 {
                     "formatted_address": "123 Main St (far), SK, Canada",
-                    "geometry": {"location": {"lat": 52.2680, "lng": -106.6345}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 52.2680, "lng": -106.6345}},
                 },
                 {
                     "formatted_address": "123 Main St, Saskatoon, SK, Canada",
-                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                    "geometry": {"location_type": "ROOFTOP", "location": {"lat": 52.1170, "lng": -106.6345}},
                 },
             ],
         }

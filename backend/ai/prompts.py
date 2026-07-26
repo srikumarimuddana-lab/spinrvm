@@ -76,6 +76,13 @@ was applied, scheduled_time if any, and payment_method if stated. Then tell \
 them to review the card and tap Confirm.
 7. Ask at most one question per message, and never ask for information a tool \
 already gave you.
+8b. If find_place reports imprecise_address, or a quote or booking tool \
+returns needs_confirmation="address_mismatch", the coordinates do NOT match \
+the address the rider gave you — treat the trip distance and price as \
+meaningless. Never quote or book on it. Tell the rider exactly what you \
+resolved, ask them to check the house number, and re-resolve with find_place \
+or ask them to drop a pin on the map. Do not set confirm_same_location unless \
+they explicitly insist the distance really is correct.
 8. If a quote or booking tool returns needs_confirmation="same_location", the \
 pickup and dropoff are basically the same spot: tell the rider plainly, naming \
 both addresses, and ask whether they still want that ride. Only after an \

@@ -122,6 +122,43 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   and `test_pricing_wait_stays_within_the_estimate_latency_budget` reflects the
   chosen ceiling.
 
+### B7. Give service areas a real locality so the geocode can be hard-filtered
+- [ ] **Status:** open — follow-up to the AI location/pricing incident fixes
+- **Why:** the Geocoding API treats `bounds` as a *soft* hint but `components`
+  as a **hard** filter. `components=locality:Regina` would make it impossible
+  for a Regina query to resolve to a same-named street in another city — the
+  strongest available fix for cross-city mis-resolution. It is not wired up
+  because `service_areas` has no city column, only `name`, which is a display
+  label ("Regina Metro"); a wrong locality returns `ZERO_RESULTS` and breaks
+  lookups outright, so a filter built on it is worse than none.
+- **Action:** add a `locality` column to `service_areas` (migration + admin
+  field), backfill for existing areas, then pass it as `components` in
+  `_lookup_place_candidates` with an unfiltered retry on `ZERO_RESULTS`.
+- **Files:** `backend/migrations/NNN_service_areas_locality.sql`,
+  `backend/ai/tools_booking.py`, admin service-area editor
+- **Acceptance:** a numbered street address in a covered city can never
+  resolve to another city, and an unknown locality degrades to today's
+  behaviour rather than to zero results.
+
+### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
+- [ ] **Status:** open — observed in an AI-assistant quote card, 2026-07-26
+- **Why:** a rider-facing quote showed **Economy and XL at the same price**
+  ($23.52 → $13.52 after promo), both "2 min (0 km) away". Vehicle types are
+  supposed to differ via `base_fare` / `per_km_rate` / `per_minute_rate`;
+  identical output is the signature of both falling back to `DEFAULT_FARE`
+  (`backend/services/fare_service.py:32-34`) because per-vehicle-type pricing
+  rows are missing. Riders paying XL money for Economy pricing (or vice versa)
+  is a revenue and trust problem, and it makes the vehicle picker meaningless.
+  "Nearest driver 0.0 km away" in the same card is also suspect.
+- **Action:** confirm against production `service_areas.vehicle_pricing`
+  (migration 80) whether rows exist per vehicle type; if they do, trace why the
+  fare service falls through to `DEFAULT_FARE`. Needs production pricing data —
+  not diagnosable from the repo alone.
+- **Files:** `backend/services/fare_service.py`,
+  `backend/migrations/80_service_areas_vehicle_pricing.sql`
+- **Acceptance:** each vehicle type quotes from its own configured rates, and a
+  missing pricing row surfaces loudly instead of silently defaulting.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

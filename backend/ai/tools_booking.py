@@ -22,6 +22,7 @@ a rich card instead of re-reading numbers from model prose.
 
 import logging
 import math
+import re
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
@@ -118,6 +119,31 @@ async def _maps_get(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
         return resp.json()
 
 
+# Google Geocoding `geometry.location_type` values that actually pin a
+# building. ROOFTOP is the building itself; RANGE_INTERPOLATED is a position
+# interpolated between two known house numbers on the block — both are precise
+# enough to send a driver to. GEOMETRIC_CENTER (street/polyline centre) and
+# APPROXIMATE (locality centroid) are NOT: they are what Google returns when it
+# cannot find the address you asked for, and quoting on one prices a trip to
+# the middle of a neighbourhood.
+_PRECISE_LOCATION_TYPES = frozenset({"ROOFTOP", "RANGE_INTERPOLATED"})
+# Google's own "I could not match the whole thing" flag.
+_PARTIAL_MATCH_QUALITY = "PARTIAL_MATCH"
+
+
+def _match_quality(result: Dict[str, Any]) -> str:
+    """How confident Google is in this geocode. `partial_match` outranks
+    location_type: a partial match on a numbered address means the house number
+    was ignored, whatever precision the returned point claims.
+
+    Places Text Search results carry neither field; absent both, report
+    UNKNOWN and let the caller treat it as unverified rather than precise.
+    """
+    if result.get("partial_match"):
+        return _PARTIAL_MATCH_QUALITY
+    return ((result.get("geometry") or {}).get("location_type")) or "UNKNOWN"
+
+
 async def _candidates_from_results(
     results,
     near_lat: Optional[float] = None,
@@ -149,6 +175,13 @@ async def _candidates_from_results(
             "in_service_area": area is not None,
             "service_area": (area or {}).get("name"),
         }
+        # Google tells us when it guessed; we used to throw that away and hand
+        # the model an APPROXIMATE centroid wearing a confident-looking
+        # formatted_address (incident: "4321 Wakeling St" — a house number
+        # Google lacks — resolved 8.78 km from "4325 Wakeling St").
+        quality = _match_quality(result)
+        candidate["match_quality"] = quality
+        candidate["precise"] = quality in _PRECISE_LOCATION_TYPES
         if distance_km is not None:
             candidate["distance_from_search_km"] = round(distance_km, 1)
         candidates.append(candidate)
@@ -189,6 +222,13 @@ async def _lookup_place_candidates(
                 data = await _maps_get(_PLACES_TEXT_URL, params)
                 allowed = ("OK", "ZERO_RESULTS")
             else:
+                # NOTE: `components=locality:<city>` would be a HARD filter here
+                # (unlike `bounds`, which the Geocoding API may ignore) and is
+                # the strongest available fix for cross-city mis-resolution.
+                # Not wired up: `service_areas` has no city column, only `name`,
+                # which is a display label ("Regina Metro") — a wrong locality
+                # yields ZERO_RESULTS and breaks lookups outright, so a filter
+                # built on it is worse than none. Tracked in ACTION_ITEMS B7.
                 params = {
                     "address": query,
                     "components": "country:CA",
@@ -377,6 +417,23 @@ async def find_place(
             "confirm the exact address with them before quoting."
         )
         result["note"] = f"{result['note']} {warning}" if result.get("note") else warning
+
+    # The rider named a specific building ("4321 Wakeling St") but Google only
+    # produced a street/locality centroid, or admitted a partial match — i.e.
+    # it does not have that house number. The point it returned is somewhere in
+    # the neighbourhood, not at the address, so quoting on it invents a trip.
+    # Only applies to numbered street addresses: a POI search ("Walmart") has
+    # no house number to miss, and Places results carry no location_type at all.
+    best = candidates[0] or {}
+    if _looks_like_street_address(query) and not best.get("precise"):
+        imprecise = (
+            f"Warning: Google could not pin that exact street address "
+            f"(match quality {best.get('match_quality')}) — the coordinate is an approximate "
+            "point nearby, not the building. Do NOT quote on it. Ask the rider to confirm the "
+            "address (check the house number) or to drop a pin on the map."
+        )
+        result["note"] = f"{result['note']} {imprecise}" if result.get("note") else imprecise
+        result["imprecise_address"] = True
     return result
 
 
@@ -418,6 +475,94 @@ def _trip_distance_km(pickup_lat: float, pickup_lng: float, dropoff_lat: float, 
     except ImportError:
         from geo_utils import calculate_distance
     return calculate_distance(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
+
+
+_STREET_SUFFIX_ALIASES = {
+    "street": "st",
+    "avenue": "ave",
+    "road": "rd",
+    "drive": "dr",
+    "boulevard": "blvd",
+    "crescent": "cres",
+    "lane": "ln",
+    "court": "crt",
+    "place": "pl",
+    "highway": "hwy",
+    "parkway": "pkwy",
+    "terrace": "terr",
+}
+
+
+def _street_key(address: Optional[str]) -> Optional[tuple]:
+    """``(street, city)`` for an address, or None when it isn't street-shaped.
+
+    Normalizes so "4325 Wakeling St, Regina, SK S4T 1B2" and
+    "4321 wakeling street, Regina" collapse to the same ``("wakeling st",
+    "regina")``: drop the leading house number, fold suffix spellings, lowercase,
+    strip punctuation. Deliberately simple — this only ever gates a
+    *confirmation prompt*, never a silent change, so a miss costs nothing and a
+    false positive costs one question.
+    """
+    if not address:
+        return None
+    parts = [p.strip() for p in str(address).split(",") if p.strip()]
+    if len(parts) < 2:
+        return None
+    street_part, city = parts[0].lower(), parts[1].lower()
+    tokens = [t for t in re.split(r"[^a-z0-9]+", street_part) if t]
+    if not tokens or not tokens[0].isdigit():
+        return None  # no house number → not a specific building
+    tokens = tokens[1:]  # drop the house number
+    if not tokens:
+        return None
+    tokens = [_STREET_SUFFIX_ALIASES.get(t, t) for t in tokens]
+    city = re.sub(r"[^a-z ]+", "", city).strip()
+    if not city:
+        return None
+    return (" ".join(tokens), city)
+
+
+# Two numbered addresses on the same street in the same city, resolved this far
+# apart, means at least one of them geocoded to the wrong place. Residential
+# streets do not run for kilometres, and even the longest urban arterials put
+# consecutive house numbers nowhere near this distance. Well above the ~250 m
+# same-place band so ordinary short same-street trips are unaffected.
+_SAME_STREET_MAX_KM = 2.0
+
+
+def _address_mismatch_refusal(
+    pickup_address: Optional[str],
+    dropoff_address: Optional[str],
+    distance_km: float,
+    confirmed: bool,
+) -> Optional[Dict[str, Any]]:
+    """Refuse to quote when the addresses say "same street" but the coordinates
+    say "kilometres apart" — one of them resolved to the wrong point.
+
+    Incident: 4325 Wakeling St → 4321 Wakeling St (adjacent houses) priced as
+    8.78 km / 22 min, because Google lacks house number 4321 and returned an
+    approximate point elsewhere in the city. Every existing guard passed: the
+    same-place check saw 8.78 km, and the road/haversine sanity band only
+    validates the route *between* two points, never whether the points are right.
+    """
+    if confirmed or distance_km <= _SAME_STREET_MAX_KM:
+        return None
+    pickup_key, dropoff_key = _street_key(pickup_address), _street_key(dropoff_address)
+    if not pickup_key or pickup_key != dropoff_key:
+        return None
+    return {
+        "needs_confirmation": "address_mismatch",
+        "distance_km": round(distance_km, 2),
+        "note": (
+            f"'{pickup_address}' and '{dropoff_address}' are on the same street, but the "
+            f"coordinates resolved {round(distance_km, 1)} km apart — one of them is almost "
+            "certainly wrong, so this fare would be for a trip the rider never asked for. "
+            "Do NOT quote it. Tell the rider what you resolved, ask them to confirm the exact "
+            "house numbers, and re-resolve with find_place or ask them to drop a pin. Only "
+            "call this tool again with confirm_same_location=true if they insist the distance "
+            "is genuinely correct."
+        ),
+    }
 
 
 def _same_place_refusal(distance_km: float, confirmed: bool) -> Optional[Dict[str, Any]]:
@@ -487,9 +632,9 @@ async def get_fare_quote(
                 "tell the rider the exact pickup address"
             )
 
-    refusal = _same_place_refusal(
-        _trip_distance_km(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng),
-        confirm_same_location,
+    trip_km = _trip_distance_km(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
+    refusal = _same_place_refusal(trip_km, confirm_same_location) or _address_mismatch_refusal(
+        pickup_address, dropoff_address, trip_km, confirm_same_location
     )
     if refusal:
         # A moved pin still has to be disclosed even when the trip is refused —
@@ -698,10 +843,15 @@ async def _reconcile_pickup(
 
     lookup = await _lookup_place_candidates(api_key=api_key, query=pickup_address, near_lat=near_lat, near_lng=near_lng)
     in_area_candidates = [c for c in lookup.get("candidates") or [] if c.get("in_service_area")]
-    if not in_area_candidates:
+    # Never relocate a pin onto a point Google itself won't vouch for: an
+    # APPROXIMATE/partial match is a neighbourhood centroid, so "correcting" a
+    # real coordinate to it moves the driver somewhere nobody asked for. With
+    # no precise candidate we keep what we were given and leave it unadjusted.
+    precise_candidates = [c for c in in_area_candidates if c.get("precise")]
+    if not precise_candidates:
         return pickup_lat, pickup_lng, pickup_address, in_area, False, 0.0
     geocoded = min(
-        in_area_candidates,
+        precise_candidates,
         key=lambda c: _trip_distance_km(pickup_lat, pickup_lng, c["lat"], c["lng"]),
     )
 
@@ -742,7 +892,9 @@ async def propose_ride_booking(
     # be dispatched, and on the proposal itself so skipping the quote step
     # cannot bypass it.
     trip_km = _trip_distance_km(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
-    refusal = _same_place_refusal(trip_km, confirm_same_location)
+    refusal = _same_place_refusal(trip_km, confirm_same_location) or _address_mismatch_refusal(
+        pickup_address, dropoff_address, trip_km, confirm_same_location
+    )
     if refusal:
         return refusal
 

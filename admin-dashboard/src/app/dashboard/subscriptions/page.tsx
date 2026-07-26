@@ -508,8 +508,8 @@ export default function SubscriptionsPage() {
                 getSubscriptionStats(),
                 getServiceAreas().catch(() => []),
             ]);
-            setPlans(plansData ?? []);
-            setDriverSubs(subsData ?? []);
+            setPlans(Array.isArray(plansData) ? plansData : []);
+            setDriverSubs(Array.isArray(subsData) ? subsData : []);
             setStats(statsData?.stats ?? null);
             setServiceAreas((Array.isArray(areasData) ? areasData : []).filter(
                 (a: ServiceArea) => !("parent_service_area_id" in a && a.parent_service_area_id),

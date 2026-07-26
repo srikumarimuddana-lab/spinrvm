@@ -242,10 +242,12 @@ export default function MonitoringPage() {
 
   // ── Initial data load + polling ─────────────────────────────────────
   const loadData = useCallback(async () => {
-    const [rawDrivers, rawRides] = await Promise.all([
+    const [rawDriversResult, rawRidesResult] = await Promise.all([
       getMonitoringDrivers().catch(() => [] as any[]),
       getMonitoringRides().catch(() => [] as any[]),
     ]);
+    const rawDrivers = Array.isArray(rawDriversResult) ? rawDriversResult : [];
+    const rawRides = Array.isArray(rawRidesResult) ? rawRidesResult : [];
 
     // Sync driver markers
     const incomingDriverIds = new Set<string>();

@@ -244,7 +244,7 @@ export default function PromotionsPage() {
 
     // Load service areas once on mount for the promo scoping dropdown
     useEffect(() => {
-        getServiceAreas().then((areas) => setServiceAreas(areas ?? [])).catch(() => {});
+        getServiceAreas().then((areas) => setServiceAreas(Array.isArray(areas) ? areas : [])).catch(() => {});
     }, []);
 
     // Re-fetch stats when range changes

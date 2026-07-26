@@ -75,7 +75,7 @@ export default function ExpiringDocsPage() {
     }, [windowDays, serviceAreaId, toast]);
 
     useEffect(() => { if (allowed) load(); }, [allowed, load]);
-    useEffect(() => { getServiceAreas().then((rows) => setServiceAreas(rows || [])).catch(() => {}); }, []);
+    useEffect(() => { getServiceAreas().then((rows) => setServiceAreas(Array.isArray(rows) ? rows : [])).catch(() => {}); }, []);
 
     const handleNudge = async (it: ExpiringDocItem) => {
         const key = `${it.driver_id}:${it.doc_type}`;

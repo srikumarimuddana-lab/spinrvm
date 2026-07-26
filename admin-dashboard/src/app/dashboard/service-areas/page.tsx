@@ -113,7 +113,7 @@ export default function ServiceAreasPage() {
         getSubscriptionPlans().catch(() => []),
         getVehicleTypes().catch(() => [] as any[]),
       ]);
-      setAreas(a);
+      setAreas(Array.isArray(a) ? a : []);
       setPlans(p);
       setVehicleTypes((vt || []).map((v: any) => ({ id: v.id, name: v.name })));
     } catch {}

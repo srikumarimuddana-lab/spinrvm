@@ -236,7 +236,7 @@ export default function RedisMonitoringPage() {
     }, [stats]);
 
     const memoryPercent = stats?.used_memory_percent ?? null;
-    const circuitInfo = circuitBadgeVariant(infra?.db_circuit_breaker.state ?? "closed");
+    const circuitInfo = circuitBadgeVariant(infra?.db_circuit_breaker?.state ?? "closed");
     const CircuitIcon = circuitInfo.icon;
 
     if (loading) {
@@ -387,11 +387,11 @@ export default function RedisMonitoringPage() {
                     <CardContent>
                         <Badge variant={circuitInfo.variant} className="gap-1">
                             <CircuitIcon className="h-3 w-3" />
-                            {infra?.db_circuit_breaker.state?.toUpperCase() ?? "–"}
+                            {infra?.db_circuit_breaker?.state?.toUpperCase() ?? "–"}
                         </Badge>
                         <p className="mt-2 text-xs text-muted-foreground">{circuitInfo.label}</p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                            {infra?.db_circuit_breaker.recent_failures ?? 0} recent failures
+                            {infra?.db_circuit_breaker?.recent_failures ?? 0} recent failures
                         </p>
                     </CardContent>
                 </Card>
@@ -452,7 +452,7 @@ export default function RedisMonitoringPage() {
             </Card>
 
             {/* WebSocket fan-out degraded banner — the live-map failure mode */}
-            {ws && ws.fanout.configured && !ws.fanout.active && (
+            {ws?.fanout?.configured && !ws.fanout.active && (
                 <Card className="border-red-500/50">
                     <CardContent className="pt-6 flex items-start gap-2 text-red-600 dark:text-red-400">
                         <WifiOff className="mt-0.5 h-5 w-5 shrink-0" />
@@ -495,7 +495,7 @@ export default function RedisMonitoringPage() {
                         {/* Fan-out status */}
                         <div className="rounded-md border bg-muted/30 px-3 py-2 lg:col-span-1">
                             <p className="text-xs text-muted-foreground">Fan-out</p>
-                            {!ws ? (
+                            {!ws?.fanout ? (
                                 <p className="font-semibold">–</p>
                             ) : ws.fanout.active ? (
                                 <Badge variant="default" className="mt-1 gap-1">
@@ -511,17 +511,17 @@ export default function RedisMonitoringPage() {
                                 </Badge>
                             )}
                         </div>
-                        <InfraStat label="Total sockets" value={formatNumber(ws?.connections.total)} />
-                        <InfraStat label="Admins" value={formatNumber(ws?.connections.admins)} />
-                        <InfraStat label="Drivers" value={formatNumber(ws?.connections.drivers)} />
-                        <InfraStat label="Riders" value={formatNumber(ws?.connections.riders)} />
+                        <InfraStat label="Total sockets" value={formatNumber(ws?.connections?.total)} />
+                        <InfraStat label="Admins" value={formatNumber(ws?.connections?.admins)} />
+                        <InfraStat label="Drivers" value={formatNumber(ws?.connections?.drivers)} />
+                        <InfraStat label="Riders" value={formatNumber(ws?.connections?.riders)} />
                     </div>
                     <p className="mt-3 text-xs text-muted-foreground">
-                        Channel <code>{ws?.fanout.channel ?? "–"}</code>
-                        {ws?.fanout.backend_scheme ? <> · backend <code>{ws.fanout.backend_scheme}://</code></> : null}
+                        Channel <code>{ws?.fanout?.channel ?? "–"}</code>
+                        {ws?.fanout?.backend_scheme ? <> · backend <code>{ws.fanout.backend_scheme}://</code></> : null}
                         {ws?.replica_hostname ? <> · host <code>{ws.replica_hostname}</code></> : null}
                         {ws?.worker_pid ? <> · worker pid <code>{ws.worker_pid}</code></> : null}
-                        {ws?.fanout.last_error ? <> · last error <code>{ws.fanout.last_error}</code></> : null}
+                        {ws?.fanout?.last_error ? <> · last error <code>{ws.fanout.last_error}</code></> : null}
                     </p>
                 </CardContent>
             </Card>
@@ -603,7 +603,7 @@ export default function RedisMonitoringPage() {
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <Server className="h-5 w-5" />
-                        Replica: {infra?.replica.hostname ?? "–"}
+                        Replica: {infra?.replica?.hostname ?? "–"}
                     </CardTitle>
                     <p className="text-xs text-muted-foreground">
                         Process-level stats for the backend replica that served this request.
@@ -615,20 +615,20 @@ export default function RedisMonitoringPage() {
                     <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
                         <InfraStat
                             label="PID"
-                            value={infra?.replica.pid?.toString() ?? "–"}
+                            value={infra?.replica?.pid?.toString() ?? "–"}
                         />
                         <InfraStat
                             label="Uptime"
-                            value={formatDuration(infra?.replica.uptime_seconds)}
+                            value={formatDuration(infra?.replica?.uptime_seconds)}
                         />
                         <InfraStat
                             label="RSS Memory"
-                            value={infra?.process.rss_human ?? "–"}
+                            value={infra?.process?.rss_human ?? "–"}
                         />
                         <InfraStat
                             label="Thread Pool"
                             value={
-                                infra?.thread_pool.max_workers != null
+                                infra?.thread_pool?.max_workers != null
                                     ? `max ${infra.thread_pool.max_workers}`
                                     : "–"
                             }
@@ -636,7 +636,7 @@ export default function RedisMonitoringPage() {
                         <InfraStat
                             label="CPU (user)"
                             value={
-                                infra?.process.cpu_user_seconds != null
+                                infra?.process?.cpu_user_seconds != null
                                     ? `${infra.process.cpu_user_seconds.toFixed(1)}s`
                                     : "–"
                             }
@@ -644,27 +644,27 @@ export default function RedisMonitoringPage() {
                         <InfraStat
                             label="CPU (system)"
                             value={
-                                infra?.process.cpu_system_seconds != null
+                                infra?.process?.cpu_system_seconds != null
                                     ? `${infra.process.cpu_system_seconds.toFixed(1)}s`
                                     : "–"
                             }
                         />
                         <InfraStat
                             label="Redis Memory"
-                            value={infra?.redis.used_memory_human ?? "–"}
+                            value={infra?.redis?.used_memory_human ?? "–"}
                         />
                         <InfraStat
                             label="Redis Evictions"
-                            value={formatNumber(infra?.redis.evicted_keys_total)}
+                            value={formatNumber(infra?.redis?.evicted_keys_total)}
                         />
                     </div>
 
                     <Separator className="my-4" />
 
                     <h3 className="mb-2 text-sm font-medium">Counters (this replica, since start)</h3>
-                    {infra && Object.keys(infra.metrics).length > 0 ? (
+                    {infra && Object.keys(infra.metrics ?? {}).length > 0 ? (
                         <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
-                            {Object.entries(infra.metrics)
+                            {Object.entries(infra.metrics ?? {})
                                 .sort((a, b) => b[1] - a[1])
                                 .map(([name, value]) => (
                                     <div

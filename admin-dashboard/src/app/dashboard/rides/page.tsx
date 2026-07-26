@@ -100,7 +100,7 @@ export default function RidesPage() {
             loadRides(0, pageSize, currentOpts()),
             getServiceAreas().catch(() => []),
         ])
-            .then(([, a]) => { if (a) setAreas(a as any); })
+            .then(([, a]) => { setAreas(Array.isArray(a) ? a : []); })
             .catch(() => {});
         // Only run on mount
         // eslint-disable-next-line react-hooks/exhaustive-deps

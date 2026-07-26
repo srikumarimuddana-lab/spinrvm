@@ -138,7 +138,7 @@ export default function VehicleTypesPage() {
     const fetchTypes = () => {
         setLoading(true);
         getVehicleTypes()
-            .then(setTypes)
+            .then((data) => setTypes(Array.isArray(data) ? data : []))
             .catch(() => {
                 toast({ title: "Failed to load vehicle types", description: "Please refresh the page.", variant: "destructive" });
             })

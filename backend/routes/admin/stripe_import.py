@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 try:
     from ...dependencies import get_admin_user
@@ -105,6 +106,7 @@ async def _build_plan(kind: str, rows: list[dict[str, str]], batch: str) -> Any:
 
 def _report(plan: Any, kind: str, batch: str, total_rows: int) -> dict[str, Any]:
     skipped = sum(1 for w in plan.warnings if w.field == "already_mapped")
+    needs_update = list(getattr(plan, "needs_update", []))
     return {
         "batch": batch,
         "kind": kind,
@@ -113,9 +115,14 @@ def _report(plan: Any, kind: str, batch: str, total_rows: int) -> dict[str, Any]
             "rows": total_rows,
             "to_map": len(plan.driver_updates) + len(plan.user_updates),
             "skipped_already_mapped": skipped,
+            "needs_update": len(needs_update),
         },
         "warnings": _serialize_items(plan.warnings),
         "errors": _serialize_items(plan.errors),
+        # Drivers already carrying a DIFFERENT account: non-blocking, surfaced
+        # for an explicit per-driver update. Items are PII-free (row_ref,
+        # driver_id, and acct_ ids only) — the UI resolves names by driver_id.
+        "needs_update": needs_update,
     }
 
 
@@ -192,6 +199,114 @@ async def commit_stripe_import(
         **result,
         "kyc_sync": kyc_sync,
         "warnings": _serialize_items(plan.warnings),
+    }
+
+
+class DriverAccountUpdate(BaseModel):
+    """Body for the explicit per-driver payout-account overwrite."""
+
+    driver_id: str = Field(..., min_length=1)
+    new_stripe_account_id: str = Field(..., min_length=1)
+    current_stripe_account_id: str = Field(..., min_length=1)
+    batch: Optional[str] = None
+
+
+# Service status → HTTP. 409 for the two "someone/something changed" races so
+# the UI tells the operator to re-validate; 422 for bad input / Stripe findings.
+_UPDATE_STATUS_HTTP = {
+    "stale": 409,
+    "id_taken": 409,
+    "not_found": 404,
+    "bad_format": 422,
+    "validation_failed": 422,
+    "stripe_not_configured": 503,
+}
+
+
+def _serialize_pairs(pairs: list) -> list[dict[str, str]]:
+    return [{"field": f, "message": m} for f, m in pairs]
+
+
+# Human-readable failure messages. The generic admin API client surfaces
+# HTTPException.detail as the thrown Error's message, so detail must be a
+# STRING (a dict would collapse to "[object Object]" in the UI).
+_UPDATE_MESSAGES = {
+    "stale": "This driver's Stripe account changed since this screen loaded — re-validate the CSV and try again.",
+    "id_taken": "That Stripe account is already mapped to another driver.",
+    "not_found": "Driver not found.",
+    "stripe_not_configured": "Stripe is not configured in app settings.",
+}
+
+
+def _update_error_message(status: str, errors: list) -> str:
+    if status in _UPDATE_MESSAGES:
+        return _UPDATE_MESSAGES[status]
+    # bad_format / validation_failed → surface the specific Stripe findings.
+    if errors:
+        return "; ".join(m for _f, m in errors)
+    return "Could not update the driver's Stripe account."
+
+
+@router.post("/stripe/import/update-driver")
+async def update_driver_stripe_account(
+    body: DriverAccountUpdate,
+    admin: dict = Depends(get_admin_user),
+):
+    """Overwrite ONE driver's ``stripe_account_id`` (redirects their payouts).
+
+    This is the deliberate counterpart to the bulk commit's NULL-only fill: it
+    exists to resolve a ``needs_update`` row from the validate/commit report,
+    one driver at a time, after the operator confirms in the UI. super_admin
+    only, live-validated, optimistic-concurrency guarded, and audited.
+    """
+    _require_super_admin(admin)
+    batch = body.batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+
+    try:
+        result = await import_svc.update_driver_stripe_account(
+            body.driver_id,
+            body.new_stripe_account_id,
+            body.current_stripe_account_id,
+            batch,
+            stripe_secret,
+        )
+    except Exception as e:
+        logger.error("driver stripe account update failed", extra={"batch": batch}, exc_info=True)
+        raise HTTPException(
+            status_code=503, detail="Could not update the driver's Stripe account (database/Stripe error); retry"
+        ) from e
+
+    warnings = _serialize_pairs(result.get("warnings", []))
+    if not result["ok"]:
+        raise HTTPException(
+            status_code=_UPDATE_STATUS_HTTP.get(result["status"], 422),
+            detail=_update_error_message(result["status"], result.get("errors", [])),
+        )
+
+    # Redirecting a payout destination is money-moving — audit it. IDs only,
+    # never PII (acct_/driver ids are non-PII and already logged in the service).
+    await log_admin_action(
+        admin,
+        "stripe_account_update",
+        "drivers",
+        body.driver_id,
+        {
+            "batch": batch,
+            "previous_account_id": body.current_stripe_account_id,
+            "new_account_id": body.new_stripe_account_id,
+        },
+    )
+    # Converge KYC mirror columns from the new account, same as bulk commit.
+    asyncio.create_task(import_svc.sync_kyc_after_commit([body.driver_id], batch))
+
+    return {
+        "ok": True,
+        "status": result["status"],
+        "driver_id": body.driver_id,
+        "batch": batch,
+        "warnings": warnings,
     }
 
 

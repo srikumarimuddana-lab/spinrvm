@@ -1334,13 +1334,23 @@ export interface StripeImportReportItem {
     field: string;
     message: string;
 }
+// Drivers already carrying a DIFFERENT account than the CSV. Non-blocking:
+// surfaced for an explicit per-driver update. PII-free (name is resolved in the
+// UI by driver_id, never carried in the report).
+export interface StripeImportNeedsUpdateItem {
+    row_ref: string;
+    driver_id: string;
+    current_stripe_account_id: string;
+    new_stripe_account_id: string;
+}
 export interface StripeImportReport {
     batch: string;
     kind: StripeImportKind;
     can_commit: boolean;
-    counts: { rows: number; to_map: number; skipped_already_mapped: number };
+    counts: { rows: number; to_map: number; skipped_already_mapped: number; needs_update: number };
     warnings: StripeImportReportItem[];
     errors: StripeImportReportItem[];
+    needs_update: StripeImportNeedsUpdateItem[];
 }
 export interface StripeImportCommitResult {
     batch: string;
@@ -1355,6 +1365,7 @@ export interface StripeImportCommitResult {
     can_commit?: boolean;
     counts?: StripeImportReport["counts"];
     errors?: StripeImportReportItem[];
+    needs_update?: StripeImportNeedsUpdateItem[];
 }
 export interface StripeImportStatus {
     batch: string;
@@ -1391,6 +1402,31 @@ export const adminStripeImportStatus = (batch: string) =>
     request<StripeImportStatus>(
         `/api/admin/stripe/import/status?batch=${encodeURIComponent(batch)}`,
     );
+
+export interface StripeDriverAccountUpdateResult {
+    ok: boolean;
+    status: "updated";
+    driver_id: string;
+    batch: string;
+    warnings: StripeImportReportItem[];
+}
+
+/**
+ * Overwrite ONE driver's payout account (resolves a `needs_update` row). This
+ * redirects where the driver is paid, so it is super-admin-only, live-validated,
+ * and confirmed in the UI. On failure `request` throws with the backend's
+ * human-readable message (409 = stale/id-taken, 422 = bad account/validation).
+ */
+export const adminUpdateDriverStripeAccount = (body: {
+    driver_id: string;
+    new_stripe_account_id: string;
+    current_stripe_account_id: string;
+    batch?: string;
+}) =>
+    request<StripeDriverAccountUpdateResult>("/api/admin/stripe/import/update-driver", {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
 
 /* ── Bulk Rider Import (CSV) ──────────────── */
 export interface RiderImportReportItem {

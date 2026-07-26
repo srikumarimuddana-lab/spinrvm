@@ -220,7 +220,7 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
     logger.info(
         "retention_purge complete dry_run=%s rides_anon=%s rides_del=%s "
         "loc_del=%s msgs_del=%s tokens_del=%s stripe_del=%s dsar_users=%s "
-        "dsar_skipped_fk=%s",
+        "dsar_skipped_fk=%s ts_cols=%s",
         data.get("dry_run"),
         data.get("rides_anonymized"),
         data.get("rides_deleted"),
@@ -230,6 +230,10 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         data.get("stripe_events_deleted"),
         data.get("dsar_users_purged"),
         skipped_fk,
+        # migration 256: the live timestamp column Steps D/F resolved to. Logged
+        # so schema drift between the migration tree and production is visible
+        # on every run, not only once it breaks the purge with a 42703.
+        data.get("retention_ts_columns"),
     )
     logger.info(
         "trip_route_geometry_purge complete dry_run=%s routes_anon=%s snapshots_deleted=%s gap_events_del=%s",

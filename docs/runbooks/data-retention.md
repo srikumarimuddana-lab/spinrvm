@@ -180,6 +180,27 @@ Recovery:
 - This runbook does **not** cover regulator data export requests
   (PIPEDA s. 8). Those follow the user-rights flow in
   `docs/runbooks/security-incident.md` and `CLAUDE.md` § Compliance.
+- **Schema drift is the historical failure mode of this job.** The whole
+  purge is one transaction, so a single step keyed on a column the live
+  table does not have aborts and rolls back *every* step — the loop logs
+  one DB error a day and enforces nothing. It has happened three times:
+  `driver_location_history.recorded_at` (fixed by migration 187),
+  `stripe_events.created_at` (introduced by migration 67, fixed by 256),
+  and `ride_messages.created_at` (fixed by 256). Steps D and F now resolve
+  their column from `pg_catalog` at run time and `RAISE` if none of the
+  candidates exist, and every run records what it resolved to under
+  `retention_ts_columns` in the result JSONB — visible in the daily
+  `pii_retention_purge` audit row and the loop's INFO log:
+
+  ```
+  retention_purge complete dry_run=False ... ts_cols={'ride_messages': 'timestamp', 'stripe_events': 'received_at'}
+  ```
+
+  If a re-fork of `purge_pii_retention` adds a step, check the column
+  against the *live* table, not against a `CREATE TABLE IF NOT EXISTS` in
+  `backend/migrations/` — several of those never applied to production.
+  `backend/tests/test_retention_purge_column_drift.py` enforces this
+  statically for every hard-coded cutoff.
 
 ---
 

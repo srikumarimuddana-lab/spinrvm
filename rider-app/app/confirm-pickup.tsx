@@ -69,6 +69,15 @@ export default function ConfirmPickupScreen() {
 
   const isTooFar = distanceM > PICKUP_RADIUS_M;
 
+  // Coordinates the displayed address was geocoded FOR. Starts at the original
+  // pin, whose address came in with it from the store. The reverse geocode is
+  // debounced 400 ms, so on a fast pan-then-confirm `address` still describes
+  // the previous pin — booking would bind the old label to the new coordinate.
+  const addressForRef = useRef<{ lat: number; lng: number }>({
+    lat: originalLat.current,
+    lng: originalLng.current,
+  });
+
   const reverseGeocode = useCallback(async (lat: number, lng: number) => {
     setGeocoding(true);
     try {
@@ -80,6 +89,7 @@ export default function ConfirmPickupScreen() {
     } catch {
       setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
     } finally {
+      addressForRef.current = { lat, lng };
       setGeocoding(false);
     }
   }, []);
@@ -115,7 +125,19 @@ export default function ConfirmPickupScreen() {
       // No venue match / lookup failed → fall through to the plain pin.
     }
     setChecking(false);
-    proceed(region.latitude, region.longitude, address, note);
+    // Never bind a label to a pin it wasn't geocoded for — when they disagree
+    // (mid-debounce confirm), the honest label for the booked coordinate is
+    // the coordinate itself.
+    const labelCurrent =
+      !!address &&
+      !geocoding &&
+      haversineM(region.latitude, region.longitude, addressForRef.current.lat, addressForRef.current.lng) <= 60;
+    proceed(
+      region.latitude,
+      region.longitude,
+      labelCurrent ? address : `${region.latitude.toFixed(5)}, ${region.longitude.toFixed(5)}`,
+      note,
+    );
   };
 
   const handleRecenter = () => {

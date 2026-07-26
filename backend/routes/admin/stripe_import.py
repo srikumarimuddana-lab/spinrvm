@@ -261,10 +261,10 @@ async def update_driver_stripe_account(
     """
     _require_super_admin(admin)
     batch = body.batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    settings = await get_app_settings()
-    stripe_secret = settings.get("stripe_secret_key", "")
 
     try:
+        settings = await get_app_settings()
+        stripe_secret = settings.get("stripe_secret_key", "")
         result = await import_svc.update_driver_stripe_account(
             body.driver_id,
             body.new_stripe_account_id,
@@ -287,7 +287,7 @@ async def update_driver_stripe_account(
 
     # Redirecting a payout destination is money-moving — audit it. IDs only,
     # never PII (acct_/driver ids are non-PII and already logged in the service).
-    await log_admin_action(
+    audit_id = await log_admin_action(
         admin,
         "stripe_account_update",
         "drivers",
@@ -298,8 +298,19 @@ async def update_driver_stripe_account(
             "new_account_id": body.new_stripe_account_id,
         },
     )
+    if audit_id is None:
+        warnings.append(
+            {"field": "audit", "message": "audit log write failed — the update was applied but not audited"}
+        )
+
     # Converge KYC mirror columns from the new account, same as bulk commit.
-    asyncio.create_task(import_svc.sync_kyc_after_commit([body.driver_id], batch))
+    asyncio.create_task(
+        import_svc.sync_kyc_after_commit(
+            [body.driver_id],
+            batch,
+            expected_account_id=body.new_stripe_account_id,
+        )
+    )
 
     return {
         "ok": True,

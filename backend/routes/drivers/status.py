@@ -44,8 +44,9 @@ async def get_driver(driver_id: str, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    requester_role = current_user.get("role", "")
-    is_admin = requester_role in {"admin", "super_admin", "operations", "support"}
+    # Verified-admin marker only — never the users.role column, which an
+    # ordinary rider/driver token also carries (see get_admin_user).
+    is_admin = bool(current_user.get("_admin_verified"))
     is_self = driver.get("user_id") == current_user["id"]
 
     if is_admin or is_self:

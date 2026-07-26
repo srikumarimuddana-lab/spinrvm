@@ -126,6 +126,7 @@ from ._shared import (  # noqa: F401
     _vault_decrypt,
     _vault_encrypt,
     serialize_doc,
+    serialize_ride_for_driver,
 )
 from .earnings import (  # noqa: F401
     get_driver_balance,
@@ -486,6 +487,7 @@ __all__ = [
     "send_live_activity_update",
     "send_push_notification",
     "serialize_doc",
+    "serialize_ride_for_driver",
     "set_destination_mode",
     "socket",
     "spawn",

@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import hmac
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -35,7 +34,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
     from ..utils.audit_logger import log_user_action as _audit_log_user
-    from ..utils.crypto import hash_otp
+    from ..utils.crypto import hash_otp, verify_otp_hash
     from ..utils.email_provider import send_transactional_email
     from ..utils.error_handling import (
         ErrorCode,
@@ -82,7 +81,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
     from utils.audit_logger import log_user_action as _audit_log_user
-    from utils.crypto import hash_otp
+    from utils.crypto import hash_otp, verify_otp_hash
     from utils.email_provider import send_transactional_email
     from utils.error_handling import (
         ErrorCode,
@@ -664,7 +663,7 @@ async def verify_company_email_otp(
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
 
-    if not otp_record or not hmac.compare_digest(str(otp_record.get("code_hash", "")), hash_otp(code)):
+    if not otp_record or not verify_otp_hash(str(otp_record.get("code_hash", "")), code):
         await _record_otp_failure(lockout_key)
         raise SpinrException(
             message="ERR_OTP_INVALID",
@@ -733,13 +732,11 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     try:
         # R-P1-14: Fetch by phone only; compare hashes in constant time with
         # hmac.compare_digest to prevent timing-based hash-prefix leakage.
-        import hmac as _hmac
 
         otp_record = await db_supabase.get_otp_record_by_phone(phone)
         if otp_record:
             expected = otp_record.get("code", "")
-            actual = hash_otp(code)
-            if not _hmac.compare_digest(str(expected), str(actual)):
+            if not verify_otp_hash(str(expected), code):
                 otp_record = None
     except Exception as e:
         # C3: a DB read failure is NOT a wrong code. Surface 503 so the client

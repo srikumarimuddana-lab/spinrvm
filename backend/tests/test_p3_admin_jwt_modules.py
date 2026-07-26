@@ -213,12 +213,27 @@ class TestGetCurrentUserAdminJWT:
 class TestGetAdminUserRoleGating:
     @pytest.mark.anyio
     @pytest.mark.parametrize("role", ["admin", "super_admin", "operations", "support", "finance", "custom"])
-    async def test_valid_admin_roles_pass(self, role):
+    async def test_valid_admin_roles_pass_with_marker(self, role):
+        """A verified admin (marker set by _verify_admin_payload) passes."""
         from dependencies import get_admin_user
 
-        user = {"id": "u1", "role": role, "modules": ["dashboard"]}
+        user = {"id": "u1", "role": role, "modules": ["dashboard"], "_admin_verified": True}
         result = await get_admin_user(user)
         assert result is user
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("role", ["admin", "super_admin", "operations", "support", "finance", "custom"])
+    async def test_admin_roles_without_marker_raise_403(self, role):
+        """REGRESSION: an admin role string with no verified-admin marker (an
+        ordinary rider/driver token whose users.role was set) must NOT pass."""
+        from fastapi import HTTPException
+
+        from dependencies import get_admin_user
+
+        user = {"id": "u1", "role": role, "modules": ["dashboard"]}  # no _admin_verified
+        with pytest.raises(HTTPException) as exc_info:
+            await get_admin_user(user)
+        assert exc_info.value.status_code == 403
 
     @pytest.mark.anyio
     @pytest.mark.parametrize("role", ["rider", "driver", "guest", "", "superadmin", "ADMIN"])

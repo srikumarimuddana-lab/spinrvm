@@ -1080,7 +1080,59 @@ class TestProposal:
 
 def test_booking_tools_hidden_from_mcp():
     ensure_registry_loaded()
-    for name in ("find_place", "get_rider_location", "get_fare_quote", "propose_ride_booking"):
+    for name in ("find_place", "get_rider_location", "get_fare_quote", "propose_ride_booking", "request_map_pin"):
         assert TOOL_REGISTRY[name].mcp_exposed is False
         assert "rider" in TOOL_REGISTRY[name].audiences
         assert "driver" not in TOOL_REGISTRY[name].audiences
+
+
+class TestRequestMapPin:
+    """The chat has no map — this tool is the only bridge to one. Its client
+    action must carry everything the picker screen needs, and every refusal
+    note that says "drop a pin" must point the model at this tool (a bare
+    "drop a pin on the map" instruction is a dead end the rider cannot act
+    on — the incident this flow exists to fix)."""
+
+    @pytest.mark.anyio
+    async def test_action_carries_role_approx_and_label(self):
+        result, ok = await execute_tool(
+            "request_map_pin",
+            {
+                "location_role": "dropoff",
+                "approx_lat": 50.4079,
+                "approx_lng": -104.6501,
+                "label": "2965 Gordon Rd, Regina",
+            },
+            user=RIDER,
+        )
+        assert ok
+        assert result["shown"] is True
+        action = result["_client_action"]
+        assert action["type"] == "open_map_picker"
+        assert action["location_role"] == "dropoff"
+        assert action["approx_lat"] == 50.4079
+        assert action["approx_lng"] == -104.6501
+        assert action["label"] == "2965 Gordon Rd, Regina"
+        # The model must relay the pin verbatim, not re-geocode it.
+        assert "verbatim" in result["note"]
+
+    @pytest.mark.anyio
+    async def test_approx_optional(self):
+        result, ok = await execute_tool("request_map_pin", {"location_role": "pickup"}, user=RIDER)
+        assert ok
+        assert result["_client_action"]["location_role"] == "pickup"
+        assert "approx_lat" not in result["_client_action"]
+
+    def test_refusal_notes_point_at_this_tool(self):
+        import inspect
+
+        source = inspect.getsource(tools_booking)
+        # The imprecise-address warning and the same-street mismatch refusal
+        # both tell the model to offer a pin — they must name request_map_pin
+        # so the model can actually show a button instead of describing a map
+        # that does not exist in the chat.
+        for fragment in (
+            "call request_map_pin with this candidate's",
+            "or call request_map_pin so they",
+        ):
+            assert fragment in source

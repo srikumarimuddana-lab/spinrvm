@@ -29,7 +29,36 @@ interface Location {
   address: string;
   lat: number;
   lng: number;
+  /** Google place_id when this point came from a Places selection — lets a
+   * later tap re-resolve fresh coordinates instead of replaying stored ones. */
+  place_id?: string;
+  /** Epoch ms when a recents entry was stored; entries expire after
+   * RECENT_SEARCH_TTL_MS. */
+  saved_at?: number;
 }
+
+// v2: the v1 key stored unversioned, never-expiring address+coord pairs; a
+// backend defect wrote pairs whose coordinate did not match the address, and
+// they replayed verbatim on every tap. Bumping the key abandons all v1 data.
+const RECENT_SEARCHES_KEY = 'recent_searches_v2';
+const RECENT_SEARCH_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+
+const normalizeAddressKey = (address: string): string =>
+  address.trim().toLowerCase().replace(/\s+/g, ' ');
+
+/** Entry must be a plausible point on Earth with a non-empty address — a
+ * malformed or (0,0) entry booked verbatim becomes a ride to the Gulf of
+ * Guinea. */
+const isValidRecentSearch = (e: unknown): e is Location => {
+  if (typeof e !== 'object' || e === null) return false;
+  const { address, lat, lng } = e as Record<string, unknown>;
+  return (
+    typeof address === 'string' && address.trim().length > 0 &&
+    typeof lat === 'number' && Number.isFinite(lat) && Math.abs(lat) <= 90 &&
+    typeof lng === 'number' && Number.isFinite(lng) && Math.abs(lng) <= 180 &&
+    !(lat === 0 && lng === 0)
+  );
+};
 
 interface VehicleType {
   id: string;
@@ -986,18 +1015,31 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   addRecentSearch: (location) => {
     const { recentSearches } = get();
-    // Avoid duplicates (by address)
-    const filtered = recentSearches.filter(s => s.address !== location.address);
-    const updated = [location, ...filtered].slice(0, 10); // Keep max 10
+    // Dedupe on normalized address so "4500 Gordon Rd" and "4500 gordon rd "
+    // collapse — the old byte-exact match let differently-formatted copies of
+    // one place accumulate, and a stale copy could outlive its correction.
+    const key = normalizeAddressKey(location.address);
+    const filtered = recentSearches.filter(s => normalizeAddressKey(s.address) !== key);
+    const updated = [{ ...location, saved_at: Date.now() }, ...filtered].slice(0, 10);
     set({ recentSearches: updated });
-    AsyncStorage.setItem('recent_searches', JSON.stringify(updated)).catch(() => { });
+    AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated)).catch(() => { });
   },
 
   loadRecentSearches: async () => {
     try {
-      const stored = await AsyncStorage.getItem('recent_searches');
+      // Versioned key: v1 entries carried address+coord pairs written by code
+      // that could bind a wrong coordinate to a correct address string (and a
+      // backend bug did exactly that — the pair then replayed on every tap,
+      // forever, with no expiry and no re-validation). Abandoning the old key
+      // purges any poisoned pair in the wild; the one-time cost is an empty
+      // recents list.
+      const stored = await AsyncStorage.getItem(RECENT_SEARCHES_KEY);
       if (stored) {
-        set({ recentSearches: JSON.parse(stored) });
+        const cutoff = Date.now() - RECENT_SEARCH_TTL_MS;
+        const entries = (JSON.parse(stored) as unknown[])
+          .filter(isValidRecentSearch)
+          .filter((e) => (e.saved_at ?? 0) >= cutoff);
+        set({ recentSearches: entries });
       }
       // Also hydrate the Accessibility setting at the same time — the
       // home screen calls loadRecentSearches on mount, so this is the
@@ -1009,7 +1051,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   clearRecentSearches: () => {
     set({ recentSearches: [] });
-    AsyncStorage.removeItem('recent_searches').catch(() => { });
+    AsyncStorage.removeItem(RECENT_SEARCHES_KEY).catch(() => { });
   },
 
   setScheduledTime: (time) => set({ scheduledTime: time }),
@@ -1195,6 +1237,10 @@ registerLogoutCallback(() => {
     activeRideRouteCoords: null,
     activeDriverRouteCoords: null,
     lastEtaMin: null,
+    // Recents are per-person, not per-device: the next account on this phone
+    // must not inherit (or book to) the previous rider's destinations.
+    recentSearches: [],
   });
   AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
+  AsyncStorage.removeItem(RECENT_SEARCHES_KEY).catch(() => {});
 });

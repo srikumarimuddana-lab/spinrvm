@@ -357,8 +357,10 @@ describe('rideStore — recent searches', () => {
 
     const { recentSearches } = useRideStore.getState();
     expect(recentSearches).toHaveLength(2);
-    expect(recentSearches[0]).toEqual(loc1);
-    expect(recentSearches[1]).toEqual(loc2);
+    // toMatchObject: entries additionally carry a saved_at timestamp (recents
+    // v2 expiry) on top of the caller-provided fields.
+    expect(recentSearches[0]).toMatchObject(loc1);
+    expect(recentSearches[1]).toMatchObject(loc2);
   });
 
   test('clearRecentSearches empties the list', () => {

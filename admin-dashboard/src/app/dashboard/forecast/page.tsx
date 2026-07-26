@@ -80,7 +80,7 @@ export default function ForecastPage() {
         </div>
         <div className="flex gap-2 items-center">
           <Select value={areaId} onValueChange={setAreaId}>
-            <SelectTrigger className="w-44">
+            <SelectTrigger className="w-44" aria-label="All Areas">
               <SelectValue placeholder="All Areas" />
             </SelectTrigger>
             <SelectContent>
@@ -91,7 +91,7 @@ export default function ForecastPage() {
             </SelectContent>
           </Select>
           <Select value={hoursAhead} onValueChange={setHoursAhead}>
-            <SelectTrigger className="w-32">
+            <SelectTrigger className="w-32" aria-label="Hours ahead">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

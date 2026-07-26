@@ -36,7 +36,7 @@ export function ServiceAreaFilter({
 }) {
     return (
         <Select value={value} onValueChange={onChange}>
-            <SelectTrigger className="w-44 h-9">
+            <SelectTrigger className="w-44 h-9" aria-label="Filter by service area">
                 <div className="flex items-center gap-1.5">
                     <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
                     <SelectValue placeholder="All Areas" />

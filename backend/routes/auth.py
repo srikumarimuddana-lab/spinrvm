@@ -590,6 +590,12 @@ async def _issue_company_email_session(
 @limiter.limit("3/minute")
 async def send_company_email_otp(request: Request, body: CompanyEmailOtpSendRequest):
     email = _normalize_company_email(str(body.email))
+    # Send cap only — deliberately NOT _check_otp_lockout, matching the phone
+    # send_otp path. The lockout is enforced at verify, so gating send buys no
+    # security: an attacker who can request codes still cannot verify one.
+    # It would only strip the recovery path from a legitimate user whose
+    # address someone else mistyped into the lockout.
+    await _enforce_otp_send_cap(_synthetic_phone_for_company_email(email))
     otp_code = generate_otp()
     otp_row = {
         "id": str(uuid.uuid4()),
@@ -643,6 +649,9 @@ async def verify_company_email_otp(
 ):
     email = _normalize_company_email(str(body.email))
     code = body.code.strip()
+    lockout_key = _synthetic_phone_for_company_email(email)
+
+    await _check_otp_lockout(lockout_key)
 
     try:
         otp_record = await _latest_company_email_otp(email)
@@ -656,6 +665,7 @@ async def verify_company_email_otp(
         ) from e
 
     if not otp_record or not hmac.compare_digest(str(otp_record.get("code_hash", "")), hash_otp(code)):
+        await _record_otp_failure(lockout_key)
         raise SpinrException(
             message="ERR_OTP_INVALID",
             error_code=ErrorCode.AUTH_OTP_INVALID,
@@ -699,6 +709,7 @@ async def verify_company_email_otp(
         {"id": otp_record["id"]},
         {"verified": True},
     )
+    await _clear_otp_failures(lockout_key)
     return await _issue_company_email_session(request=request, response=response, email=email)
 
 

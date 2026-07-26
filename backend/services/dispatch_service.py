@@ -109,6 +109,22 @@ def _is_dispatchable_driver(driver: Dict[str, Any]) -> bool:
     Excludes:
       - Legacy demo rows without a real user_id (can never be notified)
       - Rows missing lat/lng (can't compute distance or ETA)
+
+    Deliberately does NOT gate on ``drivers.updated_at`` as a GPS-freshness
+    proxy. That column is not a location clock: it is stamped by go-online /
+    go-offline (``routes/drivers/status.py``) and ride acceptance
+    (``repositories/driver_repo.py``) as well as by ``update_driver_location``.
+    Worse, a *stationary* driver legitimately stops producing fixes at all —
+    the foreground watcher uses ``distanceInterval: 30``m when idle and the
+    background task 50m — so a parked driver waiting in a queue would freeze
+    their ``updated_at`` and silently drop out of dispatch, removing exactly
+    the most-available cohort.
+
+    Liveness is already enforced upstream in ``find_candidate_drivers`` via the
+    Redis presence key, which ``mark_present()`` refreshes on every heartbeat
+    pong *and* every location ping. That is the correct signal; the DB-timestamp
+    sweeper it replaced was retired on purpose (see ``status.py``). Do not
+    reintroduce a staleness gate here.
     """
     if not driver.get("user_id"):
         return False

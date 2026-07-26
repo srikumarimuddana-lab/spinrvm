@@ -1,0 +1,295 @@
+"""Unit tests for services/stripe_mapping_import_service.py.
+
+The service talks to Supabase through its own module-level ``supabase`` plus
+``driver_import_service._select_in``, so the fake is patched onto BOTH modules.
+Stripe is exercised only in the live-validation tests, via patched
+``stripe.Account.retrieve`` / ``stripe.Customer.retrieve``.
+"""
+
+import pytest
+
+from backend.services import driver_import_service as driver_svc
+from backend.services import stripe_mapping_import_service as svc
+
+
+class _FakeExecute:
+    def __init__(self, data):
+        self.data = data
+
+
+def _resolve(row, col):
+    """Support PostgREST JSONB arrow syntax (``meta->>key``) like the real API."""
+    if "->>" in col:
+        base, key = col.split("->>", 1)
+        value = (row.get(base) or {}).get(key)
+        return None if value is None else str(value)
+    return row.get(col)
+
+
+class _FakeQuery:
+    def __init__(self, table, store):
+        self.table = table
+        self.store = store
+        self._filters = []
+        self._update = None
+
+    def select(self, *_a, **_k):
+        return self
+
+    def update(self, fields):
+        self._update = dict(fields)
+        return self
+
+    def eq(self, col, val):
+        self._filters.append(("eq", col, val))
+        return self
+
+    def in_(self, col, vals):
+        self._filters.append(("in", col, list(vals)))
+        return self
+
+    def is_(self, col, val):
+        self._filters.append(("is", col, val))
+        return self
+
+    def limit(self, _n):
+        return self
+
+    def execute(self):
+        rows = list(self.store.get(self.table, []))
+        for op, col, val in self._filters:
+            if op == "eq":
+                rows = [r for r in rows if _resolve(r, col) == val]
+            elif op == "in":
+                allowed = {str(v) for v in val}
+                rows = [r for r in rows if str(_resolve(r, col)) in allowed]
+            elif op == "is":
+                assert val == "null"
+                rows = [r for r in rows if _resolve(r, col) is None]
+        if self._update is not None:
+            for r in rows:
+                r.update(self._update)
+        return _FakeExecute(rows)
+
+
+class _FakeSupabase:
+    def __init__(self, store):
+        self.store = store
+
+    def table(self, name):
+        return _FakeQuery(name, self.store)
+
+
+def _install_fake(monkeypatch, *, drivers=None, users=None):
+    store = {"drivers": drivers or [], "users": users or []}
+    fake = _FakeSupabase(store)
+    monkeypatch.setattr(svc, "supabase", fake)
+    monkeypatch.setattr(driver_svc, "supabase", fake)
+    return store
+
+
+def _driver(**overrides):
+    row = {
+        "id": "drv-1",
+        "phone": "+13065551234",
+        "stripe_account_id": None,
+        "legacy_import_metadata": {"source": svc.DRIVER_IMPORT_SOURCE, "old_driver_id": "OLD-1"},
+    }
+    row.update(overrides)
+    return row
+
+
+def _user(**overrides):
+    row = {
+        "id": "usr-1",
+        "phone": "+13065559999",
+        "email": "rider@example.com",
+        "stripe_customer_id": None,
+        "legacy_import_metadata": {},
+    }
+    row.update(overrides)
+    return row
+
+
+# ---------------------------------------------------------------- parsing
+
+
+def test_parse_rejects_unknown_kind():
+    with pytest.raises(ValueError, match="unknown kind"):
+        svc.parse_mapping_rows("a,b\n1,2\n", "corporate")
+
+
+def test_parse_requires_stripe_column_per_kind():
+    with pytest.raises(ValueError, match="stripe_account_id"):
+        svc.parse_mapping_rows("old_driver_id,phone\nOLD-1,3065551234\n", svc.KIND_DRIVERS)
+    with pytest.raises(ValueError, match="stripe_customer_id"):
+        svc.parse_mapping_rows("phone,email\n3065551234,a@b.c\n", svc.KIND_RIDERS)
+
+
+def test_parse_requires_a_match_key_column():
+    with pytest.raises(ValueError, match="old_driver_id or phone"):
+        svc.parse_mapping_rows("stripe_account_id\nacct_1\n", svc.KIND_DRIVERS)
+    with pytest.raises(ValueError, match="phone or email"):
+        svc.parse_mapping_rows("stripe_customer_id\ncus_1\n", svc.KIND_RIDERS)
+
+
+def test_parse_rejects_empty_csv():
+    with pytest.raises(ValueError, match="no data rows"):
+        svc.parse_mapping_rows("stripe_account_id,old_driver_id\n", svc.KIND_DRIVERS)
+
+
+# ------------------------------------------------------- driver matching
+
+
+def test_driver_matched_by_old_driver_id(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    rows = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert not plan.errors
+    assert [u["driver_id"] for u in plan.driver_updates] == ["drv-1"]
+    assert plan.driver_updates[0]["stripe_account_id"] == "acct_A1"
+    assert plan.driver_updates[0]["row_ref"] == "OLD-1"
+
+
+def test_driver_old_id_requires_importer_source(monkeypatch):
+    # Same old_driver_id but stamped by some other source — must NOT match.
+    _install_fake(monkeypatch, drivers=[_driver(legacy_import_metadata={"source": "other", "old_driver_id": "OLD-1"})])
+    rows = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["no_match"]
+
+
+def test_driver_phone_fallback(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver(legacy_import_metadata={})])
+    rows = [{"phone": "3065551234", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert not plan.errors
+    assert [u["driver_id"] for u in plan.driver_updates] == ["drv-1"]
+    assert plan.driver_updates[0]["row_ref"] == "row-2"  # header is line 1
+
+
+def test_driver_ambiguous_match(monkeypatch):
+    other = _driver(id="drv-2", phone="+13065550000", legacy_import_metadata={})
+    _install_fake(monkeypatch, drivers=[_driver(), other])
+    rows = [{"old_driver_id": "OLD-1", "phone": "3065550000", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["ambiguous_match"]
+    assert not plan.driver_updates
+
+
+def test_driver_no_match(monkeypatch):
+    _install_fake(monkeypatch)
+    rows = [{"old_driver_id": "OLD-404", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["no_match"]
+
+
+def test_driver_missing_match_key_row(monkeypatch):
+    _install_fake(monkeypatch)
+    rows = [{"old_driver_id": "", "phone": "", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["csv"]
+
+
+# --------------------------------------------------------- local guards
+
+
+def test_malformed_account_id_errors_without_stripe(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    rows = [{"old_driver_id": "OLD-1", "stripe_account_id": "ACCT-BAD"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["stripe_id_format"]
+    assert not plan.driver_updates
+
+
+def test_duplicate_stripe_id_in_csv(monkeypatch):
+    two = _driver(
+        id="drv-2",
+        phone="+13065550000",
+        legacy_import_metadata={"source": svc.DRIVER_IMPORT_SOURCE, "old_driver_id": "OLD-2"},
+    )
+    _install_fake(monkeypatch, drivers=[_driver(), two])
+    rows = [
+        {"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"},
+        {"old_driver_id": "OLD-2", "stripe_account_id": "acct_A1"},
+    ]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["duplicate_in_csv", "duplicate_in_csv"]
+    assert not plan.driver_updates
+
+
+def test_duplicate_target_rows(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    rows = [
+        {"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"},
+        {"old_driver_id": "OLD-1", "stripe_account_id": "acct_A2"},
+    ]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["duplicate_target", "duplicate_target"]
+    assert not plan.driver_updates
+
+
+def test_already_mapped_is_warning_and_skipped(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_A1")])
+    rows = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert not plan.errors
+    assert [w.field for w in plan.warnings] == ["already_mapped"]
+    assert not plan.driver_updates
+
+
+def test_conflict_existing_different_id(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver(stripe_account_id="acct_OTHER")])
+    rows = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["conflict_existing"]
+
+
+def test_id_taken_by_other_driver(monkeypatch):
+    holder = _driver(id="drv-2", phone="+13065550000", stripe_account_id="acct_A1", legacy_import_metadata={})
+    _install_fake(monkeypatch, drivers=[_driver(), holder])
+    rows = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["id_taken"]
+
+
+def test_bad_old_stripe_account_id_is_warning_only(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    rows = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1", "old_stripe_account_id": "junk"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert not plan.errors
+    assert [w.field for w in plan.warnings] == ["stripe_id_format"]
+    assert plan.driver_updates[0]["old_stripe_account_id"] is None
+
+
+# -------------------------------------------------------- rider matching
+
+
+def test_rider_matched_by_phone_then_email(monkeypatch):
+    by_phone = _user()
+    by_email = _user(id="usr-2", phone="+13065550001", email="other@example.com")
+    _install_fake(monkeypatch, users=[by_phone, by_email])
+    rows = [{"phone": "3065559999", "email": "other@example.com", "stripe_customer_id": "cus_C1"}]
+    plan = svc._build_local_plan(svc.KIND_RIDERS, rows, "b1")
+    # phone and email resolve to different users → ambiguous
+    assert [e.field for e in plan.errors] == ["ambiguous_match"]
+
+    rows = [{"phone": "", "email": "other@example.com", "stripe_customer_id": "cus_C1"}]
+    plan = svc._build_local_plan(svc.KIND_RIDERS, rows, "b1")
+    assert not plan.errors
+    assert [u["user_id"] for u in plan.user_updates] == ["usr-2"]
+
+
+def test_rider_conflict_existing_lazily_created_customer(monkeypatch):
+    _install_fake(monkeypatch, users=[_user(stripe_customer_id="cus_NEWAPP")])
+    rows = [{"phone": "3065559999", "stripe_customer_id": "cus_C1"}]
+    plan = svc._build_local_plan(svc.KIND_RIDERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["conflict_existing"]
+
+
+def test_rider_row_ref_uses_old_user_id_not_pii(monkeypatch):
+    _install_fake(monkeypatch, users=[_user()])
+    rows = [{"phone": "3065559999", "stripe_customer_id": "cus_BAD!", "old_user_id": "U-77"}]
+    plan = svc._build_local_plan(svc.KIND_RIDERS, rows, "b1")
+    assert plan.errors[0].row_ref == "U-77"
+    assert "3065559999" not in plan.errors[0].message

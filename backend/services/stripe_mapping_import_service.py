@@ -320,6 +320,7 @@ def _build_local_driver_plan(rows: list[dict[str, str]], plan: StripeMappingPlan
         )
 
     plan.driver_updates = _drop_duplicate_targets(plan, plan.driver_updates, "driver_id")
+    plan.needs_update = _drop_duplicate_targets(plan, plan.needs_update, "driver_id")
 
 
 def _build_local_rider_plan(rows: list[dict[str, str]], plan: StripeMappingPlan) -> None:
@@ -680,7 +681,18 @@ def _write_driver_account_update(
     zero rows means the value moved since we read it (stale review screen)."""
     res = (
         supabase.table("drivers")
-        .update({"stripe_account_id": new_acct, "legacy_import_metadata": meta, "updated_at": now})
+        .update(
+            {
+                "stripe_account_id": new_acct,
+                "legacy_import_metadata": meta,
+                "updated_at": now,
+                "stripe_account_onboarded": False,
+                "stripe_details_submitted": False,
+                "stripe_payouts_enabled": False,
+                "stripe_id_number_provided": False,
+                "stripe_requirements_due": [],
+            }
+        )
         .eq("id", driver_id)
         .eq("stripe_account_id", expected_current_acct)
         .execute()
@@ -790,7 +802,13 @@ def _update_result(
     return {"ok": ok, "status": status, "errors": errors or [], "warnings": warnings or []}
 
 
-async def sync_kyc_after_commit(driver_ids: list[str], batch: str, *, concurrency: int = 5) -> dict[str, Any]:
+async def sync_kyc_after_commit(
+    driver_ids: list[str],
+    batch: str,
+    *,
+    concurrency: int = 5,
+    expected_account_id: str | None = None,
+) -> dict[str, Any]:
     """Mirror real KYC state from Stripe for every driver just mapped.
 
     CSV flags are never trusted — ``refresh_driver_kyc`` retrieves the live
@@ -799,6 +817,10 @@ async def sync_kyc_after_commit(driver_ids: list[str], batch: str, *, concurrenc
     recorded (never halt the batch); the outcome is stamped into
     ``legacy_import_metadata.stripe_migration.kyc_sync`` so the status
     endpoint can show convergence.
+
+    When ``expected_account_id`` is set (per-driver update path), skip the
+    driver if their account changed between the update and this task — avoids
+    writing KYC data from a superseded account after a rapid double-redirect.
     """
     try:
         from .. import db_supabase
@@ -820,6 +842,15 @@ async def sync_kyc_after_commit(driver_ids: list[str], batch: str, *, concurrenc
                     failed.append(driver_id)
                     return
                 driver = rows[0]
+                if expected_account_id and driver.get("stripe_account_id") != expected_account_id:
+                    logger.warning(
+                        "[STRIPE-MAP] kyc sync: driver %s account changed (%s → expected %s); skipping",
+                        driver_id,
+                        driver.get("stripe_account_id"),
+                        expected_account_id,
+                    )
+                    failed.append(driver_id)
+                    return
                 result = await stripe_kyc_sync.refresh_driver_kyc(driver)
                 status = result.get("status", "unknown")
                 meta = dict(driver.get("legacy_import_metadata") or {})

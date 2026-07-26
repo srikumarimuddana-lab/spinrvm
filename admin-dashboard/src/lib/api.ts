@@ -1392,6 +1392,66 @@ export const adminStripeImportStatus = (batch: string) =>
         `/api/admin/stripe/import/status?batch=${encodeURIComponent(batch)}`,
     );
 
+/* ── Bulk Rider Import (CSV) ──────────────── */
+export interface RiderImportReportItem {
+    row_num: number;
+    field: string;
+    message: string;
+}
+export interface RiderImportDuplicate {
+    row: number;
+    phone: string;
+    match_type: "rider" | "driver";
+    is_driver: boolean;
+    existing_user_id: string;
+}
+export interface RiderImportReport {
+    batch: string;
+    can_commit: boolean;
+    counts: {
+        rows: number;
+        to_create: number;
+        to_update: number;
+        duplicates: number;
+        duplicate_drivers: number;
+    };
+    duplicates: RiderImportDuplicate[];
+    warnings: RiderImportReportItem[];
+    errors: RiderImportReportItem[];
+}
+export interface RiderImportCommitResult {
+    batch: string;
+    committed: boolean;
+    created_users?: number;
+    updated_users?: number;
+    duplicates?: RiderImportDuplicate[];
+    warnings?: RiderImportReportItem[];
+    can_commit?: boolean;
+    counts?: RiderImportReport["counts"];
+    errors?: RiderImportReportItem[];
+}
+
+function riderImportFormData(file: File, batch?: string): FormData {
+    const fd = new FormData();
+    fd.append("riders_csv", file);
+    if (batch) fd.append("batch", batch);
+    return fd;
+}
+
+/** Dry-run: parse + validate the riders CSV and return the report (no writes). */
+export const adminValidateRiderImport = (file: File, batch?: string) =>
+    request<RiderImportReport>("/api/admin/riders/import/validate", {
+        method: "POST",
+        body: riderImportFormData(file, batch),
+    });
+
+/** Commit the rider import. Returns committed=false + errors if the CSV no longer validates. */
+export const adminCommitRiderImport = (file: File, batch?: string) =>
+    request<RiderImportCommitResult>("/api/admin/riders/import/commit", {
+        method: "POST",
+        body: riderImportFormData(file, batch),
+    });
+
 /* ── Manual Admin Document Upload ─────────── */
 export interface AdminUploadDocumentInput {
     driverId: string;

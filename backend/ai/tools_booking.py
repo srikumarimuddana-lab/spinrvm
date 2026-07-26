@@ -363,13 +363,16 @@ async def find_place(
     # A biased search whose BEST match still sits outside the bias radius is
     # a red flag (wrong city, mis-typed address). Tell the model so it
     # surfaces the distance to the rider instead of quoting a silent 12 km
-    # "same street" trip.
+    # "same street" trip. APPEND — an ambiguous query whose nearest match is
+    # also far needs both instructions, and overwriting dropped the
+    # "ask which one they mean" half exactly when it mattered most.
     nearest_km = (candidates[0] or {}).get("distance_from_search_km")
     if nearest_km is not None and nearest_km * 1000 > _PLACE_RADIUS_METERS:
-        result["note"] = (
+        warning = (
             f"Warning: the closest match is {nearest_km} km from the rider's search area — "
             "confirm the exact address with them before quoting."
         )
+        result["note"] = f"{result['note']} {warning}" if result.get("note") else warning
     return result
 
 

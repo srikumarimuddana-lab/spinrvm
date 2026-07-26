@@ -24,25 +24,36 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 # App-generated trip-endpoint coordinates — "[50.40790,-104.65010]" — written
-# into user messages by the quote-card tap and the map-pin picker, never typed
-# by the rider. These are EXEMPT from the COORDS scrub: the model must receive
-# them verbatim (scrubbing them re-introduced the re-geocode drift the
+# into user messages by the quote-card tap and the map-pin picker. The AI chat
+# message path opts in to keeping them (keep_trip_pins=True): the model must
+# receive them verbatim (scrubbing them re-introduced the re-geocode drift the
 # bracketed format exists to prevent), and as trip endpoints they are the same
 # data class the rides table stores openly and tool traffic already carries to
-# the provider. They are not the rider's live device location. Free-text
-# coordinates the rider types remain scrubbed.
+# the provider. They are not the rider's live device location.
+#
+# The exemption is opt-in, NOT the default, because scrub_pii is shared:
+# utils/sentry_scrub.py runs it over exception messages and breadcrumbs, and
+# raw GPS must never reach Sentry (PIPEDA hard rule) — a bracketed pair inside
+# an error string gets no pass there. Callers that are not the chat-message
+# path must never set keep_trip_pins.
 _BRACKETED_COORDS = re.compile(r"\[-?\d{1,3}\.\d+,\s*-?\d{1,3}\.\d+\]")
 
 
-def scrub_pii(text: str) -> str:
-    """Replace high-risk identifiers with redaction tokens."""
+def scrub_pii(text: str, *, keep_trip_pins: bool = False) -> str:
+    """Replace high-risk identifiers with redaction tokens.
+
+    keep_trip_pins=True preserves app-generated bracketed "[lat,lng]" trip
+    endpoints (AI chat messages only — see module comment). Free-text
+    coordinates are scrubbed either way.
+    """
     protected: list[str] = []
 
     def _stash(match: re.Match) -> str:
         protected.append(match.group(0))
         return f"\x00{len(protected) - 1}\x00"
 
-    text = _BRACKETED_COORDS.sub(_stash, text)
+    if keep_trip_pins:
+        text = _BRACKETED_COORDS.sub(_stash, text)
     for pattern, token in _PII_PATTERNS:
         text = pattern.sub(token, text)
     for index, original in enumerate(protected):

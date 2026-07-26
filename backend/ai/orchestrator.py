@@ -92,6 +92,7 @@ async def run_chat_turn(
     audience: str = "rider",
     admin_actor_id: Optional[str] = None,
     client_location: Optional[Dict[str, float]] = None,
+    client_capabilities: Optional[list] = None,
 ) -> AsyncIterator[Frame]:
     settings = await get_app_settings()
 
@@ -137,7 +138,11 @@ async def run_chat_turn(
             source="message",
         )
 
-    scrubbed = scrub_pii(user_message)
+    # keep_trip_pins: chat messages may carry app-generated bracketed
+    # [lat,lng] trip endpoints (quote-card taps, map-pin confirms) that the
+    # model must see verbatim. Only this path opts in — Sentry and support
+    # scrubbing stay fully strict.
+    scrubbed = scrub_pii(user_message, keep_trip_pins=True)
     user_row = await conversations.append_message(conversation, "user", scrubbed)
     yield "meta", {"conversation_id": conversation["id"], "user_message_id": user_row["id"]}
 
@@ -191,6 +196,10 @@ async def run_chat_turn(
     tool_user = {**user, "_conversation_id": conversation["id"]}
     if client_location:
         tool_user["_client_location"] = client_location
+    # UI features this client build can render (e.g. "map_pin" → the Drop-a-pin
+    # card). Tools that emit client actions check this so an older installed
+    # app is never promised a button it cannot draw.
+    tool_user["_client_capabilities"] = frozenset(client_capabilities or ())
 
     max_iterations = int(settings.get("ai_max_tool_iterations") or 6)
     all_text: List[str] = []

@@ -462,3 +462,10 @@ describe("Dashboard page — /dashboard/drivers/import", () => {
     await expect(renderPage(Page)).resolves.not.toThrow();
   });
 });
+
+describe("Dashboard page — /dashboard/bulk-operations", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/bulk-operations/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+});

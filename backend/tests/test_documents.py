@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -588,3 +589,153 @@ class TestExtractSignedUrl:
 
         with pytest.raises(RuntimeError, match="unexpected shape"):
             _extract_signed_url("just a string")
+
+
+class TestDocumentFileAuthP0:
+    """P0 regression: GET /documents/{file_id} must require authentication
+    and enforce ownership.  Previously the endpoint was fully open —
+    anyone holding a document UUID could retrieve a driver's government-ID
+    document via the Supabase Storage signed-URL redirect.
+    """
+
+    def test_handler_requires_current_user_dependency(self):
+        """The handler signature must declare a current_user Depends param,
+        so FastAPI returns 401 before the body runs for unauthenticated callers.
+        """
+        import inspect
+
+        from documents import get_document_file
+
+        sig = inspect.signature(get_document_file)
+        assert "current_user" in sig.parameters, (
+            "get_document_file must have a current_user parameter with Depends(get_current_user)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_owner_driver_gets_redirect(self):
+        """Authenticated driver who owns the document → 302 redirect."""
+        from documents import get_document_file
+
+        mock_doc = {
+            "id": "doc_123",
+            "driver_id": "drv_1",
+            "document_url": "https://storage.example.com/signed/licence.pdf",
+        }
+        mock_driver = {"id": "drv_1", "user_id": "user_1"}
+        mock_user = {"id": "user_1", "role": "driver"}
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "driver_documents":
+                return [mock_doc]
+            if table == "drivers":
+                return [mock_driver]
+            return []
+
+        with patch("documents.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)):
+            response = await get_document_file(file_id="doc_123", current_user=mock_user)
+            assert response.status_code == 307  # RedirectResponse default
+
+    @pytest.mark.asyncio
+    async def test_non_owner_driver_gets_403(self):
+        """Authenticated driver who does NOT own the document → 403."""
+        from documents import get_document_file
+
+        mock_doc = {
+            "id": "doc_123",
+            "driver_id": "drv_other",
+            "document_url": "https://storage.example.com/signed/licence.pdf",
+        }
+        mock_driver = {"id": "drv_1", "user_id": "user_1"}
+        mock_user = {"id": "user_1", "role": "driver"}
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "driver_documents":
+                return [mock_doc]
+            if table == "drivers":
+                return [mock_driver]
+            return []
+
+        with patch("documents.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_document_file(file_id="doc_123", current_user=mock_user)
+            assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_admin_can_access_any_document(self):
+        """Admin user → 302 redirect regardless of ownership."""
+        from documents import get_document_file
+
+        mock_doc = {
+            "id": "doc_123",
+            "driver_id": "drv_other",
+            "document_url": "https://storage.example.com/signed/licence.pdf",
+        }
+        mock_user = {"id": "admin_1", "role": "admin"}
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "driver_documents":
+                return [mock_doc]
+            return []
+
+        with patch("documents.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)):
+            response = await get_document_file(file_id="doc_123", current_user=mock_user)
+            assert response.status_code == 307
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_document_returns_404(self):
+        """Unknown file_id → 404, even for an admin."""
+        from documents import get_document_file
+
+        mock_user = {"id": "admin_1", "role": "admin"}
+
+        with patch("documents.db_supabase.get_rows", AsyncMock(return_value=[])):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_document_file(file_id="nonexistent", current_user=mock_user)
+            assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_rider_without_driver_profile_gets_404(self):
+        """Authenticated rider (no driver row) → 404."""
+        from documents import get_document_file
+
+        mock_doc = {
+            "id": "doc_123",
+            "driver_id": "drv_1",
+            "document_url": "https://storage.example.com/signed/licence.pdf",
+        }
+        mock_user = {"id": "user_rider", "role": "rider"}
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "driver_documents":
+                return [mock_doc]
+            if table == "drivers":
+                return []
+            return []
+
+        with patch("documents.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_document_file(file_id="doc_123", current_user=mock_user)
+            assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_all_admin_roles_can_access(self):
+        """Every admin-class role bypasses the ownership check."""
+        from documents import get_document_file
+
+        mock_doc = {
+            "id": "doc_123",
+            "driver_id": "drv_other",
+            "document_url": "https://storage.example.com/signed/licence.pdf",
+        }
+
+        for role in ("admin", "super_admin", "operations", "support", "finance", "custom"):
+            mock_user = {"id": f"{role}_1", "role": role}
+
+            async def fake_get_rows(table, filters=None, **kw):
+                if table == "driver_documents":
+                    return [mock_doc]
+                return []
+
+            with patch("documents.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)):
+                response = await get_document_file(file_id="doc_123", current_user=mock_user)
+                assert response.status_code == 307, f"Admin role '{role}' should get 302/307 redirect"

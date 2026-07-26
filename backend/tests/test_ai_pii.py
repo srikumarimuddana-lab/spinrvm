@@ -46,22 +46,48 @@ class TestCoordinates:
         # A fare like 18.50 must not be mistaken for a coordinate.
         assert "[COORDS]" not in scrub_pii("the fare was 18.50, tip 3.00")
 
-    def test_bracketed_app_coordinates_survive(self):
+    def test_bracketed_app_coordinates_survive_in_chat_mode(self):
         # Machine-generated trip endpoints from the quote-card tap and the
         # map-pin picker — "[lat,lng]" — must reach the model verbatim.
         # Scrubbing them re-introduced the re-geocode drift the bracketed
         # format exists to prevent (rule 6/6b coordinates arrived as
-        # "[COORDS]" and the model silently re-geocoded the trip).
+        # "[COORDS]" and the model silently re-geocoded the trip). Only the
+        # chat-message path opts in via keep_trip_pins.
         text = "Book the Economy from 4325 Wakeling St [50.42140,-104.66410] to 4500 Gordon Rd [50.40790,-104.65010], total $5.27."
-        assert scrub_pii(text) == text
+        assert scrub_pii(text, keep_trip_pins=True) == text
 
     def test_bracketed_exemption_is_narrow(self):
         # Free-text coordinates still scrub even when a bracketed pair is in
         # the same message; brackets without a coordinate pair get no pass.
-        scrubbed = scrub_pii("pin [50.40790,-104.65010] but I'm at 52.131802, -106.660767")
+        scrubbed = scrub_pii("pin [50.40790,-104.65010] but I'm at 52.131802, -106.660767", keep_trip_pins=True)
         assert "[50.40790,-104.65010]" in scrubbed
         assert "[COORDS]" in scrubbed
         assert "52.13" not in scrubbed
+
+    def test_bracketed_coordinates_scrub_by_default(self):
+        # scrub_pii is shared — utils/sentry_scrub.py runs it over exception
+        # messages and breadcrumbs, where raw GPS must NEVER survive (PIPEDA).
+        # Without the explicit chat-path opt-in, bracketed pairs scrub like
+        # any other coordinates.
+        scrubbed = scrub_pii("geocode failed near [50.40790,-104.65010]")
+        assert "[COORDS]" in scrubbed
+        assert "50.40790" not in scrubbed
+
+    def test_orchestrator_is_the_only_trip_pin_optin(self):
+        # The keep_trip_pins exemption must never quietly spread to Sentry or
+        # support scrubbing. Enumerate every call site: only the chat-message
+        # path (orchestrator) opts in.
+        import re as _re
+        from pathlib import Path
+
+        backend = Path(__file__).resolve().parents[1]
+        opt_ins = []
+        for path in backend.rglob("*.py"):
+            if "tests" in path.parts or "__pycache__" in path.parts:
+                continue
+            for match in _re.finditer(r"scrub_pii\([^)]*keep_trip_pins\s*=\s*True", path.read_text()):
+                opt_ins.append(path.relative_to(backend).as_posix())
+        assert opt_ins == ["ai/orchestrator.py"]
 
 
 class TestPostalCodes:

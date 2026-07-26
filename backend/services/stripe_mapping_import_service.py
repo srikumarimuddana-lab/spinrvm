@@ -114,9 +114,12 @@ def _prefetch_drivers(
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Batched lookups for the drivers kind.
 
-    Returns (by_old_id, by_phone, by_stripe_account_id). by_old_id only
-    includes drivers stamped by the legacy driver importer (source match), so
-    an unrelated driver can never be matched through a recycled old ID.
+    Returns (by_old_id, by_phone, by_stripe_account_id). BOTH match maps only
+    include drivers stamped by the legacy driver importer (source match) —
+    this tool exists solely for the legacy-imported cohort, and an unscoped
+    phone match would let a mapping CSV point ANY not-yet-onboarded driver's
+    payout destination at an arbitrary accessible Connect account. by_acct is
+    deliberately unscoped: it detects value collisions across the whole table.
     """
     old_ids = sorted({(r.get("old_driver_id") or "").strip() for r in rows} - {""})
     phones = sorted({normalize_phone(r.get("phone") or "") for r in rows if (r.get("phone") or "").strip()})
@@ -137,6 +140,8 @@ def _prefetch_drivers(
                 by_old_id[key] = d
     if phones:
         for d in _select_in("drivers", cols, "phone", phones):
+            if (d.get("legacy_import_metadata") or {}).get("source") != DRIVER_IMPORT_SOURCE:
+                continue
             key = d.get("phone")
             if key is not None and key not in by_phone:
                 by_phone[key] = d
@@ -261,7 +266,9 @@ def _build_local_driver_plan(rows: list[dict[str, str]], plan: StripeMappingPlan
             continue
         driver = matched_by_old or matched_by_phone
         if not driver:
-            plan.errors.append(StripeMappingErrorItem(row_ref, "no_match", "no imported driver matches this row"))
+            plan.errors.append(
+                StripeMappingErrorItem(row_ref, "no_match", "no legacy-imported driver matches this row")
+            )
             continue
 
         existing = driver.get("stripe_account_id")
@@ -385,7 +392,10 @@ def _build_local_rider_plan(rows: list[dict[str, str]], plan: StripeMappingPlan)
 # ------------------------------------------------------ live Stripe phase
 
 
-def _livemode_warning(obj: dict[str, Any], stripe_secret: str) -> tuple[str, str] | None:
+def _livemode_error(obj: dict[str, Any], stripe_secret: str) -> tuple[str, str] | None:
+    """Hard error: a test-mode object must never be mapped as a live payout
+    destination (or vice versa). Normally unreachable — a key can't retrieve
+    the other mode's objects — so if it fires, something is deeply wrong."""
     live_key = stripe_secret.startswith("sk_live_")
     if bool(obj.get("livemode")) != live_key:
         return ("livemode", "object livemode does not match the configured key mode")
@@ -516,9 +526,9 @@ async def build_plan(
             errs, warns = _account_findings(payload)
         else:
             errs, warns = _customer_findings(payload, upd.get("user_id"))
-        livemode = _livemode_warning(payload, stripe_secret)
+        livemode = _livemode_error(payload, stripe_secret)
         if livemode:
-            warns = [*warns, livemode]
+            errs = [*errs, livemode]
         for f, m in warns:
             plan.warnings.append(StripeMappingErrorItem(upd["row_ref"], f, m))
         for f, m in errs:
@@ -545,6 +555,12 @@ def _provenance(plan: StripeMappingPlan, upd: dict[str, Any], now: str) -> dict[
     return prov
 
 
+def _is_unique_violation(exc: Exception) -> bool:
+    """Postgres 23505 via PostgREST/supabase-py — the migration-257 partial
+    unique indexes firing because a concurrent commit took the same value."""
+    return getattr(exc, "code", None) == "23505" or "duplicate key value" in str(exc)
+
+
 def commit_plan(plan: StripeMappingPlan) -> dict[str, Any]:
     """Apply a clean plan. Sync (call via ``asyncio.to_thread`` from routes).
 
@@ -553,6 +569,11 @@ def commit_plan(plan: StripeMappingPlan) -> dict[str, Any]:
     validate and commit turns into a zero-row update, reported in
     ``conflicts`` rather than silently clobbered. That guard is also what
     makes the batch safely rollbackable (see the runbook).
+
+    The migration-257 unique indexes cover the other half of the race: the
+    same Stripe VALUE landing on two different rows via overlapping commits.
+    A unique violation here is that guard firing — reported as a conflict,
+    never retried onto another row. Any other DB error propagates (502).
     """
     if plan.errors:
         raise RuntimeError("plan has errors; refusing to commit")
@@ -562,19 +583,28 @@ def commit_plan(plan: StripeMappingPlan) -> dict[str, Any]:
     updated_drivers = 0
     for upd in plan.driver_updates:
         meta = {**(upd.get("existing_metadata") or {}), "stripe_migration": _provenance(plan, upd, now)}
-        res = (
-            supabase.table("drivers")
-            .update(
-                {
-                    "stripe_account_id": upd["stripe_account_id"],
-                    "legacy_import_metadata": meta,
-                    "updated_at": now,
-                }
+        try:
+            res = (
+                supabase.table("drivers")
+                .update(
+                    {
+                        "stripe_account_id": upd["stripe_account_id"],
+                        "legacy_import_metadata": meta,
+                        "updated_at": now,
+                    }
+                )
+                .eq("id", upd["driver_id"])
+                .is_("stripe_account_id", "null")
+                .execute()
             )
-            .eq("id", upd["driver_id"])
-            .is_("stripe_account_id", "null")
-            .execute()
-        )
+        except Exception as e:
+            if _is_unique_violation(e):
+                logger.error(
+                    "[STRIPE-MAP] %s already taken by another driver row (concurrent commit)", upd["stripe_account_id"]
+                )
+                conflicts.append(upd["row_ref"])
+                continue
+            raise
         if res.data:
             updated_drivers += 1
         else:
@@ -583,19 +613,28 @@ def commit_plan(plan: StripeMappingPlan) -> dict[str, Any]:
     updated_users = 0
     for upd in plan.user_updates:
         meta = {**(upd.get("existing_metadata") or {}), "stripe_migration": _provenance(plan, upd, now)}
-        res = (
-            supabase.table("users")
-            .update(
-                {
-                    "stripe_customer_id": upd["stripe_customer_id"],
-                    "legacy_import_metadata": meta,
-                    "updated_at": now,
-                }
+        try:
+            res = (
+                supabase.table("users")
+                .update(
+                    {
+                        "stripe_customer_id": upd["stripe_customer_id"],
+                        "legacy_import_metadata": meta,
+                        "updated_at": now,
+                    }
+                )
+                .eq("id", upd["user_id"])
+                .is_("stripe_customer_id", "null")
+                .execute()
             )
-            .eq("id", upd["user_id"])
-            .is_("stripe_customer_id", "null")
-            .execute()
-        )
+        except Exception as e:
+            if _is_unique_violation(e):
+                logger.error(
+                    "[STRIPE-MAP] %s already taken by another user row (concurrent commit)", upd["stripe_customer_id"]
+                )
+                conflicts.append(upd["row_ref"])
+                continue
+            raise
         if res.data:
             updated_users += 1
         else:

@@ -271,6 +271,38 @@ class TestGeocodeBias:
         assert "confirm the exact address" in result["note"]
         assert "km from the rider's search area" in result["note"]
 
+    @pytest.mark.anyio
+    async def test_far_warning_keeps_the_disambiguation_note(self):
+        """Ambiguous AND far is the incident's own shape. The far-match warning
+        used to overwrite result["note"], deleting 'ask which one they mean'
+        exactly when the model most needed both instructions."""
+        far_and_ambiguous = {
+            "status": "OK",
+            "results": [
+                {  # ~54 km from the bias point — both candidates are far
+                    "formatted_address": "4325 Wakeling St, Somewhere Else, SK",
+                    "geometry": {"location": {"lat": 50.90, "lng": -104.65}},
+                },
+                {  # ~65 km — a second plausible match keeps this ambiguous
+                    "formatted_address": "4325 Wakeling Ave, Elsewhere, SK",
+                    "geometry": {"location": {"lat": 51.00, "lng": -104.65}},
+                },
+            ],
+        }
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(far_and_ambiguous),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok
+        assert len(result["candidates"]) > 1
+        # Both instructions survive, and the disambiguation one still leads.
+        assert "ask the rider which one they mean" in result["note"].lower()
+        assert "km from the rider's search area" in result["note"]
+
 
 class TestRiderLocation:
     @pytest.mark.anyio

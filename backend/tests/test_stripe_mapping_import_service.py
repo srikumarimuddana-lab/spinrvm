@@ -293,3 +293,171 @@ def test_rider_row_ref_uses_old_user_id_not_pii(monkeypatch):
     plan = svc._build_local_plan(svc.KIND_RIDERS, rows, "b1")
     assert plan.errors[0].row_ref == "U-77"
     assert "3065559999" not in plan.errors[0].message
+
+
+# --------------------------------------------------- live Stripe validation
+
+SECRET = "sk_test_abc"  # test-mode key → payload livemode False matches
+DRIVER_ROWS = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"}]
+
+
+def _acct_payload(**overrides):
+    payload = {
+        "id": "acct_A1",
+        "type": "express",
+        "country": "CA",
+        "business_type": "individual",
+        "details_submitted": True,
+        "payouts_enabled": True,
+        "livemode": False,
+        "capabilities": {"transfers": "active"},
+        "requirements": {"currently_due": [], "disabled_reason": None},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _patch_account_retrieve(monkeypatch, result):
+    import stripe
+
+    def fake(_id, api_key=None):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(stripe.Account, "retrieve", fake)
+
+
+def _patch_customer_retrieve(monkeypatch, result):
+    import stripe
+
+    def fake(_id, api_key=None):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(stripe.Customer, "retrieve", fake)
+
+
+@pytest.mark.anyio
+async def test_build_plan_clean_account(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(monkeypatch, _acct_payload())
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert not plan.errors and not plan.warnings
+    assert len(plan.driver_updates) == 1
+
+
+@pytest.mark.anyio
+async def test_build_plan_no_such_account(monkeypatch):
+    import stripe
+
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(monkeypatch, stripe.error.InvalidRequestError("No such account: acct_A1", None))
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert [e.field for e in plan.errors] == ["not_accessible"]
+    assert not plan.driver_updates
+
+
+@pytest.mark.anyio
+async def test_build_plan_permission_error(monkeypatch):
+    import stripe
+
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(monkeypatch, stripe.error.PermissionError("not authorized for acct_A1"))
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert [e.field for e in plan.errors] == ["not_accessible"]
+
+
+@pytest.mark.anyio
+async def test_build_plan_rate_limit_is_transient_error(monkeypatch):
+    import stripe
+
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(monkeypatch, stripe.error.RateLimitError("slow down"))
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert [e.field for e in plan.errors] == ["stripe_transient"]
+    assert not plan.driver_updates
+
+
+@pytest.mark.anyio
+async def test_build_plan_wrong_country(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(monkeypatch, _acct_payload(country="US"))
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert [e.field for e in plan.errors] == ["country"]
+    assert not plan.driver_updates
+
+
+@pytest.mark.anyio
+async def test_build_plan_transfers_never_requested(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(monkeypatch, _acct_payload(capabilities={}))
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert [e.field for e in plan.errors] == ["capability_transfers"]
+
+
+@pytest.mark.anyio
+async def test_build_plan_incomplete_onboarding_is_commitable(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(
+        monkeypatch,
+        _acct_payload(
+            details_submitted=False,
+            payouts_enabled=False,
+            capabilities={"transfers": "pending"},
+            requirements={"currently_due": ["external_account"], "disabled_reason": None},
+        ),
+    )
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert not plan.errors
+    assert {w.field for w in plan.warnings} == {"capability_transfers", "onboarding_incomplete", "requirements_due"}
+    assert len(plan.driver_updates) == 1  # the whole point: keep the account
+
+
+@pytest.mark.anyio
+async def test_build_plan_rejected_account(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(
+        monkeypatch, _acct_payload(requirements={"currently_due": [], "disabled_reason": "rejected.fraud"})
+    )
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert "account_rejected" in [e.field for e in plan.errors]
+
+
+@pytest.mark.anyio
+async def test_build_plan_deleted_customer(monkeypatch):
+    _install_fake(monkeypatch, users=[_user()])
+    _patch_customer_retrieve(monkeypatch, {"id": "cus_C1", "deleted": True, "livemode": False})
+    rows = [{"phone": "3065559999", "stripe_customer_id": "cus_C1"}]
+    plan = await svc.build_plan(svc.KIND_RIDERS, rows, SECRET, "b1")
+    assert [e.field for e in plan.errors] == ["customer_deleted"]
+    assert not plan.user_updates
+
+
+@pytest.mark.anyio
+async def test_build_plan_customer_metadata_mismatch_warns(monkeypatch):
+    _install_fake(monkeypatch, users=[_user()])
+    _patch_customer_retrieve(monkeypatch, {"id": "cus_C1", "livemode": False, "metadata": {"user_id": "someone-else"}})
+    rows = [{"phone": "3065559999", "stripe_customer_id": "cus_C1"}]
+    plan = await svc.build_plan(svc.KIND_RIDERS, rows, SECRET, "b1")
+    assert not plan.errors
+    assert [w.field for w in plan.warnings] == ["metadata_user_mismatch"]
+    assert len(plan.user_updates) == 1
+
+
+@pytest.mark.anyio
+async def test_build_plan_livemode_mismatch_warns(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    _patch_account_retrieve(monkeypatch, _acct_payload(livemode=True))
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
+    assert not plan.errors
+    assert [w.field for w in plan.warnings] == ["livemode"]
+
+
+@pytest.mark.anyio
+async def test_build_plan_without_stripe_secret_refuses(monkeypatch):
+    _install_fake(monkeypatch, drivers=[_driver()])
+    plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, "", "b1")
+    assert [e.field for e in plan.errors] == ["stripe_not_configured"]
+    assert not plan.driver_updates

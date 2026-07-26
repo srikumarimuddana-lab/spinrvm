@@ -42,6 +42,50 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** template with columns (date, scope, RROSH assessment, notified?,
   evidence location) and a "no entries to date" first row.
 
+### A4. 156 failing backend tests on `main`
+- [ ] **Status:** open — found while triaging PR #2377's CI failures (2026-07-26)
+- **Why:** `backend-test` job runs `156 failed, 4511 passed, 8 skipped` on plain `main`
+  (no PR-specific cause). Confirmed real test failures, not flaky infra — includes
+  `AttributeError`s for functions tests reference but that no longer exist
+  (`routes.drivers.set_presence`, `routes.wallet.wallet_increment_balance`,
+  `routes.wallet._wallet_transfer_rpc`), `StopAsyncIteration`s across
+  `test_webhooks_main.py`/`test_spinr_pass_subscription.py` (mock exhaustion —
+  likely a call-count contract drift), and wallet-transfer status-code mismatches
+  (404 vs expected 400/422). Every PR currently shows a red `backend-test` check
+  regardless of the PR's own quality, which trains reviewers to ignore CI signal —
+  a bigger risk than any single failing test.
+- **Files:** `backend/tests/test_wallet.py`, `backend/tests/test_webhooks_main.py`,
+  `backend/tests/test_spinr_pass_subscription.py`, `backend/routes/wallet.py`,
+  `backend/routes/drivers/__init__.py` (start here; full list needs a fresh
+  `pytest -v` triage pass since this item was filed from CI log inspection, not
+  a local run)
+- **Approach:** triage in batches by failure class (AttributeError = code/test drift,
+  StopAsyncIteration = mock setup drift, status-code mismatch = real behavior change
+  or stale test expectation) rather than fixing all 156 in one pass — respects the
+  ≤3-files-per-subtask rule. Do not skip/xfail to turn CI green; fix or delete each
+  test on its merits.
+- **Acceptance:** `pytest` on `main` reports 0 failures; CI Guard Rails coverage gate
+  stays meaningful again once the underlying suite is trustworthy.
+
+### A5. PyJWT HIGH-severity CVE-2026-48526 (auth bypass) in backend image
+- [ ] **Status:** open — found via Trivy container scan on PR #2377 (2026-07-26)
+- **Why:** `docker-image-scan` job flags `PyJWT==2.12.1` for `CVE-2026-48526`, an
+  authentication-bypass-via-forged-JWT vulnerability, fixed in PyJWT `2.13.0`.
+  Given CLAUDE.md's JWT trust model (admin JWTs are fully trusted on role/email/
+  modules claims), an unpatched JWT-forgery CVE in the dependency stack is worth
+  fixing ahead of its normal priority, independent of the specific PR that
+  surfaced it (a docs-only change did not introduce this).
+- **Files:** `backend/requirements.txt` (or `requirements.in`), regenerate
+  `backend/requirements-locked.txt` via
+  `pip-compile --generate-hashes --resolver=backtracking`
+- **Approach:** bump PyJWT to `>=2.13.0`, regenerate the hash-locked requirements
+  file per `docs/runbooks/dependency-update.md`, run the full auth test suite
+  (`backend/tests/test_auth.py`, `test_admin_mfa_enforcement.py`,
+  `test_admin_privilege_escalation.py`, `test_p3_admin_jwt_modules.py`) to confirm
+  no behavior change, then re-run the Trivy image scan to confirm the finding clears.
+- **Acceptance:** `docker-image-scan` job passes with 0 HIGH/CRITICAL findings for
+  PyJWT; all auth tests still pass.
+
 ## P1 — Fix before launch (code)
 
 ### B1. `track_driver_online` accepts raw GPS for third-party analytics

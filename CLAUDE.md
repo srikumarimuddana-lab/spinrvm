@@ -22,6 +22,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Batch size rule
 - Limit each commit to one logical change. If a diff exceeds ~200 lines, split it.
 
+### Change Impact & Risk Log (mandatory — product is in live app testing)
+
+Spinr is currently going through live app testing with real users. Any commit or PR that fixes a bug, closes a gap, or changes existing behavior **must** include a Change Impact & Risk entry — do not just describe the fix, describe what it risks breaking. Use the template at `docs/templates/CHANGE_IMPACT_LOG.md` and either paste the filled-in table into the PR description or add it to `docs/change-log/` as `YYYY-MM-DD-<short-slug>.md` for anything touching a live-tested surface (rides, dispatch, payments, auth, corporate, safety).
+
+Required fields per entry:
+- **Issue/gap identified** — what's wrong today, one sentence.
+- **Root cause** — why it happens, not just the symptom.
+- **Fix/remediation** — what changed.
+- **Risk & impact on existing functionality** — what else reads/writes the same table, state, or code path; what could regress.
+- **User experience effect** — rider/driver/corporate-admin/internal-admin facing change, if any, and whether it's visible mid-session to someone already using the app.
+- **Files modified** — table: `file path | what changed | why`.
+- **Before/after snippet** — for any behavior-changing diff (not pure additive code), a short before/after code block, not just the file link.
+- **Rollback plan** — how to revert without a second deploy if it goes wrong (feature flag off, config revert, migration rollback SQL) — a `git revert` is not a rollback plan for anything already applied to live data (Stripe charges, wallet deltas, ride state).
+- **Verification performed** — tests run, manual repro steps, staging check.
+
+### Pre-merge release gates (mandatory while live app testing is active)
+
+Do not rely on "commit, observe, roll back if broken" for anything touching a live-tested surface. Gate before merge, not after:
+
+1. **Blast-radius check first** — before writing the fix, grep for every other caller/reader of the function, table, or state field being changed. State the blast radius in the Change Impact Log, even if it's "isolated, no other callers."
+2. **Additive over destructive** — prefer a new column/field/flag over mutating an existing one when behavior might be observed mid-session (e.g. a rider mid-ride, a driver online). Never repurpose a column's meaning without a migration + dual-read window.
+3. **Feature-flag anything user-visible and non-trivial** — new/changed UX, new notification copy, new validation rules that could reject previously-valid input. Ship dark, verify in staging/canary, then flip on. This project's existing `app_settings`-in-DB pattern (see Critical Conventions) already supports flag-without-redeploy — use it.
+4. **State-machine and money changes need a dry run** — any change touching ride state transitions, wallet/allowance deltas, or Stripe flows must be exercised against `mock_supabase_client` fixtures AND described with a concrete before/after scenario in the Change Impact Log, not just "tests pass."
+5. **No silent behavior change to a live-tested flow** — if a fix changes what an already-shipped screen does (not just fixes a crash), that's a UX change and needs the "User experience effect" field filled in, even for an internal admin screen.
+6. **Rollback plan is required before merge, not written after something breaks** — if you can't state one, that's a signal that the change should be additive/flagged instead of a direct edit.
+7. **Escalate, don't silently ship, when in doubt** — if blast radius is unclear or the change touches rides/payments/auth/corporate/safety and you're not confident of the full impact, use `AskUserQuestion` before merging rather than shipping and watching for fallout.
+
 ### PR review handling (Codex auto-review)
 - When subscribed to a PR (or asked to look at one), **do not chase CI checks** — skip `yarn audit` / `npm audit` / lint / deploy status unless the user explicitly asks. Pre-existing dependency-audit failures on surfaces a PR doesn't touch are not this PR's job.
 - **Always** check the PR's review comments from Codex (`chatgpt-codex-connector`) and act on them without being reminded:

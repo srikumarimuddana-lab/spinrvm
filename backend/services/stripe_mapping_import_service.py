@@ -31,6 +31,7 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 try:
@@ -531,3 +532,138 @@ async def build_plan(
     else:
         plan.user_updates = kept
     return plan
+
+
+# --------------------------------------------------------------- commit
+
+
+def _provenance(plan: StripeMappingPlan, upd: dict[str, Any], now: str) -> dict[str, Any]:
+    prov: dict[str, Any] = {"batch": plan.batch, "source": IMPORT_SOURCE, "imported_at": now}
+    for key in ("old_stripe_account_id", "old_stripe_customer_id", "old_user_id"):
+        if upd.get(key):
+            prov[key] = upd[key]
+    return prov
+
+
+def commit_plan(plan: StripeMappingPlan) -> dict[str, Any]:
+    """Apply a clean plan. Sync (call via ``asyncio.to_thread`` from routes).
+
+    Every update is guarded with ``.is_(<column>, "null")`` so the importer can
+    only ever FILL an empty column — a value written by anyone else between
+    validate and commit turns into a zero-row update, reported in
+    ``conflicts`` rather than silently clobbered. That guard is also what
+    makes the batch safely rollbackable (see the runbook).
+    """
+    if plan.errors:
+        raise RuntimeError("plan has errors; refusing to commit")
+    now = datetime.now(timezone.utc).isoformat()
+    conflicts: list[str] = []
+
+    updated_drivers = 0
+    for upd in plan.driver_updates:
+        meta = {**(upd.get("existing_metadata") or {}), "stripe_migration": _provenance(plan, upd, now)}
+        res = (
+            supabase.table("drivers")
+            .update(
+                {
+                    "stripe_account_id": upd["stripe_account_id"],
+                    "legacy_import_metadata": meta,
+                    "updated_at": now,
+                }
+            )
+            .eq("id", upd["driver_id"])
+            .is_("stripe_account_id", "null")
+            .execute()
+        )
+        if res.data:
+            updated_drivers += 1
+        else:
+            conflicts.append(upd["row_ref"])
+
+    updated_users = 0
+    for upd in plan.user_updates:
+        meta = {**(upd.get("existing_metadata") or {}), "stripe_migration": _provenance(plan, upd, now)}
+        res = (
+            supabase.table("users")
+            .update(
+                {
+                    "stripe_customer_id": upd["stripe_customer_id"],
+                    "legacy_import_metadata": meta,
+                    "updated_at": now,
+                }
+            )
+            .eq("id", upd["user_id"])
+            .is_("stripe_customer_id", "null")
+            .execute()
+        )
+        if res.data:
+            updated_users += 1
+        else:
+            conflicts.append(upd["row_ref"])
+
+    if conflicts:
+        logger.error(
+            "[STRIPE-MAP] batch=%s: %d row(s) hit commit-time conflicts (column filled since validate): %s",
+            plan.batch,
+            len(conflicts),
+            conflicts,
+        )
+    return {"updated_drivers": updated_drivers, "updated_users": updated_users, "conflicts": conflicts}
+
+
+async def sync_kyc_after_commit(driver_ids: list[str], batch: str, *, concurrency: int = 5) -> dict[str, Any]:
+    """Mirror real KYC state from Stripe for every driver just mapped.
+
+    CSV flags are never trusted — ``refresh_driver_kyc`` retrieves the live
+    Account and populates the migration-92 mirror columns, exactly like the
+    admin "Refresh from Stripe" button. Per-driver failures are logged and
+    recorded (never halt the batch); the outcome is stamped into
+    ``legacy_import_metadata.stripe_migration.kyc_sync`` so the status
+    endpoint can show convergence.
+    """
+    try:
+        from .. import db_supabase
+        from . import stripe_kyc_sync
+    except ImportError:  # pragma: no cover - allow direct/CLI module imports
+        import db_supabase  # type: ignore
+        from services import stripe_kyc_sync  # type: ignore
+
+    sem = asyncio.Semaphore(concurrency)
+    ok: list[str] = []
+    failed: list[str] = []
+
+    async def one(driver_id: str) -> None:
+        async with sem:
+            try:
+                rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1)
+                if not rows:
+                    logger.error("[STRIPE-MAP] kyc sync: driver %s not found after commit", driver_id)
+                    failed.append(driver_id)
+                    return
+                driver = rows[0]
+                result = await stripe_kyc_sync.refresh_driver_kyc(driver)
+                status = result.get("status", "unknown")
+                meta = dict(driver.get("legacy_import_metadata") or {})
+                migration = dict(meta.get("stripe_migration") or {})
+                migration["kyc_sync"] = status
+                migration["kyc_synced_at"] = datetime.now(timezone.utc).isoformat()
+                meta["stripe_migration"] = migration
+                await db_supabase.update_one("drivers", {"id": driver_id}, {"legacy_import_metadata": meta})
+                if status == "ok":
+                    ok.append(driver_id)
+                else:
+                    logger.error("[STRIPE-MAP] kyc sync for driver %s returned %s", driver_id, status)
+                    failed.append(driver_id)
+            except Exception:
+                logger.error("[STRIPE-MAP] kyc sync crashed for driver %s", driver_id, exc_info=True)
+                failed.append(driver_id)
+
+    await asyncio.gather(*(one(d) for d in driver_ids))
+    logger.info(
+        "[STRIPE-MAP] kyc sync batch=%s ok=%d failed=%d",
+        batch,
+        len(ok),
+        len(failed),
+        extra={"domain": "payments"},
+    )
+    return {"ok": len(ok), "failed": len(failed), "failed_driver_ids": failed}

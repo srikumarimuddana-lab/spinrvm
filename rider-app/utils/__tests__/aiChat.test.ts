@@ -97,6 +97,9 @@ describe('streamChat', () => {
       conversation_id: 'conv-1',
       stream: true,
       audience: 'rider',
+      // This build renders the Drop-a-pin card; the backend gates
+      // request_map_pin's action on the declaration.
+      capabilities: ['map_pin'],
     });
   });
 
@@ -107,6 +110,7 @@ describe('streamChat', () => {
       message: 'hi',
       conversation_id: null,
       stream: true,
+      capabilities: ['map_pin'],
     });
   });
 

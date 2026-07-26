@@ -160,7 +160,8 @@ def test_driver_old_id_requires_importer_source(monkeypatch):
 
 
 def test_driver_phone_fallback(monkeypatch):
-    _install_fake(monkeypatch, drivers=[_driver(legacy_import_metadata={})])
+    meta = {"source": svc.DRIVER_IMPORT_SOURCE, "old_driver_id": "OLD-9"}
+    _install_fake(monkeypatch, drivers=[_driver(legacy_import_metadata=meta)])
     rows = [{"phone": "3065551234", "stripe_account_id": "acct_A1"}]
     plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
     assert not plan.errors
@@ -168,8 +169,23 @@ def test_driver_phone_fallback(monkeypatch):
     assert plan.driver_updates[0]["row_ref"] == "row-2"  # header is line 1
 
 
+def test_driver_phone_match_never_targets_native_drivers(monkeypatch):
+    # Payout-hijack guard: a driver who onboarded natively (no legacy import
+    # provenance) must be unreachable by phone-matched mapping rows, even
+    # with a NULL stripe_account_id.
+    _install_fake(monkeypatch, drivers=[_driver(legacy_import_metadata={})])
+    rows = [{"phone": "3065551234", "stripe_account_id": "acct_A1"}]
+    plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
+    assert [e.field for e in plan.errors] == ["no_match"]
+    assert not plan.driver_updates
+
+
 def test_driver_ambiguous_match(monkeypatch):
-    other = _driver(id="drv-2", phone="+13065550000", legacy_import_metadata={})
+    other = _driver(
+        id="drv-2",
+        phone="+13065550000",
+        legacy_import_metadata={"source": svc.DRIVER_IMPORT_SOURCE, "old_driver_id": "OLD-2"},
+    )
     _install_fake(monkeypatch, drivers=[_driver(), other])
     rows = [{"old_driver_id": "OLD-1", "phone": "3065550000", "stripe_account_id": "acct_A1"}]
     plan = svc._build_local_plan(svc.KIND_DRIVERS, rows, "b1")
@@ -447,12 +463,13 @@ async def test_build_plan_customer_metadata_mismatch_warns(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_build_plan_livemode_mismatch_warns(monkeypatch):
+async def test_build_plan_livemode_mismatch_is_error(monkeypatch):
+    # A test-mode object must never become a live payout destination.
     _install_fake(monkeypatch, drivers=[_driver()])
     _patch_account_retrieve(monkeypatch, _acct_payload(livemode=True))
     plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
-    assert not plan.errors
-    assert [w.field for w in plan.warnings] == ["livemode"]
+    assert [e.field for e in plan.errors] == ["livemode"]
+    assert not plan.driver_updates
 
 
 @pytest.mark.anyio
@@ -518,6 +535,70 @@ def test_commit_plan_null_guard_reports_conflict(monkeypatch):
     assert result["updated_drivers"] == 0
     assert result["conflicts"] == ["OLD-1"]
     assert store["drivers"][0]["stripe_account_id"] == "acct_RACED"
+
+
+def test_commit_plan_unique_violation_is_conflict(monkeypatch):
+    # Migration-257 unique index firing (same acct_ taken by an overlapping
+    # commit) → reported as a conflict, never retried or propagated.
+    class _UniqueViolation(Exception):
+        code = "23505"
+
+    class _RaisingQuery:
+        def update(self, _fields):
+            return self
+
+        def eq(self, *_a):
+            return self
+
+        def is_(self, *_a):
+            return self
+
+        def execute(self):
+            raise _UniqueViolation("duplicate key value violates unique constraint")
+
+    class _RaisingSupabase:
+        def table(self, _name):
+            return _RaisingQuery()
+
+    monkeypatch.setattr(svc, "supabase", _RaisingSupabase())
+    plan = svc.StripeMappingPlan(kind=svc.KIND_DRIVERS, batch="b1")
+    plan.driver_updates.append(
+        {"driver_id": "drv-1", "stripe_account_id": "acct_A1", "row_ref": "OLD-1", "existing_metadata": {}}
+    )
+    result = svc.commit_plan(plan)
+    assert result["updated_drivers"] == 0
+    assert result["conflicts"] == ["OLD-1"]
+
+
+def test_commit_plan_other_db_error_propagates(monkeypatch):
+    # Non-unique DB errors must surface loudly (route turns them into a 502).
+    class _DbError(Exception):
+        pass
+
+    class _RaisingQuery:
+        def update(self, _fields):
+            return self
+
+        def eq(self, *_a):
+            return self
+
+        def is_(self, *_a):
+            return self
+
+        def execute(self):
+            raise _DbError("connection reset")
+
+    class _RaisingSupabase:
+        def table(self, _name):
+            return _RaisingQuery()
+
+    monkeypatch.setattr(svc, "supabase", _RaisingSupabase())
+    plan = svc.StripeMappingPlan(kind=svc.KIND_DRIVERS, batch="b1")
+    plan.driver_updates.append(
+        {"driver_id": "drv-1", "stripe_account_id": "acct_A1", "row_ref": "OLD-1", "existing_metadata": {}}
+    )
+    with pytest.raises(_DbError):
+        svc.commit_plan(plan)
 
 
 def test_commit_plan_writes_rider_customer(monkeypatch):

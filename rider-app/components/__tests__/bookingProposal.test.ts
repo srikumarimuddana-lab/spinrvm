@@ -15,6 +15,7 @@ import {
   postBookingRoute,
   priceChangeNotice,
   promoForProposal,
+  promoSubstitutionNotice,
   scheduledDateForProposal,
 } from '../bookingProposal';
 import type { AiAction, BookingProposal, FareQuoteOption } from '@shared/types/ai';
@@ -220,6 +221,34 @@ describe('displayFareWithPromo', () => {
 
   it('no promo → plain grand total', () => {
     expect(displayFareWithPromo(fullEst, null)).toBe('30.92');
+  });
+});
+
+describe('promoSubstitutionNotice', () => {
+  it('stays silent when the applied promo is the one proposed', () => {
+    expect(promoSubstitutionNotice('SAVE75', 'SAVE75')).toBeNull();
+  });
+
+  it('stays silent when no promo was proposed', () => {
+    // The store may auto-apply a promo the proposal never mentioned — that is
+    // a bonus, not a substitution, and needs no warning.
+    expect(promoSubstitutionNotice(undefined, 'AUTO10')).toBeNull();
+    expect(promoSubstitutionNotice(null, null)).toBeNull();
+  });
+
+  it('names the substitute rather than claiming no promo applied', () => {
+    expect(promoSubstitutionNotice('SAVE75', 'SAVE50')).toBe(
+      'Promo SAVE75 is no longer available — SAVE50 applied instead.',
+    );
+  });
+
+  it('says the total is undiscounted only when nothing is applied', () => {
+    expect(promoSubstitutionNotice('SAVE75', undefined)).toBe(
+      'Promo SAVE75 is no longer available — total shown without it.',
+    );
+    expect(promoSubstitutionNotice('SAVE75', null)).toBe(
+      'Promo SAVE75 is no longer available — total shown without it.',
+    );
   });
 });
 

@@ -103,15 +103,18 @@ async function renderAndConfirm(proposal: any) {
   // Let the promo fetch settle so the card shows its final total.
   await act(async () => { await Promise.resolve(); });
 
+  // Snapshot the ready-state copy BEFORE confirming — the card swaps to a
+  // "Booked!" state afterwards and the fare/promo rows unmount.
+  const readyTexts = texts(renderer);
   // The last $ amount is the live (post-promo) total; a struck-through
   // pre-promo total may precede it.
-  const shown = texts(renderer).filter((t) => /^\$\d+\.\d{2}$/.test(t));
+  const shown = readyTexts.filter((t) => /^\$\d+\.\d{2}$/.test(t));
   const finalTotal = shown[shown.length - 1];
 
   const confirm = renderer.root.findAllByType(TouchableOpacity)[0];
   await act(async () => { await confirm.props.onPress(); });
 
-  return { finalTotal, renderer };
+  return { finalTotal, readyTexts, renderer };
 }
 
 beforeEach(() => {
@@ -136,12 +139,18 @@ describe('booking card promo invariant: displayed total == charged total', () =>
     const substitute = { code: 'SAVE50', discount_type: 'flat', discount_value: 5, eligible: true };
     mockStore = makeStore([substitute]); // SAVE75 is NOT in the server's list
 
-    const { finalTotal } = await renderAndConfirm({ ...PROPOSAL, promo_code: 'SAVE75' });
+    const { finalTotal, readyTexts } = await renderAndConfirm({ ...PROPOSAL, promo_code: 'SAVE75' });
 
     expect(finalTotal).toBe(`$${displayFareWithPromo(ESTIMATE as any, substitute as any)}`);
     expect(finalTotal).toBe('$25.92');
     // The old code would have billed the dead 'SAVE75' here.
     expect(createRideSpy).toHaveBeenCalledWith({ promo_code: 'SAVE50' });
+
+    // ...and the card must name the substitute rather than claim the total is
+    // undiscounted while showing a discounted one (the chip used to be
+    // suppressed whenever the applied code differed from the proposed one).
+    expect(readyTexts).toContain('Promo SAVE50');
+    expect(readyTexts).toContain('Promo SAVE75 is no longer available — SAVE50 applied instead.');
   });
 
   it('books with the proposed promo when the server still honours it', async () => {

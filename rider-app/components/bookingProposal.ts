@@ -66,6 +66,25 @@ export function displayFareWithPromo(
   return discounted.toFixed(2);
 }
 
+/** Copy for the promo the rider was promised vs. the one actually applied.
+ * Null while they agree (including before the promo fetch resolves, when the
+ * placeholder still carries the proposed code) so the card stays quiet in the
+ * normal case.
+ *
+ * fetchAvailablePromos auto-applies the best eligible promo when the proposed
+ * one is gone, so "not the promo you asked for" and "no promo at all" are
+ * different states: saying "total shown without it" while a substitute is
+ * discounting the total is simply false. Name the substitute instead. */
+export function promoSubstitutionNotice(
+  proposedCode: string | null | undefined,
+  appliedCode: string | null | undefined,
+): string | null {
+  if (!proposedCode || appliedCode === proposedCode) return null;
+  return appliedCode
+    ? `Promo ${proposedCode} is no longer available — ${appliedCode} applied instead.`
+    : `Promo ${proposedCode} is no longer available — total shown without it.`;
+}
+
 /** The message a tapped quote option sends back to the assistant. The next
  * turn sees only message text, so this must be self-contained — and it must
  * carry the quote's exact [lat,lng] coordinates and vehicle id verbatim so

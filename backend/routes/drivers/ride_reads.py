@@ -25,6 +25,7 @@ from ._deps import (  # noqa: F401
 )
 from ._shared import (  # noqa: F401
     serialize_doc,
+    serialize_ride_for_driver,
 )
 
 router = APIRouter()
@@ -230,7 +231,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
             logger.warning(f"get_active_ride: service_area polygon fetch non-fatal: {e}")
 
     return {
-        "ride": serialize_doc(ride),
+        "ride": serialize_ride_for_driver(ride),
         "rider": safe_rider,
         "vehicle_type": serialize_doc(vehicle_type) if vehicle_type else None,
         "incentives": incentives,
@@ -399,4 +400,4 @@ async def get_ride_history(
             r["cancel_fee_earned"] = round(cancel_fee, 2)
             r["total_earned"] = round(fare_only + tip + incentive + cancel_fee + tax, 2)
 
-    return {"total": total, "rides": [serialize_doc(r) for r in rides]}
+    return {"total": total, "rides": [serialize_ride_for_driver(r) for r in rides]}

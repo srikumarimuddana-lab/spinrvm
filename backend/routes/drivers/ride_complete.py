@@ -41,6 +41,7 @@ from ._deps import (  # noqa: F401
 from ._shared import (  # noqa: F401
     COMPLETE_FROM_STATES,
     serialize_doc,
+    serialize_ride_for_driver,
 )
 
 router = APIRouter()
@@ -940,7 +941,7 @@ async def complete_ride(
             )
         )
 
-    response = serialize_doc(completed_ride)
+    response = serialize_ride_for_driver(completed_ride)
     response["location_ack"] = completion_location.location_ack
     response["legacy_client_missing_tail"] = completion_location.legacy_client_missing_tail
     response["completion_distance_band"] = completion_location.distance_band

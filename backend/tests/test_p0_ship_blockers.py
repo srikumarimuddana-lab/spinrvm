@@ -216,7 +216,9 @@ class TestNoDriversAvailableTimeout:
         )
 
         assert push_calls and push_calls[0]["user_id"] == RIDER_ID
-        assert push_calls[0]["data"].get("is_auto") is True
+        # FCM data payloads are stringified (FCM data values must be
+        # strings), so booleans arrive as "true"/"false", not Python bools.
+        assert push_calls[0]["data"].get("is_auto") == "true"
 
     async def test_timeout_is_a_noop_if_driver_already_matched(self):
         """If a driver was matched/accepted before the timer fired, the
@@ -565,12 +567,20 @@ class TestCreateRideHonorsEstimateToken:
 
         with (
             patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=rider_row)),
+            # _get_active_service_area_for_point calls this directly before
+            # falling back to the polygon check against get_rows's
+            # service_areas result -- unmocked, it hits the real DB and the
+            # geofence rejects the ride as "outside service area".
+            patch("backend.routes.rides._deps.db_supabase.get_service_area_for_point", AsyncMock(return_value=None)),
             patch(
                 "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(
                     side_effect=[
+                        [],  # get_app_settings() -- settings/app_settings row
                         [],  # no active ride
-                        [],  # service_areas (empty is fine — no airport)
+                        [],  # unpaid (failed-payment) rides check
+                        [],  # all_areas (service_areas geofence check) -- empty
+                        #    means the geofence gate is skipped entirely
                         [{"id": "economy"}],  # vehicle_types
                     ]
                 ),

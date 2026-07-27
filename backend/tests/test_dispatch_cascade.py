@@ -84,7 +84,21 @@ async def test_cascade_fires_when_no_exact_type_drivers(mock_supabase_client):
         ),
         patch("backend.routes.rides.matching._dispatch_retry", new_callable=AsyncMock),
         patch("backend.routes.rides._deps.asyncio.create_task", return_value=MagicMock()),
-        patch("backend.routes.rides._send_offer_to_driver", new_callable=AsyncMock),
+        # get_app_settings() itself calls db_supabase.get_rows("settings",
+        # ...) (with an in-process 60s cache, so whether it fires here
+        # depends on cache state from earlier tests) -- patch it directly so
+        # the get_rows_mock side_effect list below maps cleanly onto the
+        # SUV-pool-then-cascade-pool calls it's actually meant to model.
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        # Batch-offer dispatch inserts ride_offers rows via
+        # db_supabase.run_sync(lambda: supabase.table(...)...execute()) --
+        # unmocked this hits a real, unconfigured client and re-raises,
+        # aborting match_driver_to_ride before the assertions below run.
+        patch(
+            "backend.routes.rides._deps.db_supabase.run_sync",
+            new_callable=AsyncMock,
+            return_value=MagicMock(data=[]),
+        ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
             new_callable=AsyncMock,

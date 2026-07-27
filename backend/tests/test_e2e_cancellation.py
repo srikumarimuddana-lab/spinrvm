@@ -74,6 +74,7 @@ class TestRiderCancelSearching:
                 request=MagicMock(),
                 ride_id=RIDE_ID,
                 current_user={"id": RIDER_ID},
+                reason=None,
             )
 
         assert result["success"] is True
@@ -100,7 +101,7 @@ class TestRiderCancelSearching:
             patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
-            await fn(request=MagicMock(), ride_id=RIDE_ID, current_user={"id": RIDER_ID})
+            await fn(request=MagicMock(), ride_id=RIDE_ID, current_user={"id": RIDER_ID}, reason=None)
 
         broadcast_mock.assert_awaited_once()
         args = broadcast_mock.call_args
@@ -110,7 +111,13 @@ class TestRiderCancelSearching:
 @pytest.mark.e2e
 @pytest.mark.asyncio
 class TestRiderCancelDriverArrived:
-    """Rider cancels after driver arrives — $5 flat fee to driver, $0.50 to admin."""
+    """Rider cancels after driver arrives — settings-configured fee to driver + admin.
+
+    calculate_cancellation_fee (services/cancellation_service.py) returns the
+    area/settings-configured cancellation_fee_admin/cancellation_fee_driver
+    verbatim for DRIVER_ARRIVED with a driver assigned — there is no separate
+    hardcoded "$5 flat fee" path distinct from settings.
+    """
 
     async def test_driver_arrived_applies_flat_cancellation_fee(self):
         from backend.routes import rides as rides_mod
@@ -146,11 +153,12 @@ class TestRiderCancelDriverArrived:
                 request=MagicMock(),
                 ride_id=RIDE_ID,
                 current_user={"id": RIDER_ID},
+                reason=None,
             )
 
         assert result["success"] is True
-        # driver_arrived flat fee: $5.00 driver + $0.50 admin
-        assert result["cancellation_fee"] == 5.50
+        # driver_arrived fee: settings-configured $2.50 driver + $0.50 admin
+        assert result["cancellation_fee"] == 3.00
 
     async def test_driver_arrived_notifies_driver_via_ws(self):
         from backend.routes import rides as rides_mod
@@ -177,7 +185,7 @@ class TestRiderCancelDriverArrived:
             patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
-            await fn(request=MagicMock(), ride_id=RIDE_ID, current_user={"id": RIDER_ID})
+            await fn(request=MagicMock(), ride_id=RIDE_ID, current_user={"id": RIDER_ID}, reason=None)
 
         # Driver must receive a ride_cancelled WS event
         sent_events = [call.args[0] for call in ws_mock.call_args_list]
@@ -328,6 +336,7 @@ class TestRiderCancelFeeWriteFailureReleasesDriver:
                 request=MagicMock(),
                 ride_id=RIDE_ID,
                 current_user={"id": RIDER_ID},
+                reason=None,
             )
 
         # The cancel still succeeds (the ride is already persisted as cancelled).

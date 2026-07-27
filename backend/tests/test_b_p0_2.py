@@ -163,7 +163,7 @@ async def test_complete_ride_does_not_overwrite_payment_status():
 
     written_fields: dict = {}
 
-    async def capture_update_one(table, filters, updates):
+    async def capture_update_one(table, filters, updates, **kw):
         if table == "rides":
             data = updates.get("$set", updates)
             written_fields.update(data)
@@ -192,6 +192,7 @@ async def test_complete_ride_does_not_overwrite_payment_status():
             AsyncMock(side_effect=lambda t, *a, **kw: [driver] if t == "drivers" else ([ride] if t == "rides" else [])),
         ),
         patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=capture_update_one)),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value={**ride, "status": "completed"})),
         patch("backend.routes.drivers._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
         patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
         patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),

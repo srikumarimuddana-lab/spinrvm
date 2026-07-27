@@ -144,7 +144,17 @@ class TestChatNonStreaming:
         with patch("backend.routes.ai.run_chat_turn", _frames_gen(frames)):
             resp = rider_client.post("/api/v1/ai/chat", json={"message": "hi", "stream": False})
         assert resp.status_code == status
-        assert resp.json()["detail"]["code"] == code
+        if status >= 500:
+            # B-P2-1: the global HTTPException handler sanitizes any 5xx
+            # detail that isn't a bare ERR_* sentinel string -- this route's
+            # structured {"code": ..., "message": ...} dict detail predates
+            # that control and gets replaced with a generic message, so the
+            # original `code` no longer reaches the client on 5xx responses.
+            body = resp.json()
+            assert body["detail"] == "Internal server error"
+            assert body["error"]["sanitised"] is True
+        else:
+            assert resp.json()["detail"]["code"] == code
 
     def test_message_length_validated(self, rider_client):
         resp = rider_client.post("/api/v1/ai/chat", json={"message": "x" * 1001, "stream": False})

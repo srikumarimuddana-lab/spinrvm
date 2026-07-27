@@ -46,6 +46,11 @@ async def test_run_tick_parses_jsonb_result_and_forwards_dry_run():
     with (
         patch("utils.retention_purge.supabase", supa),
         patch("utils.retention_purge.run_sync", AsyncMock(side_effect=lambda fn: fn())),
+        # Exercises only the purge_pii_retention/purge_trip_route_geometry
+        # JSONB-parsing path this test pins; the route-snapshot object purge
+        # (Supabase Storage removal) is a separate sub-feature with its own
+        # coverage and would need its own supa.table() chain mocked here.
+        patch("utils.retention_purge._delete_expired_route_snapshot_objects", AsyncMock(return_value=0)),
     ):
         from utils.retention_purge import run_retention_purge_tick
 

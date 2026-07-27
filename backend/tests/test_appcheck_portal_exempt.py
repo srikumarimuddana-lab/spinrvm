@@ -1,6 +1,8 @@
 """H2: the browser company portal (which can't attach an X-Firebase-AppCheck
-header) must be App-Check-exempt on its own surfaces, while the MOBILE
-/api/v1/auth/* endpoints stay enforced."""
+header) must be App-Check-exempt on its own surfaces. Mobile's
+/api/v1/auth/* namespace stays enforced except OTP login
+(send-otp/verify-otp), which is deliberately exempt so login stays
+reachable when App Check native modules aren't available/attested yet."""
 
 from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES, _CSRF_EXEMPT_EXACT
 
@@ -22,9 +24,15 @@ def test_portal_surfaces_are_appcheck_exempt():
 
 
 def test_mobile_auth_stays_appcheck_enforced():
-    # The hybrid keeps mobile's own auth namespace enforced — only the browser
-    # portal's /api/portal/auth/* is exempt.
-    assert not _appcheck_exempt("/api/v1/auth/verify-otp")
+    # The hybrid keeps mobile's own auth namespace enforced -- EXCEPT OTP
+    # login (send-otp/verify-otp), which core/middleware.py deliberately
+    # exempts so login stays reachable when App Check native modules are
+    # unavailable/not-yet-attested (Expo Go/debug builds, newly registered
+    # devices). Those two handlers keep their own OTP throttling/lockout
+    # and expose nothing without possession of the SMS code. refresh/logout
+    # and the rest of the API stay enforced.
+    assert _appcheck_exempt("/api/v1/auth/send-otp")
+    assert _appcheck_exempt("/api/v1/auth/verify-otp")
     assert not _appcheck_exempt("/api/v1/auth/refresh")
     assert not _appcheck_exempt("/api/v1/auth/logout")
     assert not _appcheck_exempt("/api/v1/rides")

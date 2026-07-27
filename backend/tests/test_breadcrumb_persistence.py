@@ -11,7 +11,7 @@ Regression guards:
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -343,6 +343,13 @@ def test_v2_preserves_capture_time_and_derives_phase_from_server_ride():
         captured["docs"] = docs
         return docs
 
+    # A fixed far-future captured_at (e.g. "2099-...") now trips the
+    # active-trip future-skew guard (_MAX_ACTIVE_TRIP_FUTURE_SKEW = 30s,
+    # utils/breadcrumbs.py) and gets rejected before reaching the insert
+    # this test is asserting against. A few seconds ahead of "now" still
+    # satisfies received_at < captured_at without tripping the guard.
+    future_captured_at = (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
+
     with patch(
         "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
         _insert_many_ignore_conflicts,
@@ -352,14 +359,14 @@ def test_v2_preserves_capture_time_and_derives_phase_from_server_ride():
                 "drv_1",
                 "ride_1",
                 "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
-                [_v2_point(1, captured_at="2099-01-01T00:00:00Z", tracking_phase="trip_in_progress")],
+                [_v2_point(1, captured_at=future_captured_at, tracking_phase="trip_in_progress")],
                 active_ride=_ride(),
             )
         )
 
     row = captured["docs"][0]
     assert result.ack.accepted_count == 1
-    assert row["captured_at"].isoformat() == "2099-01-01T00:00:00+00:00"
+    assert row["captured_at"].isoformat() == future_captured_at.replace("Z", "+00:00")
     assert row["received_at"] < row["captured_at"]
     assert row["tracking_phase"] == "trip_in_progress"
 

@@ -43,12 +43,26 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   evidence location) and a "no entries to date" first row.
 
 ### A4. 156 failing backend tests on `main`
-- [ ] **Status:** open — found while triaging PR #2377's CI failures (2026-07-26);
-  root-caused 2026-07-26 (see below). Confirmed **test drift, not a product
-  regression** — production code changed correctly; tests were never updated to
-  match. Every PR currently shows a red `backend-test` check regardless of the
-  PR's own quality, which trains reviewers to ignore CI signal — a bigger risk
-  than any single failing test.
+- [x] **Status:** ✅ fully complete (2026-07-27) — all 4 buckets cleared, 0
+  known backend test failures remain. Bucket 2 (the last holdout —
+  `test_wallet.py::TestTransfer`/`TestTopUp`,
+  `test_p2_promo_wallet_loyalty.py::TestWalletTopUp`) was resolved per
+  explicit product confirmation: wallet-to-wallet transfer is a removed
+  feature (no `/transfer` route exists in `routes/wallet.py`) — `TestTransfer`
+  was deleted, and `TestTopUp` was rewritten against the current Stripe
+  PaymentIntent + EphemeralKey response shape (credit now happens
+  asynchronously via the `payment_intent.succeeded` webhook, already covered
+  by `test_webhooks_main.py::test_wallet_topup_credits_idempotently_on_reference_id`).
+  Fixed across ~22 PRs (#2394 through #2421 and follow-ups), plus several
+  genuine production bugs found and fixed along the way (a broken dual-import
+  fallback silently dropping an insurance-period audit write; a corporate
+  allowance RPC's `p_actor_user_id` parameter silently re-narrowed from
+  `TEXT` back to `UUID` by two later migrations, reopening the exact
+  `22P02` bug 214 had already fixed). Originally found while triaging PR
+  #2377's CI failures (2026-07-26); root-caused 2026-07-26 (see below).
+  Confirmed **test drift, not a product regression** — production code
+  changed correctly; tests were never updated to match. Full local suite
+  run (2026-07-27): `4667 passed, 8 skipped, 1 xfailed, 0 failed`.
 - **Root cause breakdown (ranked by likely share of the 156):**
   1. **Orphaned `patch()` targets after module splits (likely >half of the 156).**
      `routes/drivers.py` → `routes/drivers/` package, `routes/rides.py` →
@@ -113,8 +127,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   test on its merits. Bucket 2 (`TestTransfer`) needs a product decision first
   — confirm wallet-to-wallet transfer is actually a dead/removed feature before
   deleting its tests, rather than assuming.
-- **Acceptance:** `pytest` on `main` reports 0 failures; CI Guard Rails coverage gate
-  stays meaningful again once the underlying suite is trustworthy.
+- **Acceptance:** ✅ met — `pytest` reports 0 failures on this branch (full
+  suite: 4667 passed, 8 skipped, 1 xfailed); CI Guard Rails coverage gate is
+  meaningful again once this merges to `main`.
 
 ### A5. PyJWT HIGH-severity CVE-2026-48526 (auth bypass) in backend image
 - [ ] **Status:** open — found via Trivy container scan on PR #2377 (2026-07-26)
@@ -134,6 +149,40 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   no behavior change, then re-run the Trivy image scan to confirm the finding clears.
 - **Acceptance:** `docker-image-scan` job passes with 0 HIGH/CRITICAL findings for
   PyJWT; all auth tests still pass.
+
+### A6. Flaky backend tests: `test_no_double_accept`, `test_ranks_by_vector_similarity_with_no_lexical_overlap`
+- [ ] **Status:** open — found while driving PR #2421 (A4 closure) to green
+  (2026-07-27). Confirmed flaky via two `backend-test` CI runs on the identical
+  commit (`b1b4408`) producing different results (2 failed / 4665 passed, then
+  1 failed / 4666 passed, each time a different subset of these two tests) and
+  via 10 local isolated runs (5x each) that all passed. Neither test's file is
+  touched by PR #2421 — pre-existing flakiness, not a regression from that PR.
+- **Why:**
+  - `tests/test_rides.py::test_no_double_accept` races two `asyncio.gather`
+    coroutines against `patch("backend.routes.drivers._deps.db.update_one",
+    AsyncMock(side_effect=[accepted_ride, None]))` — a fixed-order list. Real
+    concurrent scheduling under `asyncio.gather` does not guarantee call order
+    matches list order, so whichever coroutine's `update_one` call lands second
+    can pull the `accepted_ride` slot meant for the "winner," or exhaust the
+    list before both calls resolve, raising `StopAsyncIteration` and failing
+    with `AttributeError: 'StopAsyncIteration' object has no attribute
+    'status_code'`. The test is asserting a real race condition's outcome with
+    a mock that assumes a deterministic race — the mock, not the race handling
+    it's testing, is the bug.
+  - `tests/test_ai_tools_support.py::TestSearchFaqsSemantic::test_ranks_by_vector_similarity_with_no_lexical_overlap`
+    fails intermittently with `AssertionError: Expected mock to have been
+    awaited.` — root cause not yet investigated; likely a similar
+    async-scheduling/timing assumption. Needs its own read of the test and the
+    code it covers before proposing a fix.
+- **Fix:** for `test_no_double_accept`, mock at a level that doesn't depend on
+  call order (e.g. an `update_one` fake with real "only the first caller for a
+  given ride_id wins" semantics, keyed by an in-memory dict guarded by an
+  `asyncio.Lock`, rather than a fixed-order `side_effect` list) so the test
+  exercises the actual race-handling logic instead of coincidental scheduling.
+  For the promo/FAQ test, root-cause the await-assertion timing before fixing.
+- **Files:** `backend/tests/test_rides.py`, `backend/tests/test_ai_tools_support.py`
+- **Acceptance:** both tests pass deterministically across ≥10 consecutive local
+  runs and ≥3 consecutive CI `backend-test` runs on an unchanged commit.
 
 ## P1 — Fix before launch (code)
 

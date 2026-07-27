@@ -274,12 +274,19 @@ class TestRoleClaimTampering:
         assert exc_info.value.status_code == 403
         assert "Admin access required" in exc_info.value.detail
 
-    async def test_auto_created_user_always_gets_rider_role(self):
-        """When a JWT references a user_id not yet in the DB, the auto-created
-        user must always get `role: 'rider'` — never trust the JWT claim."""
+    async def test_missing_user_row_for_valid_jwt_fails_closed_not_auto_created(self):
+        """C2: a valid JWT whose user_id has no matching DB row must NOT be
+        auto-created here — that previously forked phantom duplicate
+        accounts on a transient Supabase replica miss. A missing row now
+        fails closed with a 503 so the client retries; user creation
+        belongs only in the auth endpoints (/auth/verify-otp, /auth/firebase).
+        This also means a forged/stale JWT can no longer mint a fresh
+        'rider'-role identity by referencing a user_id that was never
+        created — role tampering has nothing to attach to."""
         from fastapi.security import HTTPAuthorizationCredentials
 
         from backend.dependencies import get_current_user
+        from backend.utils.error_handling import ServiceUnavailableException
 
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-jwt")
 
@@ -299,18 +306,17 @@ class TestRoleClaimTampering:
             ),
             patch(
                 "backend.dependencies.db_supabase.get_user_by_id",
-                AsyncMock(return_value=None),  # not found → auto-create
+                AsyncMock(return_value=None),  # no matching row
             ),
             patch(
                 "backend.dependencies.db_supabase.create_user",
                 AsyncMock(side_effect=_create_user),
             ),
         ):
-            user = await get_current_user(credentials=creds)
+            with pytest.raises(ServiceUnavailableException):
+                await get_current_user(credentials=creds)
 
-        assert user["role"] == "rider", f"Auto-created user got role='{user.get('role')}' — must always be 'rider'"
-        if created_users:
-            assert created_users[0]["role"] == "rider"
+        assert not created_users, "get_current_user must never auto-create a user row (C2)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

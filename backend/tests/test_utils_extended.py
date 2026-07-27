@@ -100,8 +100,15 @@ class TestRecalculateAllSurges:
         from backend.utils.surge_engine import recalculate_all_surges
 
         areas = [
-            {"id": "area_manual", "name": "Manual", "is_active": True, "surge_source": "manual"},
-            {"id": "area_auto", "name": "Auto", "is_active": True, "surge_source": "auto", "surge_multiplier": 1.0},
+            {"id": "area_manual", "name": "Manual", "is_active": True, "surge_source": "manual", "surge_enabled": True},
+            {
+                "id": "area_auto",
+                "name": "Auto",
+                "is_active": True,
+                "surge_source": "auto",
+                "surge_multiplier": 1.0,
+                "surge_enabled": True,
+            },
         ]
 
         with (
@@ -157,6 +164,7 @@ class TestRecalculateAllSurges:
                 "is_active": True,
                 "surge_source": "auto",
                 "surge_multiplier": 1.0,
+                "surge_enabled": True,
             }
         ]
 

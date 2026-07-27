@@ -1293,10 +1293,15 @@ class TestStripeWebhookRecurringSubscription:
         event_obj = self._event("invoice.paid", data_obj)
         update_mock = AsyncMock()
         push_mock = AsyncMock()
-        # find_one: driver_subscriptions row, then drivers row (for the push).
+        # find_one order: driver_subscriptions row, subscription_plans row
+        # (for the ledger's duration/price label), drivers row (tax
+        # computation's own lookup -- None, no service_area_id, short-
+        # circuits to zero tax/SK), then drivers row again (for the push).
         find_mock = AsyncMock(
             side_effect=[
                 {"id": "row1", "driver_id": "d1", "plan_id": "p1"},
+                {"id": "p1", "duration_days": 30, "price": 49.99},
+                None,
                 {"id": "d1", "user_id": "u1"},
             ]
         )
@@ -1588,9 +1593,14 @@ class TestStripeWebhookInvoiceLedger:
         }
         event_obj = self._event(data_obj)
         record_mock = AsyncMock()
+        # find_one order: driver_subscriptions row, subscription_plans row,
+        # drivers row (tax computation's own lookup -- None, no
+        # service_area_id, short-circuits), then drivers row again (push).
         find_mock = AsyncMock(
             side_effect=[
                 {"id": "row1", "driver_id": "d1", "plan_id": "p1", "plan_name": "Pro"},
+                {"id": "p1", "duration_days": 30, "price": 49.99},
+                None,
                 {"id": "d1", "user_id": "u1"},
             ]
         )
@@ -1653,9 +1663,17 @@ class TestStripeWebhookInvoiceRecovery:
         }
         event_obj = self._event(data_obj)
         record_mock = AsyncMock()
-        # 1st find_one (by stripe_subscription_id) misses; 2nd (by metadata id) hits.
+        # 1st find_one (by stripe_subscription_id) misses; 2nd (by metadata
+        # id) hits; then subscription_plans row, then drivers row (tax
+        # computation's own lookup -- None, no service_area_id, short-
+        # circuits to zero tax/SK).
         find_mock = AsyncMock(
-            side_effect=[None, {"id": "row1", "driver_id": "d1", "plan_id": "p1", "plan_name": "Pro"}]
+            side_effect=[
+                None,
+                {"id": "row1", "driver_id": "d1", "plan_id": "p1", "plan_name": "Pro"},
+                {"id": "p1", "duration_days": 30, "price": 49.99},
+                None,
+            ]
         )
         sub_obj = MagicMock()
         sub_obj.get = lambda k, d=None: {"metadata": {"subscription_id": "row1"}}.get(k, d)

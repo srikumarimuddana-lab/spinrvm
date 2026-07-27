@@ -245,7 +245,7 @@ class TestWebhookActivation:
             activate_mock=activate_mock,
             update_mock=update_mock,
         )
-        activate_mock.assert_called_once_with("sub-id-123", "plan-premium")
+        activate_mock.assert_called_once_with("sub-id-123", "plan-premium", None)
         # stripe_subscription_id linked
         linked = [
             c
@@ -343,9 +343,14 @@ class TestVerifySession:
         mock_session.get = lambda k, d=None: "sub_stripe_99" if k == "subscription" else d
 
         update_mock = AsyncMock()
+        # verify_subscription_session re-reads the row after activation to
+        # decide whether to link/return "active" — a flat return_value would
+        # make that re-read see the same stale "pending" row and fall through
+        # to the "superseded" branch. Model the real before/after activation.
+        mock_sub_after_activate = {**mock_sub, "status": "active", "payment_status": "paid"}
 
         with (
-            patch("backend.db_supabase.find_one", AsyncMock(return_value=mock_sub)),
+            patch("backend.db_supabase.find_one", AsyncMock(side_effect=[mock_sub, mock_sub_after_activate])),
             patch("backend.db_supabase.get_rows", AsyncMock(return_value=[{"id": "driver-1"}])),
             patch("backend.db_supabase.update_one", update_mock),
             patch(
@@ -668,12 +673,16 @@ class TestActivationPeriodAndVerifySuperseded:
         from backend.routes import drivers as drv
 
         update_mock = AsyncMock()
-        # find_one order: pending sub, plan, driver (none, no push). The prior-
-        # active lookup is now a get_rows (patched to no prior active).
+        # find_one order: pending sub, plan, driver (none, no push), then
+        # _compute_subscription_tax's own drivers lookup (none -> no
+        # service_area_id -> tax computation short-circuits to zero/SK
+        # without a service_areas lookup). The prior-active lookup is now a
+        # get_rows (patched to no prior active).
         find_mock = AsyncMock(
             side_effect=[
                 {"id": "s1", "status": "pending", "driver_id": "d1"},
                 {"id": "plan-1", "duration_days": 7, "subscriber_count": 0},
+                None,
                 None,
             ]
         )
@@ -809,6 +818,9 @@ class TestSubscriptionPaymentsLedger:
             side_effect=[
                 {"id": "s1", "status": "pending", "driver_id": "d1", "plan_name": "Pro", "stripe_session_id": "cs1"},
                 {"id": "p1", "duration_days": 30, "price": 49.99, "subscriber_count": 0},
+                None,
+                # _compute_subscription_tax's own drivers lookup: no
+                # service_area_id -> short-circuits to zero tax/SK.
                 None,
             ]
         )
@@ -974,6 +986,9 @@ class TestRecurringIntervalAndModeLedger:
             side_effect=[
                 {"id": "s1", "status": "pending", "driver_id": "d1", "plan_name": "Pro", "stripe_session_id": "cs1"},
                 {"id": "p1", "duration_days": 30, "price": 49.99, "stripe_price_id": "price_x", "subscriber_count": 0},
+                None,
+                # _compute_subscription_tax's own drivers lookup: no
+                # service_area_id -> short-circuits to zero tax/SK.
                 None,
             ]
         )

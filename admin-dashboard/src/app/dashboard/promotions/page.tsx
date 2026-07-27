@@ -82,7 +82,15 @@ interface PromoStatsData {
     active_private: number;
     total_redemptions: number;
     total_discount_given: number;
-    daily_usage: { date: string; count: number; amount: number }[];
+    daily_usage: {
+        date: string;
+        count: number;
+        amount: number;
+        public_count?: number;
+        public_amount?: number;
+        private_count?: number;
+        private_amount?: number;
+    }[];
 }
 
 interface UserOption {
@@ -340,12 +348,25 @@ export default function PromotionsPage() {
     const { sorted: sortedPromos, sort: promoSort, toggle: togglePromoSort } = useTableSort(filtered);
     const { sorted: sortedUsage, sort: usageSort, toggle: toggleUsageSort } = useTableSort(filteredUsage);
 
-    // Chart data filtered by chartFilter
+    // Chart data filtered by chartFilter — the backend now splits each
+    // day's usage into public_count/public_amount and
+    // private_count/private_amount alongside the combined count/amount.
     const chartData = useMemo(() => {
         if (!stats?.daily_usage) return [];
-        // If "all", return raw daily_usage from stats
-        // For public/private filtering, we'd need per-type data from backend
-        // For now, show all data with the filter label context
+        if (chartFilter === "public") {
+            return stats.daily_usage.map((d) => ({
+                date: d.date,
+                count: d.public_count ?? 0,
+                amount: d.public_amount ?? 0,
+            }));
+        }
+        if (chartFilter === "private") {
+            return stats.daily_usage.map((d) => ({
+                date: d.date,
+                count: d.private_count ?? 0,
+                amount: d.private_amount ?? 0,
+            }));
+        }
         return stats.daily_usage;
     }, [stats, chartFilter]);
 

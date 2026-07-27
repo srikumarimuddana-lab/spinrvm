@@ -153,9 +153,7 @@ async def admin_get_promotions(
 
 
 @router.post("/promotions")
-async def admin_create_promotion(
-    promotion: PromotionCreateRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_create_promotion(promotion: PromotionCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create a new promotion/discount code."""
     # Reject negative discount values — a negative discount is a charge (F-30).
     if promotion.discount_value < 0:
@@ -303,10 +301,12 @@ async def admin_get_promo_usage(
     user_name_map: Dict[str, str] = {}
     try:
         user_rows = await db_supabase.run_sync(
-            lambda: db_supabase.supabase.table("users")
-            .select("id, first_name, last_name, phone")
-            .in_("id", user_ids)
-            .execute()
+            lambda: (
+                db_supabase.supabase.table("users")
+                .select("id, first_name, last_name, phone")
+                .in_("id", user_ids)
+                .execute()
+            )
         )
         for u in getattr(user_rows, "data", None) or []:
             first = u.get("first_name") or ""
@@ -321,10 +321,12 @@ async def admin_get_promo_usage(
     ride_id_map: Dict[str, str] = {}
     try:
         ride_rows = await db_supabase.run_sync(
-            lambda: db_supabase.supabase.table("rides")
-            .select("id, promo_application_id")
-            .in_("promo_application_id", app_ids)
-            .execute()
+            lambda: (
+                db_supabase.supabase.table("rides")
+                .select("id, promo_application_id")
+                .in_("promo_application_id", app_ids)
+                .execute()
+            )
         )
         for r in getattr(ride_rows, "data", None) or []:
             if r.get("promo_application_id"):
@@ -381,13 +383,7 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
 
     # Promo counts
     total_codes = len([p for p in all_promos if p.get("promo_type") != "private"])
-    active_codes = len(
-        [
-            p
-            for p in all_promos
-            if p.get("promo_type") != "private" and p.get("is_active")
-        ]
-    )
+    active_codes = len([p for p in all_promos if p.get("promo_type") != "private" and p.get("is_active")])
     expired_codes = len(
         [
             p
@@ -399,34 +395,47 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
         ]
     )
     total_private = len([p for p in all_promos if p.get("promo_type") == "private"])
-    active_private = len(
-        [
-            p
-            for p in all_promos
-            if p.get("promo_type") == "private" and p.get("is_active")
-        ]
-    )
+    active_private = len([p for p in all_promos if p.get("promo_type") == "private" and p.get("is_active")])
 
     # Usage stats
     total_redemptions = len(filtered_usage)
-    total_discount = float(
-        sum(Decimal(str(u.get("discount_applied", 0))) for u in filtered_usage)
-    )
+    total_discount = float(sum(Decimal(str(u.get("discount_applied", 0))) for u in filtered_usage))
 
-    # Daily usage for charts (last 30 days)
+    # Daily usage for charts (last 30 days), split by promo type so the
+    # admin dashboard's "Public codes only" / "Private coupons only" chart
+    # filter has real per-type data to select from (previously the filter
+    # was wired up client-side with no backend breakdown to filter against).
+    promo_is_private = {p["id"]: p.get("promo_type") == "private" for p in all_promos}
+
     daily: Dict[str, Dict[str, Any]] = {}
     for i in range(30):
         d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
-        daily[d] = {"date": d, "count": 0, "amount": 0.0}
+        daily[d] = {
+            "date": d,
+            "count": 0,
+            "amount": 0.0,
+            "public_count": 0,
+            "public_amount": 0.0,
+            "private_count": 0,
+            "private_amount": 0.0,
+        }
 
     for u in all_usage:
         d = u.get("created_at", "")[:10]
-        if d in daily:
-            daily[d]["count"] += 1
-            daily[d]["amount"] = float(
-                Decimal(str(daily[d]["amount"]))
-                + Decimal(str(u.get("discount_applied", 0)))
-            )
+        if d not in daily:
+            continue
+        discount = Decimal(str(u.get("discount_applied", 0)))
+        is_private = promo_is_private.get(u.get("promo_id"), False)
+
+        daily[d]["count"] += 1
+        daily[d]["amount"] = float(Decimal(str(daily[d]["amount"])) + discount)
+
+        if is_private:
+            daily[d]["private_count"] += 1
+            daily[d]["private_amount"] = float(Decimal(str(daily[d]["private_amount"])) + discount)
+        else:
+            daily[d]["public_count"] += 1
+            daily[d]["public_amount"] = float(Decimal(str(daily[d]["public_amount"])) + discount)
 
     daily_usage = sorted(daily.values(), key=lambda x: x["date"])
 
@@ -465,9 +474,7 @@ async def admin_update_promotion(
             ]:
                 updates.pop(f, None)
             if updates:
-                await db_supabase.update_one(
-                    "promotions", {"id": promotion_id}, updates
-                )
+                await db_supabase.update_one("promotions", {"id": promotion_id}, updates)
         await log_admin_action(
             admin,
             "promotion_updated",
@@ -479,9 +486,7 @@ async def admin_update_promotion(
 
 
 @router.delete("/promotions/{promotion_id}")
-async def admin_delete_promotion(
-    promotion_id: str, admin: dict = Depends(get_admin_user)
-):
+async def admin_delete_promotion(promotion_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a promotion."""
     await db_supabase.delete_many("promotions", {"id": promotion_id})
     await log_admin_action(admin, "promotion_deleted", "promotions", promotion_id)

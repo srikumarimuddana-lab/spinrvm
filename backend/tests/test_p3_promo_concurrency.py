@@ -96,7 +96,7 @@ class TestIncrementPromoUsesHelper:
     @pytest.mark.anyio
     async def test_returns_true_when_capacity_remains(self):
         """RPC data=True → helper returns True."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = MagicMock()
         res = MagicMock()
@@ -111,7 +111,7 @@ class TestIncrementPromoUsesHelper:
     @pytest.mark.anyio
     async def test_returns_false_when_exhausted(self):
         """RPC data=False (uses == max_uses) → helper returns False."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = MagicMock()
         res = MagicMock()
@@ -129,7 +129,7 @@ class TestIncrementPromoUsesHelper:
         N concurrent calls with capacity=2 → exactly 2 True results,
         the rest False. Mirrors the DB's serialized UPDATE behavior.
         """
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         capacity = 2
         total = 6
@@ -149,7 +149,7 @@ class TestIncrementPromoUsesHelper:
     @pytest.mark.anyio
     async def test_unlimited_promo_always_returns_true(self):
         """max_uses=0 is treated as unlimited — helper always returns True."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = MagicMock()
         res = MagicMock()
@@ -179,8 +179,18 @@ class TestPromoApplyRouteRaceHandling:
             "role": "rider",
             "is_driver": False,
         }
-        with TestClient(app) as c:
-            yield c
+        # TestClient boots the full lifespan, which spawns ~29 background
+        # loops including retention_purge_loop. Its own supabase reference
+        # (module-level `from ..db_supabase import supabase`) isn't covered
+        # by the shared mock_supabase_client fixture's calling convention
+        # (that mock's .rpc() is an AsyncMock returning an awaited coroutine
+        # directly, incompatible with retention_purge's .rpc(...).execute()
+        # sync-chain-then-run_sync pattern) -- irrelevant to what this test
+        # verifies, so stub the tick to a no-op instead of fixing the
+        # shared fixture's broader calling-convention mismatch here.
+        with patch("utils.retention_purge.run_retention_purge_tick", new_callable=AsyncMock):
+            with TestClient(app) as c:
+                yield c
         app.dependency_overrides.clear()
 
     def _patch_apply(self, promo: dict, ride: dict, *, increment_result: bool):
@@ -245,7 +255,7 @@ class TestPromoApplyRouteRaceHandling:
         and 8 callers → exactly 3 granted. The route-level 409 follows
         automatically from the False return, tested above.
         """
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         capacity = 3
         callers = 8

@@ -8,11 +8,21 @@ const source = fs.readFileSync(
 
 describe('driver dashboard route presentation contract', () => {
   it('does not reuse the pickup-to-dropoff route while navigating to pickup', () => {
-    expect(source).toContain(
-      "const useSavedRoute = hasSavedRoute &&\n            (rideState === 'ride_offered' || rideState === 'trip_in_progress');",
-    );
+    const savedRouteStateGuard = /(?:canUseSaved|useSavedRoute)\s*=\s*[\s\S]*?rideState === 'ride_offered'[\s\S]*?rideState === 'trip_in_progress'/g;
+
+    // Both the state-seeding effect and render path must exclude pre-pickup.
+    expect(source.match(savedRouteStateGuard)).toHaveLength(2);
     expect(source).toContain(
       'const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive;',
+    );
+  });
+
+  it('clears stale geometry when live pre-pickup routing cannot supply a path', () => {
+    expect(source).toMatch(
+      /else \{\s*setOsrmRouteActive\(false\);[\s\S]*?setRouteCoords\(\[\]\);/,
+    );
+    expect(source).toMatch(
+      /onError=\{\(err\) => \{[\s\S]*?setRouteCoords\(\[\]\);[\s\S]*?setDirectionsFailed\(true\);/,
     );
   });
 });

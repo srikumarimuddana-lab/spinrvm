@@ -132,7 +132,12 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   meaningful again once this merges to `main`.
 
 ### A5. PyJWT HIGH-severity CVE-2026-48526 (auth bypass) in backend image
-- [ ] **Status:** open — found via Trivy container scan on PR #2377 (2026-07-26)
+- [x] **Status:** done — fixed via CR-2026-004, PR #2474 (merged 2026-07-27,
+  squash sha `0026612`). PyJWT bumped 2.12.1→2.13.0 (part of a 13-package
+  dependency bump also clearing the overlapping `G6 · Trivy container scan`
+  findings). Full backend suite run before/after with byte-for-byte identical
+  failure sets; targeted auth/JWT/MFA/OTP/token pass (542 tests) also
+  unaffected. See `docs/change-log/2026-07-27-cr-2026-004-backend-dep-bump.md`.
 - **Why:** `docker-image-scan` job flags `PyJWT==2.12.1` for `CVE-2026-48526`, an
   authentication-bypass-via-forged-JWT vulnerability, fixed in PyJWT `2.13.0`.
   Given CLAUDE.md's JWT trust model (admin JWTs are fully trusted on role/email/

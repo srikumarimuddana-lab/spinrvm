@@ -49,6 +49,9 @@ export interface LocationSuggestionCandidate {
   lng: number;
   in_service_area?: boolean;
   service_area?: string | null;
+  /** Google driving route from the rider/pickup when all suggestions routed. */
+  driving_distance_km?: number;
+  driving_duration_minutes?: number;
 }
 
 /** One vehicle option inside a fare_quote action. Amounts are exact

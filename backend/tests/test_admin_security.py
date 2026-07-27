@@ -320,10 +320,12 @@ class TestExpiredTokenRejectedOnResource:
         expired = _make_admin_token(expired=True, modules=["drivers"], secret=settings.JWT_SECRET)
         resp = test_client.get(self.RESOURCE_URL, headers={"Authorization": f"Bearer {expired}"})
         assert resp.status_code == 401, f"Expected 401 for expired admin token, got {resp.status_code}: {resp.text}"
-        # Envelope-agnostic: a plain HTTPException serialises to
-        # {"detail": ...} while the global handler may wrap it as
-        # {"error": {"message": ...}}; either way the reason mentions expiry.
-        assert "expire" in resp.text.lower()
+        # C4: the client-facing message is now a static "Invalid token" for
+        # every JWT decode failure (expired/malformed/wrong-aud/bad-sig
+        # alike) -- interpolating the real PyJWT reason into the response
+        # would let an attacker fingerprint which claim failed. The real
+        # cause ("Token has expired") is server-logged only.
+        assert "invalid token" in resp.text.lower()
 
     def test_tampered_signature_is_rejected_401(self, test_client):
         # Signed with a secret other than settings.JWT_SECRET → signature

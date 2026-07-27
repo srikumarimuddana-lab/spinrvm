@@ -719,7 +719,10 @@ function DriverDashboard() {
         {ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
           const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
           const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
-          const useSavedRoute = hasSavedRoute;
+          // The saved route always describes pickup -> dropoff. Before pickup,
+          // only a live route (OSRM or Directions) can describe driver -> pickup.
+          const useSavedRoute = hasSavedRoute &&
+            (rideState === 'ride_offered' || rideState === 'trip_in_progress');
           const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive;
 
           const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;

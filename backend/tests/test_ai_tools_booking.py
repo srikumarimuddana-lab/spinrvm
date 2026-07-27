@@ -153,6 +153,73 @@ class TestFindPlace:
         assert result["_client_action"]["candidates"][0]["name"] == "Walmart Supercentre"
 
     @pytest.mark.anyio
+    async def test_named_place_suggestions_rank_by_google_driving_time(self):
+        async def maps_get(url, params):
+            if url == tools_booking._PLACES_TEXT_URL:
+                return PLACES_OK
+            destination = params["destination"]
+            minutes_by_destination = {
+                "50.4079,-104.6501": 12,  # closest as the crow flies
+                "50.4497,-104.5345": 18,
+                "50.4966,-104.6401": 8,  # fastest by road; must rank first
+            }
+            minutes = minutes_by_destination[destination]
+            return {
+                "status": "OK",
+                "routes": [
+                    {
+                        "legs": [
+                            {
+                                "distance": {"value": minutes * 500},
+                                "duration": {"value": minutes * 60},
+                            }
+                        ]
+                    }
+                ],
+            }
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_area(),
+            patch.object(tools_booking, "_maps_get", AsyncMock(side_effect=maps_get)),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place",
+                {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65, "location_role": "dropoff"},
+                user=RIDER,
+            )
+
+        assert ok
+        assert result["ranking_basis"] == "driving_time"
+        assert result["candidates"][0]["name"] == "Walmart Rochdale"
+        assert result["candidates"][0]["driving_duration_minutes"] == 8
+        assert result["_client_action"]["candidates"][0]["name"] == "Walmart Rochdale"
+
+    @pytest.mark.anyio
+    async def test_route_ranking_failure_keeps_proximity_order(self):
+        async def maps_get(url, params):
+            if url == tools_booking._PLACES_TEXT_URL:
+                return PLACES_OK
+            raise TimeoutError("directions timeout")
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_area(),
+            patch.object(tools_booking, "_maps_get", AsyncMock(side_effect=maps_get)),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
+            )
+
+        assert ok
+        assert result["ranking_basis"] == "straight_line_distance"
+        assert result["candidates"][0]["name"] == "Walmart Supercentre"
+
+    @pytest.mark.anyio
     async def test_budget_exhausted_degrades_gracefully(self):
         with _patch_settings(), _patch_budget(within=False):
             result, ok = await execute_tool("find_place", {"query": "airport"}, user=RIDER)
@@ -1217,7 +1284,12 @@ class TestDropoffLabelGuard:
     @pytest.mark.anyio
     async def test_proposal_refuses_label_over_foreign_coordinates(self):
         patches, _lookup = self._patches()
-        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": self.LABEL}
+        args = {
+            **self.PICKUP,
+            "dropoff_lat": self.STALE["lat"],
+            "dropoff_lng": self.STALE["lng"],
+            "dropoff_address": self.LABEL,
+        }
         with patches[0], patches[1], patches[2]:
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
@@ -1229,7 +1301,12 @@ class TestDropoffLabelGuard:
     @pytest.mark.anyio
     async def test_quote_refuses_the_same_pair(self):
         patches, _lookup = self._patches()
-        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": self.LABEL}
+        args = {
+            **self.PICKUP,
+            "dropoff_lat": self.STALE["lat"],
+            "dropoff_lng": self.STALE["lng"],
+            "dropoff_address": self.LABEL,
+        }
         with patches[0], patches[1], patches[2]:
             result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
         assert ok
@@ -1238,7 +1315,12 @@ class TestDropoffLabelGuard:
     @pytest.mark.anyio
     async def test_matching_pair_passes(self):
         patches, _lookup = self._patches()
-        args = {**self.PICKUP, "dropoff_lat": self.WALMART["lat"], "dropoff_lng": self.WALMART["lng"], "dropoff_address": self.LABEL}
+        args = {
+            **self.PICKUP,
+            "dropoff_lat": self.WALMART["lat"],
+            "dropoff_lng": self.WALMART["lng"],
+            "dropoff_address": self.LABEL,
+        }
         with patches[0], patches[1], patches[2]:
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
@@ -1267,7 +1349,12 @@ class TestDropoffLabelGuard:
         # A transient Maps failure must not wave the stale pair through —
         # that would disable the guard exactly when Google blips. Distinct
         # retryable result, not a mismatch verdict.
-        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": self.LABEL}
+        args = {
+            **self.PICKUP,
+            "dropoff_lat": self.STALE["lat"],
+            "dropoff_lng": self.STALE["lng"],
+            "dropoff_address": self.LABEL,
+        }
         with (
             _patch_area(),
             patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
@@ -1275,6 +1362,27 @@ class TestDropoffLabelGuard:
                 tools_booking,
                 "_lookup_place_candidates",
                 AsyncMock(return_value={"error": "place lookup failed"}),
+            ),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["needs_correction"] == "dropoff_unverified"
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_unavailable_maps_fails_closed(self):
+        args = {
+            **self.PICKUP,
+            "dropoff_lat": self.STALE["lat"],
+            "dropoff_lng": self.STALE["lng"],
+            "dropoff_address": self.LABEL,
+        }
+        with (
+            _patch_area(),
+            patch.object(
+                tools_booking,
+                "_places_available",
+                AsyncMock(return_value=(None, {"error": "place lookup is not available right now"})),
             ),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
@@ -1305,6 +1413,20 @@ class TestDropoffLabelGuard:
                 self.STALE["lat"], self.STALE["lng"], f"{self.STALE['lat']:.5f}, {self.STALE['lng']:.5f}"
             )
         assert refusal is None
+
+    @pytest.mark.anyio
+    async def test_coordinate_label_uses_decimal_precision_not_poi_radius(self):
+        # Roughly 100 m is well inside the 1.5 km POI-centroid allowance, but
+        # far outside the rounding envelope of a five-decimal coordinate.
+        maps = AsyncMock(side_effect=AssertionError("coordinate label must not geocode"))
+        with patch.object(tools_booking, "_places_available", maps):
+            refusal = await tools_booking._dropoff_pair_refusal(
+                self.STALE["lat"] + 0.0009,
+                self.STALE["lng"],
+                f"{self.STALE['lat']:.5f}, {self.STALE['lng']:.5f}",
+            )
+        assert refusal is not None
+        assert refusal["needs_correction"] == "dropoff_label_mismatch"
 
     @pytest.mark.anyio
     async def test_street_address_label_needs_precise_agreement(self):
@@ -1345,7 +1467,12 @@ class TestDropoffLabelGuard:
                 ]
             }
 
-        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": "4500 Gordon Rd, Regina"}
+        args = {
+            **self.PICKUP,
+            "dropoff_lat": self.STALE["lat"],
+            "dropoff_lng": self.STALE["lng"],
+            "dropoff_address": "4500 Gordon Rd, Regina",
+        }
         with (
             _patch_area(),
             patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
@@ -1384,7 +1511,12 @@ class TestDropoffLabelGuard:
                 ]
             }
 
-        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": "4500 Gordon Rd, Regina"}
+        args = {
+            **self.PICKUP,
+            "dropoff_lat": self.STALE["lat"],
+            "dropoff_lng": self.STALE["lng"],
+            "dropoff_address": "4500 Gordon Rd, Regina",
+        }
         with (
             _patch_area(),
             patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),

@@ -153,11 +153,12 @@ export default function SearchDestinationScreen() {
 
   // Focus the active field
   useEffect(() => {
-    setTimeout(() => {
+    const t = setTimeout(() => {
       if (activeField === 'pickup') pickupRef.current?.focus();
       else if (activeField === 'dropoff') dropoffRef.current?.focus();
       else if (typeof activeField === 'number') stopRefs.current[activeField]?.focus();
     }, 100);
+    return () => clearTimeout(t);
   }, [activeField]);
 
   const getPlaceDetails = async (placeId: string): Promise<{ lat: number; lng: number; address: string } | null> => {

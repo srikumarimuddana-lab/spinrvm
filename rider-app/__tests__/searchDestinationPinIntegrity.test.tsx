@@ -148,7 +148,14 @@ describe('editing the destination text', () => {
     // The store pair is gone — Search is disabled until a fresh selection
     // re-binds address and coordinates atomically.
     expect(useRideStore.getState().dropoff).toBeNull();
-  });
+    // Pragmatic timeout headroom: this test has hung against the 5000ms
+    // default on CI's runners specifically (never reproduced locally, even
+    // matching CI's exact `--ci --coverage --forceExit` invocation across
+    // 15+ full-suite runs) despite fixing two independently-real bugs found
+    // along the way (a dangling focus timer, an un-unmounted renderer
+    // leaking into later tests). Widening the budget rather than continuing
+    // to guess at a CI-only timing cause I cannot observe or reproduce.
+  }, 20000);
 
   it('does not clear the pin when the text still equals the selected address', async () => {
     useRideStore.setState({ dropoff: GORDON });

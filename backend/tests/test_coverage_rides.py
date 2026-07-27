@@ -2169,6 +2169,337 @@ async def test_rider_complete_ride_success():
     assert result["status"] == "completed"
 
 
+@pytest.mark.anyio
+async def test_simulate_driver_arrival_ride_not_found():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import simulate_driver_arrival
+
+    with (
+        patch("backend.routes.rides._deps._settings") as mock_settings,
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+    ):
+        mock_settings.ENV = "development"
+        mock_db.get_ride = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as exc:
+            await simulate_driver_arrival(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_simulate_driver_arrival_wrong_rider():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import simulate_driver_arrival
+
+    with (
+        patch("backend.routes.rides._deps._settings") as mock_settings,
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+    ):
+        mock_settings.ENV = "development"
+        mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other-rider"))
+        with pytest.raises(HTTPException) as exc:
+            await simulate_driver_arrival(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_rider_start_ride_ride_not_found():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_start_ride
+
+    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as exc:
+            await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_rider_start_ride_wrong_driver():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_start_ride
+
+    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    ride = _ride(status="driver_arrived", driver_id="some-other-driver")
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[{"id": _DRIVER_ID}])
+        with pytest.raises(HTTPException) as exc:
+            await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_rider_start_ride_wrong_status():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_start_ride
+
+    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    ride = _ride(status="searching", driver_id=_DRIVER_ID)
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[{"id": _DRIVER_ID}])
+        with pytest.raises(HTTPException) as exc:
+            await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_rider_start_ride_lost_race_returns_409():
+    """The atomic driver_arrived -> in_progress claim matched zero rows."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_start_ride
+
+    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    ride = _ride(status="driver_arrived", driver_id=_DRIVER_ID)
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[{"id": _DRIVER_ID}])
+        mock_db.update_one = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as exc:
+            await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_wrong_status():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_complete_ride
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="driver_assigned", rider_id=_RIDER_ID))
+        with pytest.raises(HTTPException) as exc:
+            await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_lost_race_returns_409():
+    """The atomic in_progress -> completed claim matched zero rows."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_complete_ride
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="in_progress", rider_id=_RIDER_ID))
+        mock_db.update_one = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as exc:
+            await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_no_driver_skips_driver_side_effects():
+    """A driverless ride (shouldn't really happen, but the code guards for it)
+    must not call any driver-scoped DB helpers and must not blow up computing
+    the incentive total."""
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID, driver_id=None)
+    completed_ride = {**ride, "status": "completed"}
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_one = AsyncMock(return_value=ride)
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["status"] == "completed"
+    mock_db.set_driver_available.assert_not_called()
+    mock_db.get_driver_by_id.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_period_transition_failure_is_swallowed():
+    """A regulatory insurance-period write failing must not block completion."""
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed"}
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch(
+            "backend.routes.rides._deps.record_period_transition",
+            AsyncMock(side_effect=RuntimeError("audit write failed")),
+        ),
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_quota_check_failure_is_swallowed():
+    """A transient error in the daily-allowance check must not block completion."""
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed"}
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("utils.spinr_pass.force_offline_if_exhausted", AsyncMock(side_effect=RuntimeError("redis down"))),
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_quota_exhausted_notifies_driver():
+    """When this completion used the driver's last daily ride, the driver gets
+    a WS auto_offline notice, admins get a status-changed broadcast, and a push
+    notification is sent."""
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed"}
+    quota_offline = {
+        "rides_per_day": 10,
+        "hours_until_reset": 5.4,
+        "quota_resets_at": "2026-07-28T00:00:00Z",
+    }
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("utils.spinr_pass.force_offline_if_exhausted", AsyncMock(return_value=quota_offline)),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock) as mock_push,
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        mock_manager.send_personal_message = AsyncMock()
+        mock_manager.broadcast_ride_status = AsyncMock()
+        mock_manager.broadcast_to_admins = AsyncMock()
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["status"] == "completed"
+    mock_push.assert_awaited_once()
+    assert mock_push.call_args.kwargs["data"]["type"] == "quota_exhausted"
+    # auto_offline WS message + admin broadcast, in addition to the two
+    # ride_completed personal messages sent unconditionally.
+    auto_offline_calls = [
+        c for c in mock_manager.send_personal_message.await_args_list if c.args[0].get("type") == "auto_offline"
+    ]
+    assert len(auto_offline_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_quota_notify_failure_is_swallowed():
+    """A WS/push failure while notifying a quota-exhausted driver must not
+    surface to the rider -- the ride is already completed."""
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed"}
+    quota_offline = {"rides_per_day": 10, "hours_until_reset": 1, "quota_resets_at": "2026-07-28T00:00:00Z"}
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("utils.spinr_pass.force_offline_if_exhausted", AsyncMock(return_value=quota_offline)),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch(
+            "backend.routes.rides._deps.send_push_notification",
+            AsyncMock(side_effect=RuntimeError("push provider down")),
+        ),
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        # The unconditional ride_completed notices (to driver + rider) are NOT
+        # wrapped in try/except -- only the LATER quota "auto_offline" message
+        # is. Only fail that one, or we'd be asserting something the code
+        # doesn't actually guarantee.
+        async def _send_personal_message(payload, *args, **kwargs):
+            if payload.get("type") == "auto_offline":
+                raise RuntimeError("ws send failed")
+
+        mock_manager.send_personal_message = AsyncMock(side_effect=_send_personal_message)
+        mock_manager.broadcast_ride_status = AsyncMock()
+        mock_manager.broadcast_to_admins = AsyncMock(side_effect=RuntimeError("broadcast failed"))
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_earnings_snapshot_failure_is_swallowed():
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed"}
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("utils.spinr_pass.force_offline_if_exhausted", AsyncMock(return_value=None)),
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        # The first update_one call is the atomic completion guard; the second
+        # is the driver_earnings_snapshot write -- make only the second raise.
+        mock_db.update_one = AsyncMock(side_effect=[ride, RuntimeError("snapshot write failed")])
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_admin_broadcast_failure_is_swallowed():
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed"}
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("utils.spinr_pass.force_offline_if_exhausted", AsyncMock(return_value=None)),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        mock_manager.send_personal_message = AsyncMock()
+        mock_manager.broadcast_ride_status = AsyncMock()
+        mock_manager.broadcast_to_admins = AsyncMock(side_effect=RuntimeError("admin broadcast down"))
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_quest_scheduling_failure_is_swallowed():
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed"}
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("utils.spinr_pass.force_offline_if_exhausted", AsyncMock(return_value=None)),
+        # _deps.spawn is used for BOTH the live-activity update (unwrapped) and
+        # the quest-progress scheduling (wrapped in try/except) -- let the
+        # first call through and only fail the second.
+        patch("backend.routes.rides._deps.spawn", side_effect=[None, RuntimeError("event loop full")]),
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["status"] == "completed"
+
+
 # ── get_ride_receipt ──────────────────────────────────────────────────────────
 
 

@@ -29,24 +29,34 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   - `routes/rides.py` no longer exists as a single file — the god-file split
     (see `backend/CLAUDE.md` / `docs/refactors/god-file-split.md`) replaced it
     with a `routes/rides/` package, and CLAUDE.md's target was never updated
-    to reflect that. Per-file coverage in that package is **highly uneven**
-    and several files are well below 80%: `lost_found.py` 25%, `receipts.py`
-    58.3%, `matching.py` 64.7%, `lifecycle.py` 65.1%, `booking.py` 65.7%,
+    to reflect that. Per-file coverage in that package was **highly uneven**:
+    `lost_found.py` 25%, `receipts.py` 58.3%, `matching.py` 64.7%,
+    `lifecycle.py` 65.1% (now **87.88%** — see below), `booking.py` 65.7%,
     `queries.py` 69.2%, `estimates.py`/`cancellation.py` 71.0%,
-    `rides/payments.py` 79.5%. This is the real remaining gap, not
-    payments/fare — `matching.py` and `lifecycle.py` are the highest-priority
-    files (ride state-machine transitions, dispatch-adjacent) per CLAUDE.md's
-    own "every new state transition must have a test" rule.
+    `rides/payments.py` 79.5%.
+  - `routes/rides/lifecycle.py`: was 65.1%, **now 87.88%** after adding 23
+    tests (`tests/test_coverage_rides.py`) covering the ride state-machine
+    functions' previously-untested guard clauses (404/403/400/409 branches
+    across `simulate_driver_arrival`, `rider_start_ride`,
+    `rider_complete_ride` — including both atomic-transition race-lost 409
+    paths) and their fail-open exception paths (insurance-period audit write,
+    daily-quota check, driver-earnings snapshot, admin broadcast, quest
+    scheduling, quota-exhaustion driver notification). Meets the 80% target.
+    Remaining gap: the ride-incentive-claim happy path (lines 208-230,
+    a Supabase query-builder chain) and a small WS/push branch in
+    `rider_start_ride` — left uncovered, lower priority than the other
+    `routes/rides/` files below.
 - **Why:** CLAUDE.md mandates ≥90% for `routes/payments.py` + `services/fare_service.py`
   and ≥80% for `routes/rides.py` (now the `routes/rides/` package) +
   `services/dispatch_service.py`; the global floor in `backend/pytest.ini` is
   only 60%.
 - **Files:** `backend/pytest.ini`, new tests under `backend/tests/` — done so
-  far: `backend/tests/services/test_dispatch_service.py`. Next:
+  far: `backend/tests/services/test_dispatch_service.py`,
+  `backend/tests/test_coverage_rides.py` (lifecycle functions). Next:
   `backend/tests/` coverage for `routes/rides/lost_found.py`,
   `routes/rides/receipts.py`, `routes/rides/matching.py`,
-  `routes/rides/lifecycle.py`, `routes/rides/booking.py`, in roughly that
-  priority order (worst-covered / highest-stakes first).
+  `routes/rides/booking.py`, in roughly that priority order
+  (worst-covered / highest-stakes first).
 - **Approach:** measure current per-file coverage (`pytest --cov --cov-report=term-missing`),
   write tests for the uncovered branches (fare tiers, surge, corporate, promo, refund,
   webhook types, ride-state transitions), then enforce with
@@ -54,8 +64,10 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   don't big-bang — one file/PR at a time, per CLAUDE.md's ≤3-files-per-subtask
   rule.
 - **Acceptance:** CI fails if payments/fare coverage drops below 90% or
-  `routes/rides/*` / dispatch below 80%. Payments and fare already satisfy
-  this; dispatch now does too. `routes/rides/` package files remain open.
+  `routes/rides/*` / dispatch below 80%. Payments, fare, dispatch, and
+  `lifecycle.py` now meet target. Remaining `routes/rides/` package files
+  (`lost_found.py`, `receipts.py`, `matching.py`, `booking.py`, `queries.py`,
+  `estimates.py`, `cancellation.py`) still open.
 
 ### A2. Post-deploy smoke test in CI
 - [ ] **Status:** open

@@ -105,6 +105,27 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     coverage via 15 existing tests across 10 test files; closing the rest
     needs its own targeted pass identifying which specific `create_ride`
     branches those existing tests don't reach, not a full rewrite.
+  - `routes/rides/queries.py`: was 69.2%, **now 92.20%** after adding 19
+    tests (`tests/test_coverage_rides.py` for `get_ride`/`get_ride_history`/
+    `_fetch_ride_history_page`, `tests/test_rider_stats_empty.py` for
+    `get_rider_stats`) covering: every `period` value + service-area
+    timezone resolution for stats; `get_ride`'s free-cancel countdown in all
+    four states (driver-arrived → 0, normal elapsed calc, malformed
+    timestamp → 0, not-yet-accepted → null), the no-show countdown in all
+    three states, the offer-timeout settings-lookup failure fallback, the
+    driver-view terminal-ride PII redaction, the fare-lock snapshot path,
+    the driver-earnings-snapshot-preferred-over-live-fields path, and the
+    tax-falls-back-to-snapshot-lines-when-zero branch; plus
+    `get_ride_history`'s settings-lookup-failure fallback and its own
+    fare-lock snapshot branch, and `_fetch_ride_history_page`'s
+    no-Supabase-client fail-closed guard. Meets the 80% target. Caught a
+    real footgun along the way: `get_ride` shadows the module-level
+    `_deps.get_app_settings` re-export with a *local* `from settings_loader
+    import get_app_settings` inside the function body — patching
+    `_deps.get_app_settings` silently has zero effect there (only
+    `get_ride_history`, which calls `_deps.get_app_settings()` directly, is
+    reachable that way); the correct patch target for `get_ride` is
+    `backend.settings_loader.get_app_settings`.
 - **Why:** CLAUDE.md mandates ≥90% for `routes/payments.py` + `services/fare_service.py`
   and ≥80% for `routes/rides.py` (now the `routes/rides/` package) +
   `services/dispatch_service.py`; the global floor in `backend/pytest.ini` is
@@ -436,23 +457,44 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   behaviour rather than to zero results.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
-- [ ] **Status:** open — observed in an AI-assistant quote card, 2026-07-26
-- **Why:** a rider-facing quote showed **Economy and XL at the same price**
-  ($23.52 → $13.52 after promo), both "2 min (0 km) away". Vehicle types are
-  supposed to differ via `base_fare` / `per_km_rate` / `per_minute_rate`;
-  identical output is the signature of both falling back to `DEFAULT_FARE`
-  (`backend/services/fare_service.py:32-34`) because per-vehicle-type pricing
-  rows are missing. Riders paying XL money for Economy pricing (or vice versa)
-  is a revenue and trust problem, and it makes the vehicle picker meaningless.
-  "Nearest driver 0.0 km away" in the same card is also suspect.
-- **Action:** confirm against production `service_areas.vehicle_pricing`
-  (migration 80) whether rows exist per vehicle type; if they do, trace why the
-  fare service falls through to `DEFAULT_FARE`. Needs production pricing data —
-  not diagnosable from the repo alone.
-- **Files:** `backend/services/fare_service.py`,
-  `backend/migrations/80_service_areas_vehicle_pricing.sql`
-- **Acceptance:** each vehicle type quotes from its own configured rates, and a
-  missing pricing row surfaces loudly instead of silently defaulting.
+- [ ] **Status:** open — parked pending a pricing decision (2026-07-27).
+  **Root cause confirmed against production data** (queried live Supabase):
+  this is a **data problem, not a code bug**. All 5 active `service_areas`
+  rows have real `vehicle_pricing` JSONB entries — the fare service's
+  per-vehicle-type join/lookup logic (`routes/fares.py::build_fares_for_area`)
+  is correct and does NOT fall through to `DEFAULT_FARE` for these areas.
+  The rows themselves were configured with **identical rate numbers across
+  every vehicle type in every area**:
+  - `Regina Airport`, `riyadh`, `riyadh airport`: all 4 vehicle types
+    (Economy/XL/Van/Premium) carry the exact `DEFAULT_FARE` values
+    (base_fare 3.50, per_km 1.50, per_min 0.25, min_fare 8, booking_fee 2) —
+    almost certainly seeded by copying the fallback defaults verbatim rather
+    than falling back to them at request time.
+  - `Regina`, `Saskatoon`: Economy and XL both configured, but with the same
+    numbers as each other in each area (Regina: 2/2/0/0/0 both; Saskatoon:
+    4/1/0/0/0 both) — looks like a row was duplicated in the admin Vehicle
+    Pricing editor and only the `vehicle_type` name field was changed, not
+    the rate fields.
+  - `riyadh`/`riyadh airport` are intentional (international market),
+    not a data-hygiene concern — confirmed with product.
+  - **Not a live-testing blocker**: booking end-to-end still works, no
+    fare/receipt mismatch, no payment-integrity or safety issue — riders
+    just see the same price across vehicle types, which could read as "the
+    picker does nothing" if a tester notices.
+- **Action (blocked on a pricing decision, not on more investigation)**:
+  someone with pricing authority needs to supply real differentiated
+  base_fare/per_km/per_min/min_fare/booking_fee values per vehicle type per
+  area (or approve applying industry-standard multipliers off each area's
+  existing Economy rate — proposed: XL/Van ≈1.4×, Premium ≈1.8× on
+  base_fare/per_km, more modest ~1.2×/~1.5× on per_min/booking_fee) — then
+  `UPDATE service_areas SET vehicle_pricing = ...` per area. No code change
+  needed; the join logic is already correct and tested
+  (`backend/tests/test_fares.py`).
+- **Files:** none (data-only fix) — reference only:
+  `backend/routes/fares.py::build_fares_for_area`,
+  `backend/tests/test_fares.py`
+- **Acceptance:** each vehicle type in each area quotes genuinely different
+  rates reflecting its class (XL/Premium priced above Economy).
 
 ### B9. Address+coordinate pairs are stored server-side with zero consistency validation
 - [ ] **Status:** open — follow-up to the Glide Crescent wrong-pin incident

@@ -56,3 +56,29 @@ async def test_get_rider_stats_sums_discounts_when_rides_exist():
     assert result["total_rides"] == 2
     assert result["total_saved"] == "3.75"
     assert result["total_distance_km"] == 8.0
+
+
+@pytest.mark.parametrize("period", ["today", "day", "week", "month", "all", "bogus"])
+async def test_get_rider_stats_accepts_every_period_value(period):
+    """Every recognized period (plus an unrecognized one, which falls back to
+    the week window) must resolve to a date filter without raising."""
+    with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
+        result = await queries.get_rider_stats(period=period, current_user={"id": "rider-1"})
+    assert result["period"] == period
+    assert result["total_rides"] == 0
+
+
+async def test_get_rider_stats_uses_service_area_timezone_of_most_recent_ride():
+    """'today' must align with the rider's local calendar day (driver's
+    service-area timezone), not UTC midnight."""
+
+    async def _get_rows(table, *args, **kwargs):
+        if table == "rides" and kwargs.get("limit") == 1:
+            return [{"service_area_id": "area-1"}]  # the recent-ride tz probe
+        if table == "service_areas":
+            return [{"id": "area-1", "timezone": "America/Vancouver"}]
+        return []  # the main stats query
+
+    with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
+        result = await queries.get_rider_stats(period="today", current_user={"id": "rider-1"})
+    assert result["total_rides"] == 0

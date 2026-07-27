@@ -198,8 +198,8 @@ describe('car surface route presentation contract (carSurface.tsx)', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '..', 'carSurface.tsx'), 'utf8');
 
   it('draws the stored route through the shared RouteLine + RoutePins', () => {
-    expect(source).toContain("import { RouteLine } from '@shared/components/RouteLine'");
-    expect(source).toContain("import { RoutePins } from '@shared/components/RoutePins'");
+    expect(source).toContain("RouteLine = require('@shared/components/RouteLine').RouteLine");
+    expect(source).toContain("RoutePins = require('@shared/components/RoutePins').RoutePins");
     expect(source).toContain('<RouteLine path={route.polyline} />');
     expect(source).toContain('<RoutePins');
     expect(source).toContain('dropoff={route.leg === \'dropoff\' ? route.destination : null}');
@@ -212,4 +212,3 @@ describe('car surface route presentation contract (carSurface.tsx)', () => {
     expect(source).not.toContain('<Marker coordinate={route.destination}');
   });
 });
-

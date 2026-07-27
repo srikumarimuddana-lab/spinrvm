@@ -55,7 +55,11 @@ PLACES_OK = {
 
 
 def _patch_area(area=AREA):
-    return patch.object(tools_booking, "_resolve_area", AsyncMock(return_value=area))
+    return patch.multiple(
+        tools_booking,
+        _resolve_area=AsyncMock(return_value=area),
+        _resolve_candidate_areas=AsyncMock(side_effect=lambda points: [area] * len(points)),
+    )
 
 
 def _patch_http(payload):
@@ -160,6 +164,49 @@ class TestFindPlace:
         assert result["_client_action"]["type"] == "location_suggestions"
         assert result["_client_action"]["location_role"] == "dropoff"
         assert result["_client_action"]["candidates"][0]["name"] == "Walmart Supercentre"
+
+    @pytest.mark.anyio
+    async def test_named_search_keeps_ten_unique_in_area_addresses(self):
+        results = []
+        for index in range(12):
+            address_index = 0 if index == 1 else index
+            results.append(
+                {
+                    "name": "Walmart Pharmacy" if index == 1 else f"Walmart {index}",
+                    "formatted_address": f"{100 + address_index} Test Rd, Regina, SK",
+                    "geometry": {"location": {"lat": 50.41 + index * 0.001, "lng": -104.65}},
+                }
+            )
+        places = {"status": "OK", "results": results}
+
+        async def areas(points):
+            # The last unique candidate is outside service and must not be shown.
+            return [AREA] * (len(points) - 1) + [None]
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(places),
+            patch.object(tools_booking, "_resolve_candidate_areas", AsyncMock(side_effect=areas)),
+            patch.object(
+                tools_booking,
+                "_rank_named_place_candidates_by_route",
+                AsyncMock(side_effect=lambda candidates, *_args: (candidates, False)),
+            ),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place",
+                {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65, "location_role": "dropoff"},
+                user=RIDER,
+            )
+
+        assert ok
+        addresses = [candidate["address"] for candidate in result["candidates"]]
+        assert len(addresses) == 10
+        assert len(set(addresses)) == len(addresses)
+        assert "100 Test Rd, Regina, SK" in addresses
+        assert result["_client_action"]["candidates"] == result["candidates"]
 
     @pytest.mark.anyio
     async def test_named_place_suggestions_rank_by_google_driving_distance(self):

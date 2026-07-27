@@ -53,6 +53,7 @@ _DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
 _HTTP_TIMEOUT = 4.0
 _CENT = Decimal("0.01")
 _PLACE_RADIUS_METERS = 25000
+_PLACE_CANDIDATE_LIMIT = 10
 # A model-supplied pickup that sits more than this far from its own
 # (re-geocoded) address is treated as stale/hallucinated and replaced by the
 # address — the driver is dispatched to the coordinate, never the text, so the
@@ -115,6 +116,17 @@ async def _resolve_area(lat: float, lng: float):
     return await resolve_service_area_for_point(lat, lng)
 
 
+async def _resolve_candidate_areas(points: list[tuple[float, float]]) -> list:
+    """Resolve a candidate set with one service-area read, not an N+1 loop."""
+    try:
+        from ..routes.fares import resolve_service_area_for_point
+    except ImportError:
+        from routes.fares import resolve_service_area_for_point
+
+    all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
+    return [await resolve_service_area_for_point(lat, lng, all_areas=all_areas) for lat, lng in points]
+
+
 async def _maps_get(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         resp = await client.get(url, params=params)
@@ -166,9 +178,22 @@ async def _candidates_from_results(
         # resolved ~12 km away). Nearest-first before the cut — the same
         # defence as maps_proxy's autocomplete re-sort.
         parsed.sort(key=lambda item: item[0])
+    # Text Search commonly returns several departments at one store (for
+    # example Walmart, Walmart Pharmacy and Walmart Garden Centre). The rider
+    # needs one destination choice per physical address, not duplicate brands.
+    unique = []
+    seen_addresses = set()
+    for item in parsed:
+        address = re.sub(r"\s+", " ", str(item[1].get("formatted_address") or "").strip().casefold())
+        dedupe_key = address or f"{item[2]:.5f},{item[3]:.5f}"
+        if dedupe_key in seen_addresses:
+            continue
+        seen_addresses.add(dedupe_key)
+        unique.append(item)
+
+    areas = await _resolve_candidate_areas([(lat, lng) for _distance, _result, lat, lng in unique])
     candidates = []
-    for distance_km, result, lat, lng in parsed[:3]:
-        area = await _resolve_area(lat, lng)
+    for (distance_km, result, lat, lng), area in zip(unique, areas, strict=True):
         candidate = {
             "name": result.get("name"),
             "address": result.get("formatted_address"),
@@ -195,7 +220,7 @@ def _suggestions_action(query: str, candidates: list, location_role: Optional[st
         "type": "location_suggestions",
         "query": query,
         "location_role": location_role,
-        "candidates": candidates[:3],
+        "candidates": candidates[:_PLACE_CANDIDATE_LIMIT],
     }
 
 
@@ -459,11 +484,14 @@ async def find_place(
     if lookup.get("error"):
         return {"error": lookup["error"]}
     candidates = lookup.get("candidates") or []
+    if not _looks_like_street_address(query):
+        candidates = [candidate for candidate in candidates if candidate.get("in_service_area")]
+    candidates = candidates[:_PLACE_CANDIDATE_LIMIT]
     if not candidates:
         return {
             "candidates": [],
             "note": (
-                "No matching place found — ask the rider to rephrase, or call "
+                "No matching place was found inside Spinr's service area — ask the rider to rephrase, or call "
                 "request_map_pin so they get a button to drop a pin on the map."
             ),
         }

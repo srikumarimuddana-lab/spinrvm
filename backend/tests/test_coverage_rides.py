@@ -3267,9 +3267,20 @@ async def test_process_payment_company_allowance_unlimited_happy_path():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
-        patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
+        # settle_corporate (services/payment_service.py) uses its own
+        # db_supabase import, not routes.rides._deps.db_supabase -- reuse
+        # the same mock_db instance (already has list_active_memberships_
+        # for_user/get_member_allowance/etc. configured) for both.
+        patch("backend.services.payment_service.db_supabase", mock_db),
+        # corporate_allowance_service/corporate_wallet_service are imported
+        # at MODULE level in payment_service.py (top-of-file try/except),
+        # not function-locally -- patching backend.services.X only replaces
+        # the services package's own attribute, not the name payment_service
+        # already captured into its own namespace at import time. Must patch
+        # backend.services.payment_service.X to actually intercept the call.
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.evaluate_policy", mock_policy_eval),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
         result = await process_payment(
@@ -3315,9 +3326,20 @@ async def test_process_payment_company_allowance_capped_with_master():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
-        patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
+        # settle_corporate (services/payment_service.py) uses its own
+        # db_supabase import, not routes.rides._deps.db_supabase -- reuse
+        # the same mock_db instance (already has list_active_memberships_
+        # for_user/get_member_allowance/etc. configured) for both.
+        patch("backend.services.payment_service.db_supabase", mock_db),
+        # corporate_allowance_service/corporate_wallet_service are imported
+        # at MODULE level in payment_service.py (top-of-file try/except),
+        # not function-locally -- patching backend.services.X only replaces
+        # the services package's own attribute, not the name payment_service
+        # already captured into its own namespace at import time. Must patch
+        # backend.services.payment_service.X to actually intercept the call.
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.evaluate_policy", mock_policy_eval),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
         result = await process_payment(
@@ -3360,11 +3382,20 @@ async def test_process_payment_company_allowance_master_debit_fails():
 
     mock_wallet_svc = MagicMock()
     mock_wallet_svc.apply_adjustment = AsyncMock(side_effect=Exception("wallet debit failed"))
+    mock_policy_eval = MagicMock(return_value={"pass": True, "failed_rules": []})
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.db_supabase", mock_db),
+        # corporate_allowance_service/corporate_wallet_service are imported
+        # at MODULE level in payment_service.py (top-of-file try/except),
+        # not function-locally -- patching backend.services.X only replaces
+        # the services package's own attribute, not the name payment_service
+        # already captured into its own namespace at import time. Must patch
+        # backend.services.payment_service.X to actually intercept the call.
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.evaluate_policy", mock_policy_eval),
     ):
         with pytest.raises(HTTPException) as exc:
             await process_payment(
@@ -3373,5 +3404,8 @@ async def test_process_payment_company_allowance_master_debit_fails():
                 current_user=_USER,
             )
     assert exc.value.status_code == 503
-    # Compensation grant should have been attempted
-    mock_allowance_svc.apply_grant.assert_called_once()
+    # Compensation reverses the allowance debit (services/payment_service.py
+    # explicitly documents why apply_grant is wrong here: it would debit the
+    # master wallet a SECOND time via its own negative master delta,
+    # compounding the failure instead of compensating it).
+    mock_allowance_svc.apply_ride_debit_reversal.assert_called_once()

@@ -7,7 +7,9 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { showToast } from '../store/toastStore';
@@ -16,7 +18,6 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
-import { ACTUAL_ROUTE_STROKE, INFERRED_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
@@ -606,38 +607,15 @@ function RideCompletedScreenContent() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
-              {actualSections.map((section) => (
-                <Polyline
-                  key={section.id}
-                  coordinates={section.coordinates}
-                  {...(section.geometryKind === 'inferred' ? INFERRED_ROUTE_STROKE : ACTUAL_ROUTE_STROKE)}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              ))}
-              {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
-                <Polyline
-                  key={`planned-segment-${index}`}
-                  coordinates={coordinates}
-                  {...PLANNED_ROUTE_STROKE}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              ))}
-
-              <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}><Ionicons name="location" size={14} color="#FFF" /></View>
-              </Marker>
-              <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
-              </Marker>
-              {currentRide.actual_completion_point && (
-                <Marker coordinate={currentRide.actual_completion_point} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.mapPin, { backgroundColor: '#F59E0B' }]}>
-                    <Ionicons name="checkmark" size={14} color="#FFF" />
-                  </View>
-                </Marker>
-              )}
+              {/* Real reconstructed route (actual GPS segments flattened, or the
+                  legacy planned polyline), drawn as one shared orange→red gradient.
+                  No straight-line fallback: an unmeasured route must draw nothing. */}
+              <RouteLine path={mapCoordinates} />
+              <RoutePins
+                pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+                dropoff={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+                completion={currentRide.actual_completion_point || null}
+              />
             </MapView>
 
             {/* Address overlay */}
@@ -1044,12 +1022,6 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.border, borderWidth: 1, borderColor: colors.border,
     },
     map: { flex: 1 },
-    mapPin: {
-      width: 26, height: 26, borderRadius: 13,
-      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 2, borderColor: '#FFF',
-      elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2,
-    },
         mapOverlay: {
       position: 'absolute', bottom: 8, left: 8, right: 8,
       backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 10, padding: 10, paddingHorizontal: 14,

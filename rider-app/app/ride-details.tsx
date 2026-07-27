@@ -5,14 +5,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
-import { ACTUAL_ROUTE_STROKE, INFERRED_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -324,41 +325,15 @@ export default function RideDetailsScreen() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
-                  {hasActualRoute && actualSections.map((section) => (
-                      <Polyline
-                        key={section.id}
-                        coordinates={section.coordinates}
-                        {...(section.geometryKind === 'inferred' ? INFERRED_ROUTE_STROKE : ACTUAL_ROUTE_STROKE)}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                ))}
-              {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
-                <Polyline
-                  key={`planned-route-${index}`}
-                  coordinates={coordinates}
-                  {...PLANNED_ROUTE_STROKE}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              ))}
-              <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
-                  <Ionicons name="location" size={14} color="#FFF" />
-                </View>
-              </Marker>
-              <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
-                  <Ionicons name="flag" size={14} color="#FFF" />
-                </View>
-              </Marker>
-              {ride.actual_completion_point && (
-                <Marker coordinate={ride.actual_completion_point} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.completion }]}>
-                    <Ionicons name="checkmark" size={14} color="#FFF" />
-                  </View>
-                </Marker>
-              )}
+              {/* Real reconstructed route (actual GPS segments flattened, or the
+                  legacy planned polyline), drawn as one shared orange→red gradient.
+                  No straight-line fallback: an unmeasured route must draw nothing. */}
+              <RouteLine path={mapCoordinates} />
+              <RoutePins
+                pickup={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
+                dropoff={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
+                completion={ride.actual_completion_point || null}
+              />
             </MapView>
           </View>
         )}
@@ -563,10 +538,6 @@ function createStyles(colors: ThemeColors) {
         mapCard: { height: 180, borderRadius: 18, overflow: 'hidden', marginBottom: 16, backgroundColor: colors.border },
         map: { flex: 1 },
         routeQualityText: { color: colors.textDim, fontSize: 12, marginTop: -10, marginBottom: 16 },
-        pin: {
-      width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center',
-      borderWidth: 2, borderColor: '#FFF', elevation: 3,
-    },
 
     routeCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 16 },
     routeRow: { flexDirection: 'row' },

@@ -32,8 +32,10 @@ import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { buildShareTripMessage } from '../lib/shareTripMessage';
@@ -683,51 +685,17 @@ function RideInProgressScreenContent() {
               />
             )}
 
-            {/* Orange → Red gradient route */}
-            {tripRouteCoords.length > 1 && (() => {
-              const total = tripRouteCoords.length;
-              const SEGS = 20;
-              const chunk = Math.max(1, Math.floor(total / SEGS));
-              const segments: { coords: any[]; color: string }[] = [];
-              for (let i = 0; i < total - 1; i += chunk) {
-                const end = Math.min(i + chunk + 1, total);
-                const t = i / Math.max(total - 1, 1);
-                const r = Math.round(255 + (238 - 255) * t);
-                const g = Math.round(149 + (43 - 149) * t);
-                const b = Math.round(0 + (43 - 0) * t);
-                segments.push({ coords: tripRouteCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
-              }
-              return segments.map((seg, idx) => (
-                <Polyline
-                  key={`trip-seg-${idx}`}
-                  coordinates={seg.coords}
-                  strokeWidth={5}
-                  strokeColor={seg.color}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              ));
-            })()}
-
-            {/* Pickup Marker (green) */}
-            <Marker
-              coordinate={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={styles.pickupMarker}>
-                <Ionicons name="location" size={16} color="#FFF" />
-              </View>
-            </Marker>
-
-            {/* Destination Marker (red) */}
-            <Marker
-              coordinate={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={styles.dropoffMarker}>
-                <Ionicons name="flag" size={16} color="#FFF" />
-              </View>
-            </Marker>
+            {/* Live road-snapped route (/live-route + planned polyline coords),
+                drawn via the shared orange→red gradient line + pins. */}
+            <RouteLine
+              path={tripRouteCoords}
+              pickup={routeOrigin}
+              destination={routeDestination}
+            />
+            <RoutePins
+              pickup={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
+              dropoff={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
+            />
 
             {/* Driver Car Marker */}
             {currentDriver?.lat != null && currentDriver?.lng != null && (
@@ -939,20 +907,6 @@ function createStyles(colors: ThemeColors) {
     },
     actionBtnDanger: { backgroundColor: '#FEF2F2' },
     actionBtnText: { fontSize: 12, fontWeight: '600', color: colors.text },
-
-    // Markers
-    pickupMarker: {
-      width: 32, height: 32, borderRadius: 16,
-      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 2, borderColor: '#FFF',
-      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
-    },
-    dropoffMarker: {
-      width: 32, height: 32, borderRadius: 16,
-      backgroundColor: '#EF4444', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 2, borderColor: '#FFF',
-      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
-    },
 
     // Dev
     devBar: {

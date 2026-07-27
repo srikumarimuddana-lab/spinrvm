@@ -20,8 +20,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Circle, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Circle, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 
 import { useRideStore } from '../store/rideStore';
 import { useWalletStore } from '../store/walletStore';
@@ -593,35 +595,16 @@ function RideOptionsScreenContent() {
               optimizeWaypoints
             />
           )}
-          {routeCoordinates.length > 1 && (() => {
-            const total = routeCoordinates.length;
-            const segments: { coords: any[]; color: string }[] = [];
-            const SEGMENT_COUNT = 30;
-            const chunkSize = Math.max(1, Math.floor(total / SEGMENT_COUNT));
-            for (let i = 0; i < total - 1; i += chunkSize) {
-              const end = Math.min(i + chunkSize + 1, total);
-              const t = i / Math.max(total - 1, 1);
-              const r = Math.round(255 + (238 - 255) * t);
-              const g = Math.round(149 + (43 - 149) * t);
-              const b = Math.round(0 + (43 - 0) * t);
-              segments.push({ coords: routeCoordinates.slice(i, end), color: `rgb(${r},${g},${b})` });
-            }
-            return (
-              <>
-                <Polyline coordinates={routeCoordinates} strokeWidth={9} strokeColor="rgba(238,43,43,0.12)" />
-                {segments.map((seg, idx) => (
-                  <Polyline key={`seg-${idx}`} coordinates={seg.coords} strokeWidth={5}
-                    strokeColor={seg.color} lineCap="round" lineJoin="round" />
-                ))}
-              </>
-            );
-          })()}
-          <Marker coordinate={{ latitude: pickup.lat, longitude: pickup.lng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
-            <View style={styles.markerContainer}><View style={[styles.markerDot, { backgroundColor: '#10B981' }]} /></View>
-          </Marker>
-          <Marker coordinate={{ latitude: dropoff.lat, longitude: dropoff.lng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
-            <View style={styles.markerContainer}><View style={[styles.markerDot, { backgroundColor: '#EF4444' }]} /></View>
-          </Marker>
+          {/* Real derived route, drawn via the shared orange→red gradient line. */}
+          <RouteLine
+            path={routeCoordinates}
+            pickup={{ latitude: pickup.lat, longitude: pickup.lng }}
+            destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
+          />
+          <RoutePins
+            pickup={{ latitude: pickup.lat, longitude: pickup.lng }}
+            dropoff={{ latitude: dropoff.lat, longitude: dropoff.lng }}
+          />
           {stops.map((stop, i) => (
             <Marker key={`stop-${i}`} coordinate={{ latitude: stop.lat, longitude: stop.lng }} anchor={{ x: 0.5, y: 0.5 }}>
               <View style={styles.markerContainer}><View style={[styles.markerDot, { backgroundColor: '#F59E0B' }]} /></View>

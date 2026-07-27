@@ -7,8 +7,10 @@ import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useRideStore } from '../store/rideStore';
@@ -184,41 +186,16 @@ function DriverArrivedScreenContent() {
               }}
             />
           )}
-          {/* Orange → Red gradient */}
-          {routeCoords.length > 1 && (() => {
-            const total = routeCoords.length;
-            const SEGS = 15;
-            const chunk = Math.max(1, Math.floor(total / SEGS));
-            const segs: { c: any[]; color: string }[] = [];
-            for (let i = 0; i < total - 1; i += chunk) {
-              const end = Math.min(i + chunk + 1, total);
-              const t = i / Math.max(total - 1, 1);
-              const r = Math.round(255 + (238 - 255) * t);
-              const g = Math.round(149 + (43 - 149) * t);
-              const b = Math.round(0 + (43 - 0) * t);
-              segs.push({ c: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
-            }
-            return segs.map((s, idx) => (
-              <Polyline key={`rs-${idx}`} coordinates={s.c} strokeWidth={4} strokeColor={s.color} lineCap="round" lineJoin="round" />
-            ));
-          })()}
-
-          {/* Pickup pin with pulse */}
-          <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.pickupMarkerWrap}>
-              <View style={styles.pickupPulse} />
-              <View style={styles.pickupPin}>
-                <Ionicons name="location" size={18} color="#FFF" />
-              </View>
-            </View>
-          </Marker>
-
-          {/* Dropoff pin */}
-          <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.dropoffPin}>
-              <Ionicons name="flag" size={16} color="#FFF" />
-            </View>
-          </Marker>
+          {/* Real pickup → dropoff route, drawn via the shared gradient line + pins. */}
+          <RouteLine
+            path={routeCoords}
+            pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+            destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+          />
+          <RoutePins
+            pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+            dropoff={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+          />
 
           {/* Driver car at pickup */}
           {currentDriver?.lat && currentDriver?.lng && (
@@ -450,26 +427,6 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: '#EE2B2B', borderRadius: 24,
     },
     mapRetryText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
-
-    // Map markers
-    pickupMarkerWrap: { alignItems: 'center', justifyContent: 'center', width: 56, height: 56 },
-    pickupPulse: {
-      position: 'absolute', width: 56, height: 56, borderRadius: 28,
-      backgroundColor: 'rgba(238, 43, 43, 0.12)',
-    },
-    pickupPin: {
-      width: 36, height: 36, borderRadius: 18,
-      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 3, borderColor: '#FFF',
-      elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
-    },
-
-    dropoffPin: {
-      width: 32, height: 32, borderRadius: 16,
-      backgroundColor: '#EF4444', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 2, borderColor: '#FFF',
-      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
-    },
 
     // Header
     headerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },

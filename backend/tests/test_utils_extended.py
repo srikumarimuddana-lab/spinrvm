@@ -1533,49 +1533,109 @@ class TestSnapshotTrailSelection:
     def _pickup_trail(n):
         return [[50.48 + i * 0.001, -104.58 - i * 0.001, "2026-06-11T09:50:00Z"] for i in range(n)]
 
-    def test_draws_one_straight_gradient_pickup_to_dropoff(self, monkeypatch):
-        # Uniform rule: one straight pickup→dropoff line drawn as orange→red
-        # colour-interpolated `path` segments — no GPS trail, ever.
-        url = self._render(monkeypatch)
-        paths = [p for p in url.split("&") if p.startswith("path=")]
-        assert len(paths) == 12  # the fixed gradient sub-segment count
-        assert "|50.45,-104.61|" in paths[0]  # first sub-segment starts at pickup
-        # Orange near the pickup end, red near the destination end (gradient).
-        assert paths[0].split("|", 1)[0] != paths[-1].split("|", 1)[0]
-
-    def test_gps_trails_and_v2_segments_are_ignored(self, monkeypatch):
-        # None of the GPS/trail/segment coordinates may be drawn — only the
-        # straight pickup→dropoff line. This is what removes the loops/gaps.
+    def test_dense_trip_trail_drawn_without_pickup_leg(self, monkeypatch):
         url = self._render(
             monkeypatch,
             phase_polylines={
-                "navigating_to_pickup": self._pickup_trail(30),
-                "trip_in_progress": self._trip_trail(30),
+                "navigating_to_pickup": self._pickup_trail(20),
+                "trip_in_progress": self._trip_trail(20),
             },
-            route_polyline=[[50.44, -104.62], [50.43, -104.625]],
-            route_segments=[{"coordinates": [[50.49, -104.67], [50.491, -104.671]]}],
         )
-        assert "50.48,-104.58" not in url  # pickup-approach trail
-        assert "50.44,-104.62" not in url  # legacy route_polyline
-        assert "50.49,-104.67" not in url  # v2 segment coords
-        assert "|50.45,-104.61|" in url  # the straight line still starts at pickup
+        assert "path=" in url
+        assert "50.45,-104.61" in url  # trip leg start
+        assert "50.48,-104.58" not in url  # pickup approach leg excluded
 
-    def test_markers_are_green_pickup_red_dropoff_amber_completion(self, monkeypatch):
-        url = self._render(monkeypatch, completion_point={"lat": 50.452, "lng": -104.612})
-        assert "markers=color:green|label:P|50.45,-104.61" in url
+    def test_sparse_trip_trail_falls_back_to_route_polyline(self, monkeypatch):
+        # A dense pickup leg must NOT carry a sparse trip leg over the
+        # 10-point threshold — that combination drew the pickup approach as
+        # the "actual path" plus straight chords pickup→dropoff.
+        url = self._render(
+            monkeypatch,
+            phase_polylines={
+                "navigating_to_pickup": self._pickup_trail(50),
+                "trip_in_progress": self._trip_trail(4),
+            },
+            route_polyline=[[50.44, -104.62], [50.43, -104.625], [50.42, -104.628]],
+        )
+        assert "50.44,-104.62" in url  # route_polyline fallback used
+        assert "50.48,-104.58" not in url  # pickup leg still excluded
+
+    def test_no_phase_trails_uses_route_polyline(self, monkeypatch):
+        url = self._render(
+            monkeypatch,
+            route_polyline=[[50.45, -104.61], [50.41, -104.63]],
+        )
+        assert "path=" in url
+        assert "50.45,-104.61" in url
+
+    def test_no_trail_at_all_renders_markers_only(self, monkeypatch):
+        url = self._render(monkeypatch)
+        assert "path=" not in url
+        assert "markers=color:green" in url and "markers=color:red" in url
+
+    def test_v2_segments_render_as_separate_paths_without_a_cross_gap_chord(self, monkeypatch):
+        url = self._render(
+            monkeypatch,
+            route_segments=[
+                {"coordinates": [[50.45, -104.61], [50.451, -104.611]]},
+                {"coordinates": [[50.49, -104.67], [50.491, -104.671]]},
+            ],
+        )
+
+        paths = [part for part in url.split("&") if part.startswith("path=")]
+        assert len(paths) == 2
+        assert all("50.451,-104.611|50.49,-104.67" not in path for path in paths)
+
+    def test_v2_snapshot_marks_planned_and_completion_locations_and_banners_incomplete_coverage(self, monkeypatch):
+        from backend.utils import route_snapshot
+
+        banner_calls = []
+        monkeypatch.setattr(
+            route_snapshot,
+            "_add_route_quality_banner",
+            lambda png, quality: banner_calls.append(quality) or png,
+        )
+
+        url = self._render(
+            monkeypatch,
+            route_segments=[{"coordinates": [[50.45, -104.61], [50.451, -104.611]]}],
+            completion_point={"lat": 50.452, "lng": -104.612},
+            route_quality={"missing_tail": True, "coverage_ratio": 0.54},
+        )
+
         assert "markers=color:red|label:D|50.41,-104.63" in url
         assert "markers=color:orange|label:C|50.452,-104.612" in url
+        assert banner_calls == [{"missing_tail": True, "coverage_ratio": 0.54}]
 
-    def test_incomplete_quality_flag_still_triggers_banner(self):
-        # The straight line no longer represents GPS, but the coverage banner is
-        # orthogonal and still fires on an incomplete route_quality. Test the
-        # trigger predicate directly (render-path monkeypatching is order-fragile).
-        from backend.utils.route_snapshot import _is_incomplete
+    def test_outlier_hop_not_bridged_by_straight_chord(self, monkeypatch):
+        # A GPS dropout / OSRM multi-matching jump leaves one giant hop in the
+        # middle of an otherwise dense trail. The renderer must split there and
+        # NOT draw the bridging chord — otherwise it reads as a second straight
+        # red line across the map (the "duplicate route line" artifact).
+        import re
 
-        assert _is_incomplete({"missing_tail": True, "coverage_ratio": 0.54}) is True
-        assert _is_incomplete({"incomplete_reason": "osrm_reconstruction_failed"}) is True
-        assert _is_incomplete({"coverage_ratio": 0.99}) is False
-        assert _is_incomplete(None) is False
+        from backend.utils.route_snapshot import _haversine_km
+
+        dense_a = [[50.45 + i * 0.0005, -104.61 - i * 0.0005, "t"] for i in range(15)]
+        jump = [[50.52, -104.70, "t"]]  # ~9 km from the previous point
+        dense_b = [[50.52 + i * 0.0005, -104.70 - i * 0.0005, "t"] for i in range(15)]
+        url = self._render(
+            monkeypatch,
+            phase_polylines={"trip_in_progress": dense_a + jump + dense_b},
+        )
+        # No single drawn segment may span the giant jump.
+        for seg in re.findall(r"path=color:0x[0-9A-F]{8}\|weight:4\|([^&]+)", url):
+            pts = [tuple(map(float, p.split(","))) for p in seg.split("|")]
+            for a, b in zip(pts, pts[1:]):
+                assert _haversine_km(a, b) <= 5.0, f"chord bridges a {_haversine_km(a, b):.1f} km gap"
+
+    def test_dense_route_is_one_unbroken_run(self, monkeypatch):
+        # A normal road trail (no outlier hop) must stay a single continuous
+        # line — the gap guard must not fragment ordinary routes.
+        from backend.utils.route_snapshot import _split_on_gaps
+
+        coords = [(50.45 + i * 0.0008, -104.61 - i * 0.0008) for i in range(40)]
+        assert len(_split_on_gaps(coords)) == 1
 
 
 # ===========================================================================

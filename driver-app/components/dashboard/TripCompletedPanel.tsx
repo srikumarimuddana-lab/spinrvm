@@ -8,7 +8,6 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
 import { showAlert } from '../AlertDialog';
-import { ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 
 const n = (v: number | string | null | undefined): number => {
   if (v == null) return 0;
@@ -517,13 +516,13 @@ function createStyles(colors: ThemeColors) {
       width: 12,
       height: 12,
       borderRadius: 6,
-      backgroundColor: ROUTE_PIN_COLORS.pickup,
+      backgroundColor: colors.info,
     },
     dropoffDot: {
       width: 12,
       height: 12,
       borderRadius: 6,
-      backgroundColor: ROUTE_PIN_COLORS.dropoff,
+      backgroundColor: colors.success,
     },
     routeLine: {
       width: 2,

@@ -41,17 +41,29 @@ CREATE TABLE IF NOT EXISTS public.provinces (
 COMMENT ON TABLE public.provinces IS
     'Canadian province reference data — shared by the corporate module, reporting module, and bulk-upload utility for province/service-area scoping. See migration 260 for the service_areas.province_code backfill + FK.';
 
--- RLS enabled with no anon/authenticated policies defined — default-deny
--- for direct Supabase-client reads. No existing migration shows a
--- precedent for anon-readable access to `service_areas` (the comparable
--- reference table), so this does not introduce a new access pattern
--- speculatively. All current and near-term consumers (backend API routes,
--- admin dashboard, the reporting module) go through the backend, which
--- uses the service-role key and bypasses RLS by design. If a future
--- rider-app/driver-app screen needs to query this table directly via the
--- anon key (bypassing the backend), add an explicit SELECT-only policy in
--- a follow-up migration at that time — do not add it preemptively here.
+-- RLS enabled, default-deny for direct Supabase-client reads. No existing
+-- migration shows a precedent for anon-readable access to `service_areas`
+-- (the comparable reference table), so this does not introduce a new
+-- access pattern speculatively. All current and near-term consumers
+-- (backend API routes, admin dashboard, the reporting module) go through
+-- the backend, which uses the service-role key and bypasses RLS by design.
 ALTER TABLE public.provinces ENABLE ROW LEVEL SECURITY;
+
+-- Explicit deny-all policy for anon/authenticated. Functionally this is
+-- identical to RLS-enabled-with-zero-policies (Postgres already denies all
+-- access by default in that state) — it's added to make the deny explicit
+-- and self-documenting rather than implicit, and to satisfy this repo's
+-- migration-safety CI check, which correctly requires every new table to
+-- ship an explicit access decision rather than relying on the reader to
+-- know that an absent policy means deny. If a future rider-app/driver-app
+-- screen needs to query this table directly via the anon key (bypassing
+-- the backend), replace this policy with a real SELECT-only one in a
+-- follow-up migration at that time — do not open it preemptively here.
+CREATE POLICY provinces_deny_direct_client_access
+    ON public.provinces
+    FOR SELECT
+    TO anon, authenticated
+    USING (false);
 
 -- Seed Saskatchewan — the only live province today. Other provinces are
 -- added via admin tooling (or a future migration) as expansion happens;

@@ -681,25 +681,117 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             </div>
                                         </div>
 
-                                        {/* Map — one straight pickup→dropoff route drawn as the
-                                            uniform orange→red gradient (shared route spec). The
-                                            per-phase distances above stay for reference; they no
-                                            longer change what the map draws. */}
-                                        {ride.pickup_lat && ride.dropoff_lat && (
-                                            <div className="pt-3 border-t">
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <p className="text-xs text-muted-foreground">Pickup → Dropoff</p>
+                                        {/* Map */}
+                                        {ride.pickup_lat && ride.dropoff_lat && (() => {
+                                            const pp = ride.phase_polylines || {};
+                                            const pickupPts = Array.isArray(pp.navigating_to_pickup)
+                                                ? pp.navigating_to_pickup.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] })) : [];
+                                            const tripPts = Array.isArray(pp.trip_in_progress)
+                                                ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] })) : [];
+
+                                            let pickupProp: typeof pickupPts | undefined;
+                                            let pickupApprox = false;
+                                            let tripProp: typeof tripPts | undefined;
+                                            let trailForMap: typeof tripPts | undefined;
+                                            let plannedProp: { lat: number; lng: number }[] | undefined;
+                                            let actualSegmentsProp: unknown;
+                                            let label = "";
+                                            let emptyHint: string | null = null;
+
+                                            if (selectedPhase === "pickup") {
+                                                // Prefer the OSRM road-matched pickup leg, then raw Phase 2
+                                                // GPS, then a driver-start → pickup reference line so the
+                                                // card always shows the approach.
+                                                const pickupRoad = Array.isArray(ride.road_polyline_pickup) && ride.road_polyline_pickup.length > 1
+                                                    ? ride.road_polyline_pickup.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                if (pickupRoad.length > 1) {
+                                                    label = "Driver → Pickup (road-matched)";
+                                                    pickupProp = pickupRoad;
+                                                } else if (pickupPts.length > 1) {
+                                                    label = "Driver → Pickup (actual GPS)";
+                                                    pickupProp = pickupPts;
+                                                } else {
+                                                    // No GPS captured for the approach — draw a dashed
+                                                    // reference from the driver's start to the pickup.
+                                                    const dLat = ride.driver_initial_lat ?? ride.driver_lat;
+                                                    const dLng = ride.driver_initial_lng ?? ride.driver_lng;
+                                                    if (dLat != null && dLng != null && ride.pickup_lat != null && ride.pickup_lng != null) {
+                                                        label = "Driver → Pickup (approx — no GPS captured)";
+                                                        pickupProp = [{ lat: dLat, lng: dLng }, { lat: ride.pickup_lat, lng: ride.pickup_lng }];
+                                                        pickupApprox = true;
+                                                    } else {
+                                                        label = "Driver → Pickup";
+                                                        emptyHint = "No Phase 2 GPS trail for this ride";
+                                                    }
+                                                }
+                                            } else if (selectedPhase === "actual") {
+                                                const isV2Route = Number(ride.route_schema_version || 0) >= 2;
+                                                if (isV2Route) {
+                                                    actualSegmentsProp = ride.actual_route_segments;
+                                                    const segmentCount = Array.isArray(ride.actual_route_segments)
+                                                        ? ride.actual_route_segments.length : 0;
+                                                    label = `Pickup → Dropoff (actual GPS) · ${routeQualityLabel(ride.route_quality)}`;
+                                                    if (!segmentCount) {
+                                                        emptyHint = "No captured GPS segments are available for this ride";
+                                                    }
+                                                } else {
+                                                // Prefer the OSRM road-matched line (ride_routes.road_polyline) —
+                                                // the clean on-road route SGI / dispute review should see — then
+                                                // fall back to raw trip GPS, then the legacy combined polyline.
+                                                const roadPts = Array.isArray(ride.road_polyline) && ride.road_polyline.length > 1
+                                                    ? ride.road_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                if (roadPts.length > 1) {
+                                                    label = "Pickup → Dropoff (road-matched)";
+                                                    tripProp = roadPts;
+                                                } else if (tripPts.length > 1) {
+                                                    label = "Pickup → Dropoff (actual GPS)";
+                                                    tripProp = tripPts;
+                                                } else {
+                                                    label = "Pickup → Dropoff (actual GPS)";
+                                                    const legacy = Array.isArray(ride.route_polyline) && ride.route_polyline.length > 1
+                                                        ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                    if (legacy.length > 1) trailForMap = legacy;
+                                                    else emptyHint = "No trip GPS trail for this ride";
+                                                }
+                                                }
+                                            } else {
+                                                // Planned route: the road-following polyline captured from
+                                                // the Directions API at booking. Falls back to the dashed
+                                                // straight line (drawn by the map) when none was stored.
+                                                const plannedPts = Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1
+                                                    ? ride.planned_route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                if (plannedPts.length > 1) {
+                                                    label = "Planned Trip (road-following)";
+                                                    plannedProp = plannedPts;
+                                                } else {
+                                                    label = "Planned Trip (straight-line reference)";
+                                                }
+                                            }
+
+                                            return (
+                                                <div className="pt-3 border-t">
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <p className="text-xs text-muted-foreground">{label}</p>
+                                                        {emptyHint && <p className="text-[10px] text-muted-foreground/70">{emptyHint}</p>}
+                                                    </div>
+                                                    <div className="rounded-xl overflow-hidden">
+                                                        <RideRouteMap
+                                                            key={selectedPhase}
+                                                            pickupLat={ride.pickup_lat}
+                                                            pickupLng={ride.pickup_lng}
+                                                            dropoffLat={ride.dropoff_lat}
+                                                            dropoffLng={ride.dropoff_lng}
+                                                            pickupTrail={pickupProp}
+                                                            pickupApprox={pickupApprox}
+                                                            tripTrail={tripProp}
+                                                            plannedTrail={plannedProp}
+                                                            locationTrail={trailForMap}
+                                                            actualSegments={actualSegmentsProp}
+                                                        />
+                                                    </div>
                                                 </div>
-                                                <div className="rounded-xl overflow-hidden">
-                                                    <RideRouteMap
-                                                        pickupLat={ride.pickup_lat}
-                                                        pickupLng={ride.pickup_lng}
-                                                        dropoffLat={ride.dropoff_lat}
-                                                        dropoffLng={ride.dropoff_lng}
-                                                    />
-                                                </div>
-                                            </div>
-                                        )}
+                                            );
+                                        })()}
                                     </div>
                                 </Card>
 

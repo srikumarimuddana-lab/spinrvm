@@ -428,23 +428,44 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   behaviour rather than to zero results.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
-- [ ] **Status:** open — observed in an AI-assistant quote card, 2026-07-26
-- **Why:** a rider-facing quote showed **Economy and XL at the same price**
-  ($23.52 → $13.52 after promo), both "2 min (0 km) away". Vehicle types are
-  supposed to differ via `base_fare` / `per_km_rate` / `per_minute_rate`;
-  identical output is the signature of both falling back to `DEFAULT_FARE`
-  (`backend/services/fare_service.py:32-34`) because per-vehicle-type pricing
-  rows are missing. Riders paying XL money for Economy pricing (or vice versa)
-  is a revenue and trust problem, and it makes the vehicle picker meaningless.
-  "Nearest driver 0.0 km away" in the same card is also suspect.
-- **Action:** confirm against production `service_areas.vehicle_pricing`
-  (migration 80) whether rows exist per vehicle type; if they do, trace why the
-  fare service falls through to `DEFAULT_FARE`. Needs production pricing data —
-  not diagnosable from the repo alone.
-- **Files:** `backend/services/fare_service.py`,
-  `backend/migrations/80_service_areas_vehicle_pricing.sql`
-- **Acceptance:** each vehicle type quotes from its own configured rates, and a
-  missing pricing row surfaces loudly instead of silently defaulting.
+- [ ] **Status:** open — parked pending a pricing decision (2026-07-27).
+  **Root cause confirmed against production data** (queried live Supabase):
+  this is a **data problem, not a code bug**. All 5 active `service_areas`
+  rows have real `vehicle_pricing` JSONB entries — the fare service's
+  per-vehicle-type join/lookup logic (`routes/fares.py::build_fares_for_area`)
+  is correct and does NOT fall through to `DEFAULT_FARE` for these areas.
+  The rows themselves were configured with **identical rate numbers across
+  every vehicle type in every area**:
+  - `Regina Airport`, `riyadh`, `riyadh airport`: all 4 vehicle types
+    (Economy/XL/Van/Premium) carry the exact `DEFAULT_FARE` values
+    (base_fare 3.50, per_km 1.50, per_min 0.25, min_fare 8, booking_fee 2) —
+    almost certainly seeded by copying the fallback defaults verbatim rather
+    than falling back to them at request time.
+  - `Regina`, `Saskatoon`: Economy and XL both configured, but with the same
+    numbers as each other in each area (Regina: 2/2/0/0/0 both; Saskatoon:
+    4/1/0/0/0 both) — looks like a row was duplicated in the admin Vehicle
+    Pricing editor and only the `vehicle_type` name field was changed, not
+    the rate fields.
+  - `riyadh`/`riyadh airport` are intentional (international market),
+    not a data-hygiene concern — confirmed with product.
+  - **Not a live-testing blocker**: booking end-to-end still works, no
+    fare/receipt mismatch, no payment-integrity or safety issue — riders
+    just see the same price across vehicle types, which could read as "the
+    picker does nothing" if a tester notices.
+- **Action (blocked on a pricing decision, not on more investigation)**:
+  someone with pricing authority needs to supply real differentiated
+  base_fare/per_km/per_min/min_fare/booking_fee values per vehicle type per
+  area (or approve applying industry-standard multipliers off each area's
+  existing Economy rate — proposed: XL/Van ≈1.4×, Premium ≈1.8× on
+  base_fare/per_km, more modest ~1.2×/~1.5× on per_min/booking_fee) — then
+  `UPDATE service_areas SET vehicle_pricing = ...` per area. No code change
+  needed; the join logic is already correct and tested
+  (`backend/tests/test_fares.py`).
+- **Files:** none (data-only fix) — reference only:
+  `backend/routes/fares.py::build_fares_for_area`,
+  `backend/tests/test_fares.py`
+- **Acceptance:** each vehicle type in each area quotes genuinely different
+  rates reflecting its class (XL/Premium priced above Economy).
 
 ### B9. Address+coordinate pairs are stored server-side with zero consistency validation
 - [ ] **Status:** open — follow-up to the Glide Crescent wrong-pin incident

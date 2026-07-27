@@ -446,29 +446,47 @@ class TestWalletPay:
 
 @pytest.mark.e2e
 class TestWalletTopUp:
-    """Pins top_up_wallet: balance increment and transaction record.
+    """Pins top_up_wallet: creates a Stripe PaymentIntent for the client's
+    PaymentSheet rather than crediting the balance synchronously -- the
+    wallet is only credited once Stripe confirms payment via the
+    payment_intent.succeeded webhook (scope=wallet_topup), a separate code
+    path (routes/webhooks.py) not exercised here.
 
-    Code under test: backend/routes/wallet.py::top_up_wallet (~line 115).
+    Code under test: backend/routes/wallet.py::top_up_wallet (~line 137).
     """
 
-    async def test_top_up_increases_balance(self):
+    async def test_top_up_creates_payment_intent(self):
         from backend.routes.wallet import TopUpRequest, top_up_wallet
 
         req = TopUpRequest(amount=Decimal("25.00"))
         mock_request = MagicMock()
         mock_request.headers.get.return_value = None
-        txns = []
+
+        mock_intent = MagicMock()
+        mock_intent.client_secret = "pi_secret_xxx"
+        mock_ephemeral = MagicMock()
+        mock_ephemeral.secret = "ek_secret_yyy"
 
         with (
             patch("backend.routes.wallet.db.find_one", AsyncMock(return_value=_wallet(balance=10.00))),
-            patch("backend.routes.wallet.wallet_increment_balance", AsyncMock(return_value=Decimal("35.00"))),
-            patch("backend.routes.wallet.db.insert_one", AsyncMock(side_effect=lambda t, r: txns.append(r) or r)),
+            patch(
+                "backend.routes.wallet.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x", "stripe_publishable_key": "pk_test_x"}),
+            ),
+            patch(
+                "backend.routes.wallet.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "stripe_customer_id": "cus_existing"}),
+            ),
+            patch("backend.routes.wallet.stripe.EphemeralKey.create", return_value=mock_ephemeral),
+            patch("backend.routes.wallet.stripe.PaymentIntent.create", return_value=mock_intent) as mock_pi_create,
         ):
             result = await top_up_wallet(req=req, request=mock_request, current_user={"id": USER_ID})
 
-        assert float(result["balance"]) == pytest.approx(35.00, abs=0.01)
-        assert txns, "Transaction not recorded"
-        assert txns[0]["type"] == "top_up"
+        assert result["paymentIntent"] == "pi_secret_xxx"
+        assert result["ephemeralKey"] == "ek_secret_yyy"
+        assert result["customer"] == "cus_existing"
+        assert mock_pi_create.call_args.kwargs["amount"] == 2500
+        assert mock_pi_create.call_args.kwargs["metadata"]["scope"] == "wallet_topup"
 
     async def test_suspended_wallet_blocks_top_up(self):
         from fastapi import HTTPException

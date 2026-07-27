@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write
   checks: write
 
 # Cancel in-flight runs for the same PR
@@ -602,6 +603,198 @@ jobs:
       - name: Ensure no test files under an Expo Router app/ tree
         run: python3 scripts/check_mobile_test_placement.py
 
+  # ─── 7. Change Impact & Risk Log gate ─────────────────────────────────────
+  # CLAUDE.md: any PR touching a live-tested surface (rides, dispatch,
+  # payments, auth, corporate, safety) must include a filled Change Impact
+  # & Risk Log — either pasted into the PR description or added under
+  # docs/change-log/. This gate only checks presence/shape of the required
+  # sections, not their content quality — that's still a human reviewer's job.
+  change-impact-log-gate:
+    name: Change Impact & Risk Log check
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify Change Impact Log present for sensitive-surface PRs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, re, subprocess, sys
+
+          BASE_SHA = os.environ.get('BASE_SHA', '')
+          HEAD_SHA = os.environ.get('HEAD_SHA', '')
+          PR_BODY = os.environ.get('PR_BODY') or ''
+
+          result = subprocess.run(
+              ['git', 'diff', '--name-only', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          changed = [f for f in result.stdout.strip().split('\n') if f]
+
+          # Path substrings that mark a "live-tested surface" per CLAUDE.md's
+          # own Change Impact Log policy (rides, dispatch, payments, auth,
+          # corporate, safety). Kept as substrings, not exact paths, so it
+          # still catches new files in these domains without maintenance.
+          SENSITIVE_MARKERS = [
+              'backend/routes/rides', 'backend/services/dispatch_service',
+              'backend/services/fare_service', 'backend/routes/payments',
+              'backend/routes/webhooks', 'backend/routes/auth.py',
+              'backend/routes/corporate', 'backend/services/corporate',
+              'backend/routes/wallet', 'backend/routes/safety.py',
+              'backend/utils/insurance_periods', 'backend/services/payment_service',
+              'backend/routes/drivers/ride_', 'backend/routes/drivers/status',
+              'backend/routes/drivers/payouts', 'backend/migrations/',
+          ]
+
+          touched = [f for f in changed if any(m in f for m in SENSITIVE_MARKERS)]
+
+          if not touched:
+              print("PASS: No live-tested-surface files changed — Change Impact Log not required.")
+              sys.exit(0)
+
+          print(f"Live-tested-surface files changed: {touched}")
+
+          # Required fields, per docs/templates/CHANGE_IMPACT_LOG.md. Matched
+          # loosely (case-insensitive substring) since PR authors may adapt
+          # heading style slightly — this checks presence, not formatting.
+          REQUIRED_MARKERS = [
+              'root cause',
+              'risk & impact',
+              'user experience',
+              'rollback plan',
+              'verification performed',
+          ]
+
+          # Accept either: (a) the PR body contains the required sections, or
+          # (b) this PR adds a docs/change-log/*.md file (also checked for markers).
+          change_log_added = [
+              f for f in changed
+              if f.startswith('docs/change-log/') and f.endswith('.md')
+          ]
+
+          candidate_text = PR_BODY.lower()
+          for f in change_log_added:
+              try:
+                  candidate_text += '\n' + open(f, encoding='utf-8').read().lower()
+              except OSError:
+                  pass
+
+          missing = [m for m in REQUIRED_MARKERS if m not in candidate_text]
+
+          if missing:
+              print("FAIL: This PR touches a live-tested surface but is missing a Change Impact & Risk Log.")
+              print(f"Missing section(s): {missing}")
+              print()
+              print("Fix: paste a filled docs/templates/CHANGE_IMPACT_LOG.md into the PR description,")
+              print("or add docs/change-log/YYYY-MM-DD-<short-slug>.md with the same sections.")
+              print("See CLAUDE.md → 'Change Impact & Risk Log (mandatory)'.")
+              sys.exit(1)
+          else:
+              print("PASS: Change Impact & Risk Log present and covers required sections.")
+          PYEOF
+
+  # ─── 8. Risk label bot ────────────────────────────────────────────────────
+  # Informational only (never blocks): labels the PR risk:high / risk:medium /
+  # risk:low based on which surfaces it touches, so reviewers can triage
+  # attention before reading the full diff. High = same live-tested-surface
+  # marker list as the Change Impact Log gate above.
+  risk-label:
+    name: Apply risk label
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine risk level
+        id: risk
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, subprocess
+
+          BASE_SHA = os.environ.get('BASE_SHA', '')
+          HEAD_SHA = os.environ.get('HEAD_SHA', '')
+
+          result = subprocess.run(
+              ['git', 'diff', '--name-only', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          changed = [f for f in result.stdout.strip().split('\n') if f]
+
+          HIGH_MARKERS = [
+              'backend/routes/rides', 'backend/services/dispatch_service',
+              'backend/services/fare_service', 'backend/routes/payments',
+              'backend/routes/webhooks', 'backend/routes/auth.py',
+              'backend/routes/corporate', 'backend/services/corporate',
+              'backend/routes/wallet', 'backend/routes/safety.py',
+              'backend/utils/insurance_periods', 'backend/services/payment_service',
+              'backend/routes/drivers/ride_', 'backend/routes/drivers/status',
+              'backend/routes/drivers/payouts', 'backend/migrations/',
+          ]
+          MEDIUM_MARKERS = [
+              'backend/', 'rider-app/', 'driver-app/', 'admin-dashboard/',
+          ]
+
+          if any(m in f for f in changed for m in HIGH_MARKERS):
+              level = 'high'
+          elif any(m in f for f in changed for m in MEDIUM_MARKERS):
+              level = 'medium'
+          else:
+              level = 'low'
+
+          gh_output = os.environ.get('GITHUB_OUTPUT')
+          with open(gh_output, 'a') as f:
+              f.write(f'level={level}\n')
+          print(f"Risk level: {level}")
+          PYEOF
+
+      - name: Apply label
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const level = '${{ steps.risk.outputs.level }}';
+            const allLevels = ['risk:high', 'risk:medium', 'risk:low'];
+            const target = `risk:${level}`;
+
+            const { data: current } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const currentNames = current.map(l => l.name);
+
+            // Remove any stale risk:* label that doesn't match the current level.
+            for (const name of currentNames) {
+              if (allLevels.includes(name) && name !== target) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name,
+                }).catch(() => {});
+              }
+            }
+
+            if (!currentNames.includes(target)) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [target],
+              }).catch(() => {});
+            }
+
   # ─── Guard rail summary comment on PR ─────────────────────────────────────
   guardrail-summary:
     name: Post guard rail summary
@@ -613,6 +806,7 @@ jobs:
       - migration-safety-gate
       - breaking-change-gate
       - mobile-test-placement-gate
+      - change-impact-log-gate
     if: always() && github.event_name == 'pull_request'
     steps:
       - name: Summarise results
@@ -620,12 +814,13 @@ jobs:
         with:
           script: |
             const jobs = {
-              'Coverage Regression': '${{ needs.coverage-regression-gate.result }}',
-              'Lint Trend':          '${{ needs.lint-trend-gate.result }}',
-              'Security Posture':    '${{ needs.security-posture-gate.result }}',
-              'Migration Safety':    '${{ needs.migration-safety-gate.result }}',
-              'Breaking Changes':    '${{ needs.breaking-change-gate.result }}',
-              'Test Placement':      '${{ needs.mobile-test-placement-gate.result }}',
+              'Coverage Regression':  '${{ needs.coverage-regression-gate.result }}',
+              'Lint Trend':           '${{ needs.lint-trend-gate.result }}',
+              'Security Posture':     '${{ needs.security-posture-gate.result }}',
+              'Migration Safety':     '${{ needs.migration-safety-gate.result }}',
+              'Breaking Changes':     '${{ needs.breaking-change-gate.result }}',
+              'Test Placement':       '${{ needs.mobile-test-placement-gate.result }}',
+              'Change Impact Log':    '${{ needs.change-impact-log-gate.result }}',
             };
 
             const icon = r => r === 'success' ? '✅' : r === 'failure' ? '❌' : r === 'skipped' ? '⏭️' : '⚠️';

@@ -207,6 +207,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
+        continue-on-error: true
         uses: codecov/codecov-action@v6
         with:
           file: ./driver-app/coverage/coverage-final.json
@@ -256,6 +257,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
+        continue-on-error: true
         uses: codecov/codecov-action@v6
         with:
           file: ./rider-app/coverage/coverage-final.json
@@ -279,9 +281,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: admin-dashboard/node_modules
+          # No restore-keys: a partial restore from an older key (e.g. before
+          # a dependency version bump) risks a stale node_modules that `npm
+          # ci` doesn't reliably reconcile. Force a clean miss on any
+          # package-lock.json change instead, matching driver-app-test's
+          # existing cache convention (see its comment above).
           key: ${{ runner.os }}-admin-node-${{ hashFiles('admin-dashboard/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-admin-node-
 
       - name: Install dependencies
         working-directory: admin-dashboard

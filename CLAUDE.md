@@ -22,33 +22,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Batch size rule
 - Limit each commit to one logical change. If a diff exceeds ~200 lines, split it.
 
-### Bug/gap fix documentation (mandatory)
-Whenever you identify and fix a bug, gap, or issue — whether from a user report, a Codex comment, an audit, or something you found while doing something else — produce an **Impact & Risk Record** as part of that PR's description (append it under a `## Impact & Risk Record` heading; do not create a separate file per fix). This is in addition to, not a replacement for, the standard PR template's Tier 1–4 fields.
+### Change Impact & Risk Log (mandatory — product is in live app testing)
 
-Required table, one row per file touched:
+Spinr is currently going through live app testing with real users. Any commit or PR that fixes a bug, closes a gap, or changes existing behavior **must** include a Change Impact & Risk entry — do not just describe the fix, describe what it risks breaking. Use the template at `docs/templates/CHANGE_IMPACT_LOG.md` and either paste the filled-in table into the PR description or add it to `docs/change-log/` as `YYYY-MM-DD-<short-slug>.md` for anything touching a live-tested surface (rides, dispatch, payments, auth, corporate, safety).
 
-| File | Path | What changed | Risk to existing functionality | UX effect | Verified how |
-|---|---|---|---|---|---|
-| `page.tsx` | `admin-dashboard/src/app/dashboard/x/page.tsx` | one-line description | none / isolated / shared-component blast radius — name every other consumer of a shared component you touched | none (invisible fix) / visible change a user will notice, described | unit test / e2e / manual crawl / **production build run** — say which, don't assume |
+Required fields per entry:
+- **Issue/gap identified** — what's wrong today, one sentence.
+- **Root cause** — why it happens, not just the symptom.
+- **Fix/remediation** — what changed.
+- **Risk & impact on existing functionality** — what else reads/writes the same table, state, or code path; what could regress. For a shared component/hook/utility, grep for every other consumer and name them — don't write "checked, looks fine" without listing who else is affected.
+- **User experience effect** — rider/driver/corporate-admin/internal-admin facing change, if any, and whether it's visible mid-session to someone already using the app.
+- **Files modified** — table: `file path | what changed | why`.
+- **Before/after snippet** — for any behavior-changing diff (not pure additive code), a short before/after code block, not just the file link.
+- **Rollback plan** — how to revert without a second deploy if it goes wrong (feature flag off, config revert, migration rollback SQL) — a `git revert` is not a rollback plan for anything already applied to live data (Stripe charges, wallet deltas, ride state).
+- **Verification performed** — tests run, manual repro steps, staging check, and **whether a real production build was run** (`npm run build` / equivalent) for any `admin-dashboard`/`rider-app`/`driver-app` change — a passing dev server or `tsc --noEmit` alone is not equivalent, say explicitly which you ran.
+- **What was NOT verified** — every fix has a real boundary of what was checked (e.g. "not tested against live Supabase, only mocked API responses" or "no visual regression tooling exists in this repo, so a visually-invisible change like `aria-label` was reasoned about, not screenshotted"). State it — don't let silence imply full coverage.
 
-For every row, include a **before/after code snippet** (not the full diff — just the changed lines with 1–2 lines of surrounding context) directly under the table, fenced as ` ```diff ` or paired before/after blocks.
+### Pre-merge release gates (mandatory while live app testing is active)
 
-Then answer explicitly, in prose, not just checkboxes:
-- **What could this break that isn't covered by an existing test?** Grep for other consumers of anything shared you touched (components, hooks, utility functions) — list them by name, not just "checked, looks fine."
-- **Did you run a production build (`npm run build` / equivalent)?** A passing dev server or `tsc --noEmit` is not the same thing — say explicitly whether you ran it and what happened.
-- **What did you NOT verify, and why is that acceptable?** Every fix has a real boundary of what was checked (e.g. "not tested against live Supabase, only mocked API responses" or "no visual regression tooling exists in this repo, so a visually-invisible change like `aria-label` was reasoned about, not screenshotted"). State it — don't let silence imply full coverage.
+Do not rely on "commit, observe, roll back if broken" for anything touching a live-tested surface. Gate before merge, not after:
 
-The point is to make risk and "what wasn't checked" visible to a human reviewer before merge, not after a rollback.
-
-### Pre-merge quality gates (live app testing phase — proactive, not reactive)
-The product is in live app testing. A change that ships and then gets rolled back after a user hits it is a worse outcome than one that's caught in review — prefer gates over rollbacks. When you finish a fix, before considering it done:
-
-1. **Run a real production build**, not just `tsc --noEmit` or the dev server — `next dev`'s fast refresh tolerates things a production build won't. This is non-negotiable for any `admin-dashboard`/`rider-app`/`driver-app` change.
-2. **Trace blast radius for shared components/hooks/utilities.** `grep -rn` for every other file that imports the thing you changed, and confirm each consumer still works — don't assume "it's just an aria-label" is safe without checking whether any test hardcodes the old markup or stubs the component out entirely (a stubbed-out component in a test gives zero real coverage of your change — say so if you find it, don't count it as "tested").
-3. **If there's no automated visual/snapshot regression tooling for the surface you're touching, say so explicitly** rather than silently relying on "no visible diff" reasoning. Flag it as a standing gap (see `ACTION_ITEMS.md`) rather than re-discovering it every session.
-4. **Prefer additive/flagged rollout for anything touching a shared component used by 3+ pages.** If the platform supports feature flags or a staged rollout, use one instead of a direct `main` merge for cross-cutting UI changes — ask the user if unsure whether that mechanism exists here.
-5. **A CI check that's red for a reason unrelated to your diff is not "not my problem" — it's a signal the gate itself has decayed.** File a `[CR]` (see `.github/ISSUE_TEMPLATE/ci_change_request.yml`) for a documented accepted-risk finding rather than leaving a permanently-red gate unexplained; don't force a fix that breaks something else just to turn a check green (verify newer/patched dependency versions actually work before pinning them — a version bump that "should" fix an audit finding can break the tool it's supposed to fix, confirm before committing).
-6. **Escalate before merging, don't roll back after:** if a fix touches a shared component/hook used by other pages and you can't verify all its consumers (no time, no test coverage, unclear ownership), say so and ask before merging — that's cheaper than a live rollback.
+1. **Blast-radius check first** — before writing the fix, grep for every other caller/reader of the function, table, or state field being changed (for frontend, every other importer of a shared component/hook/utility). State the blast radius in the Change Impact Log, even if it's "isolated, no other callers." A stubbed-out component in a test gives zero real coverage of your change — say so if you find it, don't count it as "tested."
+2. **Additive over destructive** — prefer a new column/field/flag over mutating an existing one when behavior might be observed mid-session (e.g. a rider mid-ride, a driver online). Never repurpose a column's meaning without a migration + dual-read window.
+3. **Feature-flag anything user-visible and non-trivial**, and prefer additive/flagged rollout for anything touching a shared component used by 3+ pages — new/changed UX, new notification copy, new validation rules that could reject previously-valid input. Ship dark, verify in staging/canary, then flip on. This project's existing `app_settings`-in-DB pattern (see Critical Conventions) already supports flag-without-redeploy — use it; ask the user if unsure whether an equivalent mechanism exists for a given frontend surface.
+4. **State-machine and money changes need a dry run** — any change touching ride state transitions, wallet/allowance deltas, or Stripe flows must be exercised against `mock_supabase_client` fixtures AND described with a concrete before/after scenario in the Change Impact Log, not just "tests pass."
+5. **No silent behavior change to a live-tested flow** — if a fix changes what an already-shipped screen does (not just fixes a crash), that's a UX change and needs the "User experience effect" field filled in, even for an internal admin screen.
+6. **If there's no automated visual/snapshot regression tooling for the surface you're touching, say so explicitly** rather than silently relying on "no visible diff" reasoning. Flag it as a standing gap (see `ACTION_ITEMS.md`) rather than re-discovering it every session.
+7. **Rollback plan is required before merge, not written after something breaks** — if you can't state one, that's a signal that the change should be additive/flagged instead of a direct edit.
+8. **A CI check that's red for a reason unrelated to your diff is a signal the gate itself has decayed, not "not my problem."** File a `[CR]` (see `.github/ISSUE_TEMPLATE/ci_change_request.yml`) for a documented accepted-risk finding rather than leaving a permanently-red gate unexplained. Don't force a fix that breaks something else just to turn a check green — verify a newer/patched dependency version actually works (run the affected build/lint/tests) before pinning it, since a version bump that "should" fix a finding can break the tool it's supposed to fix.
+9. **Escalate, don't silently ship, when in doubt** — if blast radius is unclear, you can't verify all consumers of something shared (no time, no test coverage, unclear ownership), or the change touches rides/payments/auth/corporate/safety and you're not confident of the full impact, use `AskUserQuestion` before merging rather than shipping and watching for fallout.
 
 ### PR review handling (Codex auto-review)
 - When subscribed to a PR (or asked to look at one), **do not chase CI checks** — skip `yarn audit` / `npm audit` / lint / deploy status unless the user explicitly asks. Pre-existing dependency-audit failures on surfaces a PR doesn't touch are not this PR's job.

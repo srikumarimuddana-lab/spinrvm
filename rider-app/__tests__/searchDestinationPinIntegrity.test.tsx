@@ -119,16 +119,30 @@ beforeEach(() => {
 
 describe('editing the destination text', () => {
   it('clears the previously selected dropoff pin (no stale-pair booking)', async () => {
-    useRideStore.setState({ dropoff: GORDON });
-    const renderer = await renderScreen();
+    // The screen schedules real setTimeout calls on mount (the 100ms
+    // focus-active-field effect, plus FlatList/VirtualizedList's own internal
+    // cell-render timer once the recents/predictions list mounts). Left as
+    // real timers, those callbacks fire on the actual event loop rather than
+    // inside this test's act() calls — under CI load that occasionally
+    // ballooned past Jest's 5000ms per-test timeout even though this test's
+    // own assertion never depends on them (CR-2026-005). Fake timers make
+    // the render deterministic; nothing here needs to advance them since the
+    // assertion is pure synchronous store state.
+    jest.useFakeTimers();
+    try {
+      useRideStore.setState({ dropoff: GORDON });
+      const renderer = await renderScreen();
 
-    await act(async () => {
-      dropoffInput(renderer).props.onChangeText('4321 wakeling');
-    });
+      await act(async () => {
+        dropoffInput(renderer).props.onChangeText('4321 wakeling');
+      });
 
-    // The store pair is gone — Search is disabled until a fresh selection
-    // re-binds address and coordinates atomically.
-    expect(useRideStore.getState().dropoff).toBeNull();
+      // The store pair is gone — Search is disabled until a fresh selection
+      // re-binds address and coordinates atomically.
+      expect(useRideStore.getState().dropoff).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('does not clear the pin when the text still equals the selected address', async () => {

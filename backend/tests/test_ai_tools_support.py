@@ -165,18 +165,34 @@ class TestSearchFaqsSemantic:
         # with "when do I get my earnings"
         embed = AsyncMock(return_value=[[1.0, 0.0], [0.0, 1.0], [0.9, 0.1]])  # query, a, b
         update = AsyncMock()
+        # Persistence is deferred via asyncio.create_task (fire-and-forget) so the
+        # tool path never waits on it -- a fixed `await asyncio.sleep(0.05)` (the
+        # old version of this test) assumed the background task always finishes
+        # within 50ms, which is not guaranteed under CI scheduling load and made
+        # this test flaky. Capture the actual task the production code creates
+        # and await it directly instead, so draining it is deterministic rather
+        # than time-based.
+        created_tasks = []
+        real_create_task = asyncio.create_task
+
+        def _capture_create_task(coro, *args, **kwargs):
+            task = real_create_task(coro, *args, **kwargs)
+            created_tasks.append(task)
+            return task
+
         with (
             patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)),
             patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())),
             patch.object(tools_support.embeddings, "embed_texts", embed),
             patch.object(tools_support.db_supabase, "update_one", update),
+            patch.object(tools_support.asyncio, "create_task", side_effect=_capture_create_task),
         ):
             result, ok = await execute_tool("search_faqs", {"query": "when do I get my earnings"}, user=RIDER)
         assert ok
         assert [r["question"] for r in result["results"]] == ["When are payouts made?"]
-        # Persistence is deferred (fire-and-forget) so the tool path never waits
-        # on it — drain the background task, then confirm it ran.
-        await asyncio.sleep(0.05)
+        assert created_tasks, "expected the embedding-persist background task to be scheduled"
+        for task in created_tasks:
+            await task
         update.assert_awaited()  # freshly embedded rows were persisted in the background
 
     @pytest.mark.anyio

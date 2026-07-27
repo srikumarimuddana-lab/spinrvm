@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -194,21 +195,34 @@ class TestPromoApplyRouteRaceHandling:
         app.dependency_overrides.clear()
 
     def _patch_apply(self, promo: dict, ride: dict, *, increment_result: bool):
-        """Return a context manager stack that stubs out all DB calls for apply_promo."""
+        """Return a context manager stack that stubs out all DB calls for apply_promo.
+
+        apply_promo calls _validate_promo_for_user directly (not the
+        validate_promo route wrapper), and the atomic redemption path
+        (_record_promo_application) gates on claim_promo_user_slot
+        (migration 257's authoritative per-user cap) before ever reaching
+        increment_promo_uses -- both added since these tests were written.
+        """
         validation_result = {
             "valid": True,
             "promo_id": promo["id"],
             "code": promo["code"],
+            "free_ride": False,
             "discount_type": promo["discount_type"],
             "discount_value": float(promo["discount_value"]),
-            "discount_amount": float(promo["discount_value"]),
+            "discount_amount": Decimal(str(promo["discount_value"])),
+            "max_discount": promo.get("max_discount"),
+            "description": promo.get("description", ""),
         }
         return (
             # find_one("rides", ...) must return the ride dict so rider_id check passes
             patch("routes.promotions.db_supabase.find_one", AsyncMock(return_value=ride)),
-            # get_rows("promotions", ...) returns the promo row for max_uses lookup
+            # get_rows("promotions", ...) returns the promo row -- used both by
+            # the validation lookup and _record_promo_application's promo_row read.
             patch("routes.promotions.db_supabase.get_rows", AsyncMock(return_value=[promo])),
-            patch("routes.promotions.validate_promo", AsyncMock(return_value=validation_result)),
+            patch("routes.promotions._validate_promo_for_user", AsyncMock(return_value=validation_result)),
+            patch("routes.promotions.db_supabase.claim_promo_user_slot", AsyncMock(return_value=True)),
+            patch("routes.promotions.db_supabase.release_promo_user_slot", AsyncMock(return_value=True)),
             patch(
                 "routes.promotions.increment_promo_uses",
                 AsyncMock(return_value=increment_result),
@@ -222,7 +236,7 @@ class TestPromoApplyRouteRaceHandling:
         ride = _ride()
 
         patches = self._patch_apply(promo, ride, increment_result=False)
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             resp = client.post(
                 "/api/v1/promo/apply",
                 json={"code": "RACETEST", "ride_id": RIDE_ID},
@@ -237,7 +251,7 @@ class TestPromoApplyRouteRaceHandling:
         ride = _ride()
 
         patches = self._patch_apply(promo, ride, increment_result=True)
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             resp = client.post(
                 "/api/v1/promo/apply",
                 json={"code": "RACETEST", "ride_id": RIDE_ID},

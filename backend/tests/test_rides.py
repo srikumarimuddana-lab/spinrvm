@@ -47,7 +47,19 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
     driver_1 = {"id": "driver_001", "user_id": "user_driver_001"}
     driver_2 = {"id": "driver_002", "user_id": "user_driver_002"}
     ride = {"id": ride_id, "status": "searching", "driver_id": None, "rider_id": "rider_001"}
-    accepted_ride = {**ride, "status": "driver_accepted", "driver_id": "driver_001"}
+
+    # The real accept_ride runs a conditional UPDATE ({'status': 'searching'})
+    # that only the first request to actually reach Postgres wins -- which
+    # asyncio task gets there first depends on scheduling, not call order.
+    # A fixed `side_effect=[accepted_ride, None]` list (the old version of
+    # this test) silently assumed driver_1's coroutine always calls
+    # update_one before driver_2's, which asyncio.gather does not guarantee
+    # once both coroutines have multiple await points ahead of the update
+    # (assert_quota_available, the ride_offers lookup, etc.) -- that's what
+    # made this test flaky. Model the DB's real "first claim wins" semantics
+    # instead, keyed by whichever driver_id actually lands first.
+    claim_lock = asyncio.Lock()
+    state = {"claimed_by": None}
 
     async def _get_rows(table, filters=None, **kwargs):
         if table == "drivers":
@@ -55,11 +67,31 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
         # ride_offers lookup on the broadcast/searching path — pending for both.
         return [{"id": "offer-1", "ride_id": ride_id, "status": "pending"}]
 
+    async def _update_one(table, filters, update):
+        if table != "rides":
+            return None
+        async with claim_lock:
+            if state["claimed_by"] is not None:
+                # Either the race was already lost, or this is a later
+                # housekeeping update (e.g. ride_metrics) after acceptance --
+                # its return value isn't checked by the caller either way.
+                return None
+            set_fields = update.get("$set") or {}
+            if "driver_id" not in set_fields:
+                return None
+            state["claimed_by"] = set_fields["driver_id"]
+            return {**ride, "status": "driver_accepted", "driver_id": state["claimed_by"]}
+
+    async def _find_one(table, filters=None, **kwargs):
+        if table == "rides" and state["claimed_by"] is not None:
+            return {**ride, "status": "driver_accepted", "driver_id": state["claimed_by"]}
+        return ride
+
     with (
         patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
         patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
-        patch("backend.routes.drivers._deps.db.update_one", AsyncMock(side_effect=[accepted_ride, None])),
-        patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=accepted_ride)),
+        patch("backend.routes.drivers._deps.db.update_one", AsyncMock(side_effect=_update_one)),
+        patch("backend.routes.drivers._deps.db.find_one", AsyncMock(side_effect=_find_one)),
         patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
         patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
     ):
@@ -73,6 +105,7 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
 
     statuses = sorted([200 if isinstance(r, dict) else r.status_code for r in results])
     assert statuses == [200, 409]
+    assert state["claimed_by"] in ("driver_001", "driver_002")
 
 
 # ── 9-2: Guard against completing a ride that hasn't started ─────────────────

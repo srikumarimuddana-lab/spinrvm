@@ -683,6 +683,7 @@ class TestFareQuote:
             _patch_budget(),
             _patch_http(correct),
             patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
         assert ok
@@ -918,6 +919,7 @@ class TestProposal:
             _patch_budget(),
             _patch_http(downtown),
             patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=RIDER)
         assert ok
@@ -955,6 +957,7 @@ class TestProposal:
             _patch_budget(),
             _patch_http(correct),
             patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
@@ -984,6 +987,7 @@ class TestProposal:
             _patch_budget(),
             _patch_http(near),
             patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
@@ -1022,7 +1026,11 @@ class TestProposal:
         # and the pin must not snap to an address centroid.
         rider = {**RIDER, "_client_location": {"lat": 52.1320, "lng": -106.6609}}
         maps = AsyncMock()
-        with _patch_area(), patch.object(tools_booking, "_places_available", maps):
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", maps),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+        ):
             result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=rider)
         assert ok
         proposal = result["_client_action"]["proposal"]
@@ -1057,6 +1065,7 @@ class TestProposal:
             _patch_budget(),
             _patch_http(two),
             patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
@@ -1150,3 +1159,237 @@ class TestRequestMapPin:
             "or call request_map_pin so they",
         ):
             assert fragment in source
+
+
+class TestDropoffLabelGuard:
+    """The label and the pin of a dropoff must describe the same place.
+
+    Incident: the quote priced the rider's 1.4 km Walmart trip at $7.28; the
+    booking card kept the "Walmart Supercentre" label but carried Southland
+    Mall coordinates the model remembered from an earlier message — $11.76 to
+    a place the rider didn't ask to go, under the right name. History keeps
+    only message text, so recalled coordinates are always from an older trip.
+    """
+
+    # 4325 Wakeling St, Regina.
+    PICKUP = {"pickup_lat": 50.4214, "pickup_lng": -104.6641, "pickup_address": "4325 Wakeling St, Regina"}
+    # Where the Walmart label actually geocodes.
+    WALMART = {"lat": 50.4079, "lng": -104.6501}
+    # The stale pin recalled from the earlier Southland Mall request — ~4 km
+    # from where the label resolves.
+    STALE = {"lat": 50.4350, "lng": -104.6100}
+    LABEL = "Walmart Supercentre, 4500 Gordon Rd, Regina"
+
+    def _patches(self):
+        async def fake_lookup(*, api_key, query, near_lat=None, near_lng=None, **kwargs):
+            if "Wakeling" in query:
+                # Pickup reconciles onto itself — unadjusted, not this test's subject.
+                return {
+                    "candidates": [
+                        {
+                            "lat": self.PICKUP["pickup_lat"],
+                            "lng": self.PICKUP["pickup_lng"],
+                            "address": self.PICKUP["pickup_address"],
+                            "in_service_area": True,
+                            "precise": True,
+                        }
+                    ]
+                }
+            return {
+                "candidates": [
+                    {
+                        "lat": self.WALMART["lat"],
+                        "lng": self.WALMART["lng"],
+                        "address": self.LABEL,
+                        "in_service_area": True,
+                        "precise": True,
+                    }
+                ]
+            }
+
+        lookup = AsyncMock(side_effect=fake_lookup)
+        return (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
+            patch.object(tools_booking, "_lookup_place_candidates", lookup),
+        ), lookup
+
+    @pytest.mark.anyio
+    async def test_proposal_refuses_label_over_foreign_coordinates(self):
+        patches, _lookup = self._patches()
+        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": self.LABEL}
+        with patches[0], patches[1], patches[2]:
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["needs_correction"] == "dropoff_label_mismatch"
+        assert "_client_action" not in result
+        assert "re-resolve" in result["note"]
+        assert result["distance_km"] > 1.5
+
+    @pytest.mark.anyio
+    async def test_quote_refuses_the_same_pair(self):
+        patches, _lookup = self._patches()
+        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": self.LABEL}
+        with patches[0], patches[1], patches[2]:
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        assert result["needs_correction"] == "dropoff_label_mismatch"
+
+    @pytest.mark.anyio
+    async def test_matching_pair_passes(self):
+        patches, _lookup = self._patches()
+        args = {**self.PICKUP, "dropoff_lat": self.WALMART["lat"], "dropoff_lng": self.WALMART["lng"], "dropoff_address": self.LABEL}
+        with patches[0], patches[1], patches[2]:
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["_client_action"]["type"] == "booking_proposal"
+
+    @pytest.mark.anyio
+    async def test_coordinate_string_label_is_its_own_pin(self):
+        # The map-pin fallback label ("50.43500, -104.61000") IS the pin —
+        # nothing to cross-check, and no Maps call spent on it.
+        patches, lookup = self._patches()
+        args = {
+            **self.PICKUP,
+            "dropoff_lat": self.STALE["lat"],
+            "dropoff_lng": self.STALE["lng"],
+            "dropoff_address": "50.43500, -104.61000",
+        }
+        with patches[0], patches[1], patches[2]:
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["_client_action"]["type"] == "booking_proposal"
+        dropoff_lookups = [c for c in lookup.await_args_list if "Wakeling" not in c.kwargs["query"]]
+        assert dropoff_lookups == []
+
+    @pytest.mark.anyio
+    async def test_lookup_error_fails_closed(self):
+        # A transient Maps failure must not wave the stale pair through —
+        # that would disable the guard exactly when Google blips. Distinct
+        # retryable result, not a mismatch verdict.
+        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": self.LABEL}
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
+            patch.object(
+                tools_booking,
+                "_lookup_place_candidates",
+                AsyncMock(return_value={"error": "place lookup failed"}),
+            ),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["needs_correction"] == "dropoff_unverified"
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_coordinate_label_must_match_the_pin(self):
+        # A coordinate-shaped label carries its own numbers — gluing a current
+        # pin label onto stale coordinates is the same incident, and it must
+        # be caught numerically, without spending a Maps call.
+        maps = AsyncMock(side_effect=AssertionError("coordinate label must not geocode"))
+        with patch.object(tools_booking, "_places_available", maps):
+            refusal = await tools_booking._dropoff_pair_refusal(
+                self.STALE["lat"],
+                self.STALE["lng"],
+                f"{self.WALMART['lat']:.5f}, {self.WALMART['lng']:.5f}",
+            )
+        assert refusal is not None
+        assert refusal["needs_correction"] == "dropoff_label_mismatch"
+
+    @pytest.mark.anyio
+    async def test_coordinate_label_matching_the_pin_passes(self):
+        maps = AsyncMock(side_effect=AssertionError("coordinate label must not geocode"))
+        with patch.object(tools_booking, "_places_available", maps):
+            refusal = await tools_booking._dropoff_pair_refusal(
+                self.STALE["lat"], self.STALE["lng"], f"{self.STALE['lat']:.5f}, {self.STALE['lng']:.5f}"
+            )
+        assert refusal is None
+
+    @pytest.mark.anyio
+    async def test_street_address_label_needs_precise_agreement(self):
+        # An APPROXIMATE centroid drifting near the stale pin must not vouch
+        # for a numbered street address when Google DID pin the real building
+        # precisely — elsewhere.
+        async def lookup(*, api_key, query, near_lat=None, near_lng=None, **kwargs):
+            if "Wakeling" in query:
+                return {
+                    "candidates": [
+                        {
+                            "lat": self.PICKUP["pickup_lat"],
+                            "lng": self.PICKUP["pickup_lng"],
+                            "address": self.PICKUP["pickup_address"],
+                            "in_service_area": True,
+                            "precise": True,
+                        }
+                    ]
+                }
+            return {
+                "candidates": [
+                    # Neighbourhood centroid beside the stale pin — imprecise.
+                    {
+                        "lat": self.STALE["lat"] + 0.001,
+                        "lng": self.STALE["lng"],
+                        "address": "Gordon Rd area, Regina",
+                        "in_service_area": True,
+                        "precise": False,
+                    },
+                    # Google's actual rooftop for the address — far from the pin.
+                    {
+                        "lat": self.WALMART["lat"],
+                        "lng": self.WALMART["lng"],
+                        "address": self.LABEL,
+                        "in_service_area": True,
+                        "precise": True,
+                    },
+                ]
+            }
+
+        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": "4500 Gordon Rd, Regina"}
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
+            patch.object(tools_booking, "_lookup_place_candidates", AsyncMock(side_effect=lookup)),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["needs_correction"] == "dropoff_label_mismatch"
+
+    @pytest.mark.anyio
+    async def test_street_address_label_with_only_imprecise_candidates_stays_lenient(self):
+        # With NO precise candidate anywhere, refusing on centroid distance
+        # would block odd-but-real addresses — keep the lenient fallback.
+        async def lookup(*, api_key, query, near_lat=None, near_lng=None, **kwargs):
+            if "Wakeling" in query:
+                return {
+                    "candidates": [
+                        {
+                            "lat": self.PICKUP["pickup_lat"],
+                            "lng": self.PICKUP["pickup_lng"],
+                            "address": self.PICKUP["pickup_address"],
+                            "in_service_area": True,
+                            "precise": True,
+                        }
+                    ]
+                }
+            return {
+                "candidates": [
+                    {
+                        "lat": self.STALE["lat"] + 0.001,
+                        "lng": self.STALE["lng"],
+                        "address": "Gordon Rd area, Regina",
+                        "in_service_area": True,
+                        "precise": False,
+                    }
+                ]
+            }
+
+        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": "4500 Gordon Rd, Regina"}
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
+            patch.object(tools_booking, "_lookup_place_candidates", AsyncMock(side_effect=lookup)),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["_client_action"]["type"] == "booking_proposal"

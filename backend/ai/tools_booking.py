@@ -20,6 +20,7 @@ client action so both the rider app and the admin AI console render it as
 a rich card instead of re-reading numbers from model prose.
 """
 
+import asyncio
 import logging
 import math
 import re
@@ -645,6 +646,115 @@ def _same_place_refusal(distance_km: float, confirmed: bool) -> Optional[Dict[st
     }
 
 
+# A dropoff label whose every plausible geocode sits farther than this from
+# the claimed pin is describing a different place than the pin. Generous
+# enough for POI centroids and big parking lots; far tighter than the
+# cross-town drift the incident showed.
+_DROPOFF_LABEL_MAX_KM = 1.5
+
+# "50.43500, -104.61000" — the map-pin fallback label. It carries its own
+# coordinates, so it is cross-checked numerically instead of geocoded.
+_COORD_LIKE_ADDRESS = re.compile(r"^\s*(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$")
+
+
+def _label_mismatch_refusal(distance_km: float, dropoff_address: str) -> Dict[str, Any]:
+    return {
+        "needs_correction": "dropoff_label_mismatch",
+        "distance_km": round(distance_km, 2),
+        "note": (
+            f"The dropoff coordinates are {round(distance_km, 1)} km from where "
+            f"'{dropoff_address}' actually is — the label and the pin describe two "
+            "different places, so this price would be for a trip the rider did not ask "
+            "for. Do NOT show this quote or card. Coordinates remembered from earlier "
+            "messages belong to earlier trips: re-resolve the dropoff the rider wants "
+            "NOW with find_place (or get_saved_places) in this turn, and use that "
+            "result's coordinates and address together."
+        ),
+    }
+
+
+async def _discard_check(task: "asyncio.Task") -> None:
+    """Cancel and drain an overlapped verification whose result no longer
+    matters (an earlier guard already refused). Draining prevents 'task was
+    destroyed but it is pending' noise; any error it raised is deliberately
+    discarded with it."""
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        # The check failed while being discarded — an earlier guard already
+        # refused this trip, so there is nothing actionable; debug-log only.
+        logger.debug("discarded dropoff verification failed", exc_info=True)
+
+
+async def _dropoff_pair_refusal(
+    dropoff_lat: float, dropoff_lng: float, dropoff_address: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Refuse when the dropoff label and pin describe two different places.
+
+    Incident: the quote priced the rider's 1.4 km Walmart trip at $7.28; the
+    booking card kept the Walmart label but carried Southland Mall
+    coordinates recalled from an earlier message — $11.76 to a place the
+    rider didn't ask to go, under the right name. Conversation history keeps
+    only message text, so each turn must re-resolve; when the model instead
+    recycles bracketed coordinates from an older message, the label and pin
+    come from different trips. The pickup has _reconcile_pickup; this is the
+    dropoff's equivalent check — refuse rather than relocate, because a
+    deliberate map pin must never be snapped to a label's centroid.
+    """
+    if not dropoff_address:
+        return None
+    coord_label = _COORD_LIKE_ADDRESS.match(dropoff_address)
+    if coord_label:
+        # The label IS a coordinate pair (map-pin fallback) — no geocode, but
+        # its numbers must still agree with the pin being booked: a current
+        # pin label glued onto stale coordinates is the same incident.
+        label_km = _trip_distance_km(dropoff_lat, dropoff_lng, float(coord_label[1]), float(coord_label[2]))
+        if label_km <= _DROPOFF_LABEL_MAX_KM:
+            return None
+        return _label_mismatch_refusal(label_km, dropoff_address)
+    api_key, _error = await _places_available()
+    if not api_key:
+        # Deliberate degrade: Maps unconfigured or budget-capped is a config
+        # state, not a transient fault — the free guards still apply.
+        return None
+    lookup = await _lookup_place_candidates(
+        api_key=api_key, query=dropoff_address, near_lat=dropoff_lat, near_lng=dropoff_lng
+    )
+    if lookup.get("error"):
+        # Transient Maps failure must fail CLOSED — passing here would wave
+        # through exactly the stale pair this guard exists to catch, whenever
+        # Google blips. Retryable, and distinct from a mismatch.
+        return {
+            "needs_correction": "dropoff_unverified",
+            "note": (
+                "The dropoff could not be verified against its address (maps lookup "
+                "failed). Do NOT quote or book this pair yet — retry, or re-resolve "
+                "the dropoff with find_place and use that result."
+            ),
+        }
+    candidates = lookup.get("candidates") or []
+    if not candidates:
+        return None  # genuine ZERO_RESULTS — refusing would block odd-but-real places
+    # For a numbered street address, only candidates Google actually pinned
+    # (ROOFTOP / RANGE_INTERPOLATED) may vouch for the pair — an APPROXIMATE
+    # neighbourhood centroid that happens to sit near a stale pin must not
+    # validate it. POI labels resolve via Places (no location_type at all),
+    # so the filter applies only when precise candidates exist to prefer.
+    if _looks_like_street_address(dropoff_address):
+        precise = [c for c in candidates if c.get("precise")]
+        if precise:
+            candidates = precise
+    # Biased near the claimed pin, so if ANY plausible resolution of the label
+    # agrees with the pin we pass — this errs against false refusals.
+    nearest_km = min(_trip_distance_km(dropoff_lat, dropoff_lng, c["lat"], c["lng"]) for c in candidates)
+    if nearest_km <= _DROPOFF_LABEL_MAX_KM:
+        return None
+    return _label_mismatch_refusal(nearest_km, dropoff_address)
+
+
 async def get_fare_quote(
     user: Dict[str, Any],
     pickup_lat: float,
@@ -659,6 +769,11 @@ async def get_fare_quote(
         from ..routes.rides import estimates as _rides_estimates
     except ImportError:
         from routes.rides import estimates as _rides_estimates
+
+    # Dropoff pair verification overlaps the pickup reconcile below — the two
+    # are independent Maps calls, so running them concurrently keeps the
+    # guard's wall-clock cost near zero on the quote path.
+    dropoff_check = asyncio.create_task(_dropoff_pair_refusal(dropoff_lat, dropoff_lng, dropoff_address))
 
     # Reconcile the pickup exactly like propose_ride_booking does, so the
     # quote card and the confirm card can never be priced on different
@@ -682,6 +797,7 @@ async def get_fare_quote(
         # booking step will refuse shows the rider a price and then takes it
         # away — say it once, here, before any number is spoken.
         if not pickup_in_area:
+            await _discard_check(dropoff_check)
             return {"error": _OUT_OF_AREA_ERROR}
         if pickup_adjusted:
             pickup_note = (
@@ -693,6 +809,10 @@ async def get_fare_quote(
     refusal = _same_place_refusal(trip_km, confirm_same_location) or _address_mismatch_refusal(
         pickup_address, dropoff_address, trip_km, confirm_same_location
     )
+    if refusal is None:
+        refusal = await dropoff_check
+    else:
+        await _discard_check(dropoff_check)
     if refusal:
         # A moved pin still has to be disclosed even when the trip is refused —
         # the rider needs to hear which pickup we actually resolved before they
@@ -936,6 +1056,12 @@ async def propose_ride_booking(
     confirm_same_location: bool = False,
     quoted_total: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # The card is the last stop before dispatch — a Walmart label over
+    # Southland Mall coordinates must die here even if the quote step was
+    # skipped or passed a different pair. Runs concurrently with the pickup
+    # reconcile (independent Maps calls); awaited after the free guards.
+    dropoff_check = asyncio.create_task(_dropoff_pair_refusal(dropoff_lat, dropoff_lng, dropoff_address))
+
     pickup_lat, pickup_lng, pickup_address, in_area, pickup_adjusted, pickup_drift_km = await _reconcile_pickup(
         pickup_lat,
         pickup_lng,
@@ -943,6 +1069,7 @@ async def propose_ride_booking(
         client_location=user.get("_client_location"),
     )
     if not in_area:
+        await _discard_check(dropoff_check)
         return {"error": _OUT_OF_AREA_ERROR}
 
     # Guard AFTER reconciliation so it measures the pickup that would actually
@@ -952,6 +1079,10 @@ async def propose_ride_booking(
     refusal = _same_place_refusal(trip_km, confirm_same_location) or _address_mismatch_refusal(
         pickup_address, dropoff_address, trip_km, confirm_same_location
     )
+    if refusal is None:
+        refusal = await dropoff_check
+    else:
+        await _discard_check(dropoff_check)
     if refusal:
         return refusal
 

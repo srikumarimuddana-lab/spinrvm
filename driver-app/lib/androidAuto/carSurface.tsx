@@ -28,8 +28,10 @@ import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
 import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
-import { RouteLine } from '@shared/components/RouteLine';
-import { RoutePins } from '@shared/components/RoutePins';
+// RouteLine / RoutePins hard-import react-native-maps, so they are lazy-required
+// AFTER the maps guard below (never at module scope) — otherwise loading this
+// file in a maps-less context (web / Expo Go / tests) would crash before the
+// guarded require, defeating the graceful null fallback.
 
 // Saskatoon — Spinr is Saskatchewan-first. Used only until the first fix /
 // last-known location loads, so the idle map never opens on null-island (0,0).
@@ -70,6 +72,19 @@ export function CarMapSurface(): React.ReactElement | null {
     CarMarker = null;
   }
 
+  // Same guard for the shared route renderers (they hard-import react-native-maps).
+  let RouteLine: typeof import('@shared/components/RouteLine').RouteLine | null = null;
+  let RoutePins: typeof import('@shared/components/RoutePins').RoutePins | null = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    RouteLine = require('@shared/components/RouteLine').RouteLine;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    RoutePins = require('@shared/components/RoutePins').RoutePins;
+  } catch {
+    RouteLine = null;
+    RoutePins = null;
+  }
+
   // Follow the driver; fall back to the active destination, then a city center,
   // so the camera always has a valid target even before the first GPS fix.
   const center = here ?? route?.destination ?? FALLBACK_CENTER;
@@ -101,8 +116,8 @@ export function CarMapSurface(): React.ReactElement | null {
             car surface reads identically to the phone. Pins follow the leg: green
             pickup while heading to the rider; green pickup (route start) + red
             dropoff once the trip is under way. */}
-        {route && <RouteLine path={route.polyline} />}
-        {route && (
+        {route && RouteLine && <RouteLine path={route.polyline} />}
+        {route && RoutePins && (
           <RoutePins
             pickup={route.leg === 'pickup' ? route.destination : (route.polyline[0] ?? null)}
             dropoff={route.leg === 'dropoff' ? route.destination : null}

@@ -173,9 +173,13 @@ export default function RideDetailScreen() {
                                 route coords (v2 segments joined in order, or the
                                 legacy planned line for pre-v2 rides) drawn as one
                                 orange→red gradient — identical to every other
-                                Spinr map. Geometry is unchanged; only the drawing
-                                is shared. */}
-                            <RouteLine path={mapCoordinates} />
+                                Spinr map. v2 sections are passed SEPARATELY so a
+                                GPS gap is never bridged by a false chord. */}
+                            {hasActualRoute ? (
+                                <RouteLine paths={actualSections.map((s) => s.coordinates)} />
+                            ) : (
+                                <RouteLine path={mapCoordinates} />
+                            )}
                             <RoutePins
                                 pickup={{ latitude: navPickupLat, longitude: navPickupLng }}
                                 dropoff={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}

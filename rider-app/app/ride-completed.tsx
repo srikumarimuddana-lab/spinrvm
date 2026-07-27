@@ -607,10 +607,16 @@ function RideCompletedScreenContent() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
-              {/* Real reconstructed route (actual GPS segments flattened, or the
-                  legacy planned polyline), drawn as one shared orange→red gradient.
-                  No straight-line fallback: an unmeasured route must draw nothing. */}
-              <RouteLine path={mapCoordinates} />
+              {/* Real reconstructed route as one shared orange→red gradient.
+                  v2 sections are passed SEPARATELY (paths) so a GPS gap is never
+                  bridged by a false chord; the legacy planned polyline is one
+                  continuous path. No straight fallback: an unmeasured route draws
+                  nothing. */}
+              {hasActualRoute ? (
+                <RouteLine paths={actualSections.map((s) => s.coordinates)} />
+              ) : (
+                <RouteLine path={mapCoordinates} />
+              )}
               <RoutePins
                 pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
                 dropoff={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}

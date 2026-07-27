@@ -3200,8 +3200,8 @@ async def test_process_payment_company_allowance_unlimited_happy_path():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
         patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
@@ -3248,8 +3248,8 @@ async def test_process_payment_company_allowance_capped_with_master():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
         patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
@@ -3296,8 +3296,8 @@ async def test_process_payment_company_allowance_master_debit_fails():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
     ):
         with pytest.raises(HTTPException) as exc:
             await process_payment(

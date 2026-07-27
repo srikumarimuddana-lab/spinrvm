@@ -20,9 +20,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Circle, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
-import { RouteLine } from '@shared/components/RouteLine';
-import { RoutePins } from '@shared/components/RoutePins';
+import MapView, { Marker, Circle, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 
 import { useRideStore } from '../store/rideStore';
 import { useWalletStore } from '../store/walletStore';
@@ -75,7 +74,7 @@ function RideOptionsScreenContent() {
     requiresWav, setRequiresWav, showWavOption,
     scheduledTime, setScheduledTime, quietMode, setQuietMode,
     availablePromos, appliedPromo, fetchAvailablePromos, applyPromo,
-    routePolyline,
+    setRoutePolyline, routePolyline,
   } = useRideStore();
 
   // Vehicle type config (marker variant + custom marker image), synced once
@@ -327,22 +326,36 @@ function RideOptionsScreenContent() {
     }
   }, [workModeEnabled, corporateAccounts.length]);
 
-  // Keep the server-provided route polyline (returned with the estimate) only to
-  // frame the map via fitToCoordinates — the drawn line itself is the uniform
-  // straight pickup→dropoff gradient (see RouteLine below), not this path.
+  // Populate route coordinates from the server-provided polyline (returned
+  // with the estimate response). Falls back to MapViewDirections on-device
+  // if the backend didn't return one.
   useEffect(() => {
     if (routePolyline && routePolyline.length >= 2) {
       const coords = routePolyline.map(([lat, lng]: [number, number]) => ({ latitude: lat, longitude: lng }));
       setRouteCoordinates(coords);
     } else {
       // The store clears routePolyline whenever a waypoint changes (e.g. the
-      // rider went back and picked a new destination/stop). Drop the cached
-      // framing coords too so the map re-frames from pickup/dropoff.
+      // rider went back and picked a new destination/stop). Drop the old drawn
+      // route too so a stale trace doesn't linger on the map and the
+      // MapViewDirections fallback can redraw for the new route.
       setRouteCoordinates([]);
     }
   }, [routePolyline]);
 
   // ── Handlers ──
+
+  const onReadyDirections = (result: any) => {
+    if (result.coordinates) {
+      setRouteCoordinates(result.coordinates);
+      setRoutePolyline(result.coordinates);
+    }
+    if (mapRef.current && mapReady) {
+      mapRef.current.fitToCoordinates(result.coordinates, {
+        edgePadding: { top: 60, right: 50, bottom: mapBottomInset, left: 50 },
+        animated: true,
+      });
+    }
+  };
 
   const handleSelect = (index: number) => {
     if (!estimates[index]?.available) {
@@ -565,15 +578,50 @@ function RideOptionsScreenContent() {
             latitudeDelta: 0.05, longitudeDelta: 0.05,
           }}
         >
-          {/* Uniform route: one straight orange→red gradient line pickup→dropoff. */}
-          <RouteLine
-            pickup={{ latitude: pickup.lat, longitude: pickup.lng }}
-            destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
-          />
-          <RoutePins
-            pickup={{ latitude: pickup.lat, longitude: pickup.lng }}
-            dropoff={{ latitude: dropoff.lat, longitude: dropoff.lng }}
-          />
+          {/* Fallback: only call Google Directions client-side if the backend
+              didn't return a route_polyline with the estimate response. */}
+          {GOOGLE_MAPS_API_KEY && routeCoordinates.length === 0 && (
+            <MapViewDirections
+              origin={{ latitude: pickup.lat, longitude: pickup.lng }}
+              destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
+              waypoints={stops.filter(s => s.lat && s.lng).map(s => ({ latitude: s.lat, longitude: s.lng }))}
+              apikey={GOOGLE_MAPS_API_KEY}
+              strokeWidth={0}
+              strokeColor="transparent"
+              onReady={onReadyDirections}
+              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err?.message ?? err)}
+              optimizeWaypoints
+            />
+          )}
+          {routeCoordinates.length > 1 && (() => {
+            const total = routeCoordinates.length;
+            const segments: { coords: any[]; color: string }[] = [];
+            const SEGMENT_COUNT = 30;
+            const chunkSize = Math.max(1, Math.floor(total / SEGMENT_COUNT));
+            for (let i = 0; i < total - 1; i += chunkSize) {
+              const end = Math.min(i + chunkSize + 1, total);
+              const t = i / Math.max(total - 1, 1);
+              const r = Math.round(255 + (238 - 255) * t);
+              const g = Math.round(149 + (43 - 149) * t);
+              const b = Math.round(0 + (43 - 0) * t);
+              segments.push({ coords: routeCoordinates.slice(i, end), color: `rgb(${r},${g},${b})` });
+            }
+            return (
+              <>
+                <Polyline coordinates={routeCoordinates} strokeWidth={9} strokeColor="rgba(238,43,43,0.12)" />
+                {segments.map((seg, idx) => (
+                  <Polyline key={`seg-${idx}`} coordinates={seg.coords} strokeWidth={5}
+                    strokeColor={seg.color} lineCap="round" lineJoin="round" />
+                ))}
+              </>
+            );
+          })()}
+          <Marker coordinate={{ latitude: pickup.lat, longitude: pickup.lng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
+            <View style={styles.markerContainer}><View style={[styles.markerDot, { backgroundColor: '#10B981' }]} /></View>
+          </Marker>
+          <Marker coordinate={{ latitude: dropoff.lat, longitude: dropoff.lng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
+            <View style={styles.markerContainer}><View style={[styles.markerDot, { backgroundColor: '#EF4444' }]} /></View>
+          </Marker>
           {stops.map((stop, i) => (
             <Marker key={`stop-${i}`} coordinate={{ latitude: stop.lat, longitude: stop.lng }} anchor={{ x: 0.5, y: 0.5 }}>
               <View style={styles.markerContainer}><View style={[styles.markerDot, { backgroundColor: '#F59E0B' }]} /></View>

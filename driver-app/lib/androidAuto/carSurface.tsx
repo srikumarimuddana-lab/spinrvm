@@ -8,10 +8,10 @@
  * `useCarMapCamera` (the surface is non-interactive: Android Auto forbids
  * in-surface touch and routes interaction through buttons).
  *
- * During a ride it additionally draws the shared uniform route: one straight
- * pickup→dropoff line (orange→red gradient) with green pickup / red dropoff pins
- * — so there is no live Routes/Directions API spend (turn-by-turn is handed off
- * to the driver's Google Maps / Waze; see carRoute.ts + register.ts).
+ * During a ride it additionally draws the route we ALREADY stored at ride
+ * creation (`rides.planned_route_polyline`) with the destination pinned — so
+ * there is no live Routes/Directions API spend (turn-by-turn is handed off to the
+ * driver's Google Maps / Waze; see carRoute.ts + register.ts).
  *
  * Reads the SAME useDriverStore the phone uses (single source of truth).
  * react-native-maps' native view is absent in Expo Go / web / tests, so it is
@@ -29,6 +29,7 @@ import { CarTripCard } from './CarTripCard';
 import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
 
+const SPINR_RED = '#ee2b2b';
 // Saskatoon — Spinr is Saskatchewan-first. Used only until the first fix /
 // last-known location loads, so the idle map never opens on null-island (0,0).
 const FALLBACK_CENTER = { latitude: 52.1332, longitude: -106.67 };
@@ -54,6 +55,7 @@ export function CarMapSurface(): React.ReactElement | null {
   if (!Maps) return null;
 
   const MapView = Maps.default;
+  const { Marker, Polyline } = Maps;
 
   // CarMarker hard-imports react-native-maps; require it only after the maps
   // guard above so it can never crash a maps-less context (web / Expo Go).
@@ -66,21 +68,6 @@ export function CarMapSurface(): React.ReactElement | null {
     CarMarker = require('../../components/CarMarker').CarMarker;
   } catch {
     CarMarker = null;
-  }
-
-  // The shared uniform route renderers also hard-import react-native-maps, so
-  // require them behind the same maps guard — keeps the surface degrading to
-  // null (web / Expo Go / tests) instead of crashing on module load.
-  let RouteLine: React.ComponentType<any> | null = null;
-  let RoutePins: React.ComponentType<any> | null = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    RouteLine = require('@shared/components/RouteLine').RouteLine;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    RoutePins = require('@shared/components/RoutePins').RoutePins;
-  } catch {
-    RouteLine = null;
-    RoutePins = null;
   }
 
   // Follow the driver; fall back to the active destination, then a city center,
@@ -108,8 +95,10 @@ export function CarMapSurface(): React.ReactElement | null {
           longitudeDelta: delta,
         }}
       >
-        {route && RouteLine && <RouteLine pickup={route.pickup} destination={route.dropoff} />}
-        {route && RoutePins && <RoutePins pickup={route.pickup} dropoff={route.dropoff} />}
+        {route && route.polyline.length >= 2 && (
+          <Polyline coordinates={route.polyline} strokeColor={SPINR_RED} strokeWidth={6} />
+        )}
+        {route && <Marker coordinate={route.destination} title={route.destinationLabel} />}
         {here && CarMarker && (
           <CarMarker
             coordinate={{ latitude: here.latitude, longitude: here.longitude }}

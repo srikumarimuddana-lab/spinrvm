@@ -32,9 +32,8 @@ import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
-import { RouteLine } from '@shared/components/RouteLine';
-import { RoutePins } from '@shared/components/RoutePins';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { buildShareTripMessage } from '../lib/shareTripMessage';
@@ -57,7 +56,8 @@ function RideInProgressScreenContent() {
   const {
     currentRide, currentDriver, fetchRide, cancelRide, clearRide,
     triggerEmergency, isLoading, error, wsConnected,
-    lastEtaMin, setLastEtaMin,
+    activeRideRouteCoords, lastEtaMin,
+    setActiveRideRouteCoords, setLastEtaMin,
   } = useRideStore();
   // Seed ETA and route from store so this screen shows correct values
   // immediately even before the first Directions fetch completes — and
@@ -72,6 +72,16 @@ function RideInProgressScreenContent() {
     return now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   });
   const [isSharingLocation, setIsSharingLocation] = useState(false);
+  const [tripRouteCoords, setTripRouteCoords] = useState<any[]>(() => {
+    if (activeRideRouteCoords && activeRideRouteCoords.length > 1) return activeRideRouteCoords;
+    const savedPoly = (currentRide as any)?.planned_route_polyline || (currentRide as any)?.route_polyline;
+    if (Array.isArray(savedPoly) && savedPoly.length >= 2) {
+      return savedPoly
+        .filter((p: any) => Array.isArray(p) && p.length >= 2)
+        .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
+    }
+    return [];
+  });
 
   // Source-of-truth rider bill. The API computes grand_total as the sum of
   // the fare_breakdown line items (see backend/routes/rides.py::
@@ -169,10 +179,32 @@ function RideInProgressScreenContent() {
     }
   }, [currentRide?.status]);
 
-  // The route endpoints are the ride's pickup/dropoff, always known once the
-  // ride loads, so the haversine ETA effect below can run as soon as we have
-  // coordinates — no route fetch needs to complete first.
-  const routeFetched = !!rideCoords;
+  // Stable objects keyed to ride ID so MapViewDirections only calls the
+  // Directions API once per ride instead of once per driver GPS ping.
+  const routeOrigin = useMemo(
+    () =>
+      rideCoords
+        ? { latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRide?.id, rideCoords?.pickupLat, rideCoords?.pickupLng],
+  );
+  const routeDestination = useMemo(
+    () =>
+      rideCoords
+        ? { latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRide?.id, rideCoords?.dropoffLat, rideCoords?.dropoffLng],
+  );
+
+  // Reactive flag: true once the pickup→dropoff route is known (either from the
+  // store or from a fresh Directions fetch). Using state instead of a ref so
+  // the haversine effect below re-runs immediately when the flag flips — a ref
+  // change is invisible to React's dependency tracking.
+  const [routeFetched, setRouteFetched] = useState(
+    !!(activeRideRouteCoords && activeRideRouteCoords.length > 1),
+  );
 
   // Update ETA from driver's live position via haversine — no Maps API call.
   // Fires immediately on mount when routeFetched is already true (store hit),
@@ -190,11 +222,11 @@ function RideInProgressScreenContent() {
     setLastEtaMin(etaMin);
   }, [routeFetched, currentDriver?.lat, currentDriver?.lng]);
 
-  // OSRM routed ETA for the live map. The route line itself is now the uniform
-  // straight pickup→dropoff gradient (drawn below), so this poll no longer feeds
-  // any drawing — it only refreshes the ETA; the haversine effect above remains
-  // the fallback if OSRM is unreachable. Polls every 20s (the backend routes
-  // from the driver's live position to pickup pre-trip / dropoff in-trip).
+  // OSRM road-matched route + ETA for the live map. Google stays the map
+  // canvas — we just draw this road-snapped line and use the routed ETA when
+  // available; the haversine effect above remains the fallback if OSRM is
+  // unreachable. Polls every 20s (the backend routes from the driver's live
+  // position to pickup pre-trip / dropoff in-trip).
   useEffect(() => {
     if (!rideId) return;
     let cancelled = false;
@@ -204,6 +236,11 @@ function RideInProgressScreenContent() {
           `/rides/${rideId}/live-route`,
         );
         if (cancelled || !data) return;
+        if (Array.isArray(data.polyline) && data.polyline.length > 1) {
+          const coords = data.polyline.map((p) => ({ latitude: p[0], longitude: p[1] }));
+          setTripRouteCoords(coords);
+          setActiveRideRouteCoords(coords);
+        }
         if (typeof data.eta_seconds === 'number' && data.eta_seconds > 0) {
           const m = Math.max(1, Math.ceil(data.eta_seconds / 60));
           setEta(m);
@@ -603,15 +640,94 @@ function RideInProgressScreenContent() {
             showsMyLocationButton={false}
             userInterfaceStyle={isDark ? "dark" : "light"}
           >
-            {/* Uniform route: one straight orange→red gradient line pickup→dropoff. */}
-            <RouteLine
-              pickup={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
-              destination={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
-            />
-            <RoutePins
-              pickup={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
-              dropoff={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
-            />
+            {/* Route: reuse saved polyline or store coords if available.
+                Only call Directions API when no cached route exists at all.
+                Origin is the stable pickup — never the live driver position —
+                so MapViewDirections fires at most once per ride. */}
+            {routeOrigin && routeDestination &&
+              process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY &&
+              activeRideRouteCoords === null && tripRouteCoords.length < 2 && (
+              <MapViewDirections
+                origin={routeOrigin}
+                destination={routeDestination}
+                apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY}
+                strokeWidth={0}
+                strokeColor="transparent"
+                onReady={(result: any) => {
+                  if (!result.coordinates?.length) return;
+                  setTripRouteCoords(result.coordinates);
+                  setActiveRideRouteCoords(result.coordinates);
+                  // Prefer haversine from the driver's current position rather
+                  // than the Directions total duration (pickup→dropoff), which
+                  // overstates remaining time if the driver has already moved.
+                  const dLat = currentDriver?.lat;
+                  const dLng = currentDriver?.lng;
+                  const dropLat = currentRide?.dropoff_lat;
+                  const dropLng = currentRide?.dropoff_lng;
+                  const etaMin =
+                    dLat != null && dLng != null && dropLat != null && dropLng != null
+                      ? _haversineEtaMin(dLat, dLng, dropLat, dropLng)
+                      : Math.ceil(result.duration);
+                  setEta(etaMin);
+                  setLastEtaMin(etaMin);
+                  // Flip the reactive flag last so the haversine effect sees
+                  // the correct ETA state rather than overwriting it immediately.
+                  setRouteFetched(true);
+                  if (mapRef.current && result.coordinates?.length > 1) {
+                    mapRef.current.fitToCoordinates(result.coordinates, {
+                      edgePadding: { top: 80, right: 50, bottom: 280, left: 50 },
+                      animated: true,
+                    });
+                  }
+                }}
+              />
+            )}
+
+            {/* Orange → Red gradient route */}
+            {tripRouteCoords.length > 1 && (() => {
+              const total = tripRouteCoords.length;
+              const SEGS = 20;
+              const chunk = Math.max(1, Math.floor(total / SEGS));
+              const segments: { coords: any[]; color: string }[] = [];
+              for (let i = 0; i < total - 1; i += chunk) {
+                const end = Math.min(i + chunk + 1, total);
+                const t = i / Math.max(total - 1, 1);
+                const r = Math.round(255 + (238 - 255) * t);
+                const g = Math.round(149 + (43 - 149) * t);
+                const b = Math.round(0 + (43 - 0) * t);
+                segments.push({ coords: tripRouteCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
+              }
+              return segments.map((seg, idx) => (
+                <Polyline
+                  key={`trip-seg-${idx}`}
+                  coordinates={seg.coords}
+                  strokeWidth={5}
+                  strokeColor={seg.color}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              ));
+            })()}
+
+            {/* Pickup Marker (green) */}
+            <Marker
+              coordinate={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={styles.pickupMarker}>
+                <Ionicons name="location" size={16} color="#FFF" />
+              </View>
+            </Marker>
+
+            {/* Destination Marker (red) */}
+            <Marker
+              coordinate={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={styles.dropoffMarker}>
+                <Ionicons name="flag" size={16} color="#FFF" />
+              </View>
+            </Marker>
 
             {/* Driver Car Marker */}
             {currentDriver?.lat != null && currentDriver?.lng != null && (

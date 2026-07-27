@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 _GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 _PLACES_TEXT_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+_DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
 _HTTP_TIMEOUT = 4.0
 _CENT = Decimal("0.01")
 _PLACE_RADIUS_METERS = 25000
@@ -266,6 +267,71 @@ async def _lookup_place_candidates(
     return {"candidates": []}
 
 
+async def _rank_named_place_candidates_by_route(
+    candidates: list, origin_lat: float, origin_lng: float, api_key: str
+) -> tuple[list, bool]:
+    """Rank a POI shortlist by Google driving distance from the rider/pickup.
+
+    Places relevance and haversine distance produce the shortlist; road
+    topology decides its order.  Directions calls run concurrently so three
+    suggestions add one network round trip rather than three.  Unless every
+    candidate has a route, ordering stays on the existing proximity fallback;
+    an unknown route must not be presented as slower than a known one.
+    """
+
+    async def route(candidate: Dict[str, Any]):
+        data = await _maps_get(
+            _DIRECTIONS_URL,
+            {
+                "origin": f"{origin_lat},{origin_lng}",
+                "destination": f"{candidate['lat']},{candidate['lng']}",
+                "mode": "driving",
+                "region": "ca",
+                "key": api_key,
+            },
+        )
+        await record_call("directions")
+        if data.get("status") != "OK" or not data.get("routes"):
+            return None
+        legs = data["routes"][0].get("legs") or []
+        if not legs:
+            return None
+        distance_m = (legs[0].get("distance") or {}).get("value")
+        duration_s = (legs[0].get("duration") or {}).get("value")
+        if distance_m is None or duration_s is None:
+            return None
+        return float(distance_m), float(duration_s)
+
+    results = await asyncio.gather(*(route(candidate) for candidate in candidates), return_exceptions=True)
+    routed = 0
+    for candidate, result in zip(candidates, results, strict=True):
+        if isinstance(result, Exception):
+            logger.warning(
+                "ai find_place route ranking failed",
+                exc_info=(type(result), result, result.__traceback__),
+            )
+            continue
+        if result is None:
+            logger.warning("ai find_place route ranking returned no driving route")
+            continue
+        distance_m, duration_s = result
+        candidate["driving_distance_km"] = round(distance_m / 1000, 1)
+        candidate["driving_duration_minutes"] = max(1, round(duration_s / 60))
+        routed += 1
+
+    if routed != len(candidates):
+        return candidates, False
+    candidates.sort(
+        key=lambda candidate: (
+            "driving_distance_km" not in candidate,
+            candidate.get("driving_distance_km", float("inf")),
+            candidate.get("driving_duration_minutes", float("inf")),
+            candidate.get("distance_from_search_km", float("inf")),
+        )
+    )
+    return candidates, True
+
+
 async def _places_available() -> tuple:
     settings = await get_app_settings()
     api_key = settings.get("google_maps_api_key") or ""
@@ -401,6 +467,9 @@ async def find_place(
                 "request_map_pin so they get a button to drop a pin on the map."
             ),
         }
+    route_ranked = False
+    if not _looks_like_street_address(query) and near_lat is not None and near_lng is not None and len(candidates) > 1:
+        candidates, route_ranked = await _rank_named_place_candidates_by_route(candidates, near_lat, near_lng, api_key)
     if len(candidates) > 1:
         result = {
             "candidates": candidates,
@@ -411,6 +480,7 @@ async def find_place(
         result = {"candidates": candidates}
     if bias_source:
         result["search_biased_by"] = bias_source
+    result["ranking_basis"] = "driving_distance" if route_ranked else "straight_line_distance"
     # A biased search whose BEST match still sits outside the bias radius is
     # a red flag (wrong city, mis-typed address). Tell the model so it
     # surfaces the distance to the rider instead of quoting a silent 12 km
@@ -657,6 +727,26 @@ _DROPOFF_LABEL_MAX_KM = 1.5
 _COORD_LIKE_ADDRESS = re.compile(r"^\s*(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$")
 
 
+def _coordinate_label_tolerance_km(latitude: str, longitude: str) -> float:
+    """Return the rounding envelope for a coordinate-formatted label.
+
+    Map-pin fallback labels normally carry five decimal places.  Their pin
+    therefore needs to agree within metres, not the kilometre-scale allowance
+    used for POI centroids.  The two-metre floor covers harmless floating-point
+    and serialization drift while the decimal-derived envelope also handles
+    labels rendered at a lower precision.
+    """
+    lat_step = 10 ** -len(latitude.rsplit(".", 1)[1])
+    lng_step = 10 ** -len(longitude.rsplit(".", 1)[1])
+    rounding_envelope_km = _trip_distance_km(
+        float(latitude),
+        float(longitude),
+        float(latitude) + lat_step / 2,
+        float(longitude) + lng_step / 2,
+    )
+    return max(0.002, rounding_envelope_km)
+
+
 def _label_mismatch_refusal(distance_km: float, dropoff_address: str) -> Dict[str, Any]:
     return {
         "needs_correction": "dropoff_label_mismatch",
@@ -711,15 +801,19 @@ async def _dropoff_pair_refusal(
         # The label IS a coordinate pair (map-pin fallback) — no geocode, but
         # its numbers must still agree with the pin being booked: a current
         # pin label glued onto stale coordinates is the same incident.
-        label_km = _trip_distance_km(dropoff_lat, dropoff_lng, float(coord_label[1]), float(coord_label[2]))
-        if label_km <= _DROPOFF_LABEL_MAX_KM:
+        label_lat, label_lng = coord_label[1], coord_label[2]
+        label_km = _trip_distance_km(dropoff_lat, dropoff_lng, float(label_lat), float(label_lng))
+        if label_km <= _coordinate_label_tolerance_km(label_lat, label_lng):
             return None
         return _label_mismatch_refusal(label_km, dropoff_address)
-    api_key, _error = await _places_available()
+    api_key, availability_error = await _places_available()
     if not api_key:
-        # Deliberate degrade: Maps unconfigured or budget-capped is a config
-        # state, not a transient fault — the free guards still apply.
-        return None
+        # A missing key or exhausted budget makes the pair unverifiable.  Do
+        # not disable the stale-coordinate guard in precisely those states.
+        return {
+            "needs_correction": "dropoff_unverified",
+            "note": (availability_error or {}).get("error", "The dropoff could not be verified against its address."),
+        }
     lookup = await _lookup_place_candidates(
         api_key=api_key, query=dropoff_address, near_lat=dropoff_lat, near_lng=dropoff_lng
     )
@@ -1142,7 +1236,9 @@ register(
             "Call this to turn a place the rider names ('downtown Saskatoon', 'the "
             "airport', a street address) into coordinates before quoting or proposing a "
             "ride. For saved places like 'home' or 'work', call get_saved_places instead. "
-            "If multiple candidates return, ask the rider to choose."
+            "Named-place candidates are ordered closest-first by driving distance from "
+            "near_lat/near_lng (or the rider's known location). If multiple candidates "
+            "return, show that ordered list and ask the rider to choose."
         ),
         input_schema={
             "type": "object",

@@ -26,20 +26,39 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** CI fails if payments/fare coverage drops below 90% or rides/dispatch below 80%.
 
 ### A2. Post-deploy smoke test in CI
-- [ ] **Status:** open
+- [x] **Status:** done — landed in commit `3bae3db` (before this checklist item
+  was last reviewed). Two layers now exist: (1) `deploy-fly.yml` and
+  `deploy-backend.yml` each poll `/health` for up to 3 minutes post-deploy and
+  automatically roll back to the previous deployment if it never turns
+  healthy; (2) `ci.yml`'s dedicated `smoke-test` job (gated on
+  `needs: [deploy-backend]`, `main` only) independently re-verifies `/health`
+  (200 + DB-ready), `/api/v1/settings` (200 + valid JSON),
+  `/api/v1/vehicle-types` (200 + non-empty list), auth middleware
+  (`/api/v1/rides` → 401/403, not 500), and the fare service
+  (`/api/v1/fares/estimate` → 401/403/422, not 500) — falling back from
+  Railway to the Fly domain if the primary is unreachable. `notify-failure`
+  sends a Slack alert on any of these jobs failing.
 - **Why:** deploys to Fly/Railway succeed or fail silently; a bad deploy is currently
   discovered by users. The smoke script from PR #172 already exists.
-- **Files:** `.github/workflows/deploy-fly.yml`, `.github/workflows/deploy-backend.yml`
-- **Approach:** add a job after deploy that curls `/health`, exercises auth (expect 401
-  not 500), and the fare-service health path with `--fail-with-body`; page on failure.
-- **Acceptance:** a deliberately broken deploy turns the workflow red within minutes.
+- **Files:** `.github/workflows/ci.yml` (`smoke-test`, `notify-failure` jobs),
+  `.github/workflows/deploy-fly.yml`, `.github/workflows/deploy-backend.yml`
+  (both already had health-poll-and-rollback)
+- **Acceptance:** ✅ met — a deliberately broken deploy turns the workflow red within minutes
+  (health-poll rollback within 3 min, smoke-test job on top) and pages via Slack.
 
 ### A3. PIPEDA breach record register
-- [ ] **Status:** open (regulatory)
+- [x] **Status:** done — `docs/audit/breach-record.md` exists (created in PR #2222,
+  2026-07-25), predating this checklist item's discovery. Row template covers
+  discovery/breach timestamps, data categories, affected-individual count,
+  RROSH determination, OPC/SGI/affected-individual notification status, root
+  cause, fix PR, post-mortem link, and Privacy Officer sign-off — a superset
+  of the originally-requested (date, scope, RROSH, notified?, evidence
+  location) columns. First row reads "No entries to date" with an explicit
+  note that this is the expected pre-launch state, not neglect.
 - **Why:** referenced by `docs/runbooks/data-breach.md` but never created; PIPEDA
   requires a 24-month breach record.
-- **Files:** create `docs/audit/breach-record.md`
-- **Acceptance:** template with columns (date, scope, RROSH assessment, notified?,
+- **Files:** `docs/audit/breach-record.md`
+- **Acceptance:** ✅ met — template with columns (date, scope, RROSH assessment, notified?,
   evidence location) and a "no entries to date" first row.
 
 ### A4. 156 failing backend tests on `main`

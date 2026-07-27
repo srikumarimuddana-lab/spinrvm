@@ -123,15 +123,22 @@ describe('editing the destination text', () => {
     // focus-active-field effect, plus FlatList/VirtualizedList's own internal
     // cell-render timer once the recents/predictions list mounts). Left as
     // real timers, those callbacks fire on the actual event loop rather than
-    // inside this test's act() calls — under CI load that occasionally
-    // ballooned past Jest's 5000ms per-test timeout even though this test's
-    // own assertion never depends on them (CR-2026-005). Fake timers make
-    // the render deterministic; nothing here needs to advance them since the
-    // assertion is pure synchronous store state.
+    // inside this test's act() calls — under CI load (this test file runs
+    // alongside 48 others in the same worker) that occasionally ballooned
+    // past Jest's 5000ms per-test timeout, even though this test's own
+    // assertion never depends on them firing (CR-2026-005). Fake timers make
+    // the render deterministic; flushing them inside act() (rather than
+    // leaving them pending-but-frozen) settles VirtualizedList's internal
+    // setState before the test ends, instead of that update landing outside
+    // any act() call and racing the next test file in the same worker.
     jest.useFakeTimers();
     try {
       useRideStore.setState({ dropoff: GORDON });
       const renderer = await renderScreen();
+
+      act(() => {
+        jest.runOnlyPendingTimers();
+      });
 
       await act(async () => {
         dropoffInput(renderer).props.onChangeText('4321 wakeling');

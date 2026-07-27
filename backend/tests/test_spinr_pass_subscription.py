@@ -1367,6 +1367,15 @@ class TestExpiryWarning3Day:
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"require_driver_subscription": False}),
             ),
+            # check_expiring_subscriptions() gates its whole loop body behind
+            # a distributed lock (redis_set_nx). In dev/test that falls back
+            # to a module-level in-process dict shared across the whole
+            # pytest process, so if any earlier test's run of this function
+            # already "acquired" the same lock key, it stays held for the
+            # rest of the suite and this test silently no-ops instead of
+            # reaching the push-notification code. Force the lock to always
+            # be won here rather than depending on real fallback-store state.
+            patch("backend.utils.redis_client.redis_set_nx", AsyncMock(return_value=True)),
             patch("backend.routes.drivers._deps.asyncio.sleep", AsyncMock(side_effect=Exception("stop"))),
         ):
             try:

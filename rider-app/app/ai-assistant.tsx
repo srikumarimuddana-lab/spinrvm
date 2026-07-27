@@ -157,7 +157,7 @@ function LocationSuggestionsCard({
         <Ionicons name="location-outline" size={17} color={colors.primary} />
         <Text style={styles.locationTitle}>{title}</Text>
       </View>
-      {item.action.candidates.slice(0, 3).map((candidate, index) => {
+      {item.action.candidates.slice(0, 10).map((candidate, index) => {
         const primary = candidate.name || candidate.address || `Option ${index + 1}`;
         const secondary = candidate.name && candidate.address ? candidate.address : candidate.service_area;
         const routeSummary =

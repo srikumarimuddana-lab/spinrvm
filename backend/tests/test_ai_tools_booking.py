@@ -90,6 +90,9 @@ def test_rider_prompt_requires_fresh_closest_search_without_disclosing_tools():
     assert "shortest DRIVING DISTANCE" in prompt
     assert "Tool names, function names" in prompt
     assert "Never print identifiers" in prompt
+    assert 'says "I selected this exact search result"' in prompt
+    assert "do NOT call find_place or" in prompt
+    assert "exact selected" in prompt
 
 
 def _patch_last_ride(rows=None):
@@ -209,6 +212,43 @@ class TestFindPlace:
         assert result["_client_action"]["candidates"] == result["candidates"]
 
     @pytest.mark.anyio
+    async def test_same_store_address_variants_collapse_to_main_store(self):
+        places = {
+            "status": "OK",
+            "results": [
+                {
+                    "name": "Walmart Pharmacy",
+                    "formatted_address": "Walmart Pharmacy, 4500 Gordon Road, Regina, SK S4W 0B7, Canada",
+                    "geometry": {"location": {"lat": 50.4078, "lng": -104.6500}},
+                },
+                {
+                    "name": "Walmart Garden Centre",
+                    "formatted_address": "4500 Gordon Rd., Regina, SK, Canada",
+                    "geometry": {"location": {"lat": 50.4077, "lng": -104.6502}},
+                },
+                {
+                    "name": "Walmart Supercentre",
+                    "formatted_address": "4500 Gordon Rd, Regina, SK S4W 0B7",
+                    "geometry": {"location": {"lat": 50.4079, "lng": -104.6501}},
+                },
+            ],
+        }
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(places),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
+            )
+
+        assert ok
+        assert len(result["candidates"]) == 1
+        assert result["candidates"][0]["name"] == "Walmart Supercentre"
+
+    @pytest.mark.anyio
     async def test_named_place_suggestions_rank_by_google_driving_distance(self):
         async def maps_get(url, params):
             if url == tools_booking._PLACES_TEXT_URL:
@@ -277,6 +317,33 @@ class TestFindPlace:
         assert ok
         assert result["ranking_basis"] == "straight_line_distance"
         assert result["candidates"][0]["name"] == "Walmart Supercentre"
+
+    @pytest.mark.anyio
+    async def test_partial_route_failure_excludes_unverifiable_candidate(self):
+        candidates = [
+            {"name": "Gordon", "lat": 50.4079, "lng": -104.6501, "distance_from_search_km": 5.1},
+            {"name": "Prince of Wales", "lat": 50.4497, "lng": -104.5345, "distance_from_search_km": 5.2},
+        ]
+
+        async def maps_get(_url, params):
+            if params["destination"] == "50.4079,-104.6501":
+                return {"status": "ZERO_RESULTS", "routes": []}
+            return {
+                "status": "OK",
+                "routes": [{"legs": [{"distance": {"value": 5500}, "duration": {"value": 720}}]}],
+            }
+
+        with (
+            patch.object(tools_booking, "_maps_get", AsyncMock(side_effect=maps_get)),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            ranked, route_ranked = await tools_booking._rank_named_place_candidates_by_route(
+                candidates, 50.45, -104.62, "key"
+            )
+
+        assert route_ranked is True
+        assert [candidate["name"] for candidate in ranked] == ["Prince of Wales"]
+        assert ranked[0]["driving_distance_km"] == 5.5
 
     @pytest.mark.anyio
     async def test_budget_exhausted_degrades_gracefully(self):

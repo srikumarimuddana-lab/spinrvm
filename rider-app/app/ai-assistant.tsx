@@ -36,7 +36,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/ai';
 import { useAuthStore } from '@shared/store/authStore';
 import BookingProposalCard from '../components/BookingProposalCard';
-import { buildQuoteBookingMessage } from '../components/bookingProposal';
+import { buildLocationSelectionMessage, buildQuoteBookingMessage } from '../components/bookingProposal';
 import FareQuoteCard from '../components/FareQuoteCard';
 import AiAuroraBackground from '../components/AiAuroraBackground';
 import AiWelcomeOrb from '../components/AiWelcomeOrb';
@@ -374,11 +374,9 @@ export default function AiAssistantScreen() {
           colors={colors}
           styles={styles}
           onSelect={(candidate) => {
-            const label = candidate.address || candidate.name;
-            if (!label) return;
             const role = item.action?.type === 'location_suggestions' ? item.action.location_role : null;
-            const suffix = role === 'pickup' ? ' as my pickup' : role === 'dropoff' ? ' as my dropoff' : '';
-            handleSend(`Use ${label}${suffix}.`);
+            const message = buildLocationSelectionMessage(candidate, role);
+            if (message) handleSend(message);
           }}
         />
       );

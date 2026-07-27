@@ -7,7 +7,7 @@
  * store's estimates) and books via rideStore.createRide() — the exact code
  * path of the manual booking flow. The AI never books; the rider's tap does.
  */
-import type { AiAction, BookingProposal, FareQuoteOption } from '@shared/types/ai';
+import type { AiAction, BookingProposal, FareQuoteOption, LocationSuggestionCandidate } from '@shared/types/ai';
 import {
   grandTotalOf,
   promoDiscountForEstimate,
@@ -20,6 +20,20 @@ type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 /** Quotes auto-refresh on this cadence so a stale estimate_token (surge
  * lock) is never submitted. Matches the booking screens' refresh habit. */
 export const QUOTE_REFRESH_SECONDS = 60;
+
+/** A location-suggestion tap starts a new chat turn, after the tool result has
+ * gone out of scope. Carry the selected pin with its label so the assistant
+ * uses that exact Google Places result instead of geocoding the address again
+ * and downgrading a precise POI to an approximate street centroid. */
+export function buildLocationSelectionMessage(
+  candidate: LocationSuggestionCandidate,
+  role?: 'pickup' | 'dropoff' | null,
+): string {
+  const label = candidate.address || candidate.name;
+  if (!label) return '';
+  const endpoint = role === 'pickup' ? ' as my pickup' : role === 'dropoff' ? ' as my dropoff' : '';
+  return `Use ${label} [${candidate.lat.toFixed(5)},${candidate.lng.toFixed(5)}]${endpoint}. I selected this exact search result.`;
+}
 
 export interface EstimateLike {
   vehicle_type: { id: string; name: string };

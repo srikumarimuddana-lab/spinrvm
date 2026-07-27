@@ -54,6 +54,7 @@ _HTTP_TIMEOUT = 4.0
 _CENT = Decimal("0.01")
 _PLACE_RADIUS_METERS = 25000
 _PLACE_CANDIDATE_LIMIT = 10
+_DEPARTMENT_LABELS = ("pharmacy", "garden centre", "garden center", "vision centre", "vision center", "auto centre")
 # A model-supplied pickup that sits more than this far from its own
 # (re-geocoded) address is treated as stale/hallucinated and replaced by the
 # address — the driver is dispatched to the coordinate, never the text, so the
@@ -106,6 +107,33 @@ def _looks_like_street_address(query: str) -> bool:
             " ln",
         )
     )
+
+
+def _physical_address_key(address: Optional[str], lat: float, lng: float) -> str:
+    """Collapse formatting variants for departments at one physical store."""
+    normalized = re.sub(r"[^a-z0-9, ]", " ", str(address or "").casefold())
+    normalized = re.sub(r"\b[abceghjklmnprstvxy]\d[abceghjklmnprstvxy]\s*\d[abceghjklmnprstvxy]\d\b", " ", normalized)
+    parts = [re.sub(r"\s+", " ", part).strip() for part in normalized.split(",") if part.strip()]
+    street_index = next((index for index, part in enumerate(parts) if re.search(r"\b\d+\b", part)), None)
+    if street_index is None:
+        return f"coord:{lat:.4f},{lng:.4f}"
+    street = parts[street_index]
+    for long, short in (
+        ("boulevard", "blvd"),
+        ("avenue", "ave"),
+        ("street", "st"),
+        ("drive", "dr"),
+        ("road", "rd"),
+        ("highway", "hwy"),
+    ):
+        street = re.sub(rf"\b{long}\b", short, street)
+    city = parts[street_index + 1] if street_index + 1 < len(parts) else ""
+    return f"address:{street}|{city}"
+
+
+def _is_department_result(result: Dict[str, Any]) -> bool:
+    name = str(result.get("name") or "").casefold()
+    return any(label in name for label in _DEPARTMENT_LABELS)
 
 
 async def _resolve_area(lat: float, lng: float):
@@ -182,13 +210,17 @@ async def _candidates_from_results(
     # example Walmart, Walmart Pharmacy and Walmart Garden Centre). The rider
     # needs one destination choice per physical address, not duplicate brands.
     unique = []
-    seen_addresses = set()
+    unique_indexes = {}
     for item in parsed:
-        address = re.sub(r"\s+", " ", str(item[1].get("formatted_address") or "").strip().casefold())
-        dedupe_key = address or f"{item[2]:.5f},{item[3]:.5f}"
-        if dedupe_key in seen_addresses:
+        dedupe_key = _physical_address_key(item[1].get("formatted_address"), item[2], item[3])
+        existing_index = unique_indexes.get(dedupe_key)
+        if existing_index is not None:
+            # Prefer the actual store over an embedded pharmacy/garden/vision
+            # department when Google ranks the department first.
+            if _is_department_result(unique[existing_index][1]) and not _is_department_result(item[1]):
+                unique[existing_index] = item
             continue
-        seen_addresses.add(dedupe_key)
+        unique_indexes[dedupe_key] = len(unique)
         unique.append(item)
 
     areas = await _resolve_candidate_areas([(lat, lng) for _distance, _result, lat, lng in unique])
@@ -344,9 +376,10 @@ async def _rank_named_place_candidates_by_route(
         candidate["driving_duration_minutes"] = max(1, round(duration_s / 60))
         routed += 1
 
-    if routed != len(candidates):
+    if not routed:
         return candidates, False
-    candidates.sort(
+    routed_candidates = [candidate for candidate in candidates if "driving_distance_km" in candidate]
+    routed_candidates.sort(
         key=lambda candidate: (
             "driving_distance_km" not in candidate,
             candidate.get("driving_distance_km", float("inf")),
@@ -354,7 +387,7 @@ async def _rank_named_place_candidates_by_route(
             candidate.get("distance_from_search_km", float("inf")),
         )
     )
-    return candidates, True
+    return routed_candidates, True
 
 
 async def _places_available() -> tuple:

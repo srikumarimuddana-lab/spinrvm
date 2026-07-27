@@ -7,6 +7,7 @@
  */
 import {
   buildQuoteBookingMessage,
+  buildLocationSelectionMessage,
   displayFare,
   displayFareWithPromo,
   mapBookingError,
@@ -184,6 +185,24 @@ describe('buildQuoteBookingMessage', () => {
     const bare = { type: 'fare_quote', quotes: [] } as Extract<AiAction, { type: 'fare_quote' }>;
     expect(buildQuoteBookingMessage(bare, { total: '', final_total: '' })).toBe(
       'Book the recommended option.',
+    );
+  });
+});
+
+describe('buildLocationSelectionMessage', () => {
+  it('carries the exact selected place pin into the next turn', () => {
+    expect(
+      buildLocationSelectionMessage(
+        {
+          name: 'Walmart East',
+          address: '2150 Prince of Wales Dr, Regina, SK',
+          lat: 50.449712,
+          lng: -104.534487,
+        },
+        'dropoff',
+      ),
+    ).toBe(
+      'Use 2150 Prince of Wales Dr, Regina, SK [50.44971,-104.53449] as my dropoff. I selected this exact search result.',
     );
   });
 });

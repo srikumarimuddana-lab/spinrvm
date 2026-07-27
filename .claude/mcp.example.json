@@ -17,6 +17,15 @@
       "env": {
         "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
       }
+    },
+    "stripe": {
+      "_comment": "Official Stripe MCP. Use a RESTRICTED, TEST-MODE secret key (sk_test_...) scoped to the minimum resources needed — never the live secret key or an unrestricted key. Verifying webhook/idempotency fixes against real event payloads is the main use case; it should never touch live customer charges from an editor session.",
+      "command": "npx",
+      "args": ["-y", "@stripe/mcp", "--api-key=${SPINR_STRIPE_TEST_SECRET_KEY}"]
+    },
+    "vercel": {
+      "_comment": "Official Vercel MCP — remote server, OAuth on first connect (no key to store here). Gives read access to admin-dashboard's deployments/build logs. The OAuth flow authorizes whatever Vercel account/team you sign in with, so use a team member scoped to this project if you don't want broader org access.",
+      "url": "https://mcp.vercel.com"
     }
   }
 }

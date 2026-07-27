@@ -242,6 +242,137 @@ class TestNoDriversAvailableTimeout:
         update_mock.assert_not_called()
         ws_mock.assert_not_called()
 
+    async def test_timeout_releases_preauth_hold_before_cancelling(self):
+        """A booking-time pre-auth (7-day card hold) must be released so the
+        rider's card isn't blocked after an auto-cancel (WS-8, finding 11)."""
+        from backend.routes import rides as rides_mod
+
+        searching = _ride(
+            status="searching",
+            payment_intent_id="pi_123",
+            auth_status="authorized",
+        )
+
+        with (
+            patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.cancel_authorization",
+                AsyncMock(return_value=True),
+            ) as mock_cancel_auth,
+        ):
+            await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
+
+        mock_cancel_auth.assert_awaited_once_with(ride_id=RIDE_ID, payment_intent_id="pi_123")
+
+    async def test_timeout_preauth_release_failure_still_cancels_ride(self):
+        """A Stripe error releasing the hold must not block the ride cancel --
+        the rider must not be stuck 'searching' forever over a payment-side
+        cleanup failure."""
+        from backend.routes import rides as rides_mod
+
+        searching = _ride(
+            status="searching",
+            payment_intent_id="pi_123",
+            auth_status="authorized",
+        )
+        update_calls = []
+
+        async def _capture_update(ride_id, patch):
+            update_calls.append((ride_id, patch))
+
+        with (
+            patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.cancel_authorization",
+                AsyncMock(side_effect=RuntimeError("stripe down")),
+            ),
+        ):
+            await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
+
+        assert update_calls, "ride must still be cancelled even if pre-auth release fails"
+
+    async def test_timeout_attribution_write_failure_falls_back_to_minimal_update(self):
+        """If the DB rejects cancelled_by/cancellation_type (pre-migration-38
+        schema), retry with just the base cancellation fields so the
+        rider-facing cancel still succeeds."""
+        from backend.routes import rides as rides_mod
+
+        searching = _ride(status="searching")
+        update_calls = []
+
+        async def _capture_update(ride_id, patch):
+            # First call (with attribution columns) fails; the retry (base
+            # fields only) succeeds.
+            if "cancelled_by" in patch:
+                raise RuntimeError("PGRST204: column cancelled_by does not exist")
+            update_calls.append((ride_id, patch))
+
+        with (
+            patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+        ):
+            await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
+
+        assert update_calls, "the minimal-fields retry must still succeed"
+        assert "cancelled_by" not in update_calls[0][1]
+
+    async def test_timeout_notifies_guest_by_sms_for_guest_booking(self):
+        """A corporate guest booking has no app to receive the WS/push
+        notice -- it must get an SMS instead so they're not left standing at
+        the pickup point."""
+        from backend.routes import rides as rides_mod
+
+        searching = _ride(status="searching", guest_booking=True)
+
+        with (
+            patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.spawn") as mock_spawn,
+            patch(
+                "backend.services.guest_notification_service.notify_guest_cancelled",
+                new_callable=AsyncMock,
+            ) as mock_notify,
+        ):
+            await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
+
+        mock_spawn.assert_called_once()
+        # notify_guest_cancelled(...) is called (and its coroutine object
+        # constructed) synchronously to build spawn()'s argument -- calling an
+        # AsyncMock records the call immediately, independent of whether the
+        # returned coroutine is ever awaited. spawn() itself never ran it.
+        mock_notify.assert_called_once_with(dict(searching))
+        scheduled_coro = mock_spawn.call_args.args[0]
+        scheduled_coro.close()
+
+    async def test_timeout_handler_error_is_swallowed(self):
+        """Any unexpected error in the timeout handler must not propagate --
+        it's a fire-and-forget background task with no caller to catch it."""
+        from backend.routes import rides as rides_mod
+
+        with (
+            patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_ride",
+                AsyncMock(side_effect=RuntimeError("db down")),
+            ),
+        ):
+            # Must not raise.
+            await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # P0-3: Duplicate ride request guard

@@ -373,7 +373,12 @@ async def test_get_ride_history_returns_completed_rides():
         r["id"] = f"ride-{i}"
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=completed)
+        # _fetch_ride_history_page now builds a raw Supabase query chain
+        # (table/select/eq/or_/order/limit) wrapped in db_supabase.run_sync,
+        # instead of going through get_rows/find_one -- mock the awaited
+        # call directly rather than faking the whole query-builder chain.
+        # The real query LIMITs to `limit + 1` rows to detect has-more.
+        mock_db.run_sync = AsyncMock(return_value=completed[:4])
         mock_db.find_one = AsyncMock(return_value=None)
 
         result = await get_ride_history(request=req, limit=3, before=None, current_user=_USER)
@@ -392,7 +397,10 @@ async def test_get_ride_history_cursor_pagination():
     rides_after_cursor = [{"id": f"r-{i}", "status": "completed", "driver_id": _DRIVER_ID} for i in range(2, 5)]
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=rides_after_cursor)
+        # See test_get_ride_history_returns_completed_rides -- the cursor
+        # filter is pushed into the DB query itself now, so run_sync's
+        # return already reflects "only rides after the cursor".
+        mock_db.run_sync = AsyncMock(return_value=rides_after_cursor)
         mock_db.find_one = AsyncMock(return_value={"id": "r-1", "created_at": "2024-01-02T00:00:00Z"})
 
         result = await get_ride_history(request=req, limit=20, before="r-1", current_user=_USER)
@@ -408,14 +416,17 @@ async def test_get_ride_history_filters_cancelled_without_driver():
     from backend.routes.rides import get_ride_history
 
     req = _starlette_request()
+    # The visibility filter (completed, or cancelled-with-a-driver) is now
+    # pushed into the DB query itself (_RIDE_HISTORY_VISIBLE_OR) rather than
+    # applied in Python, so the mocked run_sync return already reflects a
+    # real query's output -- r-1 would never come back from Supabase.
     rides = [
-        {"id": "r-1", "status": "cancelled", "driver_id": None},  # excluded
         {"id": "r-2", "status": "completed", "driver_id": _DRIVER_ID},  # included
         {"id": "r-3", "status": "cancelled", "driver_id": _DRIVER_ID},  # included
     ]
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=rides)
+        mock_db.run_sync = AsyncMock(return_value=rides)
         mock_db.find_one = AsyncMock(return_value=None)
 
         result = await get_ride_history(request=req, limit=20, before=None, current_user=_USER)
@@ -2600,7 +2611,10 @@ async def test_get_ride_history_with_cursor():
     # simulates that by returning only rides older than the cursor.
     rides_after_cursor = [_ride(status="completed", **{"id": f"r-{i}", "driver_id": _DRIVER_ID}) for i in range(2, 5)]
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=rides_after_cursor)
+        # See test_get_ride_history_returns_completed_rides -- filtering is
+        # now pushed into the DB query itself, mock the awaited run_sync
+        # call directly instead of get_rows (never called by this path).
+        mock_db.run_sync = AsyncMock(return_value=rides_after_cursor)
         mock_db.find_one = AsyncMock(return_value={"id": "r-1", "created_at": "2024-01-02T00:00:00Z"})
         result = await get_ride_history(
             request=_starlette_request(),
@@ -2977,11 +2991,20 @@ async def test_process_payment_wallet_success():
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.routes.rides._deps.db") as mock_ddb,
-        patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
+        # settle_wallet (services/payment_service.py) uses its own db_supabase
+        # import, not routes.rides._deps.db_supabase -- patching only the
+        # latter leaves find_one/wallet_pay_for_ride hitting the real,
+        # unmocked DB layer. routes.wallet.get_or_create_wallet is never
+        # called by this code path at all.
+        patch("backend.services.payment_service.db_supabase") as mock_pay_db,
         patch("backend.routes.wallet._record_transaction", new_callable=AsyncMock),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
         mock_ddb.update_one = AsyncMock()
+        mock_pay_db.find_one = AsyncMock(return_value=wallet)
+        mock_pay_db.wallet_pay_for_ride = AsyncMock(return_value=Decimal("35.00"))
+        mock_pay_db.update_ride = AsyncMock()
+        mock_pay_db.insert_one = AsyncMock()
 
         result = await process_payment(
             ride_id=_RIDE_ID,
@@ -3009,8 +3032,12 @@ async def test_process_payment_wallet_suspended():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
+        # settle_wallet uses its own db_supabase import -- see the happy-path
+        # test above for the full explanation.
+        patch("backend.services.payment_service.db_supabase") as mock_pay_db,
     ):
+        mock_pay_db.find_one = AsyncMock(return_value=wallet)
+        mock_pay_db.update_ride = AsyncMock()
         with pytest.raises(HTTPException) as exc:
             await process_payment(
                 ride_id=_RIDE_ID,
@@ -3039,8 +3066,13 @@ async def test_process_payment_wallet_insufficient_balance():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
+        # settle_wallet uses its own db_supabase import -- see the happy-path
+        # test above for the full explanation.
+        patch("backend.services.payment_service.db_supabase") as mock_pay_db,
     ):
+        mock_pay_db.find_one = AsyncMock(return_value=wallet)
+        mock_pay_db.update_ride = AsyncMock()
+        mock_pay_db.wallet_pay_for_ride = AsyncMock(side_effect=ValueError("insufficient_funds"))
         with pytest.raises(HTTPException) as exc:
             await process_payment(
                 ride_id=_RIDE_ID,

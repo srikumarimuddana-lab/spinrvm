@@ -47,6 +47,8 @@ def _ride(requires_wav: bool = False) -> dict:
         "rider_id": RIDER_ID,
         "pickup_lat": 52.13,
         "pickup_lng": -106.67,
+        "dropoff_lat": 52.15,
+        "dropoff_lng": -106.65,
         "vehicle_type_id": "economy",
         "requires_wav": requires_wav,
         "status": "searching",

@@ -762,7 +762,11 @@ async def test_process_payment_no_payment_method():
                 req=ProcessPaymentRequest(),
                 current_user=_USER,
             )
-    assert exc.value.status_code == 400
+    # Deliberately changed from a bare 400 to a structured 402 (see
+    # services/payment_service.py's own comment) so the rider app can
+    # surface a Change Card / Add Card action instead of a dead-end error.
+    assert exc.value.status_code == 402
+    assert exc.value.detail["code"] == "no_payment_method"
 
 
 @pytest.mark.anyio
@@ -1993,7 +1997,9 @@ async def test_get_scheduled_rides():
     from backend.routes.rides import get_scheduled_rides
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rides_for_user = MagicMock(return_value=[_ride(status="scheduled")])
+        # get_scheduled_rides calls db_supabase.get_rows directly --
+        # get_rides_for_user isn't called by this path at all.
+        mock_db.get_rows = AsyncMock(return_value=[_ride(status="scheduled")])
         result = await get_scheduled_rides(current_user=_USER)
     assert isinstance(result, list)
 
@@ -2100,6 +2106,9 @@ async def test_rider_start_ride_success():
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[driver_row])
         mock_db.update_ride = AsyncMock()
+        # Atomic driver_arrived -> in_progress claim; None means "lost the
+        # race" -> 409, so this must be truthy for the happy path.
+        mock_db.update_one = AsyncMock(return_value=ride)
         result = await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
     assert result["success"] is True
 
@@ -2137,9 +2146,25 @@ async def test_rider_complete_ride_wrong_rider():
 async def test_rider_complete_ride_success():
     from backend.routes.rides import rider_complete_ride
 
-    ride = _ride(status="completed", rider_id=_RIDER_ID)
-    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_ride = AsyncMock(return_value=ride)
+    # rider_complete_ride requires the PRE-state to be in_progress (it's the
+    # transition that produces "completed", not a precondition of it) --
+    # the fixture had the post-state instead of the pre-state.
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed"}
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+    ):
+        # get_ride is called twice: once for the pre-state read, once after
+        # the atomic transition to build the response -- the final return
+        # value (`return completed_ride or ride`) comes from the SECOND call.
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_ride = AsyncMock()
+        # Atomic in_progress -> completed claim; None means "lost the race"
+        # -> 409, so this must be truthy for the happy path.
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
         result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
     assert result["status"] == "completed"
 
@@ -2552,8 +2577,19 @@ async def test_create_ride_full_happy_path():
         patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock),
         patch("backend.routes.rides._deps.manager") as mock_manager,
     ):
-        mock_db.find_one = AsyncMock(return_value=None)  # no idempotency match
+        # find_one is used for two different lookups on this path: the
+        # idempotency-key check (None -> no match) and, since body uses
+        # payment_method="wallet", a new pre-validation wallet-balance check
+        # (own comment: "reject the ride before dispatching if the rider
+        # clearly cannot pay") -- give the wallet enough balance to pass.
+        async def _find_one_side_effect(table, *args, **kwargs):
+            if table == "wallets":
+                return {"id": "wallet-1", "balance": 100.0}
+            return None
+
+        mock_db.find_one = AsyncMock(side_effect=_find_one_side_effect)
         mock_db.get_rows = AsyncMock(return_value=[])  # always empty (no active ride, no corp members, etc.)
+        mock_db.get_service_area_for_point = AsyncMock(return_value=None)
         mock_ddb.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
         mock_db.insert_ride = AsyncMock(return_value=inserted_ride)
         mock_db.get_ride = AsyncMock(return_value={**inserted_ride, "status": "driver_assigned"})
@@ -3129,6 +3165,11 @@ async def test_process_payment_guard_row_none():
     ride = _ride(status="completed", payment_status="pending", rider_id=_RIDER_ID)
     mock_db = _mock_db_for_payment(ride)
     mock_db.update_one = AsyncMock(return_value=None)  # guard returns None
+    # On a lost claim, process_payment now re-reads the ride and only
+    # reports already_paid if it's genuinely paid (or processing for a
+    # non-wallet method) -- otherwise it raises a retryable 409. Simulate
+    # "a concurrent request already completed payment" on the re-read.
+    mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", payment_status="paid", rider_id=_RIDER_ID))
 
     with patch("backend.routes.rides._deps.db_supabase", mock_db):
         result = await process_payment(
@@ -3267,9 +3308,20 @@ async def test_process_payment_company_allowance_unlimited_happy_path():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
-        patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
+        # settle_corporate (services/payment_service.py) uses its own
+        # db_supabase import, not routes.rides._deps.db_supabase -- reuse
+        # the same mock_db instance (already has list_active_memberships_
+        # for_user/get_member_allowance/etc. configured) for both.
+        patch("backend.services.payment_service.db_supabase", mock_db),
+        # corporate_allowance_service/corporate_wallet_service are imported
+        # at MODULE level in payment_service.py (top-of-file try/except),
+        # not function-locally -- patching backend.services.X only replaces
+        # the services package's own attribute, not the name payment_service
+        # already captured into its own namespace at import time. Must patch
+        # backend.services.payment_service.X to actually intercept the call.
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.evaluate_policy", mock_policy_eval),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
         result = await process_payment(
@@ -3315,9 +3367,20 @@ async def test_process_payment_company_allowance_capped_with_master():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
-        patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
+        # settle_corporate (services/payment_service.py) uses its own
+        # db_supabase import, not routes.rides._deps.db_supabase -- reuse
+        # the same mock_db instance (already has list_active_memberships_
+        # for_user/get_member_allowance/etc. configured) for both.
+        patch("backend.services.payment_service.db_supabase", mock_db),
+        # corporate_allowance_service/corporate_wallet_service are imported
+        # at MODULE level in payment_service.py (top-of-file try/except),
+        # not function-locally -- patching backend.services.X only replaces
+        # the services package's own attribute, not the name payment_service
+        # already captured into its own namespace at import time. Must patch
+        # backend.services.payment_service.X to actually intercept the call.
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.evaluate_policy", mock_policy_eval),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
         result = await process_payment(
@@ -3360,11 +3423,20 @@ async def test_process_payment_company_allowance_master_debit_fails():
 
     mock_wallet_svc = MagicMock()
     mock_wallet_svc.apply_adjustment = AsyncMock(side_effect=Exception("wallet debit failed"))
+    mock_policy_eval = MagicMock(return_value={"pass": True, "failed_rules": []})
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.services.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.services.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.db_supabase", mock_db),
+        # corporate_allowance_service/corporate_wallet_service are imported
+        # at MODULE level in payment_service.py (top-of-file try/except),
+        # not function-locally -- patching backend.services.X only replaces
+        # the services package's own attribute, not the name payment_service
+        # already captured into its own namespace at import time. Must patch
+        # backend.services.payment_service.X to actually intercept the call.
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.evaluate_policy", mock_policy_eval),
     ):
         with pytest.raises(HTTPException) as exc:
             await process_payment(
@@ -3373,5 +3445,8 @@ async def test_process_payment_company_allowance_master_debit_fails():
                 current_user=_USER,
             )
     assert exc.value.status_code == 503
-    # Compensation grant should have been attempted
-    mock_allowance_svc.apply_grant.assert_called_once()
+    # Compensation reverses the allowance debit (services/payment_service.py
+    # explicitly documents why apply_grant is wrong here: it would debit the
+    # master wallet a SECOND time via its own negative master delta,
+    # compounding the failure instead of compensating it).
+    mock_allowance_svc.apply_ride_debit_reversal.assert_called_once()

@@ -77,7 +77,7 @@ class TestWalletPayForRideHelper:
     @pytest.mark.anyio
     async def test_insufficient_funds_raises_value_error(self):
         """RPC exception containing 'insufficient_funds' → ValueError."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = MagicMock()
         mock.rpc.return_value.execute.side_effect = Exception("insufficient_funds: balance 0")
@@ -89,7 +89,7 @@ class TestWalletPayForRideHelper:
     @pytest.mark.anyio
     async def test_success_returns_new_balance(self):
         """RPC returning a numeric string → Decimal new balance."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = MagicMock()
         res = MagicMock()
@@ -104,7 +104,7 @@ class TestWalletPayForRideHelper:
     @pytest.mark.anyio
     async def test_wallet_not_found_raises_value_error(self):
         """RPC exception containing 'wallet not found' → ValueError."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = MagicMock()
         mock.rpc.return_value.execute.side_effect = Exception("wallet not found")
@@ -121,7 +121,7 @@ class TestWalletPayForRideHelper:
         the first succeeds, the second raises 'insufficient_funds'.
         Both tasks must resolve cleanly (no crash, correct exception type).
         """
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = _mock_supabase_rpc_once_then_fail("0.00", "insufficient_funds")
 
@@ -141,7 +141,7 @@ class TestWalletPayForRideHelper:
     @pytest.mark.anyio
     async def test_three_concurrent_one_succeeds_rest_fail(self):
         """Three concurrent debits, only one can win — mirrors a burst retry."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = _mock_supabase_rpc_once_then_fail("0.00", "insufficient_funds")
 
@@ -248,7 +248,7 @@ class TestFareSplitPayShareHelper:
     @pytest.mark.anyio
     async def test_insufficient_funds_raises_value_error(self):
         """RPC exception containing 'insufficient_funds' → ValueError."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = MagicMock()
         mock.rpc.return_value.execute.side_effect = Exception("insufficient_funds: low balance")
@@ -260,7 +260,7 @@ class TestFareSplitPayShareHelper:
     @pytest.mark.anyio
     async def test_success_returns_new_balance(self):
         """RPC returning a numeric value → Decimal new balance."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = MagicMock()
         res = MagicMock()
@@ -275,7 +275,7 @@ class TestFareSplitPayShareHelper:
     @pytest.mark.anyio
     async def test_concurrent_race_one_wins_one_fails(self):
         """Two concurrent fare-split payments from the same wallet — only one succeeds."""
-        import db_supabase as dbs
+        import repositories.wallet_repo as dbs
 
         mock = _mock_supabase_rpc_once_then_fail("0.00", "insufficient_funds")
 

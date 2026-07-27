@@ -19,8 +19,10 @@ import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
 import api, { getApiErrorMessage } from '@shared/api/client';
@@ -360,7 +362,8 @@ function DriverArrivingScreenContent() {
               }}
             />
           )}
-          {driverRouteCoords.length > 1 && renderGradientPolyline(driverRouteCoords, true)}
+          {/* Driver → pickup leg — same real coords, drawn via the shared gradient. */}
+          <RouteLine path={driverRouteCoords} />
 
           {/* Pickup → dropoff route: use saved polyline or cached coords first;
               only call Directions API as a last resort. */}
@@ -377,17 +380,16 @@ function DriverArrivingScreenContent() {
               }}
             />
           )}
-          {rideRouteCoords.length > 1 && renderGradientPolyline(rideRouteCoords, false)}
-
-          {/* Pickup marker */}
-          <Marker coordinate={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
-            <View style={styles.markerWrap}><View style={[styles.markerDot, { backgroundColor: '#10B981' }]} /></View>
-          </Marker>
-
-          {/* Dropoff marker */}
-          <Marker coordinate={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
-            <View style={styles.markerWrap}><View style={[styles.markerDot, { backgroundColor: '#EF4444' }]} /></View>
-          </Marker>
+          {/* Pickup → dropoff route — real coords, shared gradient line + pins. */}
+          <RouteLine
+            path={rideRouteCoords}
+            pickup={rideRouteOrigin}
+            destination={rideRouteDestination}
+          />
+          <RoutePins
+            pickup={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
+            dropoff={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
+          />
 
           {/* Driver car */}
           {currentDriver?.lat != null && currentDriver?.lng != null && (
@@ -656,26 +658,6 @@ function DriverArrivingScreenContent() {
 }
 
 
-function renderGradientPolyline(coords: any[], dashed: boolean) {
-  const total = coords.length;
-  const SEGS = 20;
-  const chunk = Math.max(1, Math.floor(total / SEGS));
-  const segments: { coords: any[]; color: string }[] = [];
-  for (let i = 0; i < total - 1; i += chunk) {
-    const end = Math.min(i + chunk + 1, total);
-    const t = i / Math.max(total - 1, 1);
-    const r = Math.round(255 + (238 - 255) * t);
-    const g = Math.round(149 + (43 - 149) * t);
-    const b = Math.round(0 + (43 - 0) * t);
-    segments.push({ coords: coords.slice(i, end), color: `rgb(${r},${g},${b})` });
-  }
-  return segments.map((seg, idx) => (
-    <Polyline key={`seg-${idx}`} coordinates={seg.coords} strokeWidth={4}
-      strokeColor={seg.color} lineCap="round" lineJoin="round"
-      {...(dashed ? { lineDashPattern: [8, 6] } : {})} />
-  ));
-}
-
 export default function DriverArrivingScreen() {
   return (
     <ErrorBoundary>
@@ -694,12 +676,6 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     loadingText: {
       marginTop: 12, fontSize: sf(14), fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
     },
-    markerWrap: {
-      backgroundColor: '#FFF', padding: 3, borderRadius: 12,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
-    },
-    markerDot: { width: 12, height: 12, borderRadius: 6 },
-
     // ── Floating header ──
     floatingHeader: {
       position: 'absolute', left: 0, right: 0, zIndex: 20,

@@ -11,14 +11,20 @@ const rideStoreSource = fs.readFileSync(
 );
 
 describe('completed ride route presentation contract', () => {
-  it('renders each captured route segment without requesting a replacement route', () => {
+  it('draws the captured route through the shared RouteLine/RoutePins without requesting a replacement route', () => {
+    // Real geometry is still reconstructed from the captured segments…
     expect(screenSource).toContain('toReactNativeRouteSections');
     expect(screenSource).toContain('const [routeMapReady, setRouteMapReady] = useState(false)');
     expect(screenSource).toContain('if (!routeMapReady || mapCoordinates.length < 2) return');
     expect(screenSource).toContain('setRouteMapReady(true)');
-    expect(screenSource).toContain('actualSections.map((section) => (');
-    expect(screenSource).toContain("section.geometryKind === 'inferred'");
-    expect(screenSource).toContain('INFERRED_ROUTE_STROKE');
+    // …then handed to the uniform shared components rather than hand-rolled
+    // gradient polylines / bespoke markers.
+    expect(screenSource).toContain('<RouteLine path={mapCoordinates} />');
+    expect(screenSource).toContain('<RoutePins');
+    expect(screenSource).toContain('completion={currentRide.actual_completion_point || null}');
+    expect(screenSource).not.toContain('Polyline');
+    expect(screenSource).not.toContain('INFERRED_ROUTE_STROKE');
+    expect(screenSource).not.toContain('ACTUAL_ROUTE_STROKE');
     expect(screenSource).not.toContain('{routeSnapshotUrl ? (');
     expect(screenSource).toContain('useCompletedRouteRefresh(currentRide');
     expect(screenSource).not.toContain('MapViewDirections');
@@ -32,11 +38,10 @@ describe('completed ride route presentation contract', () => {
     expect(screenSource).toContain('Actual route unavailable');
   });
 
-  it('never draws the planned route for completed v2 rides', () => {
+  it('never feeds the planned route into RouteLine for completed v2 rides', () => {
     expect(screenSource).toContain('const isV2Route =');
+    // mapCoordinates (the RouteLine path) suppresses planned geometry for v2.
     expect(screenSource).toContain('isV2Route ? [] : plannedSegments');
-    expect(screenSource).toContain('{!isV2Route && !hasActualRoute && plannedSegments.map');
-    expect(screenSource).not.toContain('{!hasActualRoute && plannedSegments.map');
     expect(screenSource).toContain("? 'Actual route processing'");
     expect(screenSource).toContain("? 'Actual route'");
     expect(screenSource).toContain('routeQualityLabel');

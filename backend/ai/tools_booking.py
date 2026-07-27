@@ -645,6 +645,63 @@ def _same_place_refusal(distance_km: float, confirmed: bool) -> Optional[Dict[st
     }
 
 
+# A dropoff label whose every plausible geocode sits farther than this from
+# the claimed pin is describing a different place than the pin. Generous
+# enough for POI centroids and big parking lots; far tighter than the
+# cross-town drift the incident showed.
+_DROPOFF_LABEL_MAX_KM = 1.5
+
+# "50.43500, -104.61000" — the map-pin fallback label. It IS its own pin, so
+# there is nothing to cross-check (and it would never geocode anyway).
+_COORD_LIKE_ADDRESS = re.compile(r"^\s*-?\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+\s*$")
+
+
+async def _dropoff_pair_refusal(
+    dropoff_lat: float, dropoff_lng: float, dropoff_address: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Refuse when the dropoff label and pin describe two different places.
+
+    Incident: the quote priced the rider's 1.4 km Walmart trip at $7.28; the
+    booking card kept the Walmart label but carried Southland Mall
+    coordinates recalled from an earlier message — $11.76 to a place the
+    rider didn't ask to go, under the right name. Conversation history keeps
+    only message text, so each turn must re-resolve; when the model instead
+    recycles bracketed coordinates from an older message, the label and pin
+    come from different trips. The pickup has _reconcile_pickup; this is the
+    dropoff's equivalent check — refuse rather than relocate, because a
+    deliberate map pin must never be snapped to a label's centroid.
+    """
+    if not dropoff_address or _COORD_LIKE_ADDRESS.match(dropoff_address):
+        return None
+    api_key, _error = await _places_available()
+    if not api_key:
+        return None  # can't verify — the free guards still apply
+    lookup = await _lookup_place_candidates(
+        api_key=api_key, query=dropoff_address, near_lat=dropoff_lat, near_lng=dropoff_lng
+    )
+    candidates = lookup.get("candidates") or []
+    if not candidates:
+        return None  # unverifiable label — refusing would block odd-but-real places
+    # Biased near the claimed pin, so if ANY plausible resolution of the label
+    # agrees with the pin we pass — this errs against false refusals.
+    nearest_km = min(_trip_distance_km(dropoff_lat, dropoff_lng, c["lat"], c["lng"]) for c in candidates)
+    if nearest_km <= _DROPOFF_LABEL_MAX_KM:
+        return None
+    return {
+        "needs_correction": "dropoff_label_mismatch",
+        "distance_km": round(nearest_km, 2),
+        "note": (
+            f"The dropoff coordinates are {round(nearest_km, 1)} km from where "
+            f"'{dropoff_address}' actually is — the label and the pin describe two "
+            "different places, so this price would be for a trip the rider did not ask "
+            "for. Do NOT show this quote or card. Coordinates remembered from earlier "
+            "messages belong to earlier trips: re-resolve the dropoff the rider wants "
+            "NOW with find_place (or get_saved_places) in this turn, and use that "
+            "result's coordinates and address together."
+        ),
+    }
+
+
 async def get_fare_quote(
     user: Dict[str, Any],
     pickup_lat: float,
@@ -693,6 +750,9 @@ async def get_fare_quote(
     refusal = _same_place_refusal(trip_km, confirm_same_location) or _address_mismatch_refusal(
         pickup_address, dropoff_address, trip_km, confirm_same_location
     )
+    if refusal is None:
+        # API-costed check runs only after the free guards pass.
+        refusal = await _dropoff_pair_refusal(dropoff_lat, dropoff_lng, dropoff_address)
     if refusal:
         # A moved pin still has to be disclosed even when the trip is refused —
         # the rider needs to hear which pickup we actually resolved before they
@@ -952,6 +1012,11 @@ async def propose_ride_booking(
     refusal = _same_place_refusal(trip_km, confirm_same_location) or _address_mismatch_refusal(
         pickup_address, dropoff_address, trip_km, confirm_same_location
     )
+    if refusal is None:
+        # The card is the last stop before dispatch — a Walmart label over
+        # Southland Mall coordinates must die here even if the quote step was
+        # skipped or passed a different pair.
+        refusal = await _dropoff_pair_refusal(dropoff_lat, dropoff_lng, dropoff_address)
     if refusal:
         return refusal
 

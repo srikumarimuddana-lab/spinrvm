@@ -270,7 +270,7 @@ async def _lookup_place_candidates(
 async def _rank_named_place_candidates_by_route(
     candidates: list, origin_lat: float, origin_lng: float, api_key: str
 ) -> tuple[list, bool]:
-    """Rank a POI shortlist by Google driving time from the rider/pickup.
+    """Rank a POI shortlist by Google driving distance from the rider/pickup.
 
     Places relevance and haversine distance produce the shortlist; road
     topology decides its order.  Directions calls run concurrently so three
@@ -323,9 +323,9 @@ async def _rank_named_place_candidates_by_route(
         return candidates, False
     candidates.sort(
         key=lambda candidate: (
-            "driving_duration_minutes" not in candidate,
-            candidate.get("driving_duration_minutes", float("inf")),
+            "driving_distance_km" not in candidate,
             candidate.get("driving_distance_km", float("inf")),
+            candidate.get("driving_duration_minutes", float("inf")),
             candidate.get("distance_from_search_km", float("inf")),
         )
     )
@@ -480,7 +480,7 @@ async def find_place(
         result = {"candidates": candidates}
     if bias_source:
         result["search_biased_by"] = bias_source
-    result["ranking_basis"] = "driving_time" if route_ranked else "straight_line_distance"
+    result["ranking_basis"] = "driving_distance" if route_ranked else "straight_line_distance"
     # A biased search whose BEST match still sits outside the bias radius is
     # a red flag (wrong city, mis-typed address). Tell the model so it
     # surfaces the distance to the rider instead of quoting a silent 12 km
@@ -1236,7 +1236,9 @@ register(
             "Call this to turn a place the rider names ('downtown Saskatoon', 'the "
             "airport', a street address) into coordinates before quoting or proposing a "
             "ride. For saved places like 'home' or 'work', call get_saved_places instead. "
-            "If multiple candidates return, ask the rider to choose."
+            "Named-place candidates are ordered closest-first by driving distance from "
+            "near_lat/near_lng (or the rider's known location). If multiple candidates "
+            "return, show that ordered list and ask the rider to choose."
         ),
         input_schema={
             "type": "object",

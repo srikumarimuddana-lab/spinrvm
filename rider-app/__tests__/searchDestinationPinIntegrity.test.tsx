@@ -21,6 +21,34 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TextInput, TouchableOpacity, Text } from 'react-native';
 
+// react-native's real FlatList mounts VirtualizedList, which schedules its
+// own internal setState via a real (non-fake-timer-controlled) setTimeout on
+// every render — even with an empty `data` array (this screen always renders
+// one, for the recents/saved-places ListHeaderComponent). That timer firing
+// outside any test's act() call raced this suite's other 48 files when run
+// together in CI, intermittently pushing one test's wall-clock past Jest's
+// 5000ms timeout (CR-2026-005) in a way two different fake-timer mitigations
+// couldn't reliably suppress. A minimal non-virtualized stand-in — just the
+// header plus a synchronous item map — renders everything this screen and
+// these tests actually need with no internal timers at all.
+jest.mock('react-native/Libraries/Lists/FlatList', () => {
+  const ReactLib = require('react');
+  const MockFlatList = ({ ListHeaderComponent, data, renderItem, keyExtractor }: any) =>
+    ReactLib.createElement(
+      ReactLib.Fragment,
+      null,
+      ListHeaderComponent,
+      ...(data ?? []).map((item: any, index: number) =>
+        ReactLib.createElement(
+          ReactLib.Fragment,
+          { key: keyExtractor ? keyExtractor(item, index) : String(index) },
+          renderItem({ item, index }),
+        ),
+      ),
+    );
+  return { __esModule: true, default: MockFlatList };
+});
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), back: jest.fn() }),

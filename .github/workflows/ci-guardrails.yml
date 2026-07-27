@@ -678,10 +678,18 @@ jobs:
               if f.startswith('docs/change-log/') and f.endswith('.md')
           ]
 
-          candidate_text = PR_BODY.lower()
+          # Normalize hyphens to spaces before matching — the template itself
+          # uses hyphenated headings in places (e.g. "## 5. User-experience
+          # effect"), and a literal-substring match against 'user experience'
+          # (space) would false-negative on that exact heading. Found via a
+          # real false-positive on this gate's own first production run.
+          def _normalize(text):
+              return text.lower().replace('-', ' ')
+
+          candidate_text = _normalize(PR_BODY)
           for f in change_log_added:
               try:
-                  candidate_text += '\n' + open(f, encoding='utf-8').read().lower()
+                  candidate_text += '\n' + _normalize(open(f, encoding='utf-8').read())
               except OSError:
                   pass
 

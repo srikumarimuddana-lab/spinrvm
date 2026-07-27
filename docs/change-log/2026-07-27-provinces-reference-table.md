@@ -40,6 +40,8 @@ None. No rider, driver, corporate admin, or internal admin sees any difference �
 |---|---|---|
 | `backend/migrations/259_provinces_reference_table.sql` | New file — creates `provinces` table, RLS, seed row | Foundation for province/service-area multi-tenancy across Corporate, Reporting, and Bulk Upload modules |
 
+**Update (same day):** added an explicit `provinces_deny_direct_client_access` `CREATE POLICY` (`FOR SELECT TO anon, authenticated USING (false)`), replacing the original RLS-enabled-with-zero-policies approach. Functionally identical (Postgres already denies all access by default in that state) — made explicit to satisfy this repo's `migration-check.yml` CI gate, which correctly expects every new table to carry an explicit access decision rather than relying on an absent policy implying deny.
+
 ## 7. Before / after
 
 N/A — pure additive, no existing behavior changed.

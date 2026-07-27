@@ -9,6 +9,39 @@ import {
     makeCircleMarkerEl,
 } from "@/lib/map/maplibre-base";
 import { toGeoJsonMultiLineString } from "@spinr/shared/utils/routeSegments";
+import {
+    buildPathGradient,
+    ROUTE_PIN_COLORS,
+    ROUTE_STROKE_WIDTH,
+} from "@spinr/shared/constants/routeMapStyle";
+
+/**
+ * Turn one or more real route segments (each a list of [lng, lat] positions, as
+ * MapLibre GeoJSON stores them) into a FeatureCollection of orange→red gradient
+ * chunks. Geometry is unchanged — every point is preserved; only the per-feature
+ * `color` is derived from position along the path via the shared spec. Render
+ * with paint `"line-color": ["get", "color"]`.
+ */
+function buildGradientFeatureCollection(
+    segments: [number, number][][],
+): GeoJSON.FeatureCollection {
+    const features: GeoJSON.Feature[] = [];
+    for (const segment of segments) {
+        // Shared helper works in [lat, lng]; MapLibre coords are [lng, lat].
+        const latLng = segment.map(([lng, lat]) => [lat, lng] as [number, number]);
+        for (const chunk of buildPathGradient(latLng)) {
+            features.push({
+                type: "Feature",
+                properties: { color: chunk.color },
+                geometry: {
+                    type: "LineString",
+                    coordinates: chunk.coordinates.map(([lat, lng]) => [lng, lat]),
+                },
+            });
+        }
+    }
+    return { type: "FeatureCollection", features };
+}
 
 interface Props {
     pickupLat: number;
@@ -88,7 +121,7 @@ export default function RideRouteMap({
         map.on("load", () => {
             // Pickup marker (green)
             new maplibregl.Marker({
-                element: makeCircleMarkerEl({ color: "#10b981", size: 16 }),
+                element: makeCircleMarkerEl({ color: ROUTE_PIN_COLORS.pickup, size: 16 }),
             })
                 .setLngLat([pickupLng, pickupLat])
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Pickup"))
@@ -96,7 +129,7 @@ export default function RideRouteMap({
 
             // Dropoff marker (red)
             new maplibregl.Marker({
-                element: makeCircleMarkerEl({ color: "#ef4444", size: 16 }),
+                element: makeCircleMarkerEl({ color: ROUTE_PIN_COLORS.dropoff, size: 16 }),
             })
                 .setLngLat([dropoffLng, dropoffLat])
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Dropoff"))
@@ -136,18 +169,21 @@ export default function RideRouteMap({
             if (hasActualSegments) {
                 map.addSource(ACTUAL_SOURCE_ID, {
                     type: "geojson",
-                    data: {
-                        type: "Feature",
-                        properties: {},
-                        geometry: actualGeometry,
-                    },
+                    // Each captured segment is coloured independently along the
+                    // orange→red gradient; the MultiLineString's boundaries are
+                    // preserved (no false chord between offline gaps).
+                    data: buildGradientFeatureCollection(actualGeometry.coordinates),
                 });
                 map.addLayer({
                     id: ACTUAL_LAYER_ID,
                     type: "line",
                     source: ACTUAL_SOURCE_ID,
                     layout: { "line-cap": "round", "line-join": "round" },
-                    paint: { "line-color": "#2563eb", "line-width": 3, "line-opacity": 0.9 },
+                    paint: {
+                        "line-color": ["get", "color"],
+                        "line-width": ROUTE_STROKE_WIDTH,
+                        "line-opacity": 0.9,
+                    },
                 });
             }
 
@@ -180,18 +216,14 @@ export default function RideRouteMap({
                 });
             }
 
-            // Phase 3 (pickup → dropoff) — blue road-following line.
+            // Phase 3 (pickup → dropoff) — the real trip path, coloured as the
+            // shared orange→red gradient.
             if (hasTripTrail) {
                 map.addSource(TRIP_TRAIL_SOURCE_ID, {
                     type: "geojson",
-                    data: {
-                        type: "Feature",
-                        properties: {},
-                        geometry: {
-                            type: "LineString",
-                            coordinates: tripTrail!.map((p) => [p.lng, p.lat]),
-                        },
-                    },
+                    data: buildGradientFeatureCollection([
+                        tripTrail!.map((p) => [p.lng, p.lat] as [number, number]),
+                    ]),
                 });
                 map.addLayer({
                     id: TRIP_TRAIL_LAYER_ID,
@@ -199,8 +231,8 @@ export default function RideRouteMap({
                     source: TRIP_TRAIL_SOURCE_ID,
                     layout: { "line-cap": "round", "line-join": "round" },
                     paint: {
-                        "line-color": "#3b82f6",
-                        "line-width": 3,
+                        "line-color": ["get", "color"],
+                        "line-width": ROUTE_STROKE_WIDTH,
                         "line-opacity": 0.85,
                     },
                 });
@@ -212,14 +244,9 @@ export default function RideRouteMap({
             if (!hasRouteGeometry && locationTrail && locationTrail.length > 1) {
                 map.addSource(ACTUAL_SOURCE_ID, {
                     type: "geojson",
-                    data: {
-                        type: "Feature",
-                        properties: {},
-                        geometry: {
-                            type: "LineString",
-                            coordinates: locationTrail.map((p) => [p.lng, p.lat]),
-                        },
-                    },
+                    data: buildGradientFeatureCollection([
+                        locationTrail.map((p) => [p.lng, p.lat] as [number, number]),
+                    ]),
                 });
                 map.addLayer({
                     id: ACTUAL_LAYER_ID,
@@ -227,8 +254,8 @@ export default function RideRouteMap({
                     source: ACTUAL_SOURCE_ID,
                     layout: { "line-cap": "round", "line-join": "round" },
                     paint: {
-                        "line-color": "#3b82f6",
-                        "line-width": 3,
+                        "line-color": ["get", "color"],
+                        "line-width": ROUTE_STROKE_WIDTH,
                         "line-opacity": 0.8,
                     },
                 });

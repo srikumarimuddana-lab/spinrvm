@@ -81,10 +81,13 @@ jobs:
       # repo secrets (or leave unset to skip the probe in forks/staging).
       - name: Health check
         id: health
-        if: ${{ secrets.BACKEND_HEALTH_URL != '' }}
         env:
           HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
         run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "BACKEND_HEALTH_URL not set — skipping health check probe."
+            exit 0
+          fi
           echo "Polling ${HEALTH_URL}/health …"
           for i in $(seq 1 18); do
             STATUS=$(curl -sf --max-time 5 "${HEALTH_URL}/health" \

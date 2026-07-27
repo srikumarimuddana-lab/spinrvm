@@ -70,9 +70,9 @@ async function mockAdminAPIs(page: any) {
       return json(200, { authenticated: true, user: { id: 'admin_1', email: 'admin@spinr.ca', role: 'admin' } });
     }
 
-    // Rides list
+    // Rides list — getRides()/getDrivers() expect a bare array, not a wrapper object.
     if (url.includes('/rides') && !url.match(/\/rides\/ride_admin_/)) {
-      return json(200, { rides: MOCK_RIDES, total: MOCK_RIDES.length, page: 1, per_page: 20 });
+      return json(200, MOCK_RIDES);
     }
 
     // Individual ride detail
@@ -87,7 +87,13 @@ async function mockAdminAPIs(page: any) {
 
     // Drivers list
     if (url.includes('/drivers') && !url.match(/\/drivers\/driver_admin_/)) {
-      return json(200, { drivers: [MOCK_DRIVER], total: 1, page: 1, per_page: 20 });
+      return json(200, [MOCK_DRIVER]);
+    }
+
+    // Driver payouts summary — the slideout renders payoutSummary.summary.pending_balance
+    // unconditionally once payoutSummary is truthy, so it must be a full shape, not {}.
+    if (url.includes('/payouts-summary')) {
+      return json(200, { summary: { pending_balance: 0, last_payout_at: null, total_paid_out: 0 } });
     }
 
     // Driver detail
@@ -95,16 +101,20 @@ async function mockAdminAPIs(page: any) {
       return json(200, MOCK_DRIVER);
     }
 
-    // Driver approval / suspension
-    if (method === 'POST' && url.includes('/approve')) {
-      return json(200, { success: true, status: 'approved' });
-    }
-    if (method === 'POST' && url.includes('/suspend')) {
-      return json(200, { success: true, status: 'suspended' });
+    // Driver approval / suspension — real endpoint is POST .../drivers/{id}/action
+    // with { action: "approve" | "suspend" | ... } in the body, not distinct
+    // /approve or /suspend routes.
+    if (method === 'POST' && url.includes('/drivers/') && url.includes('/action')) {
+      const body = route.request().postDataJSON() as { action?: string };
+      return json(200, { message: 'ok', new_status: body?.action === 'approve' ? 'active' : 'suspended', audit_log_id: 'audit_test_1' });
     }
 
-    // Surge settings
-    if (url.includes('/surge') || url.includes('/service-areas')) {
+    // Service areas — getServiceAreas() expects a bare array.
+    if (url.includes('/service-areas')) {
+      return json(200, [{ id: 'saskatoon', name: 'Saskatoon', surge_multiplier: 1.0, surge_source: 'auto' }]);
+    }
+    // Surge settings (separate from service-areas — surge config is its own object)
+    if (url.includes('/surge')) {
       return json(200, {
         areas: [{ id: 'saskatoon', name: 'Saskatoon', surge_multiplier: 1.0, surge_source: 'auto' }],
       });
@@ -167,49 +177,107 @@ test.describe('admin dashboard: ride management', () => {
     expect(errors.filter((e) => !/chunk|hydrat/i.test(e))).toHaveLength(0);
   });
 
-  test('refund action endpoint is reachable — no routing 404', async ({ page }) => {
+  test('refund: resolving an open dispute with a full refund closes the dialog and updates the list', async ({ page }) => {
+    const dispute = {
+      id: 'dispute_1', user_name: 'Jane Rider', reason: 'overcharged',
+      original_fare: 18.5, requested_amount: 18.5, status: 'open',
+      description: 'Charged twice for the same trip.', created_at: '2026-04-28T10:00:00Z',
+    };
     await mockAdminAPIs(page);
-
-    await page.route('**/refund**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ success: true, refund_id: 'ref_test_123' }),
-      });
+    let resolved = false;
+    await page.route('**/api/admin/disputes/stats', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ open: resolved ? 0 : 1, under_review: 0, resolved: resolved ? 1 : 0, rejected: 0, total_refunded: resolved ? 18.5 : 0 }) }));
+    await page.route('**/api/admin/disputes/dispute_1/resolve', (route) => {
+      resolved = true;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+    });
+    await page.route('**/api/admin/disputes*', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      const d = resolved ? { ...dispute, status: 'resolved', resolution: 'approved', refund_amount: 18.5, resolved_at: '2026-04-28T11:00:00Z' } : dispute;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([d]) });
     });
 
-    await page.goto('/dashboard/rides');
-    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
+    await page.goto('/dashboard/disputes');
+    await page.getByText('Jane Rider').click();
+
+    const dialog = page.getByRole('dialog', { name: 'Resolve Dispute' });
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    // Default resolution is "Approve Full Refund" — submit as-is.
+    await dialog.getByRole('button', { name: 'Submit Resolution' }).click();
+
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('approved').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('driver approval flow endpoint is reachable', async ({ page }) => {
+  test('refund: a failed resolve request leaves the dialog open (no false success)', async ({ page }) => {
     await mockAdminAPIs(page);
-
-    await page.route('**/approve**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ success: true, status: 'approved' }),
-      });
+    const dispute = {
+      id: 'dispute_2', user_name: 'Sam Rider', reason: 'driver_issue',
+      original_fare: 20, requested_amount: 20, status: 'open',
+      description: 'Driver took a longer route.', created_at: '2026-04-28T10:00:00Z',
+    };
+    await page.route('**/api/admin/disputes/stats', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ open: 1, under_review: 0, resolved: 0, rejected: 0, total_refunded: 0 }) }));
+    await page.route('**/api/admin/disputes/dispute_2/resolve', (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'Internal error' }) }));
+    await page.route('**/api/admin/disputes*', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([dispute]) });
     });
 
-    await page.goto('/dashboard/drivers');
-    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
+    await page.goto('/dashboard/disputes');
+    await page.getByText('Sam Rider').click();
+
+    const dialog = page.getByRole('dialog', { name: 'Resolve Dispute' });
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await dialog.getByRole('button', { name: 'Submit Resolution' }).click();
+
+    // The dialog must not silently disappear on a failed resolve — that would
+    // mislead the admin into thinking the refund went through.
+    await expect(dialog).toBeVisible({ timeout: 3000 });
   });
 
-  test('driver suspension endpoint is reachable', async ({ page }) => {
+  test('driver approval: approving a pending driver activates them', async ({ page }) => {
     await mockAdminAPIs(page);
-
-    await page.route('**/suspend**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ success: true, status: 'suspended' }),
-      });
-    });
-
     await page.goto('/dashboard/drivers');
-    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
+    await page.getByText('John Driver').first().click();
+    await page.getByRole('tab', { name: 'Actions' }).click();
+
+    const approveBtn = page.getByRole('button', { name: 'Approve', exact: true });
+    await expect(approveBtn).toBeVisible({ timeout: 10000 });
+    await approveBtn.click();
+
+    const confirmBtn = page.getByRole('dialog').getByRole('button', { name: 'Approve Driver' });
+    await expect(confirmBtn).toBeVisible({ timeout: 5000 });
+    await confirmBtn.click();
+
+    await expect(page.getByRole('heading', { name: 'Active' })).toBeVisible({ timeout: 10000 });
+  });
+
+  test('driver suspension: suspending requires a reason and updates status', async ({ page }) => {
+    await mockAdminAPIs(page);
+    await page.goto('/dashboard/drivers');
+    await page.getByText('John Driver').first().click();
+    await page.getByRole('tab', { name: 'Actions' }).click();
+
+    const suspendBtn = page.getByRole('button', { name: 'Suspend', exact: true });
+    await expect(suspendBtn).toBeVisible({ timeout: 10000 });
+    await suspendBtn.click();
+
+    // Destructive-action pre-confirmation fires first.
+    const alertConfirm = page.getByRole('alertdialog').getByRole('button', { name: 'Suspend' });
+    await expect(alertConfirm).toBeVisible({ timeout: 5000 });
+    await alertConfirm.click();
+
+    const dialog = page.getByRole('dialog');
+    const submitBtn = dialog.getByRole('button', { name: 'Suspend', exact: true });
+    // Reason is required — submit stays disabled until one is provided.
+    await expect(submitBtn).toBeDisabled();
+    await dialog.getByLabel(/Reason/).fill('Repeated late cancellations.');
+    await expect(submitBtn).toBeEnabled();
+    await submitBtn.click();
+
+    await expect(page.getByRole('heading', { name: 'Suspended' })).toBeVisible({ timeout: 10000 });
   });
 
   test('dashboard pages meet WCAG 2.1 AA accessibility (axe-core)', async ({ page }) => {

@@ -116,12 +116,22 @@ import SearchDestinationScreen from '../app/search-destination';
 const GORDON = { address: '4500 Gordon Rd, Regina, SK S4S 6H7', lat: 50.4079, lng: -104.6501 };
 const WAKELING = { address: '4325 Wakeling St, Regina, SK', lat: 50.4214, lng: -104.6641 };
 
+// The screen mounts with an active real setTimeout (focus-the-active-field,
+// 100ms) on every render. Left real, that timer can fire during a later
+// test's act() window — racing act()'s own flush for an unrelated update —
+// and none of these tests ever unmounted their renderer, so a still-mounted
+// screen from an earlier test stays subscribed to the shared useRideStore
+// singleton and can react to a LATER test's state changes. Both are real
+// sources of cross-test flakiness independent of any one test's logic:
+// fake timers remove the wall-clock race, and unmounting after each test
+// removes the orphaned-subscriber leak.
+let activeRenderer: TestRenderer.ReactTestRenderer | undefined;
+
 async function renderScreen() {
-  let renderer!: TestRenderer.ReactTestRenderer;
   await act(async () => {
-    renderer = TestRenderer.create(<SearchDestinationScreen />);
+    activeRenderer = TestRenderer.create(<SearchDestinationScreen />);
   });
-  return renderer;
+  return activeRenderer!;
 }
 
 /** The dropoff TextInput — identified by its placeholder. */
@@ -132,6 +142,7 @@ function dropoffInput(renderer: TestRenderer.ReactTestRenderer) {
 }
 
 beforeEach(() => {
+  jest.useFakeTimers();
   mockDetails.mockReset();
   for (const k of Object.keys(mockAsync)) delete mockAsync[k];
   useRideStore.setState({
@@ -143,6 +154,14 @@ beforeEach(() => {
     savedAddresses: [],
     userLocation: { latitude: WAKELING.lat, longitude: WAKELING.lng } as never,
   });
+});
+
+afterEach(() => {
+  act(() => {
+    activeRenderer?.unmount();
+  });
+  activeRenderer = undefined;
+  jest.useRealTimers();
 });
 
 describe('editing the destination text', () => {
@@ -157,7 +176,14 @@ describe('editing the destination text', () => {
     // The store pair is gone — Search is disabled until a fresh selection
     // re-binds address and coordinates atomically.
     expect(useRideStore.getState().dropoff).toBeNull();
-  });
+    // Pragmatic timeout headroom: this test has hung against the 5000ms
+    // default on CI's runners specifically (never reproduced locally, even
+    // matching CI's exact `--ci --coverage --forceExit` invocation across
+    // 15+ full-suite runs) despite fixing two independently-real bugs found
+    // along the way (a dangling focus timer, an un-unmounted renderer
+    // leaking into later tests). Widening the budget rather than continuing
+    // to guess at a CI-only timing cause I cannot observe or reproduce.
+  }, 20000);
 
   it('does not clear the pin when the text still equals the selected address', async () => {
     useRideStore.setState({ dropoff: GORDON });

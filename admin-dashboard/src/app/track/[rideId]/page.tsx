@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Script from 'next/script';
+import { buildPathGradient, ROUTE_STROKE_WIDTH } from '@spinr/shared/constants/routeMapStyle';
 
 // Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
 // Same value as EXPO_PUBLIC_GOOGLE_MAPS_API_KEY used by the mobile apps;
@@ -278,28 +279,20 @@ export default function TrackRide() {
           routePolylinesRef.current.forEach(l => l.setMap(null));
           routePolylinesRef.current = [];
 
-          // OSRM returns [lng, lat]; Google Maps needs {lat, lng}.
-          const path = coords.map(([lng, lat]) => ({ lat, lng }));
-
-          // Draw the route as N coloured segments blending orange → red.
-          const SEGMENTS = 14;
-          const segLen = Math.max(1, Math.floor(path.length / SEGMENTS));
-          for (let i = 0; i < SEGMENTS; i++) {
-            const t = i / Math.max(SEGMENTS - 1, 1);          // 0 → 1
-            // Interpolate #F97316 (orange-500) → #DC2626 (red-600)
-            const rv = Math.round(249 + (220 - 249) * t);
-            const gv = Math.round(115 + ( 38 - 115) * t);
-            const bv = Math.round( 22 + ( 38 -  22) * t);
-            const color = `#${rv.toString(16).padStart(2, '0')}${gv.toString(16).padStart(2, '0')}${bv.toString(16).padStart(2, '0')}`;
-            const start = i * segLen;
-            const end   = i === SEGMENTS - 1 ? path.length : (i + 1) * segLen + 1;
-            const seg   = path.slice(start, end);
-            if (seg.length < 2) continue;
+          // Draw the real OSRM route as the shared orange→red gradient
+          // (#FF9500 → #EE2B2B). OSRM returns [lng, lat]; the shared helper
+          // works in [lat, lng]; Google Maps needs {lat, lng}. Geometry is
+          // unchanged — every coordinate is preserved, only the per-chunk
+          // colour is derived from position along the path.
+          const gradient = buildPathGradient(
+            coords.map(([lng, lat]) => [lat, lng] as [number, number]),
+          );
+          for (const chunk of gradient) {
             routePolylinesRef.current.push(new g.Polyline({
               map: mapRef.current,
-              path: seg,
-              strokeColor: color,
-              strokeWeight: 4,
+              path: chunk.coordinates.map(([lat, lng]) => ({ lat, lng })),
+              strokeColor: chunk.color,
+              strokeWeight: ROUTE_STROKE_WIDTH,
               strokeOpacity: 0.9,
               zIndex: 1,
             }));

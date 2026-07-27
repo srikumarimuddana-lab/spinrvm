@@ -9,6 +9,33 @@ import {
     fitBoundsToPoints,
     makeCircleMarkerEl,
 } from "@/lib/map/maplibre-base";
+import {
+    buildPathGradient,
+    ROUTE_PIN_COLORS,
+    ROUTE_STROKE_WIDTH,
+} from "@spinr/shared/constants/routeMapStyle";
+
+/**
+ * Colour a real trail (list of {lat, lng}) as an orange→red gradient
+ * FeatureCollection — geometry unchanged, only per-feature `color` derived from
+ * position along the path via the shared spec. Render with `["get", "color"]`.
+ */
+function trailGradientFeatureCollection(
+    trail: { lat: number; lng: number }[],
+): GeoJSON.FeatureCollection {
+    const features: GeoJSON.Feature[] = [];
+    for (const chunk of buildPathGradient(trail.map((p) => [p.lat, p.lng] as [number, number]))) {
+        features.push({
+            type: "Feature",
+            properties: { color: chunk.color },
+            geometry: {
+                type: "LineString",
+                coordinates: chunk.coordinates.map(([lat, lng]) => [lng, lat]),
+            },
+        });
+    }
+    return { type: "FeatureCollection", features };
+}
 
 interface Props {
     pickupLat: number;
@@ -49,15 +76,15 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
 
             // Pickup marker (green)
             new maplibregl.Marker({
-                element: makeCircleMarkerEl({ color: "#10b981", size: 20 }),
+                element: makeCircleMarkerEl({ color: ROUTE_PIN_COLORS.pickup, size: 20 }),
             })
                 .setLngLat([pickupLng, pickupLat])
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 8 }).setText("Pickup"))
                 .addTo(map);
 
-            // Dropoff marker (blue)
+            // Dropoff marker (red)
             new maplibregl.Marker({
-                element: makeCircleMarkerEl({ color: "#3b82f6", size: 20 }),
+                element: makeCircleMarkerEl({ color: ROUTE_PIN_COLORS.dropoff, size: 20 }),
             })
                 .setLngLat([dropoffLng, dropoffLat])
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 8 }).setText("Dropoff"))
@@ -88,14 +115,10 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
                 },
             });
 
-            // Trail source + layer (actual driver path)
+            // Trail source + layer (actual driver path) — orange→red gradient.
             map.addSource(TRAIL_SOURCE_ID, {
                 type: "geojson",
-                data: {
-                    type: "Feature",
-                    properties: {},
-                    geometry: { type: "LineString", coordinates: [] },
-                },
+                data: { type: "FeatureCollection", features: [] },
             });
             map.addLayer({
                 id: TRAIL_LAYER_ID,
@@ -103,9 +126,9 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
                 source: TRAIL_SOURCE_ID,
                 layout: { "line-cap": "round", "line-join": "round" },
                 paint: {
-                    "line-color": "#3b82f6",
-                    "line-width": 3,
-                    "line-opacity": 0.7,
+                    "line-color": ["get", "color"],
+                    "line-width": ROUTE_STROKE_WIDTH,
+                    "line-opacity": 0.9,
                 },
             });
 
@@ -150,14 +173,7 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
 
         if (trail && trail.length > 0) {
             const src = map.getSource(TRAIL_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-            src?.setData({
-                type: "Feature",
-                properties: {},
-                geometry: {
-                    type: "LineString",
-                    coordinates: trail.map((p) => [p.lng, p.lat]),
-                },
-            });
+            src?.setData(trailGradientFeatureCollection(trail));
         }
     }, [driverLat, driverLng, trail]);
 

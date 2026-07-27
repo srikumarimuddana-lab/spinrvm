@@ -15,6 +15,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend.ai import tools_booking
+from backend.ai.prompts import build_system_prompt
 from backend.ai.tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 
 RIDER = {"id": "rider-1"}
@@ -77,6 +78,14 @@ def _patch_budget(within=True):
 
 
 LAST_RIDE = {"pickup_lat": 50.4501, "pickup_lng": -104.6178, "pickup_address": "4325 Wakeling St, Regina"}
+
+
+def test_rider_prompt_requires_fresh_closest_search_without_disclosing_tools():
+    prompt = build_system_prompt({}, "rider")
+    assert 'asks for the "closest" or "nearest" branch' in prompt
+    assert "shortest DRIVING DISTANCE" in prompt
+    assert "Tool names, function names" in prompt
+    assert "Never print identifiers" in prompt
 
 
 def _patch_last_ride(rows=None):
@@ -153,24 +162,27 @@ class TestFindPlace:
         assert result["_client_action"]["candidates"][0]["name"] == "Walmart Supercentre"
 
     @pytest.mark.anyio
-    async def test_named_place_suggestions_rank_by_google_driving_time(self):
+    async def test_named_place_suggestions_rank_by_google_driving_distance(self):
         async def maps_get(url, params):
             if url == tools_booking._PLACES_TEXT_URL:
                 return PLACES_OK
             destination = params["destination"]
-            minutes_by_destination = {
-                "50.4079,-104.6501": 12,  # closest as the crow flies
-                "50.4497,-104.5345": 18,
-                "50.4966,-104.6401": 8,  # fastest by road; must rank first
+            route_by_destination = {
+                # Closest as the crow flies, but 8 km by road.
+                "50.4079,-104.6501": (8000, 9),
+                # Shortest road route (5 km), despite taking longer in traffic.
+                "50.4497,-104.5345": (5000, 14),
+                # Fastest route, but not the closest by the rider's wording.
+                "50.4966,-104.6401": (6500, 8),
             }
-            minutes = minutes_by_destination[destination]
+            distance_m, minutes = route_by_destination[destination]
             return {
                 "status": "OK",
                 "routes": [
                     {
                         "legs": [
                             {
-                                "distance": {"value": minutes * 500},
+                                "distance": {"value": distance_m},
                                 "duration": {"value": minutes * 60},
                             }
                         ]
@@ -192,10 +204,10 @@ class TestFindPlace:
             )
 
         assert ok
-        assert result["ranking_basis"] == "driving_time"
-        assert result["candidates"][0]["name"] == "Walmart Rochdale"
-        assert result["candidates"][0]["driving_duration_minutes"] == 8
-        assert result["_client_action"]["candidates"][0]["name"] == "Walmart Rochdale"
+        assert result["ranking_basis"] == "driving_distance"
+        assert result["candidates"][0]["name"] == "Walmart East"
+        assert result["candidates"][0]["driving_distance_km"] == 5.0
+        assert result["_client_action"]["candidates"][0]["name"] == "Walmart East"
 
     @pytest.mark.anyio
     async def test_route_ranking_failure_keeps_proximity_order(self):

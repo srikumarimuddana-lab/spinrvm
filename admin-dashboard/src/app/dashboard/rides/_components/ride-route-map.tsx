@@ -261,6 +261,41 @@ export default function RideRouteMap({
                 });
             }
 
+            // Fallback: older / partially-populated rides with no planned
+            // polyline AND no recorded route still get a route reference — a
+            // straight pickup→dropoff dashed line — so the drawer never shows
+            // markers only (the modal advertises this as "straight-line
+            // reference"). Reuses the planned source/layer ids, which are unused
+            // here because hasPlannedTrail is false.
+            if (!hasPlannedTrail && !hasRouteGeometry && !(locationTrail && locationTrail.length > 1)) {
+                map.addSource(PLANNED_SOURCE_ID, {
+                    type: "geojson",
+                    data: {
+                        type: "Feature",
+                        properties: {},
+                        geometry: {
+                            type: "LineString",
+                            coordinates: [
+                                [pickupLng, pickupLat],
+                                [dropoffLng, dropoffLat],
+                            ],
+                        },
+                    },
+                });
+                map.addLayer({
+                    id: PLANNED_LAYER_ID,
+                    type: "line",
+                    source: PLANNED_SOURCE_ID,
+                    layout: { "line-cap": "round", "line-join": "round" },
+                    paint: {
+                        "line-color": "#6b7280",
+                        "line-width": 3,
+                        "line-opacity": 0.7,
+                        "line-dasharray": ["literal", [2, 1.5]],
+                    },
+                });
+            }
+
             // Fit bounds over every point we actually drew.
             const allPoints: { lat: number; lng: number }[] = [
                 { lat: pickupLat, lng: pickupLng },

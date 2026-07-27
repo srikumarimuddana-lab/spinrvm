@@ -62,3 +62,24 @@ describe('marker colours', () => {
     expect(ROUTE_PIN_COLORS.completion).toBe('#F59E0B');
   });
 });
+
+import { buildMultiPathGradient } from '../routeMapStyle';
+
+describe('buildMultiPathGradient (v2 sections — no gap chord)', () => {
+  const A: [number, number][] = [[50.44, -104.62], [50.445, -104.625], [50.45, -104.63]];
+  const B: [number, number][] = [[50.50, -104.70], [50.505, -104.705], [50.51, -104.71]];
+  it('never bridges across sections (no false chord over the GPS gap)', () => {
+    const segs = buildMultiPathGradient([A, B]);
+    // No sub-polyline spans the ~6 km jump between section A and section B.
+    for (const s of segs) {
+      const lats = s.coordinates.map((c) => c[0]);
+      expect(Math.max(...lats) - Math.min(...lats)).toBeLessThan(0.03);
+    }
+  });
+  it('colours continuously across sections and drops empty ones', () => {
+    const segs = buildMultiPathGradient([A, B]);
+    expect(segs[0].color).not.toBe(segs[segs.length - 1].color);
+    expect(buildMultiPathGradient([[], [[1, 2]]])).toEqual([]);
+    expect(buildMultiPathGradient(null)).toEqual([]);
+  });
+});

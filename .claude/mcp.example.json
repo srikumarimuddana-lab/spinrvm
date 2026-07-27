@@ -26,6 +26,16 @@
     "vercel": {
       "_comment": "Official Vercel MCP — remote server, OAuth on first connect (no key to store here). Gives read access to admin-dashboard's deployments/build logs. The OAuth flow authorizes whatever Vercel account/team you sign in with, so use a team member scoped to this project if you don't want broader org access.",
       "url": "https://mcp.vercel.com"
+    },
+    "playwright": {
+      "_comment": "Official Microsoft Playwright MCP (@playwright/mcp) — no credentials needed, runs a local browser. Useful for driving admin-dashboard's Next.js dev server through real UI flows (rider/driver-app web builds too) instead of reasoning about screenshots blind. Drop --executable-path if your machine already has `npx playwright install chromium` run; --headless/--no-sandbox are only needed in a headless CI-like container, not a normal dev machine with a display.",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--isolated"]
+    },
+    "maestro": {
+      "_comment": "Official Maestro MCP (mobile-dev-inc/maestro-mcp) for rider-app/driver-app mobile E2E — matches the .maestro/ directory already in this repo. Requires the Maestro CLI installed first (`curl -fsSL \"https://get.maestro.mobile.dev\" | bash`, needs Java 17+) AND a running iOS simulator / Android emulator or attached physical device — it has nothing to drive without one. Not usable in a sandboxed/headless CI container; local dev machine only.",
+      "command": "maestro",
+      "args": ["mcp"]
     }
   }
 }

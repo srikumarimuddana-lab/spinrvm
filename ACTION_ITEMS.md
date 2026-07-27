@@ -341,14 +341,35 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** no analytics interface accepts raw coordinates; test added.
 
 ### B2. Disputes store full legal names + RLS too broad + rounding
-- [ ] **Status:** open (3 related fixes, one migration + one route change)
-- **Files:** `backend/routes/disputes.py:188` (full name in response/at rest),
-  `backend/routes/disputes.py:227` (`int(...)` without `_round()` floors refund cents),
-  new migration (next free slot — check `backend/migrations/`) replacing the
-  `FOR ALL TO authenticated` policy from `10_disputes_table.sql` with enumerated
-  SELECT/UPDATE + append-only trigger (pattern: `audit_logs`, migration 51).
-- **Acceptance:** disputes responses carry `user_id`/display alias only; refund cents
-  use `int(_round(amount * 100))`; DELETE on disputes blocked at DB level.
+- [x] **Status:** done (2026-07-27) — investigated all 3 sub-issues; only one
+  needed a code change:
+  1. **RLS too broad — fixed.** `backend/migrations/262_disputes_rls_lockdown.sql`
+     replaces the `FOR ALL TO authenticated` policy from `10_disputes_table.sql`
+     with enumerated SELECT/UPDATE for admins, plus a `BEFORE DELETE` trigger
+     blocking deletion even for `service_role` (pattern: `audit_logs`,
+     migration 51). Confirmed via grep that no live code path deletes
+     disputes — the one `delete_many("disputes", ...)` call
+     (`routes/admin/support.py`) is dead code, never imported/mounted by
+     `server.py` or `features.py`.
+  2. **Refund-cent rounding — already fixed, no action needed.**
+     `admin_resolve_dispute` (`routes/disputes.py:219`) uses
+     `dollars_to_cents()`, which does proper Decimal HALF_UP conversion, not
+     bare `int()` truncation. Covered by `backend/tests/test_dispute_refund_cents.py`.
+     The backlog text describing this as still-broken was stale.
+  3. **Full legal name in admin response — investigated, left as-is per
+     explicit decision.** Not actually stored "at rest" as originally
+     worded — it's a read-time join (`disputes.user_name` column exists in
+     the schema but is dead, never written by `create_dispute`). The
+     response shape exactly matches `_user_display_name`
+     (`routes/admin/drivers.py:41`), the same helper used identically for
+     rider/driver names in `admin/rides.py` and `admin/drivers.py` —
+     changing only disputes.py would make it inconsistent with the rest of
+     the admin surface, not more compliant. Confirmed with product: leave
+     as-is, matches existing convention.
+- **Files:** `backend/migrations/262_disputes_rls_lockdown.sql` (new)
+- **Acceptance:** ✅ met for the two applicable parts — refund cents already
+  use proper rounding; DELETE on disputes is now blocked at the DB level.
+  The full-name display item was not a bug — no acceptance criterion applies.
 
 ### B3. Driver location-update hot path (perf + Maps spend)
 - [x] **Status:** done — branch `claude/eager-franklin-69ta0w` (3 commits + completion-flush fix)

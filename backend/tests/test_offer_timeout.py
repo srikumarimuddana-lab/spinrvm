@@ -451,6 +451,259 @@ async def test_process_expired_offer_is_idempotent():
     mock_period.assert_awaited_once_with("d1", 1)
 
 
+@pytest.mark.asyncio
+async def test_process_expired_offer_claim_lost_returns_false():
+    """A conditional UPDATE that matches zero rows (already claimed by a peer
+    reaper or accepted by the driver) must run NO side-effects."""
+    from backend.routes.rides import matching as m
+
+    with (
+        patch(
+            "backend.routes.rides._deps.db_supabase.run_sync",
+            AsyncMock(return_value=MagicMock(data=[])),
+        ),
+        patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock) as mock_ar,
+        patch("backend.utils.driver_presence.increment_miss_streak", new_callable=AsyncMock) as mock_miss,
+    ):
+        won = await m.process_expired_offer("ride_c", "d1", 3)
+    assert won is False
+    mock_miss.assert_not_awaited()
+    mock_ar.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_expired_offer_auto_offline_at_threshold():
+    """Hitting the miss-streak threshold takes the driver offline, records
+    insurance Period 0, and sends an auto_offline WS notice."""
+    from backend.routes.rides import matching as m
+
+    with (
+        patch(
+            "backend.routes.rides._deps.db_supabase.run_sync",
+            AsyncMock(return_value=MagicMock(data=[{"id": "off1"}])),
+        ),
+        patch("backend.routes.rides._deps.db_supabase.set_driver_available", new_callable=AsyncMock) as mock_avail,
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+            AsyncMock(return_value={"id": "d1", "user_id": "user-1"}),
+        ),
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock) as mock_period,
+        patch("backend.routes.rides._deps.manager") as mock_mgr,
+        patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock),
+        patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=3)),
+        patch("backend.utils.driver_presence.clear_presence", new_callable=AsyncMock) as mock_clear,
+        patch("backend.utils.driver_presence.reset_miss_streak", new_callable=AsyncMock) as mock_reset,
+        patch("backend.utils.redis_client.redis_set", new_callable=AsyncMock),
+    ):
+        mock_mgr.send_personal_message = AsyncMock()
+        won = await m.process_expired_offer("ride_d", "d1", 3)
+
+    assert won is True
+    mock_avail.assert_awaited_once_with("d1", False)
+    mock_clear.assert_awaited_once_with("d1")
+    mock_reset.assert_awaited_once_with("d1")
+    mock_period.assert_awaited_once_with("d1", 0)
+    ws_call = mock_mgr.send_personal_message.await_args
+    assert ws_call.args[0]["type"] == "auto_offline"
+    assert ws_call.args[1] == "driver_user-1"
+
+
+@pytest.mark.asyncio
+async def test_process_expired_offer_redis_skip_key_failure_is_swallowed():
+    from backend.routes.rides import matching as m
+
+    with (
+        patch(
+            "backend.routes.rides._deps.db_supabase.run_sync",
+            AsyncMock(return_value=MagicMock(data=[{"id": "off1"}])),
+        ),
+        patch(
+            "backend.routes.rides._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"is_available": True}),
+        ),
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock),
+        patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)),
+        patch(
+            "backend.utils.redis_client.redis_set",
+            AsyncMock(side_effect=RuntimeError("redis down")),
+        ),
+    ):
+        won = await m.process_expired_offer("ride_e", "d1", 3)
+    assert won is True
+
+
+@pytest.mark.asyncio
+async def test_process_expired_offer_ws_notify_failure_is_swallowed():
+    from backend.routes.rides import matching as m
+
+    with (
+        patch(
+            "backend.routes.rides._deps.db_supabase.run_sync",
+            AsyncMock(return_value=MagicMock(data=[{"id": "off1"}])),
+        ),
+        patch(
+            "backend.routes.rides._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"is_available": True}),
+        ),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+            AsyncMock(return_value={"id": "d1", "user_id": "user-1"}),
+        ),
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.manager") as mock_mgr,
+        patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock),
+        patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)),
+        patch("backend.utils.redis_client.redis_set", new_callable=AsyncMock),
+    ):
+        mock_mgr.send_personal_message = AsyncMock(side_effect=RuntimeError("ws down"))
+        won = await m.process_expired_offer("ride_f", "d1", 3)
+    assert won is True
+
+
+@pytest.mark.asyncio
+async def test_batch_offer_timeout_noop_when_ride_left_searching():
+    from backend.routes.rides import matching as m
+
+    with (
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "ride_g", "status": "driver_accepted"}),
+        ),
+        patch("backend.routes.rides._deps.db_supabase.run_sync", new_callable=AsyncMock) as mock_run_sync,
+    ):
+        await m._batch_offer_timeout_handler("ride_g", rider_id=None, timeout_seconds=0)
+    mock_run_sync.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_offer_timeout_noop_when_no_pending_offers():
+    from backend.routes.rides import matching as m
+
+    with (
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "ride_h", "status": "searching"}),
+        ),
+        patch(
+            "backend.routes.rides._deps.db_supabase.run_sync",
+            AsyncMock(return_value=MagicMock(data=[])),
+        ),
+        patch("backend.routes.rides._deps.manager") as mock_mgr,
+    ):
+        mock_mgr.send_personal_message = AsyncMock()
+        await m._batch_offer_timeout_handler("ride_h", rider_id="rider-1", timeout_seconds=0)
+    mock_mgr.send_personal_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_offer_timeout_settings_fetch_failure_falls_back_to_default_threshold():
+    from backend.routes.rides import matching as m
+
+    pending_result = MagicMock(data=[{"driver_id": "d1"}])
+    with (
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "ride_i", "status": "searching"}),
+        ),
+        patch("backend.routes.rides._deps.db_supabase.run_sync", AsyncMock(return_value=pending_result)),
+        patch(
+            "backend.routes.rides._deps.get_app_settings",
+            AsyncMock(side_effect=RuntimeError("settings db down")),
+        ),
+        patch(
+            "backend.routes.rides.matching.process_expired_offer",
+            new_callable=AsyncMock,
+        ) as mock_process,
+        patch("backend.routes.rides._deps.manager") as mock_mgr,
+    ):
+        mock_mgr.send_personal_message = AsyncMock()
+        await m._batch_offer_timeout_handler("ride_i", rider_id=None, timeout_seconds=0)
+    # Falls back to the hardcoded default (3) rather than raising.
+    mock_process.assert_awaited_once_with("ride_i", "d1", 3)
+
+
+@pytest.mark.asyncio
+async def test_batch_offer_timeout_handler_error_is_swallowed():
+    """Any unexpected error in the batch handler must not propagate -- it's a
+    fire-and-forget background task with no caller to catch it."""
+    from backend.routes.rides import matching as m
+
+    with (
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+    ):
+        # Must not raise.
+        await m._batch_offer_timeout_handler("ride_j", rider_id=None, timeout_seconds=0)
+
+
+@pytest.mark.asyncio
+async def test_create_demo_drivers_is_a_noop():
+    """create_demo_drivers is a deliberate deprecated no-op -- confirm it
+    still resolves for any stale caller and does nothing observable."""
+    from backend.routes.rides import matching as m
+
+    result = await m.create_demo_drivers("economy", 52.1, -106.6)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_retry_stops_after_max_attempts():
+    from backend.routes.rides import matching as m
+
+    with (
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", new_callable=AsyncMock) as mock_get_ride,
+    ):
+        await m._dispatch_retry("ride_k", delay=0, attempt=m._MAX_DISPATCH_ATTEMPTS + 1)
+    mock_get_ride.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_retry_noop_when_ride_left_searching():
+    from backend.routes.rides import matching as m
+
+    with (
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "ride_l", "status": "driver_accepted"}),
+        ),
+        patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_match,
+    ):
+        await m._dispatch_retry("ride_l", delay=0, attempt=1)
+    mock_match.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_retry_reschedules_with_backoff_on_error():
+    """A transient failure keeps the retry chain alive with an escalating
+    backoff instead of stranding the ride in `searching`."""
+    from backend.routes.rides import matching as m
+
+    with (
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(side_effect=RuntimeError("db blip")),
+        ),
+        patch("backend.routes.rides._deps.spawn") as mock_spawn,
+    ):
+        await m._dispatch_retry("ride_m", delay=0, attempt=1)
+    mock_spawn.assert_called_once()
+    # spawn() was handed a fresh _dispatch_retry coroutine for the reschedule
+    # -- close it to avoid an "never awaited" warning since we don't run it.
+    scheduled_coro = mock_spawn.call_args.args[0]
+    scheduled_coro.close()
+
+
 def test_build_offer_rows_persists_expires_at():
     """Every dispatched ride_offers row must carry expires_at so the durable
     reaper can expire it even if the in-process asyncio timer is lost on a

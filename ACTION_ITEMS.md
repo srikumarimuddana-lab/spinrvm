@@ -30,20 +30,27 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     (see `backend/CLAUDE.md` / `docs/refactors/god-file-split.md`) replaced it
     with a `routes/rides/` package, and CLAUDE.md's target was never updated
     to reflect that. Per-file coverage in that package is **highly uneven**
-    and several files are well below 80%: `lost_found.py` 25%, `receipts.py`
-    58.3%, `matching.py` 64.7%, `lifecycle.py` 65.1%, `booking.py` 65.7%,
-    `queries.py` 69.2%, `estimates.py`/`cancellation.py` 71.0%,
-    `rides/payments.py` 79.5%. This is the real remaining gap, not
-    payments/fare — `matching.py` and `lifecycle.py` are the highest-priority
-    files (ride state-machine transitions, dispatch-adjacent) per CLAUDE.md's
-    own "every new state transition must have a test" rule.
+    and several files are well below 80%: `lost_found.py` **25% → 100%**
+    (done — see below), `receipts.py` 58.3%, `matching.py` 64.7%,
+    `lifecycle.py` 65.1%, `booking.py` 65.7%, `queries.py` 69.2%,
+    `estimates.py`/`cancellation.py` 71.0%, `rides/payments.py` 79.5%. The
+    remaining gap is not payments/fare — `matching.py` and `lifecycle.py` are
+    the highest-priority files left (ride state-machine transitions,
+    dispatch-adjacent) per CLAUDE.md's own "every new state transition must
+    have a test" rule.
+  - `routes/rides/lost_found.py`: was 25%, **now 100%** after adding 10 tests
+    (`tests/test_lost_found.py`) covering the 404/403/400 guard clauses,
+    category-validation fallback, the driver-notification success path (push
+    sent + status updated to `driver_notified`), and three
+    notification-skip/failure branches. Full backend suite re-run after:
+    4697 passed, 8 skipped, 1 xfailed, 0 failed — no regressions.
 - **Why:** CLAUDE.md mandates ≥90% for `routes/payments.py` + `services/fare_service.py`
   and ≥80% for `routes/rides.py` (now the `routes/rides/` package) +
   `services/dispatch_service.py`; the global floor in `backend/pytest.ini` is
   only 60%.
 - **Files:** `backend/pytest.ini`, new tests under `backend/tests/` — done so
-  far: `backend/tests/services/test_dispatch_service.py`. Next:
-  `backend/tests/` coverage for `routes/rides/lost_found.py`,
+  far: `backend/tests/services/test_dispatch_service.py`,
+  `backend/tests/test_lost_found.py`. Next: `backend/tests/` coverage for
   `routes/rides/receipts.py`, `routes/rides/matching.py`,
   `routes/rides/lifecycle.py`, `routes/rides/booking.py`, in roughly that
   priority order (worst-covered / highest-stakes first).

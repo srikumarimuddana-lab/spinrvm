@@ -2,10 +2,10 @@
 
 Pins that the endpoint:
   - Returns paymentIntent, ephemeralKey, customer, publishableKey on success
-  - Validates amount against the stored ride fare when ride_id is supplied
+  - Charges the server-authoritative ride fare (grand_total/total_fare + tip),
+    ignoring a mismatched client-supplied amount (CS-002)
   - Returns 503 when stripe_secret_key is missing
   - Returns 404 when ride_id references a non-existent ride
-  - Returns 400 when amount does not match ride fare
   - Returns 502 on StripeError (not 500)
 """
 
@@ -98,24 +98,39 @@ async def test_payment_sheet_ride_not_found():
 
 
 @pytest.mark.anyio
-async def test_payment_sheet_amount_mismatch():
-    from fastapi import HTTPException
-
+async def test_payment_sheet_ignores_client_amount_uses_server_fare():
+    """CS-002: body.amount is advisory only for ride payments. The endpoint
+    charges the server-authoritative grand_total/total_fare (+tip) via
+    _authoritative_ride_charge regardless of what body.amount says, rather
+    than 400ing on a mismatch -- this prevents a client from underpaying by
+    sending a lower amount, and there is no client-vs-fare comparison left
+    in create_payment_sheet to reject on."""
     from backend.routes.payments import PaymentSheetRequest, create_payment_sheet
-    from backend.utils.error_handling import SpinrException
+
+    mock_intent = MagicMock()
+    mock_intent.client_secret = "pi_secret_xxx"
+    mock_ephemeral = MagicMock()
+    mock_ephemeral.secret = "ek_secret_yyy"
 
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
         patch("backend.routes.payments.db_supabase") as mock_db,
+        patch("backend.routes.payments.stripe.EphemeralKey.create", return_value=mock_ephemeral),
+        patch("backend.routes.payments.stripe.PaymentIntent.create", return_value=mock_intent) as mock_pi_create,
     ):
         mock_db.get_ride = AsyncMock(return_value=_FAKE_RIDE)
+        mock_db.get_user_by_id = AsyncMock(return_value=_USER)
+        mock_db.update_one = AsyncMock()
 
-        with pytest.raises((HTTPException, SpinrException)) as exc_info:
-            await create_payment_sheet(
-                body=PaymentSheetRequest(amount=20.00, ride_id=_RIDE_ID),  # wrong amount
-                current_user=_USER,
-            )
-    assert exc_info.value.status_code == 400
+        result = await create_payment_sheet(
+            body=PaymentSheetRequest(amount=20.00, ride_id=_RIDE_ID),  # client amount is ignored
+            current_user=_USER,
+        )
+
+    assert result["paymentIntent"] == "pi_secret_xxx"
+    # PaymentIntent must be created for the ride's fare (15.50 -> 1550 cents),
+    # not the client-supplied 20.00.
+    assert mock_pi_create.call_args.kwargs["amount"] == 1550
 
 
 @pytest.mark.anyio

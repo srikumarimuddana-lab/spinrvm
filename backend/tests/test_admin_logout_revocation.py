@@ -179,6 +179,11 @@ async def test_get_current_user_rejects_blacklisted_jti():
             "token_version": 0,
             "exp": now + 3600,
             "iat": now,
+            # The no-aud legacy grace path was retired -- a role=admin token
+            # missing "aud" is now rejected outright (ERR_TOKEN_AUDIENCE)
+            # rather than falling through to the JTI-revocation check this
+            # test actually exercises.
+            "aud": _deps_module.JWT_AUD_ADMIN,
         },
         settings.JWT_SECRET,
         algorithm=settings.ALGORITHM,

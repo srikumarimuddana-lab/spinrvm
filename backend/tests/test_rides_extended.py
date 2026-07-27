@@ -572,7 +572,7 @@ class TestGetScheduledRides:
 
         scheduled = [_ride("scheduled")]
 
-        with patch("backend.routes.rides._deps.db_supabase.get_rides_for_user", MagicMock(return_value=scheduled)):
+        with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=scheduled)):
             result = asyncio.run(rides_mod.get_scheduled_rides(current_user={"id": RIDER_ID}))
 
         assert isinstance(result, list)

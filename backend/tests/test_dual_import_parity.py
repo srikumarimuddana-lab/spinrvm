@@ -60,7 +60,6 @@ EXTRA_GUARDED_MODULES = [
 # Each is a latent NameError in top-level import mode; fix in scoped changes.
 KNOWN_LEGACY_VIOLATIONS = {
     "routes/admin/maintenance.py": {"_run_sync", "_supabase_client"},
-    "routes/safety.py": {"notify_safety_team"},
 }
 
 

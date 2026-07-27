@@ -115,7 +115,9 @@ class TestTriggerEmergency:
         assert result["success"] is True
         assert persisted, "Incident not persisted"
         table, row = persisted[0]
-        assert table == "emergencies"
+        # Consolidated onto safety_incidents (migration 94) -- the legacy
+        # `emergencies` table was never read by anything and was dropped.
+        assert table == "safety_incidents"
         assert row["ride_id"] == RIDE_ID
         assert row["reported_by_user_id"] == RIDER_ID
         assert row["role"] == "rider"

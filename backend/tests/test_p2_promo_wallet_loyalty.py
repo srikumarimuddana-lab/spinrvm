@@ -239,10 +239,21 @@ class TestApplyPromo:
 
         req = ApplyPromoRequest(code="SAVE5", ride_id=RIDE_ID)
 
+        # apply_promo computes ride_fare as base+distance+time ("ride portion
+        # only", per the code's own comment -- distinct from grand_total,
+        # which is total_fare) and calls _validate_promo_for_user directly,
+        # not the public validate_promo wrapper this test previously patched.
+        ride = {
+            **_ride(total_fare=20.00),
+            "base_fare": 5.00,
+            "distance_fare": 10.00,
+            "time_fare": 5.00,
+        }
+
         validate_calls = []
 
-        async def _fake_validate(req_inner, user):
-            validate_calls.append(req_inner.ride_fare)
+        async def _fake_validate(code, user_id, ride_fare, ride_id=None, grand_total=None):
+            validate_calls.append(ride_fare)
             return {
                 "valid": True,
                 "code": "SAVE5",
@@ -255,16 +266,17 @@ class TestApplyPromo:
             }
 
         with (
-            patch("backend.routes.promotions.db_supabase.find_one", AsyncMock(return_value=_ride(total_fare=20.00))),
+            patch("backend.routes.promotions.db_supabase.find_one", AsyncMock(return_value=ride)),
             patch("backend.routes.promotions.db_supabase.insert_one", AsyncMock()),
             patch("backend.routes.promotions.db_supabase.get_rows", AsyncMock(return_value=[_promo()])),
             patch("backend.routes.promotions.increment_promo_uses", AsyncMock(return_value=True)),
-            patch("backend.routes.promotions.validate_promo", AsyncMock(side_effect=_fake_validate)),
+            patch("backend.routes.promotions.db_supabase.claim_promo_user_slot", AsyncMock(return_value=True)),
+            patch("backend.routes.promotions._validate_promo_for_user", AsyncMock(side_effect=_fake_validate)),
         ):
             result = await apply_promo(req=req, current_user={"id": USER_ID})
 
         assert result["success"] is True
-        # Server fare ($20) was used, not anything from the client
+        # Server fare (base+distance+time = $20) was used, not anything from the client
         assert validate_calls[0] == Decimal("20.00")
 
     async def test_non_owner_apply_raises_403(self):
@@ -340,13 +352,16 @@ class TestWalletPay:
         return result, updated, txns
 
     async def test_wallet_pay_deducts_balance(self):
-        result, _, _ = await self._pay(amount=15.00, wallet_balance=50.00, ride_fare=20.00)
+        # wallet_pay now validates the client-supplied amount exactly matches
+        # the server-stored fare (+/- $0.01) to prevent under/overpayment --
+        # amount and ride_fare must agree, not test a partial-payment case.
+        result, _, _ = await self._pay(amount=15.00, wallet_balance=50.00, ride_fare=15.00)
 
         assert "balance" in result
         assert float(result["balance"]) == pytest.approx(35.00, abs=0.01)
 
     async def test_wallet_pay_marks_ride_paid(self):
-        _, updated, _ = await self._pay(amount=15.00, wallet_balance=50.00)
+        _, updated, _ = await self._pay(amount=15.00, wallet_balance=50.00, ride_fare=15.00)
 
         ride_updates = [(t, d) for t, d in updated if t == "rides"]
         assert ride_updates, "Ride was not updated after payment"
@@ -431,29 +446,47 @@ class TestWalletPay:
 
 @pytest.mark.e2e
 class TestWalletTopUp:
-    """Pins top_up_wallet: balance increment and transaction record.
+    """Pins top_up_wallet: creates a Stripe PaymentIntent for the client's
+    PaymentSheet rather than crediting the balance synchronously -- the
+    wallet is only credited once Stripe confirms payment via the
+    payment_intent.succeeded webhook (scope=wallet_topup), a separate code
+    path (routes/webhooks.py) not exercised here.
 
-    Code under test: backend/routes/wallet.py::top_up_wallet (~line 115).
+    Code under test: backend/routes/wallet.py::top_up_wallet (~line 137).
     """
 
-    async def test_top_up_increases_balance(self):
+    async def test_top_up_creates_payment_intent(self):
         from backend.routes.wallet import TopUpRequest, top_up_wallet
 
         req = TopUpRequest(amount=Decimal("25.00"))
         mock_request = MagicMock()
         mock_request.headers.get.return_value = None
-        txns = []
+
+        mock_intent = MagicMock()
+        mock_intent.client_secret = "pi_secret_xxx"
+        mock_ephemeral = MagicMock()
+        mock_ephemeral.secret = "ek_secret_yyy"
 
         with (
             patch("backend.routes.wallet.db.find_one", AsyncMock(return_value=_wallet(balance=10.00))),
-            patch("backend.routes.wallet.wallet_increment_balance", AsyncMock(return_value=Decimal("35.00"))),
-            patch("backend.routes.wallet.db.insert_one", AsyncMock(side_effect=lambda t, r: txns.append(r) or r)),
+            patch(
+                "backend.routes.wallet.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x", "stripe_publishable_key": "pk_test_x"}),
+            ),
+            patch(
+                "backend.routes.wallet.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "stripe_customer_id": "cus_existing"}),
+            ),
+            patch("backend.routes.wallet.stripe.EphemeralKey.create", return_value=mock_ephemeral),
+            patch("backend.routes.wallet.stripe.PaymentIntent.create", return_value=mock_intent) as mock_pi_create,
         ):
             result = await top_up_wallet(req=req, request=mock_request, current_user={"id": USER_ID})
 
-        assert float(result["balance"]) == pytest.approx(35.00, abs=0.01)
-        assert txns, "Transaction not recorded"
-        assert txns[0]["type"] == "top_up"
+        assert result["paymentIntent"] == "pi_secret_xxx"
+        assert result["ephemeralKey"] == "ek_secret_yyy"
+        assert result["customer"] == "cus_existing"
+        assert mock_pi_create.call_args.kwargs["amount"] == 2500
+        assert mock_pi_create.call_args.kwargs["metadata"]["scope"] == "wallet_topup"
 
     async def test_suspended_wallet_blocks_top_up(self):
         from fastapi import HTTPException

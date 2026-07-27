@@ -59,7 +59,11 @@ async def test_expired_driver_is_suspended(now):
             [],  # driver_documents fetch (no extra docs)
         ]
     )
-    mock_db.update_one = AsyncMock(return_value=None)
+    # Truthy return: the suspension update_one is a replay-safety claim
+    # (F6) -- the caller only proceeds to clear_presence/disconnect/notify
+    # when the update actually claimed a row (falsy means already
+    # suspended by a prior tick or sibling replica).
+    mock_db.update_one = AsyncMock(return_value=driver)
 
     mock_manager = MagicMock()
     mock_send_push = AsyncMock()
@@ -75,10 +79,13 @@ async def test_expired_driver_is_suspended(now):
 
         await check_expiring_documents()
 
-    # Must call update_one with a flat dict (no $set wrapper) — P0-5 sub-fix 1
+    # Must call update_one with a flat dict (no $set wrapper) — P0-5 sub-fix 1.
+    # The filter also carries a status != 'suspended' replay-safety guard
+    # (F6) so a re-tick or sibling replica can't re-suspend/re-notify an
+    # already-suspended driver.
     mock_db.update_one.assert_awaited_once_with(
         "drivers",
-        {"id": "d1"},
+        {"id": "d1", "status": {"$ne": "suspended"}},
         {"is_online": False, "is_available": False, "status": "suspended"},
     )
     # Presence must be cleared from Redis
@@ -129,9 +136,16 @@ async def test_doc_expired_long_ago_is_still_processed(now):
 
 
 @pytest.mark.anyio
-async def test_valid_driver_not_suspended(now):
-    """Driver with a licence valid for 60 days must receive no suspension call."""
-    future_ts = (now + timedelta(days=60)).isoformat()
+async def test_valid_driver_not_suspended():
+    """Driver with a licence valid for 60 days must receive no suspension call.
+
+    check_expiring_documents() compares against the real wall-clock
+    datetime.now(), not a fixture -- computing "future" from the frozen
+    `now` fixture (2026-04-28) meant this "60 days out" date could actually
+    be in the past by the time the suite runs, making the driver look
+    expired for real. Anchor to the real clock instead.
+    """
+    future_ts = (datetime.now(timezone.utc) + timedelta(days=60)).isoformat()
     driver = _make_driver(license_expiry=future_ts)
 
     mock_db = MagicMock()
@@ -172,7 +186,10 @@ async def test_expired_driver_not_dispatched():
     mock_rpc_result.data = [active_driver]
     mock_supabase.rpc.return_value.execute.return_value = mock_rpc_result
 
-    with patch("db_supabase.supabase", mock_supabase):
+    # find_nearby_drivers is implemented in repositories/driver_repo.py,
+    # which imports its own `supabase` from repositories._base at module
+    # level -- patching db_supabase.supabase doesn't reach it.
+    with patch("repositories.driver_repo.supabase", mock_supabase):
         import db_supabase
 
         result = await db_supabase.find_nearby_drivers(52.1, -106.6, 5000)

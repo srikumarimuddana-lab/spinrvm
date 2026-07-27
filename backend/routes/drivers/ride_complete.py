@@ -65,7 +65,7 @@ except ImportError:
 try:
     from ...utils.period_distance_audit import record_ride_period_distances
 except ImportError:
-    pass  # type: ignore
+    from utils.period_distance_audit import record_ride_period_distances  # type: ignore
 
 
 _COMPLETION_MAX_CAPTURE_AGE_SECONDS = 120

@@ -863,8 +863,15 @@ class TestCompleteRide:
             if table == "rides":
                 rides_update.update(fields)
             elif table == "ride_routes":
-                routes_upsert["fields"] = fields
-                routes_upsert["upsert"] = kw.get("upsert")
+                # complete_ride makes several ride_routes update_one calls
+                # (a missing-tail completion marker, the geometry write, and
+                # a later finalization/snapshot bookkeeping write) -- capture
+                # the one that actually carries the geometry payload rather
+                # than unconditionally overwriting with whichever call is
+                # last, which would grab the bookkeeping write instead.
+                if "road_polyline" in fields:
+                    routes_upsert["fields"] = fields
+                    routes_upsert["upsert"] = kw.get("upsert")
             return completed
 
         def get_rows_side_effect(table, filters=None, **kw):
@@ -985,13 +992,28 @@ class TestCancelRide:
 
 
 class TestDeclineRide:
+    """decline_ride (routes/drivers/ride_flow.py) reads the ride via
+    db_supabase.get_ride (not get_rows), gates on an ownership check
+    (is_assigned OR a claimed pending ride_offers row), then updates the
+    driver's acceptance rate / availability / miss-streak and logs the
+    decline. Only the ride_offers claim and the re-dispatch check are
+    wrapped in their own try/except; update_acceptance_rate,
+    set_driver_available, and reset_miss_streak are not, so all three need
+    mocking or the call crashes before returning."""
+
     def test_success_declines_offer(self):
         from backend.routes import drivers as drv
 
+        ride = _ride("driver_assigned", driver_id=DRIVER_ID)
+
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
-            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
             patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
             patch("backend.routes.drivers._deps.db.insert_one", AsyncMock()),
         ):
             result = asyncio.run(drv.decline_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
@@ -999,11 +1021,22 @@ class TestDeclineRide:
         assert result == {"success": True}
 
     def test_race_lost_returns_success_silently(self):
+        """The ride_offers claim update fails (no pending row -- another path
+        already resolved it), but the driver is still the assigned driver on
+        the ride, so the ownership gate passes on is_assigned and the decline
+        still succeeds silently rather than 403ing."""
         from backend.routes import drivers as drv
+
+        ride = _ride("driver_assigned", driver_id=DRIVER_ID)
 
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
-            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("race lost"))),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
             patch("backend.routes.drivers._deps.db.insert_one", AsyncMock()),
         ):
             result = asyncio.run(drv.decline_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))

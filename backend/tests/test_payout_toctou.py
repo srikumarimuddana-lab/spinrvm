@@ -78,13 +78,13 @@ class TestStandardPayoutReservation:
         """When the Stripe Transfer fails, the reserved row must be updated
         to status='failed' so the index slot is freed for the next attempt."""
         # Find the standard payout section (before instant payout)
-        std_section = _PAYOUTS[: _PAYOUTS.index("request_instant_payout")]
+        std_section = _PAYOUTS[: _PAYOUTS.index("async def request_instant_payout")]
         assert '"failed"' in std_section
 
     def test_reverses_transfer_on_terminal_write_failure(self):
         """If the terminal write (reserved -> completed) fails after the
         Stripe Transfer succeeded, the transfer must be reversed."""
-        std_section = _PAYOUTS[: _PAYOUTS.index("request_instant_payout")]
+        std_section = _PAYOUTS[: _PAYOUTS.index("async def request_instant_payout")]
         assert "_attempt_transfer_reversal" in std_section
 
     def test_standard_payout_has_idempotency_key(self):
@@ -96,13 +96,16 @@ class TestStandardPayoutReservation:
 
 class TestInstantPayoutReservation:
     def _instant_section(self):
-        start = _PAYOUTS.index("request_instant_payout")
+        start = _PAYOUTS.index("async def request_instant_payout")
         return _PAYOUTS[start:]
 
     def test_inserts_reserved_row_before_transfer(self):
         section = self._instant_section()
         reserve_pos = section.index('"reserved"')
-        transfer_pos = section.index("Transfer.create")
+        # "stripe.Transfer.create(" (not "Transfer.create") -- the plain
+        # substring also matches the docstring's mention of
+        # "Transfer.create_reversal()" a few lines above the real call.
+        transfer_pos = section.index("stripe.Transfer.create(")
         insert_pos = section.index('insert_one("payouts"')
         assert insert_pos < transfer_pos, "instant payout row must be inserted before the Stripe Transfer"
         assert reserve_pos < transfer_pos

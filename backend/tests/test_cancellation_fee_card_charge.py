@@ -108,7 +108,11 @@ class TestCardCancellationFeeCharge:
         # at a stale pre-cancel payment_status.
         written = update_ride_mock.call_args_list[0].args[1]
         assert written["payment_status"] == "paid"
-        assert written["payment_intent_id"] == "pi_test_ok"
+        # WS-8 (migration 251): the cancellation-fee PI lives in its own
+        # column, not the shared payment_intent_id -- that column stays
+        # reserved for the booking-time PI so payment_retry.py's blind scan
+        # never chases the wrong PaymentIntent.
+        assert written["cancel_fee_payment_intent_id"] == "pi_test_ok"
 
         # A successful Stripe charge must leave a reconciliation trail — a
         # financial_events row written BEFORE the ride update, mirroring
@@ -164,13 +168,14 @@ class TestCardCancellationFeeCharge:
         assert result["success"] is True
         written = update_ride_mock.call_args_list[0].args[1]
         assert written["payment_status"] == "failed"
-        # A decline never returns a PaymentIntent id — payment_intent_id must
-        # still be explicitly overwritten (here, to None) rather than left at
-        # whatever stale booking-time hold PI the ride already had. Otherwise
-        # payment_retry.py's blind payment_status scan would pick up this
-        # cancelled ride and retry an unrelated PaymentIntent forever.
-        assert "payment_intent_id" in written
-        assert written["payment_intent_id"] is None
+        # A decline never returns a PaymentIntent id — cancel_fee_payment_
+        # intent_id must still be explicitly overwritten (here, to None)
+        # rather than left at a stale value. WS-8 (migration 251) moved this
+        # off the shared payment_intent_id column so a declined cancellation
+        # fee can never clobber the booking-time PI that payment_retry.py's
+        # blind payment_status scan reads.
+        assert "cancel_fee_payment_intent_id" in written
+        assert written["cancel_fee_payment_intent_id"] is None
 
     async def test_requires_action_also_marks_ride_failed(self):
         """No 3DS retry flow exists for a cancellation fee, so requires_action
@@ -216,7 +221,7 @@ class TestCardCancellationFeeCharge:
         assert result["success"] is True
         written = update_ride_mock.call_args_list[0].args[1]
         assert written["payment_status"] == "failed"
-        assert written["payment_intent_id"] == "pi_test_3ds"
+        assert written["cancel_fee_payment_intent_id"] == "pi_test_3ds"
 
     async def test_unconfigured_stripe_leaves_payment_status_untouched(self):
         """When Stripe isn't wired up at all, no charge was attempted — the

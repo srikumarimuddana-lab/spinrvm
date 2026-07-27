@@ -19,7 +19,9 @@ _DISPUTE = {
     "ride_id": "ride_1",
     "user_id": "user_1",
     "status": "open",
-    "original_fare": 25.00,
+    # Must cover the largest parametrized refund_amount below (29.99) --
+    # admin_resolve_dispute now rejects a refund exceeding original_fare.
+    "original_fare": 50.00,
 }
 
 _ADMIN = {"id": "admin_1", "email": "ops@spinr.ca", "role": "admin"}

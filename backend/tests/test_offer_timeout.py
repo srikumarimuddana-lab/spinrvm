@@ -28,9 +28,13 @@ class TestOfferTimeoutHandler:
     async def test_expires_and_resets(self, ride_still_assigned):
         """Ride still `driver_assigned` after timeout → release driver, reset to searching, re-dispatch.
 
-        Production code uses the flat Supabase API:
+        Production code:
             db.find_one("rides", {...})
-            db.update_one("drivers", {...}, {...})
+            db_supabase.set_driver_available(driver_id, available=True)  -- NOT
+                a raw db.update_one("drivers", ...); this enforces the
+                is_available => is_online invariant and is skipped entirely
+                on the miss-streak auto-offline branch, which instead uses
+                db.update_one("drivers", ...) directly.
             db.update_one("rides", {...}, {...})
         """
         update_calls = []
@@ -43,6 +47,14 @@ class TestOfferTimeoutHandler:
             patch("backend.routes.rides._deps.db") as mock_db,
             patch("backend.routes.rides._deps.manager") as mock_manager,  # noqa: F841
             patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
+            patch(
+                "backend.routes.rides._deps.db_supabase.set_driver_available",
+                AsyncMock(return_value={"id": "driver_1", "is_available": True}),
+            ) as mock_set_available,
+            patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
+            patch("utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)),
+            patch("utils.driver_presence.reset_miss_streak", AsyncMock()),
+            patch("utils.driver_presence.clear_presence", AsyncMock()),
         ):
             # Flat API: db.find_one("rides", {...})
             mock_db.find_one = AsyncMock(return_value=ride_still_assigned)
@@ -53,12 +65,11 @@ class TestOfferTimeoutHandler:
 
             await _offer_timeout_handler("ride_1", "driver_1", rider_id="user_rider_1", timeout_seconds=30)
 
-            # Driver released — first update_one call is to "drivers" table
-            driver_calls = [c for c in update_calls if c[0] == "drivers"]
-            assert driver_calls, "Expected db.update_one('drivers', ...) to be called"
-            assert driver_calls[0][1] == {"id": "driver_1"}
+            # Driver released via set_driver_available (below the miss-streak
+            # auto-offline threshold), not a raw db.update_one("drivers", ...).
+            mock_set_available.assert_awaited_once_with("driver_1", available=True)
 
-            # Ride reset to searching — second update_one call is to "rides" table
+            # Ride reset to searching via db.update_one("rides", ...)
             ride_calls = [c for c in update_calls if c[0] == "rides"]
             assert ride_calls, "Expected db.update_one('rides', ...) to be called"
 
@@ -253,7 +264,11 @@ class TestDispatchHardening:
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch(
                 "backend.routes.rides._deps.db_supabase.get_driver_by_id",
-                AsyncMock(return_value={**self._DRIVER, "is_online": True}),
+                # claim_driver_atomic only guards id + is_available; the
+                # freshly-read row is then revalidated against the full
+                # eligibility set (is_online + is_verified + status=='active')
+                # before the driver is actually claimed for an offer.
+                AsyncMock(return_value={**self._DRIVER, "is_online": True, "is_verified": True, "status": "active"}),
             ),
             patch(
                 "backend.routes.rides._deps.db_supabase.get_user_by_id",
@@ -267,6 +282,16 @@ class TestDispatchHardening:
             ),
             patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
             patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
+            # Batch-offer dispatch inserts ride_offers rows (and does
+            # best-effort quest-progress/incentive lookups) via
+            # db_supabase.run_sync(lambda: supabase.table(...)...execute()) --
+            # unmocked this hits a real, unconfigured client and the
+            # ride_offers insert path re-raises on failure (unlike the
+            # other lookups, which are wrapped and degrade quietly).
+            patch(
+                "backend.routes.rides._deps.db_supabase.run_sync",
+                AsyncMock(return_value=MagicMock(data=[])),
+            ),
         ):
             await rides_mod.match_driver_to_ride(ride_id=self._RIDE_BASE["id"])
 

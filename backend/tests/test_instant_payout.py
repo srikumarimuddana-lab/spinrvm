@@ -227,17 +227,24 @@ class TestRequestInstantPayout:
             )
 
         assert result["success"] is True
-        # Initial INSERT writes the in-flight transfer; status flips to
-        # completed via UPDATE only after the payout step succeeds.
+        # WS-7 reserve-then-transfer (migration 250): the INSERT reserves the
+        # row with status="reserved" and no Stripe IDs yet, BEFORE any Stripe
+        # call, so a concurrent instant-payout request is blocked by the
+        # partial unique index rather than racing past a balance check.
         assert inserted["amount"] == Decimal("100.00")
         assert inserted["fee"] == Decimal("1.50")
         assert inserted["net_amount"] == Decimal("98.50")
         assert inserted["payout_type"] == "instant"
-        assert inserted["status"] == "transfer_completed"
-        assert inserted["stripe_transfer_id"] == "tr_x"
+        assert inserted["status"] == "reserved"
+        assert inserted["stripe_transfer_id"] is None
         assert inserted["stripe_payout_id"] is None
-        # The final UPDATE marks it completed with the payout id.
-        assert updates, "Expected an UPDATE after the payout step"
+        # First UPDATE (post-transfer): reserved -> transfer_completed,
+        # carrying the Stripe transfer id.
+        assert len(updates) >= 2, "Expected an UPDATE after the transfer and another after the payout step"
+        transfer_update = updates[0]
+        assert transfer_update["status"] == "transfer_completed"
+        assert transfer_update["stripe_transfer_id"] == "tr_x"
+        # Final UPDATE marks it completed with the payout id.
         final = updates[-1]
         assert final["status"] == "completed"
         assert final["stripe_payout_id"] == "po_INSTANT"
@@ -297,12 +304,16 @@ class TestRequestInstantPayout:
                     )
                 )
         assert exc.value.status_code == 500
-        # Transfer-id is persisted before the payout attempt, so the row
-        # always exists by the time we hit the failure path.
-        assert inserted["stripe_transfer_id"] == "tr_x"
-        assert inserted["status"] == "transfer_completed"
+        # The row is reserved (no Stripe IDs yet) at INSERT time; the
+        # transfer id is only persisted by the first UPDATE, after the
+        # Stripe Transfer call succeeds.
+        assert inserted["status"] == "reserved"
+        assert inserted["stripe_transfer_id"] is None
+        assert len(updates) >= 2, "Expected an UPDATE after the transfer and another after the payout failure"
+        transfer_update = updates[0]
+        assert transfer_update["status"] == "transfer_completed"
+        assert transfer_update["stripe_transfer_id"] == "tr_x"
         # And the failure path flags the row.
-        assert updates, "Expected an UPDATE after the payout failure"
         final = updates[-1]
         assert final["status"] == "reversed"
         assert final["requires_manual_review"] is False
@@ -370,7 +381,11 @@ class TestRequestInstantPayout:
         assert final["requires_manual_review"] is True
 
     def test_transfer_failure_does_not_persist_or_reverse(self):
-        """Step-1 transfer fails. No persist, no reversal — nothing happened."""
+        """Step-1 transfer fails. No money moved → no reversal needed, but
+        WS-7's reserve-then-transfer (migration 250) means the row was
+        already inserted (status='reserved') BEFORE the Stripe call, and is
+        then marked 'failed' rather than reversed (there was nothing to
+        reverse)."""
         from backend.routes import drivers as drv
 
         def get_rows_side_effect(table, filters=None, **kw):
@@ -381,11 +396,16 @@ class TestRequestInstantPayout:
             return []
 
         insert_calls: list = []
+        update_calls: list = []
         reversal_calls: list = []
 
         async def fake_insert(_table, payload):
             insert_calls.append(payload)
             return payload
+
+        async def fake_update(_table, _filters, fields):
+            update_calls.append(dict(fields))
+            return None
 
         def fake_reversal(*args, **kw):
             reversal_calls.append((args, kw))
@@ -396,6 +416,7 @@ class TestRequestInstantPayout:
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
             patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
             patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(return_value=self._balance())),
             patch(
                 "backend.settings_loader.get_app_settings",
@@ -415,8 +436,13 @@ class TestRequestInstantPayout:
                         current_user={"id": USER_ID},
                     )
                 )
-        # No money moved → no row, no reversal needed.
-        assert insert_calls == []
+        # Reserved before the Stripe call, per WS-7.
+        assert len(insert_calls) == 1
+        assert insert_calls[0]["status"] == "reserved"
+        assert insert_calls[0]["stripe_transfer_id"] is None
+        # No money moved → the row is marked failed, not reversed.
+        assert update_calls, "Expected the reserved row to be marked failed"
+        assert update_calls[-1]["status"] == "failed"
         assert reversal_calls == []
 
 

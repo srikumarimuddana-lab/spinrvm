@@ -692,6 +692,9 @@ async def test_set_default_card_updates_db_and_stripe():
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
         patch("backend.routes.payments.db_supabase") as mock_db,
+        # WS-18: set_default_card now verifies the card belongs to this
+        # customer via PaymentMethod.list before promoting it to default.
+        patch("backend.routes.payments.stripe.PaymentMethod.list", return_value=_mock_card_list("pm_001")),
         patch("backend.routes.payments.stripe.Customer.modify") as mock_modify,
     ):
         mock_db.update_one = AsyncMock()
@@ -712,6 +715,10 @@ async def test_set_default_card_no_stripe_key_still_updates_db():
         patch("backend.routes.payments.db_supabase") as mock_db,
     ):
         mock_db.update_one = AsyncMock()
+        # WS-18: without Stripe, ownership is verified against the user's
+        # own saved_payment_methods/default_payment_method rather than
+        # accepting an arbitrary card_id string.
+        mock_db.get_user_by_id = AsyncMock(return_value={**_USER, "saved_payment_methods": ["pm_001"]})
 
         result = await set_default_card(card_id="pm_001", current_user=_USER)
 

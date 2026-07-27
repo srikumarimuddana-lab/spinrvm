@@ -77,6 +77,9 @@ class FakeDb:
             "ride_routes": list(self.ride_routes.values()),
             "driver_location_history": self.history,
             "ride_distance_recomputes": self.audit,
+            # get_app_settings() (settings_loader.py) queries this table on
+            # every cache miss -- reconstruct_completed_route now calls it.
+            "settings": [],
         }[name]
 
     @staticmethod
@@ -305,4 +308,9 @@ async def test_stranded_tail_recovers_full_route_and_distance_without_touching_f
     assert audit["ride_id"] == RIDE_ID
     assert audit["previous_actual_distance_km"] == truncated_truth
     assert abs(audit["new_actual_distance_km"] - full_truth) / full_truth < 0.05
-    assert audit["trigger"] == "late_tail_refinalization"
+    # "late_tail_refinalization" only applies to the no-reconstruction,
+    # GPS-measured-only recompute path (distance_basis="gps_measured");
+    # this test exercises route reconstruction, which resolves distance via
+    # resolve_measured_distance_km and tags the trigger "route_reconstruction"
+    # (utils/route_finalizer.py's _DISTANCE_RECOMPUTE_TRIGGER_BY_BASIS).
+    assert audit["trigger"] == "route_reconstruction"

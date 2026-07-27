@@ -129,7 +129,8 @@ class TestStripeWebhookAllowlist:
     def test_unknown_events_not_in_allowlist(self):
         from backend.routes.webhooks import ALLOWED_STRIPE_EVENTS
 
-        # `charge.refunded` was added to the allowlist in main commit b9b14f6
-        # (PR #530); test now verifies the genuinely-unknown set only.
-        for unknown in ("account.updated", "payout.paid", ""):
+        # `charge.refunded`, `account.updated` (Stripe Connect account status
+        # tracking), and `payout.paid`/`payout.failed` have all since joined
+        # the allowlist; test now verifies the genuinely-unknown set only.
+        for unknown in ("invoice.voided", "product.created", ""):
             assert unknown not in ALLOWED_STRIPE_EVENTS, f"{unknown} should not be allowed"

@@ -166,6 +166,44 @@ class TestPreauthorizeRideCard:
         assert result.fields == {}
         auth.assert_not_called()
 
+    async def test_fare_only_retry_requires_action_surfaces_client_secret(self):
+        """The buffered hold declined for insufficient_funds, and the
+        fare-only retry needs SCA -- surface it (interactive booking)."""
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_authorize(
+            _outcome(status="declined", decline_code="insufficient_funds"),
+            _outcome(status="requires_action", client_secret="cs2", payment_intent_id="pi_fare_sca"),
+        ):
+            result = await _preauthorize_ride_card(**_BASE)
+        assert result.requires_action is True
+        assert result.client_secret == "cs2"
+        assert result.payment_intent_id == "pi_fare_sca"
+
+    async def test_fare_only_retry_requires_action_degrades_when_not_blocking(self):
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_authorize(
+            _outcome(status="declined", decline_code="insufficient_funds"),
+            _outcome(status="requires_action", client_secret="cs2"),
+        ):
+            result = await _preauthorize_ride_card(**_BASE, block_on_decline=False)
+        assert result.requires_action is False
+        assert result.fields == {}
+
+    async def test_fare_only_retry_ops_failure_degrades_to_no_hold(self):
+        """The fare-only retry hits an ops error (not a genuine decline) --
+        degrade rather than block the booking."""
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_authorize(
+            _outcome(status="declined", decline_code="insufficient_funds"),
+            _outcome(status="failed", error_message="rate_limit"),
+        ):
+            result = await _preauthorize_ride_card(**_BASE)
+        assert result.fields == {}
+        assert result.requires_action is False
+
 
 def _patch_verify(outcome, *, existing_rows=None):
     """Patch verify_authorization and the PI-reuse lookup (db_supabase.get_rows)."""
@@ -257,6 +295,22 @@ class TestAttachPreauthorizedHold:
                 st.enter_context(p)
             fields = await _attach_preauthorized_hold(**_ATTACH_KW)
         assert fields == {}
+
+    async def test_pi_reuse_lookup_failure_fails_open_to_stripe_check(self):
+        """A degraded reuse-lookup query must not block attachment -- ownership
+        and amount are still enforced against Stripe itself below it."""
+        from backend.routes.rides import _attach_preauthorized_hold
+
+        out = _outcome(status="authorized", payment_intent_id="pi_sca", charged_amount=Decimal("35.00"))
+        with (
+            patch("backend.routes.rides._deps.verify_authorization", AsyncMock(return_value=out)),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_rows",
+                AsyncMock(side_effect=RuntimeError("db unavailable")),
+            ),
+        ):
+            fields = await _attach_preauthorized_hold(**_ATTACH_KW)
+        assert fields["auth_status"] == "authorized"
 
     async def test_pi_already_attached_to_other_ride_blocks(self):
         """SECURITY: a PI already on a DIFFERENT ride can't be re-attached."""

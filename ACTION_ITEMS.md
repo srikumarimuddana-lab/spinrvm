@@ -43,26 +43,26 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   evidence location) and a "no entries to date" first row.
 
 ### A4. 156 failing backend tests on `main`
-- [ ] **Status:** down to 5 failures (2026-07-27) — buckets 1, 3, and 4 fully
-  cleared, and `test_p3_promo_concurrency.py::TestPromoApplyRouteRaceHandling`
-  (2 tests, originally suspected blocked on the `mock_supabase_client`
-  fixture's calling-convention mismatch) turned out to have the same
-  dead-patch-target root cause as bucket 1 and is now fixed too — across
-  ~21 PRs (#2394 through #2421 and follow-ups), plus several genuine
-  production bugs found and fixed along the way (a broken dual-import
+- [x] **Status:** ✅ fully complete (2026-07-27) — all 4 buckets cleared, 0
+  known backend test failures remain. Bucket 2 (the last holdout —
+  `test_wallet.py::TestTransfer`/`TestTopUp`,
+  `test_p2_promo_wallet_loyalty.py::TestWalletTopUp`) was resolved per
+  explicit product confirmation: wallet-to-wallet transfer is a removed
+  feature (no `/transfer` route exists in `routes/wallet.py`) — `TestTransfer`
+  was deleted, and `TestTopUp` was rewritten against the current Stripe
+  PaymentIntent + EphemeralKey response shape (credit now happens
+  asynchronously via the `payment_intent.succeeded` webhook, already covered
+  by `test_webhooks_main.py::test_wallet_topup_credits_idempotently_on_reference_id`).
+  Fixed across ~22 PRs (#2394 through #2421 and follow-ups), plus several
+  genuine production bugs found and fixed along the way (a broken dual-import
   fallback silently dropping an insurance-period audit write; a corporate
   allowance RPC's `p_actor_user_id` parameter silently re-narrowed from
   `TEXT` back to `UUID` by two later migrations, reopening the exact
-  `22P02` bug 214 had already fixed). Remaining: bucket 2 only —
-  `test_wallet.py::TestTransfer`/`TestTopUp` (5 tests),
-  `test_p2_promo_wallet_loyalty.py::TestWalletTopUp` — explicitly deferred,
-  needs the product decision below before touching. Originally found while
-  triaging PR #2377's CI failures (2026-07-26); root-caused 2026-07-26 (see
-  below). Confirmed **test drift, not a product regression** — production
-  code changed correctly; tests were never updated to match. Every PR
-  currently shows a red `backend-test` check regardless of the PR's own quality, which
-  trains reviewers to ignore CI signal — a bigger risk than any single
-  failing test.
+  `22P02` bug 214 had already fixed). Originally found while triaging PR
+  #2377's CI failures (2026-07-26); root-caused 2026-07-26 (see below).
+  Confirmed **test drift, not a product regression** — production code
+  changed correctly; tests were never updated to match. Full local suite
+  run (2026-07-27): `4667 passed, 8 skipped, 1 xfailed, 0 failed`.
 - **Root cause breakdown (ranked by likely share of the 156):**
   1. **Orphaned `patch()` targets after module splits (likely >half of the 156).**
      `routes/drivers.py` → `routes/drivers/` package, `routes/rides.py` →
@@ -127,8 +127,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   test on its merits. Bucket 2 (`TestTransfer`) needs a product decision first
   — confirm wallet-to-wallet transfer is actually a dead/removed feature before
   deleting its tests, rather than assuming.
-- **Acceptance:** `pytest` on `main` reports 0 failures; CI Guard Rails coverage gate
-  stays meaningful again once the underlying suite is trustworthy.
+- **Acceptance:** ✅ met — `pytest` reports 0 failures on this branch (full
+  suite: 4667 passed, 8 skipped, 1 xfailed); CI Guard Rails coverage gate is
+  meaningful again once this merges to `main`.
 
 ### A5. PyJWT HIGH-severity CVE-2026-48526 (auth bypass) in backend image
 - [ ] **Status:** open — found via Trivy container scan on PR #2377 (2026-07-26)

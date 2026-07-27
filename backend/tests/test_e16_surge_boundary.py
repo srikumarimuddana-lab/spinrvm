@@ -123,12 +123,22 @@ async def _call_create_ride(body, current_surge: float = 1.0):
         with (
             patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=None)),
             patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=rider_row)),
+            # _get_active_service_area_for_point calls this directly before
+            # falling back to the polygon check against get_rows's
+            # service_areas result -- unmocked, it hits the real DB and the
+            # geofence rejects the ride as "outside service area".
+            patch("backend.routes.rides._deps.db_supabase.get_service_area_for_point", AsyncMock(return_value=None)),
             patch(
                 "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(
                     side_effect=[
-                        [],  # no active ride
-                        [],  # service_areas (airport check)
+                        [],  # get_app_settings() -- settings/app_settings row
+                        [],  # existing active ride check
+                        [],  # unpaid (failed-payment) rides check
+                        [],  # all_areas (service_areas geofence check) -- empty
+                        #    means the geofence gate is skipped entirely
+                        #    (matched_area is None and all_areas: -> False
+                        #    when all_areas is falsy)
                         [{"id": "economy"}],  # vehicle_types
                     ]
                 ),
@@ -227,3 +237,4 @@ class TestSurgeBoundaryFallbacks:
         assert exc is None
         assert inserted is not None
         assert float(inserted.get("surge_multiplier", 0)) == 1.0
+

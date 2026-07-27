@@ -63,9 +63,20 @@ class TestUpdateLocationBatch:
 
         db_updates = []
 
-        with patch(
-            "backend.routes.drivers._deps.db_supabase.update_one",
-            AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d))),
+        with (
+            patch(
+                "backend.routes.drivers._deps.db_supabase.update_one",
+                AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d))),
+            ),
+            # check_location_integrity's teleport check compares against the
+            # last point cached under f"loc:last:{driver_id}" -- in dev/test
+            # (no REDIS_URL) redis_get/redis_set fall back to a module-level
+            # in-process dict shared across the whole pytest process, so an
+            # earlier test in this class writing a point for the same
+            # DRIVER_USER_ID makes a later test's differently-located point
+            # look like a >10km teleport within the same process's clock.
+            # Force "no prior known location" so each test is independent.
+            patch("utils.location_integrity.redis_get", AsyncMock(return_value=None)),
         ):
             result = await update_location_batch(
                 batch=batch,
@@ -142,7 +153,14 @@ class TestUpdateLocationBatch:
 # Native background location permission — requires real device
 # ─────────────────────────────────────────────────────────────────────────────
 
+# requestBackgroundPermissionsAsync moved out of useDriverDashboard.ts into
+# its own testable module (driver-app/utils/backgroundLocation.ts,
+# startBackgroundLocation()) -- a real refactor, not a regression. The hook
+# still wires into it on the go-online path
+# (useDriverDashboard.ts calls startBackgroundLocation() at line ~1422/1534),
+# confirmed by reading both files before updating this pin.
 _TS_HOOK = Path(__file__).parents[2] / "driver-app" / "hooks" / "useDriverDashboard.ts"
+_TS_BG_LOCATION_UTIL = Path(__file__).parents[2] / "driver-app" / "utils" / "backgroundLocation.ts"
 _JEST_COVERAGE = Path(__file__).parents[2] / "driver-app" / "hooks" / "__tests__" / "goOnlinePermission.test.ts"
 
 
@@ -152,24 +170,30 @@ class TestBackgroundPermissionCodePath:
     Coverage is provided by the Jest suite:
       driver-app/hooks/__tests__/goOnlinePermission.test.ts
 
-    These tests pin that the call is present in the TypeScript source and
-    that the Jest coverage file exists.
+    These tests pin that the call is present in the TypeScript source
+    (driver-app/utils/backgroundLocation.ts), that useDriverDashboard.ts's
+    go-online path wires into it, and that the Jest coverage file exists.
     """
 
     def test_ios_always_permission_requested_on_go_online(self):
-        """Location.requestBackgroundPermissionsAsync() is in the go-online
-        path of useDriverDashboard.ts; Jest test pins the call is made."""
-        src = _TS_HOOK.read_text()
-        assert "requestBackgroundPermissionsAsync" in src, (
-            "requestBackgroundPermissionsAsync call removed from useDriverDashboard.ts"
+        """Location.requestBackgroundPermissionsAsync() is in
+        backgroundLocation.ts's startBackgroundLocation(); the go-online hook
+        calls startBackgroundLocation(). Jest test pins the call is made."""
+        bg_src = _TS_BG_LOCATION_UTIL.read_text()
+        assert "requestBackgroundPermissionsAsync" in bg_src, (
+            "requestBackgroundPermissionsAsync call removed from backgroundLocation.ts"
+        )
+        hook_src = _TS_HOOK.read_text()
+        assert "startBackgroundLocation" in hook_src, (
+            "useDriverDashboard.ts no longer wires into startBackgroundLocation()"
         )
         assert _JEST_COVERAGE.exists(), "goOnlinePermission.test.ts is missing — Jest coverage dropped"
 
     def test_android_background_location_permission_requested(self):
         """Same expo-location API call handles Android ACCESS_BACKGROUND_LOCATION.
         Source presence + Jest coverage file verify the path exists."""
-        src = _TS_HOOK.read_text()
-        assert "requestBackgroundPermissionsAsync" in src
+        bg_src = _TS_BG_LOCATION_UTIL.read_text()
+        assert "requestBackgroundPermissionsAsync" in bg_src
         assert _JEST_COVERAGE.exists()
 
 

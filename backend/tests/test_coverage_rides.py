@@ -437,6 +437,57 @@ async def test_get_ride_history_filters_cancelled_without_driver():
     assert "r-3" in ids
 
 
+@pytest.mark.anyio
+async def test_get_ride_history_settings_lookup_failure_defaults_to_unlocked():
+    from backend.routes.rides import get_ride_history
+
+    rides = [_ride(status="completed", id="r-1")]
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(side_effect=RuntimeError("db down"))),
+    ):
+        mock_db.run_sync = AsyncMock(return_value=rides)
+        mock_db.find_one = AsyncMock(return_value=None)
+        result = await get_ride_history(request=_starlette_request(), limit=20, before=None, current_user=_USER)
+    assert result["rides"][0]["fare_locked"] is False
+
+
+@pytest.mark.anyio
+async def test_get_ride_history_fare_lock_uses_snapshot():
+    from backend.routes.rides import get_ride_history
+
+    ride = _ride(
+        status="completed",
+        id="r-1",
+        tip_amount=1.5,
+        fare_breakdown_snapshot={"lines": [{"label": "Base fare", "amount": 3.0, "type": "base"}]},
+    )
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch(
+            "backend.routes.rides._deps.get_app_settings",
+            AsyncMock(return_value={"fare_lock_enabled": True}),
+        ),
+    ):
+        mock_db.run_sync = AsyncMock(return_value=[ride])
+        mock_db.find_one = AsyncMock(return_value=None)
+        result = await get_ride_history(request=_starlette_request(), limit=20, before=None, current_user=_USER)
+    assert result["rides"][0]["fare_locked"] is True
+    assert any(ln.get("type") == "tip" for ln in result["rides"][0]["fare_breakdown"])
+
+
+@pytest.mark.anyio
+async def test_fetch_ride_history_page_no_supabase_client_returns_empty():
+    """No Supabase client configured (e.g. a stub/dev DB) -- fail closed to
+    an empty page rather than crashing the history endpoint."""
+    from backend.routes.rides.queries import _fetch_ride_history_page
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.supabase = None
+        page = await _fetch_ride_history_page(rider_id="rider-1", limit=20, cursor_ts=None, before=None)
+    assert page == []
+
+
 # ── get_ride (single ride) ────────────────────────────────────────────────────
 
 
@@ -3181,6 +3232,186 @@ async def test_get_ride_with_driver_accepted_at():
         )
     # free_cancel_seconds_remaining should be 0 (accepted long ago)
     assert result.get("free_cancel_seconds_remaining") is not None
+
+
+@pytest.mark.anyio
+async def test_get_ride_driver_arrived_zero_free_cancel():
+    """Once the driver has physically arrived, the free-cancel window is over
+    regardless of elapsed time -- the driver already spent fuel/time."""
+    from backend.routes.rides import get_ride
+
+    ride = _ride(status="driver_arrived", driver_id=None, driver_accepted_at="2026-01-01T12:00:00+00:00")
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["free_cancel_seconds_remaining"] == 0
+
+
+@pytest.mark.anyio
+async def test_get_ride_malformed_driver_accepted_at_degrades_to_zero():
+    """An unparseable driver_accepted_at must not 500 the whole ride read --
+    degrade to 0 remaining instead."""
+    from backend.routes.rides import get_ride
+
+    ride = _ride(status="driver_accepted", driver_id=None, driver_accepted_at="not-a-timestamp")
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["free_cancel_seconds_remaining"] == 0
+
+
+@pytest.mark.anyio
+async def test_get_ride_no_driver_accepted_yet_leaves_free_cancel_none():
+    from backend.routes.rides import get_ride
+
+    ride = _ride(status="driver_assigned", driver_id=None, driver_accepted_at=None, driver_notified_at=None)
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["free_cancel_seconds_remaining"] is None
+
+
+@pytest.mark.anyio
+async def test_get_ride_noshow_countdown_when_driver_arrived():
+    from backend.routes.rides import get_ride
+
+    ride = _ride(status="driver_arrived", driver_id=None, driver_arrived_at="2026-01-01T12:00:00+00:00")
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["noshow_seconds_remaining"] == 0  # arrived long ago -> countdown exhausted
+    assert result["noshow_eligible"] is True
+
+
+@pytest.mark.anyio
+async def test_get_ride_noshow_defaults_when_driver_arrived_at_missing():
+    from backend.routes.rides import get_ride
+
+    ride = _ride(status="driver_arrived", driver_id=None, driver_arrived_at=None)
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["noshow_seconds_remaining"] == 300
+    assert result["noshow_eligible"] is False
+
+
+@pytest.mark.anyio
+async def test_get_ride_noshow_not_applicable_outside_driver_arrived():
+    from backend.routes.rides import get_ride
+
+    ride = _ride(status="in_progress", driver_id=None)
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["noshow_seconds_remaining"] is None
+    assert result["noshow_eligible"] is False
+
+
+@pytest.mark.anyio
+async def test_get_ride_offer_timeout_settings_failure_falls_back_to_default():
+    from backend.routes.rides import get_ride
+
+    ride = _ride(status="driver_assigned", driver_id=None, driver_notified_at=None)
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        # get_ride imports get_app_settings LOCALLY from settings_loader (not
+        # via the _deps re-export), so that's the name that must be patched.
+        patch("backend.settings_loader.get_app_settings", AsyncMock(side_effect=RuntimeError("db down"))),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["offer_timeout_seconds"] == 15
+    assert result["offer_expires_at"] is None
+
+
+@pytest.mark.anyio
+async def test_get_ride_driver_view_redacts_terminal_location():
+    """PIPEDA RI-2: a driver reading a COMPLETED ride must not see the exact
+    pickup_otp or (via _redact_driver_location_fields) live coordinates."""
+    from backend.routes.rides import get_ride
+
+    ride = _ride(status="completed", rider_id="someone-else", driver_id=_DRIVER_ID, pickup_otp="1234")
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        # is_driver check: this user's driver row id matches ride.driver_id
+        mock_db.get_rows = AsyncMock(return_value=[{"id": _DRIVER_ID}])
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        mock_db.get_user_by_id = AsyncMock(return_value={"profile_image": None})
+        result = await get_ride(
+            request=_starlette_request(),
+            ride_id=_RIDE_ID,
+            current_user={"id": "driver-user-1"},
+        )
+    assert "pickup_otp" not in result
+
+
+@pytest.mark.anyio
+async def test_get_ride_fare_lock_uses_snapshot():
+    from backend.routes.rides import get_ride
+
+    ride = _ride(
+        status="completed",
+        driver_id=None,
+        tip_amount=2.0,
+        fare_breakdown_snapshot={"lines": [{"label": "Base fare", "amount": 3.0, "type": "base"}]},
+    )
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"fare_lock_enabled": True}),
+        ),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["fare_locked"] is True
+    # A tip line was synthesized since the snapshot predates the tip.
+    assert any(ln.get("type") == "tip" for ln in result["fare_breakdown"])
+
+
+@pytest.mark.anyio
+async def test_get_ride_driver_earnings_snapshot_preferred_over_live_fields():
+    from backend.routes.rides import get_ride
+
+    ride = _ride(
+        status="completed",
+        driver_id=None,
+        driver_earnings_snapshot={"total": 20.0, "fare": 15.0, "tip": 3.0, "cancel_fee": 0, "tax": 2.0, "incentive": 1.0},
+    )
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["fare_only"] == 15.0
+    assert result["incentive_amount"] == 1.0
+    assert result["total_earned"] == 21.0  # 15 fare + 3 tip + 1 incentive + 0 cancel + 2 tax
+
+
+@pytest.mark.anyio
+async def test_get_ride_tax_falls_back_to_snapshot_lines_when_zero():
+    """tax_amount is 0 (older ride, pre-column-population) -- reconstruct it
+    from the fare snapshot's tax/gst/pst lines instead of showing $0 earned tax."""
+    from backend.routes.rides import get_ride
+
+    ride = _ride(
+        status="completed",
+        driver_id=None,
+        tax_amount=0,
+        fare_breakdown_snapshot={"lines": [{"label": "GST", "amount": 1.25, "type": "gst"}]},
+    )
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["tax_amount_total"] == 1.25
 
 
 # ── get_ride_history with cursor ──────────────────────────────────────────────

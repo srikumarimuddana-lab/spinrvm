@@ -8,14 +8,15 @@ import {
     ActivityIndicator,
     TouchableOpacity,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import api from '@shared/api/client';
-import { ACTUAL_ROUTE_STROKE, INFERRED_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
@@ -168,41 +169,18 @@ export default function RideDetailScreen() {
                             rotateEnabled={false}
                             onMapReady={() => setRouteMapReady(true)}
                         >
-                                {actualSections.map((section) => (
-                                    <Polyline
-                                        key={section.id}
-                                        coordinates={section.coordinates}
-                                        {...(section.geometryKind === 'inferred' ? INFERRED_ROUTE_STROKE : ACTUAL_ROUTE_STROKE)}
-                                    lineCap="round"
-                                    lineJoin="round"
-                                />
-                            ))}
-                            {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
-                                <Polyline
-                                    key={`planned-segment-${index}`}
-                                    coordinates={coordinates}
-                                    {...PLANNED_ROUTE_STROKE}
-                                    lineCap="round"
-                                    lineJoin="round"
-                                />
-                            ))}
-                            <Marker coordinate={{ latitude: navPickupLat, longitude: navPickupLng }} anchor={{ x: 0.5, y: 0.5 }}>
-                                <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
-                                    <Ionicons name="location" size={14} color="#fff" />
-                                    </View>
-                                </Marker>
-                                <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                                    <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
-                                    <Ionicons name="flag" size={14} color="#fff" />
-                                </View>
-                            </Marker>
-                            {ride.actual_completion_point && (
-                                <Marker coordinate={ride.actual_completion_point} anchor={{ x: 0.5, y: 0.5 }}>
-                                    <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.completion }]}>
-                                        <Ionicons name="checkmark" size={14} color="#fff" />
-                                    </View>
-                                </Marker>
-                            )}
+                            {/* THE uniform route line: the flattened REAL actual-
+                                route coords (v2 segments joined in order, or the
+                                legacy planned line for pre-v2 rides) drawn as one
+                                orange→red gradient — identical to every other
+                                Spinr map. Geometry is unchanged; only the drawing
+                                is shared. */}
+                            <RouteLine path={mapCoordinates} />
+                            <RoutePins
+                                pickup={{ latitude: navPickupLat, longitude: navPickupLng }}
+                                dropoff={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
+                                completion={ride.actual_completion_point || null}
+                            />
                         </MapView>
 
                         <TouchableOpacity style={[styles.backBtn, { top: insets.top + 12 }]} onPress={() => router.back()}>
@@ -530,15 +508,6 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
             alignItems: 'center',
         },
-            markerDot: {
-            width: 28,
-            height: 28,
-            borderRadius: 14,
-            justifyContent: 'center',
-            alignItems: 'center',
-            borderWidth: 2,
-                borderColor: '#fff',
-            },
             routeStatusPill: {
                 position: 'absolute', left: 12, right: 12, bottom: 12,
                 flexDirection: 'row', alignItems: 'center', gap: 5,

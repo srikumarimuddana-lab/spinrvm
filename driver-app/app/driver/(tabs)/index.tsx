@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState, Modal } from 'react-native';
-import MapView, { Marker, Polyline, Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore, type OffRouteConfirmation } from '../../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
@@ -474,47 +476,19 @@ function DriverDashboard() {
   const pickupLng = ride?.pickup_lng;
   const dropoffLat = ride?.dropoff_lat;
   const dropoffLng = ride?.dropoff_lng;
-  const pickupAddress = ride?.pickup_address;
-  const dropoffAddress = ride?.dropoff_address;
 
-  const mapMarkers = useMemo(() => {
-    const markers: any[] = [];
-    if (pickupLat && pickupLng) {
-      markers.push(
-        <Marker
-          key="pickup"
-          coordinate={{ latitude: pickupLat, longitude: pickupLng }}
-          title="Pickup"
-          description={pickupAddress}
-          tracksViewChanges={false}
-        >
-          <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
-              <Ionicons name="location" size={16} color="#fff" />
-            </View>
-          </View>
-        </Marker>
-      );
-    }
-    if (dropoffLat && dropoffLng) {
-      markers.push(
-        <Marker
-          key="dropoff"
-          coordinate={{ latitude: dropoffLat, longitude: dropoffLng }}
-          title="Dropoff"
-          description={dropoffAddress}
-          tracksViewChanges={false}
-        >
-          <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: '#EF4444' }]}>
-              <Ionicons name="flag" size={16} color="#fff" />
-            </View>
-          </View>
-        </Marker>
-      );
-    }
-    return markers;
-  }, [pickupLat, pickupLng, dropoffLat, dropoffLng, pickupAddress, dropoffAddress, styles]);
+  // Stable pickup / dropoff point objects for the shared <RoutePins>. Memoised
+  // so the countdown ticking every second during `ride_offered` doesn't hand
+  // react-native-maps fresh coordinate refs each render (which forced the
+  // markers to re-animate and flicker).
+  const pickupPoint = useMemo(
+    () => (pickupLat && pickupLng ? { latitude: pickupLat, longitude: pickupLng } : null),
+    [pickupLat, pickupLng],
+  );
+  const dropoffPoint = useMemo(
+    () => (dropoffLat && dropoffLng ? { latitude: dropoffLat, longitude: dropoffLng } : null),
+    [dropoffLat, dropoffLng],
+  );
 
   // Ride Offer Panel
   const renderRideOfferPanel = () => {
@@ -733,7 +707,7 @@ function DriverDashboard() {
             imageUri={markerImageUri}
           />
         )}
-        {mapMarkers}
+        <RoutePins pickup={pickupPoint} dropoff={dropoffPoint} />
 
         {/* Route polyline.
             - ride_offered / trip_in_progress: reuse planned_route_polyline
@@ -810,55 +784,18 @@ function DriverDashboard() {
                 }}
               />
               )}
-              {/* Fallback polyline: a dashed straight line drawn when the
-                  Directions API can't return a route (no network, quota
-                  exceeded, invalid key). Better than a blank map — the
-                  driver can still see roughly where they're being asked
-                  to go. */}
-              {directionsFailed && routeCoords.length === 0 && (
-                <Polyline
-                  coordinates={[origin, destination]}
-                  strokeWidth={4}
-                  strokeColor="#FF9500"
-                  lineDashPattern={[6, 6]}
-                  lineCap="round"
-                />
-              )}
-              {routeCoords.length > 1 && (() => {
-                const total = routeCoords.length;
-                const SEGS = 20;
-                const chunk = Math.max(1, Math.floor(total / SEGS));
-                const segments: { coords: any[]; color: string }[] = [];
-                for (let i = 0; i < total - 1; i += chunk) {
-                  const end = Math.min(i + chunk + 1, total);
-                  const t = i / Math.max(total - 1, 1);
-                  // Interpolate: #FF9500 (orange) → #EE2B2B (red)
-                  const r = Math.round(255 + (238 - 255) * t);
-                  const g = Math.round(149 + (43 - 149) * t);
-                  const b = Math.round(0 + (43 - 0) * t);
-                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
-                }
-                return (
-                  <>
-                    {/* Outer glow */}
-                    <Polyline
-                      coordinates={routeCoords}
-                      strokeWidth={9}
-                      strokeColor="rgba(238, 43, 43, 0.12)"
-                    />
-                    {segments.map((seg, idx) => (
-                      <Polyline
-                        key={`route-seg-${idx}`}
-                        coordinates={seg.coords}
-                        strokeWidth={5}
-                        strokeColor={seg.color}
-                        lineCap="round"
-                        lineJoin="round"
-                      />
-                    ))}
-                  </>
-                );
-              })()}
+              {/* THE uniform route line. Draws the REAL road coords already
+                  built for this phase (saved planned polyline / OSRM live-route /
+                  Directions onReady) as one orange→red gradient — same component,
+                  same colours as every other map. Falls back to a straight
+                  pickup→destination gradient only when Directions failed and no
+                  real path resolved, so the driver still sees where they're
+                  headed instead of a blank map. */}
+              <RouteLine
+                path={routeCoords}
+                pickup={directionsFailed ? origin : null}
+                destination={directionsFailed ? destination : null}
+              />
             </React.Fragment>
           );
         })()}
@@ -1092,18 +1029,6 @@ function createStyles(colors: ThemeColors) {
     },
     locationFallbackBtnTextSecondary: {
       color: colors.text,
-    },
-    markerContainer: {
-      alignItems: 'center',
-    },
-    markerDot: {
-      width: 32,
-      height: 32,
-      borderRadius: 16,
-      justifyContent: 'center',
-      alignItems: 'center',
-      borderWidth: 2,
-      borderColor: '#fff',
     },
     // ── Rich Ride Offer Panel ──
     rideOfferOverlay: {

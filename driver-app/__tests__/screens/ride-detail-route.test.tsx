@@ -7,14 +7,21 @@ const source = fs.readFileSync(
 );
 
 describe('driver ride detail route presentation contract', () => {
-  it('renders durable actual route segments without a directions fallback', () => {
+  it('draws the real actual route through the shared RouteLine + RoutePins', () => {
     expect(source).toContain('toReactNativeRouteSections');
     expect(source).toContain('const [routeMapReady, setRouteMapReady] = useState(false)');
     expect(source).toContain('if (!routeMapReady || mapCoordinates.length < 2) return');
     expect(source).toContain('setRouteMapReady(true)');
-    expect(source).toContain('actualSections.map((section) => (');
-    expect(source).toContain("section.geometryKind === 'inferred'");
-    expect(source).toContain('INFERRED_ROUTE_STROKE');
+    // The route is now drawn by the shared components, not hand-rolled Polylines
+    // or bespoke marker styles — same colours + markers as every other map.
+    expect(source).toContain("import { RouteLine } from '@shared/components/RouteLine'");
+    expect(source).toContain("import { RoutePins } from '@shared/components/RoutePins'");
+    expect(source).toContain('<RouteLine path={mapCoordinates} />');
+    expect(source).toContain('completion={ride.actual_completion_point || null}');
+    expect(source).not.toContain('actualSections.map((section) => (');
+    expect(source).not.toContain('INFERRED_ROUTE_STROKE');
+    expect(source).not.toContain('ACTUAL_ROUTE_STROKE');
+    expect(source).not.toContain('<Polyline');
     expect(source).not.toContain('{routeSnapshotUrl ? (');
     expect(source).toContain('ride.actual_completion_point');
     expect(source).toContain('useCompletedRouteRefresh(ride, loadRide)');
@@ -31,9 +38,9 @@ describe('driver ride detail route presentation contract', () => {
 
   it('keeps planned geometry legacy-only for completed rides', () => {
     expect(source).toContain('const isV2Route =');
+    // Legacy planned coords still flow into mapCoordinates (v2 rides drop them),
+    // which is what feeds the shared RouteLine — the geometry source is unchanged.
     expect(source).toContain('isV2Route ? [] : plannedSegments');
-    expect(source).toContain('{!isV2Route && !hasActualRoute && plannedSegments.map');
-    expect(source).not.toContain('{!hasActualRoute && plannedSegments.map');
     expect(source).toContain("? 'Actual route processing'");
     expect(source).toContain('routeQualityLabel');
   });

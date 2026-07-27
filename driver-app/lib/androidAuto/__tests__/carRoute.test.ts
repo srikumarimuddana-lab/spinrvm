@@ -2,6 +2,8 @@
  * Unit tests for lib/androidAuto/carRoute.ts — the pure route-selection +
  * hand-off logic behind the Android Auto map. No native module / head unit.
  */
+import fs from 'fs';
+import path from 'path';
 import {
   buildHandoffUrl,
   defaultNavButtons,
@@ -82,12 +84,19 @@ describe('selectCarRoute', () => {
     }
   });
 
-  it('targets the DROPOFF once in progress and draws the stored route line', () => {
+  it('targets the DROPOFF once in progress and exposes the FULL stored route line', () => {
     const route = selectCarRoute('trip_in_progress', makeRide());
     expect(route?.leg).toBe('dropoff');
     expect(route?.destination).toEqual({ latitude: 52.2, longitude: -106.6 });
     expect(route?.destinationLabel).toBe('202 Dropoff Ave');
+    // The real geometry is kept in full — NOT reduced to endpoints — so the
+    // shared <RouteLine> can draw the true road shape on the car surface.
     expect(route?.polyline).toHaveLength(3);
+    expect(route?.polyline).toEqual([
+      { latitude: 52.13, longitude: -106.67 },
+      { latitude: 52.16, longitude: -106.64 },
+      { latitude: 52.2, longitude: -106.6 },
+    ]);
   });
 
   it('returns null for non-nav states and a null ride', () => {
@@ -182,6 +191,25 @@ describe('resolveNavButtons (CarPlay install detection)', () => {
     await expect(resolveNavButtons('ios', canOpen)).resolves.toEqual([
       { id: 'nav-apple', provider: 'apple' },
     ]);
+  });
+});
+
+describe('car surface route presentation contract (carSurface.tsx)', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '..', 'carSurface.tsx'), 'utf8');
+
+  it('draws the stored route through the shared RouteLine + RoutePins', () => {
+    expect(source).toContain("import { RouteLine } from '@shared/components/RouteLine'");
+    expect(source).toContain("import { RoutePins } from '@shared/components/RoutePins'");
+    expect(source).toContain('<RouteLine path={route.polyline} />');
+    expect(source).toContain('<RoutePins');
+    expect(source).toContain('dropoff={route.leg === \'dropoff\' ? route.destination : null}');
+  });
+
+  it('drops the bespoke SPINR_RED Polyline + bare destination Marker', () => {
+    expect(source).not.toContain('SPINR_RED');
+    expect(source).not.toContain('<Polyline');
+    // The lone destination <Marker> is replaced by the shared RoutePins.
+    expect(source).not.toContain('<Marker coordinate={route.destination}');
   });
 });
 

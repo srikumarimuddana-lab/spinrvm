@@ -28,8 +28,9 @@ import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
 import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 
-const SPINR_RED = '#ee2b2b';
 // Saskatoon — Spinr is Saskatchewan-first. Used only until the first fix /
 // last-known location loads, so the idle map never opens on null-island (0,0).
 const FALLBACK_CENTER = { latitude: 52.1332, longitude: -106.67 };
@@ -55,7 +56,6 @@ export function CarMapSurface(): React.ReactElement | null {
   if (!Maps) return null;
 
   const MapView = Maps.default;
-  const { Marker, Polyline } = Maps;
 
   // CarMarker hard-imports react-native-maps; require it only after the maps
   // guard above so it can never crash a maps-less context (web / Expo Go).
@@ -95,10 +95,19 @@ export function CarMapSurface(): React.ReactElement | null {
           longitudeDelta: delta,
         }}
       >
-        {route && route.polyline.length >= 2 && (
-          <Polyline coordinates={route.polyline} strokeColor={SPINR_RED} strokeWidth={6} />
+        {/* THE uniform route line + pins. `route.polyline` is the SAME stored
+            pickup→dropoff geometry as before (empty on the pre-pickup leg); it is
+            now drawn as one orange→red gradient via the shared RouteLine so the
+            car surface reads identically to the phone. Pins follow the leg: green
+            pickup while heading to the rider; green pickup (route start) + red
+            dropoff once the trip is under way. */}
+        {route && <RouteLine path={route.polyline} />}
+        {route && (
+          <RoutePins
+            pickup={route.leg === 'pickup' ? route.destination : (route.polyline[0] ?? null)}
+            dropoff={route.leg === 'dropoff' ? route.destination : null}
+          />
         )}
-        {route && <Marker coordinate={route.destination} title={route.destinationLabel} />}
         {here && CarMarker && (
           <CarMarker
             coordinate={{ latitude: here.latitude, longitude: here.longitude }}

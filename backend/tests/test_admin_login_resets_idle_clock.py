@@ -67,7 +67,7 @@ def _patches(staff_row: dict, update_mock: AsyncMock):
         patch.object(admin_auth.db_supabase, "get_rows", AsyncMock(return_value=[staff_row])),
         patch.object(admin_auth.db_supabase, "update_one", update_mock),
         patch.object(admin_auth, "verify_password", MagicMock(return_value=(True, False))),
-        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+        patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
     )
 
 

@@ -109,7 +109,7 @@ async def test_successful_exchange_clears_failures():
             "issue_refresh_token",
             AsyncMock(return_value=("rt", "h", admin_auth.datetime.now(admin_auth.timezone.utc))),
         ),
-        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+        patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
     ):
         result = await admin_auth.admin_mfa_challenge(request=_make_request(), body=_Body())
     assert result["token"]

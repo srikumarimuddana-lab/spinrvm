@@ -272,6 +272,28 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** ✅ met — both tests pass 20/20 consecutive local runs. CI
   confirmation (≥3 consecutive green `backend-test` runs) pending merge.
 
+### A7. 8 failing tests in `test_ai_tools_booking.py` on `main`
+- [ ] **Status:** open — found via PR #2523's `backend-test` run (2026-07-27),
+  confirmed reproducible directly on `origin/main` in isolation (checked out
+  `backend/tests/test_ai_tools_booking.py` + `backend/ai/` from `main` alone
+  and re-ran — identical failures), so this is pre-existing drift already on
+  `main`, not introduced by any A1/A6 branch this session.
+- **Why:** all 8 failures are `KeyError` — either `'quotes'` or
+  `'_client_action'` — across `TestSameStreetGuard`, `TestFareQuote`,
+  `TestSamePlaceGuard`, `TestProposal`. Pattern strongly suggests the AI
+  booking tool's response shape changed (likely a key renamed or moved to a
+  different response envelope) and these tests were never updated — the same
+  class of test-drift root cause as A4.
+- **Files:** `backend/tests/test_ai_tools_booking.py`, and whichever
+  `backend/ai/` module builds the booking-tool response (likely
+  `ai/tools_booking.py` or similar — not yet located).
+- **Approach:** read the current booking-tool response builder, compare
+  against what the 8 tests assert, and either fix the tests to match
+  already-correct current behavior or, if the response shape itself is wrong,
+  fix the production code — root-cause first, same as every A4 bucket.
+- **Acceptance:** `pytest tests/test_ai_tools_booking.py` passes with 0
+  failures on `main`.
+
 ## P1 — Fix before launch (code)
 
 ### B1. `track_driver_online` accepts raw GPS for third-party analytics

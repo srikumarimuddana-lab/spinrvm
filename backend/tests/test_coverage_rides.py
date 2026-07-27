@@ -2566,6 +2566,188 @@ async def test_get_ride_receipt_success():
     assert result["receipt"]["driver_name"] == "Bob Smith"
 
 
+@pytest.mark.anyio
+async def test_get_ride_receipt_no_driver_shows_unknown():
+    from backend.routes.rides import get_ride_receipt
+
+    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id=None, corporate_account_id=None)
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["receipt"]["driver_name"] == "Unknown Driver"
+    assert result["receipt"]["vehicle_type"] == "Standard"
+    mock_db.get_driver_by_id.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_includes_vehicle_type():
+    from backend.routes.rides import get_ride_receipt
+
+    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id="vt-1", corporate_account_id=None)
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[{"id": "vt-1", "name": "XL"}])
+        result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["receipt"]["vehicle_type"] == "XL"
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_corporate_account_shows_company_payment_method():
+    from backend.routes.rides import get_ride_receipt
+
+    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id=None, corporate_account_id="corp-1")
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[{"id": "corp-1", "company_name": "Acme Inc"}])
+        result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["receipt"]["payment_method"] == "Corporate Account"
+    assert result["receipt"]["corporate_account_name"] == "Acme Inc"
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_cancelled_ride_includes_cancellation_fee():
+    from backend.routes.rides import get_ride_receipt
+
+    ride = _ride(
+        status="cancelled",
+        rider_id=_RIDER_ID,
+        driver_id=None,
+        vehicle_type_id=None,
+        corporate_account_id=None,
+        cancellation_fee_admin=2.0,
+        cancellation_fee_driver=3.0,
+    )
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["receipt"]["cancellation_fee"] == 5.0
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_fare_lock_uses_snapshot_and_adds_tip_line():
+    """When fare_lock is on and a snapshot exists, the receipt must use the
+    frozen snapshot lines (not rebuild from the live ride fields) and append
+    a synthesized tip line if the snapshot predates the tip."""
+    from backend.routes.rides import get_ride_receipt
+
+    snapshot = {"lines": [{"label": "Ride fare (5.0 km)", "amount": 10.0, "type": "fare"}]}
+    ride = _ride(
+        status="completed",
+        rider_id=_RIDER_ID,
+        driver_id=None,
+        vehicle_type_id=None,
+        corporate_account_id=None,
+        fare_breakdown_snapshot=snapshot,
+        tip_amount=2.5,
+    )
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"fare_lock_enabled": True})),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["receipt"]["fare_locked"] is True
+    tip_lines = [ln for ln in result["receipt"]["fare_breakdown"] if ln.get("type") == "tip"]
+    assert len(tip_lines) == 1
+    assert tip_lines[0]["amount"] == 2.5
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_fare_lock_settings_lookup_failure_falls_back_to_dynamic():
+    """A settings-lookup error must not crash the receipt -- fall back to the
+    dynamic (non-locked) fare rebuild instead."""
+    from backend.routes.rides import get_ride_receipt
+
+    snapshot = {"lines": [{"label": "Ride fare (5.0 km)", "amount": 10.0, "type": "fare"}]}
+    ride = _ride(
+        status="completed",
+        rider_id=_RIDER_ID,
+        driver_id=None,
+        vehicle_type_id=None,
+        corporate_account_id=None,
+        fare_breakdown_snapshot=snapshot,
+    )
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(side_effect=RuntimeError("settings db down"))),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["receipt"]["fare_locked"] is False
+
+
+# ── email_ride_receipt ────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_email_ride_receipt_not_found():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import email_ride_receipt
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as exc:
+            await email_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_email_ride_receipt_wrong_rider():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import email_ride_receipt
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other"))
+        with pytest.raises(HTTPException) as exc:
+            await email_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_email_ride_receipt_not_completed():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import email_ride_receipt
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="in_progress", rider_id=_RIDER_ID))
+        with pytest.raises(HTTPException) as exc:
+            await email_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_email_ride_receipt_success():
+    from backend.routes.rides import email_ride_receipt
+
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.receipts.send_ride_receipt", AsyncMock(return_value=True)) as mock_send,
+    ):
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID, tip_amount=1.5))
+        result = await email_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["success"] is True
+    mock_send.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_email_ride_receipt_send_failure_returns_503():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import email_ride_receipt
+
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.receipts.send_ride_receipt", AsyncMock(return_value=False)),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID))
+        with pytest.raises(HTTPException) as exc:
+            await email_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 503
+
+
 # ── trigger_emergency ─────────────────────────────────────────────────────────
 
 

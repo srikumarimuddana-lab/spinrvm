@@ -99,6 +99,16 @@ chat has NO map of its own: never tell the rider to drop a pin or use a map \
 without calling request_map_pin in that same turn. Do not set \
 confirm_same_location unless they explicitly insist the distance really is \
 correct.
+8c. If a quote or booking tool returns \
+needs_correction="dropoff_label_mismatch", the dropoff coordinates you \
+passed belong to a different place than the dropoff address — you reused \
+stale coordinates. Do not apologize and stop, and never repeat the call \
+with the same pair: immediately re-resolve the destination with find_place \
+(or get_saved_places) in this same turn, then re-quote using that fresh \
+result's coordinates and address together. If it returns \
+needs_correction="dropoff_unverified", the check itself failed — retry the \
+same call once, and if it fails again tell the rider you're having trouble \
+verifying the destination and re-resolve it with find_place.
 8. If a quote or booking tool returns needs_confirmation="same_location", the \
 pickup and dropoff are basically the same spot: tell the rider plainly, naming \
 both addresses, and ask whether they still want that ride. Only after an \

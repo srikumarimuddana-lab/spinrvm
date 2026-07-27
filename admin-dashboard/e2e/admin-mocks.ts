@@ -23,19 +23,22 @@ export const MOCK_ADMIN_USER = {
   modules: ['dashboard'],
 };
 
-export type JsonFn = (status: number, body: unknown) => Promise<void>;
+// `route.fulfill()` resolves to `undefined`, which is indistinguishable
+// from "fell through, didn't handle it" — so `json()` resolves to an
+// explicit 'handled' sentinel instead, and callers `return json(...)`.
+export type JsonFn = (status: number, body: unknown) => Promise<'handled'>;
 
 /**
- * Per-spec override hook. Return a value from `json(...)` to short-circuit
- * with that response; return `null`/`undefined` to fall through to the
- * common auth/session handling below.
+ * Per-spec override hook. `return json(...)` to short-circuit with that
+ * response; `return null`/`undefined` to fall through to the common
+ * auth/session handling below.
  */
 export type MockOverride = (
   route: Route,
   url: string,
   method: string,
   json: JsonFn
-) => Promise<void> | null | undefined | Promise<null | undefined>;
+) => Promise<'handled' | null | undefined>;
 
 /**
  * Installs the admin_token cookie (so Next.js edge middleware lets the
@@ -55,12 +58,14 @@ export async function setupAdminMocks(
     const url = route.request().url();
     const method = route.request().method();
 
-    const json: JsonFn = (status, body) =>
-      route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    const json: JsonFn = async (status, body) => {
+      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+      return 'handled';
+    };
 
     if (opts.extra) {
       const handled = await opts.extra(route, url, method, json);
-      if (handled !== null && handled !== undefined) return handled;
+      if (handled === 'handled') return;
     }
 
     if (url.includes('/auth/refresh')) {

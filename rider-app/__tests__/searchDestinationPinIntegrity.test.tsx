@@ -147,6 +147,11 @@ beforeEach(() => {
 
 describe('editing the destination text', () => {
   it('clears the previously selected dropoff pin (no stale-pair booking)', async () => {
+    // Fake timers: the screen schedules a real setTimeout (focus-the-active-field,
+    // 100ms) on every render. Left real, that timer races act()'s own flush on
+    // slower/loaded hardware (observed hanging in CI, not locally) — faking it
+    // removes the wall-clock nondeterminism instead of relying on timing luck.
+    jest.useFakeTimers();
     useRideStore.setState({ dropoff: GORDON });
     const renderer = await renderScreen();
 
@@ -157,6 +162,7 @@ describe('editing the destination text', () => {
     // The store pair is gone — Search is disabled until a fresh selection
     // re-binds address and coordinates atomically.
     expect(useRideStore.getState().dropoff).toBeNull();
+    jest.useRealTimers();
   });
 
   it('does not clear the pin when the text still equals the selected address', async () => {

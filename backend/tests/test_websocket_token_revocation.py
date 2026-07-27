@@ -233,7 +233,8 @@ class TestPubSubKickConsumer:
         ps = _WSPubSub()
         ps._redis = MagicMock()
         ps._redis.publish = AsyncMock()
-        # Force active=True without a real consumer task.
+        # Force active=True without a real consumer task or subscription.
+        ps._pubsub = MagicMock()
         ps._task = MagicMock()
         ps._task.done = MagicMock(return_value=False)
 

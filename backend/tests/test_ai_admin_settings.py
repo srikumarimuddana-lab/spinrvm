@@ -95,8 +95,25 @@ class TestCatalog:
         resp = test_client.get("/api/v1/admin/ai/catalog")
         assert resp.status_code in (401, 403)
 
-    def test_catalog_endpoint_shape(self, test_client, admin_override):
-        resp = test_client.get("/api/v1/admin/ai/catalog")
+    def test_catalog_endpoint_shape(self, test_client):
+        # /admin/ai/catalog lives on settings_router, mounted with
+        # require_module("settings") ahead of get_admin_user (routes/admin/
+        # __init__.py) -- the shared admin_override fixture's fake admin
+        # dict carries no "modules" claim, so it 403s there before reaching
+        # this route. Grant the specific module rather than widening the
+        # shared fixture (used across many admin-route tests).
+        from backend.server import app
+        from dependencies import get_admin_user
+
+        app.dependency_overrides[get_admin_user] = lambda: {
+            "id": "admin_1",
+            "role": "admin",
+            "modules": ["settings"],
+        }
+        try:
+            resp = test_client.get("/api/v1/admin/ai/catalog")
+        finally:
+            app.dependency_overrides.pop(get_admin_user, None)
         assert resp.status_code == 200
         providers = resp.json()["providers"]
         assert {p["provider"] for p in providers} == set(SUPPORTED_PROVIDERS)

@@ -77,7 +77,9 @@ class TestSOSRiderTrigger:
         assert result is not None
         insert_mock.assert_awaited_once()
         table, incident = insert_mock.call_args[0]
-        assert table == "emergencies"
+        # Consolidated onto safety_incidents (migration 94) -- the legacy
+        # `emergencies` table was never read by anything and was dropped.
+        assert table == "safety_incidents"
         assert incident["ride_id"] == RIDE_ID
         assert incident["reported_by_user_id"] == RIDER_ID
         assert incident["role"] == "rider"
@@ -101,10 +103,16 @@ class TestSOSRiderTrigger:
                 current_user={"id": RIDER_ID},
             )
 
-        admin_broadcast_mock.assert_awaited_once()
-        event = admin_broadcast_mock.call_args[0][0]
-        assert event["type"] == "emergency_alert"
-        assert event["incident"]["ride_id"] == RIDE_ID
+        # trigger_emergency broadcasts to admins directly (the emergency_alert
+        # event asserted below) AND separately via features.notify_safety_team
+        # (a second, differently-shaped admin broadcast) -- both resolve to
+        # the same patched manager.broadcast_to_admins, so two calls are
+        # expected here, not one.
+        assert admin_broadcast_mock.await_count == 2
+        events = [call.args[0] for call in admin_broadcast_mock.await_args_list]
+        emergency_events = [e for e in events if e.get("type") == "emergency_alert"]
+        assert len(emergency_events) == 1
+        assert emergency_events[0]["incident"]["ride_id"] == RIDE_ID
 
     async def test_sos_incident_carries_location(self):
         """Emergency record must include the rider's GPS coordinates."""

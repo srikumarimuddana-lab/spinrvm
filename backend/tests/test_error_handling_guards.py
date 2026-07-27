@@ -38,28 +38,39 @@ class TestDriverDocumentVerificationFailsClosed:
     """WS-13: DB failure fetching driver_documents must NOT fall through to
     approved_docs=[] (which bypasses all document expiry checks)."""
 
+    def _doc_fetch_start_index(self, lines):
+        """Line index of the driver_documents get_rows(...) call.
+
+        The call and its "driver_documents" table-name argument now span
+        multiple lines (get_rows(\n    "driver_documents",\n    ...)), so a
+        single-line dual substring match no longer finds it -- look for
+        "driver_documents" within a few lines of a "get_rows(" call.
+        """
+        for i, line in enumerate(lines):
+            if "get_rows(" in line and any("driver_documents" in ln for ln in lines[i : i + 4]):
+                return i
+        return None
+
     def test_no_approved_docs_empty_fallback(self):
         lines = _DRIVER_STATUS_SRC.split("\n")
-        in_doc_fetch = False
-        for line in lines:
-            if "driver_documents" in line and "get_rows" in line:
-                in_doc_fetch = True
-            if in_doc_fetch and "approved_docs = []" in line:
+        start = self._doc_fetch_start_index(lines)
+        assert start is not None, "driver_documents get_rows(...) call not found"
+        for line in lines[start:]:
+            if "approved_docs = []" in line:
                 pytest.fail(
                     "approved_docs = [] fallback found — DB failure would bypass "
                     "document verification (driver goes online without valid docs)"
                 )
-            if in_doc_fetch and ("raise" in line or "HTTPException" in line):
+            if "raise" in line or "HTTPException" in line:
                 break
 
     def test_raises_on_document_fetch_failure(self):
         lines = _DRIVER_STATUS_SRC.split("\n")
-        in_except = False
-        for i, line in enumerate(lines):
-            if "driver_documents" in line and "get_rows" in line:
-                in_except = True
-            if in_except and "except Exception" in line:
-                context = "\n".join(lines[i : min(i + 10, len(lines))])
+        start = self._doc_fetch_start_index(lines)
+        assert start is not None, "driver_documents get_rows(...) call not found"
+        for i, line in enumerate(lines[start:], start=start):
+            if "except Exception" in line:
+                context = "\n".join(lines[i : min(i + 20, len(lines))])
                 assert "raise" in context and "503" in context, (
                     "driver_documents except block must raise HTTPException(503)"
                 )
@@ -92,7 +103,12 @@ class TestServiceAreaRequirementsFailsClosed:
             if "service_areas" in line and "get_rows" in line:
                 in_area_block = True
             if in_area_block and "except Exception" in line:
-                context = "\n".join(lines[i : min(i + 10, len(lines))])
+                # 20-line window: the logger.error(...) call now spans
+                # several lines (driver_id, service_area_id, exc as
+                # separate args), pushing the raise HTTPException(status_
+                # code=503, ...) further down than the old 10-line window
+                # reached.
+                context = "\n".join(lines[i : min(i + 20, len(lines))])
                 assert "raise" in context and "503" in context, (
                     "service_areas except block must raise HTTPException(503)"
                 )

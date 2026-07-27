@@ -90,7 +90,6 @@ async def _run_match(presence_result, drivers, ranked_pools, mget_raises=False, 
         patch("backend.routes.rides._deps.filter_and_rank_drivers", side_effect=_record_rank),
         patch("backend.routes.rides.matching._dispatch_retry", new_callable=AsyncMock),
         patch("backend.routes.rides._deps.asyncio.create_task", return_value=MagicMock()),
-        patch("backend.routes.rides._send_offer_to_driver", new_callable=AsyncMock),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
             new_callable=AsyncMock,

@@ -195,7 +195,11 @@ class TestAdminWalletMutations:
                 "/api/admin/wallet/credit",
                 json={"user_id": "usr-1", "amount": 50, "reason": "Customer goodwill"},
             )
-        assert resp.status_code in (200, 500)  # 500 ok if remaining wallet helpers have live deps
+        # 500/503 ok if remaining wallet helpers have live deps -- 503 is the
+        # CLAUDE.md-prescribed code for DB-layer errors (more specific than
+        # a bare 500), which is what a real, unmocked DB dependency now
+        # correctly returns instead of a generic 500.
+        assert resp.status_code in (200, 500, 503)
 
     def test_debit_missing_fields_422(self, client):
         resp = client.post("/api/admin/wallet/debit", json={"amount": 10})
@@ -430,7 +434,14 @@ class TestAdminSubscriptionStats:
     def test_send_receipt_happy_path(self, client):
         with (
             patch("db_supabase.get_ride", new_callable=AsyncMock, return_value=_FAKE_RIDE),
-            patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=self._RIDER),
+            # _FAKE_USER has no email -- the endpoint requires one on file
+            # ("Rider has no email address on file"). Use a rider fixture
+            # that has one, matching TestAdminSendReceipt._RIDER's shape.
+            patch(
+                "db_supabase.get_user_by_id",
+                new_callable=AsyncMock,
+                return_value={**_FAKE_USER, "email": "rider@example.com"},
+            ),
             patch("routes.admin.rides.log_admin_action", new_callable=AsyncMock, return_value="audit-1"),
             patch("services.payment_service.send_ride_receipt", new_callable=AsyncMock, return_value=True),
         ):
@@ -441,7 +452,14 @@ class TestAdminSubscriptionStats:
     def test_send_receipt_provider_failure_502(self, client):
         with (
             patch("db_supabase.get_ride", new_callable=AsyncMock, return_value=_FAKE_RIDE),
-            patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=self._RIDER),
+            # _FAKE_USER has no email -- the endpoint requires one on file
+            # ("Rider has no email address on file"). Use a rider fixture
+            # that has one, matching TestAdminSendReceipt._RIDER's shape.
+            patch(
+                "db_supabase.get_user_by_id",
+                new_callable=AsyncMock,
+                return_value={**_FAKE_USER, "email": "rider@example.com"},
+            ),
             patch("routes.admin.rides.log_admin_action", new_callable=AsyncMock, return_value="audit-1"),
             patch("services.payment_service.send_ride_receipt", new_callable=AsyncMock, return_value=False),
         ):
@@ -658,8 +676,12 @@ class TestAdminUsersProjection:
 
         cols = set(_USER_LIST_COLUMNS.split(","))
         # These are driver/derived fields the frontend defaults client-side;
-        # they are NOT columns on the users table and must never be projected.
-        forbidden = {"total_rides", "rating", "is_verified", "city", "status"}
+        # they are NOT columns on the users table and must never be
+        # projected. "status" was removed from this list -- migration 167
+        # added a real users.status column for rider account moderation
+        # (suspend/ban/reactivate, see TestAdminUserModeration below), so
+        # it's a legitimate column now, not an over-fetch.
+        forbidden = {"total_rides", "rating", "is_verified", "city"}
         assert not (cols & forbidden), f"non-existent users columns projected: {cols & forbidden}"
         # profile_image (the heavy base64 blob) must stay excluded.
         assert "profile_image" not in cols
@@ -737,3 +759,4 @@ class TestAdminUserModeration:
         # Reactivating also withdraws a pending DSAR deletion.
         assert captured["deletion_requested_at"] is None
         assert captured["deletion_scheduled_at"] is None
+

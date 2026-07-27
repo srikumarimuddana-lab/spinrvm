@@ -112,11 +112,6 @@ async def test_full_ride_lifecycle():
     """Walk the complete ride state machine: accept → arrive → verify-otp → complete."""
     from backend.routes import drivers as drv_mod
 
-    try:
-        from backend.utils.crypto import hash_otp
-    except ImportError:
-        from utils.crypto import hash_otp
-
     ride_id = "lifecycle_test_001"
     driver_id = "driver_lifecycle"
     user_driver_id = "user_driver_lifecycle"
@@ -140,7 +135,11 @@ async def test_full_ride_lifecycle():
         "time_fare": 2.5,
         "booking_fee": 0.5,
         "total_fare": 15.0,
-        "pickup_otp": hash_otp(otp_plain),
+        # pickup_otp (routes/rides/booking.py generate_pickup_otp) is stored
+        # PLAINTEXT, unlike the separately SHA-256-hashed login OTP -- it's
+        # compared with hmac.compare_digest(stored_otp, request.otp)
+        # directly (routes/drivers/ride_flow.py::verify_pickup_otp).
+        "pickup_otp": otp_plain,
     }
     driver = {
         "id": driver_id,
@@ -168,7 +167,7 @@ async def test_full_ride_lifecycle():
     # would overwrite the first. Use one unified fake that handles both callers:
     #   • accept_ride uses db.update_one with {"$set": {...}} and checks modified_count
     #   • complete_ride uses db_supabase.update_one with a plain dict (no "$set")
-    async def fake_update_one(table, filter_, updates):
+    async def fake_update_one(table, filter_, updates, **kw):
         if table == "rides":
             actual = updates.get("$set", updates)
             ride.update(actual)

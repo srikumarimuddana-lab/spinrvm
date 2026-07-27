@@ -456,7 +456,7 @@ async def test_compute_route_non_ok_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_completed_route_endpoint_snap_uses_nearest_and_enforces_75m_limit():
+async def test_completed_route_endpoint_snap_uses_nearest_and_enforces_150m_limit():
     accepted_capture = {}
     accepted = {
         "code": "Ok",
@@ -477,7 +477,10 @@ async def test_completed_route_endpoint_snap_uses_nearest_and_enforces_75m_limit
 
     rejected = {
         "code": "Ok",
-        "waypoints": [{"distance": 75.1, "location": [-104.6201, 50.4501]}],
+        # _MAX_COMPLETED_ENDPOINT_SNAP_M is 150.0 (utils/route_distance.py) --
+        # was 75.0 when this test was written; keep the rejected case just
+        # over the current limit.
+        "waypoints": [{"distance": 150.1, "location": [-104.6201, 50.4501]}],
     }
     with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=rejected))):
         assert await rd.snap_endpoint_via_osrm({"lat": 50.45, "lng": -104.62}, "http://osrm:5000") is None

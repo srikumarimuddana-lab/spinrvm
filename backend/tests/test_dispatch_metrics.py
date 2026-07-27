@@ -152,6 +152,12 @@ async def test_accept_ride_counts_accept_and_observes_latency():
         patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
         patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=post_ride)),
         patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=_run_sync)),
+        # record_period_transition (Period 2 open on acceptance) makes its
+        # own db_supabase.run_sync call for the insurance-period RPC --
+        # unmocked, it consumes run_sync_results[0] before the winner-offer
+        # run_sync call below reaches it, so offered_at parses to None and
+        # the latency histogram observation is silently skipped.
+        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
         patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
         patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
         patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),

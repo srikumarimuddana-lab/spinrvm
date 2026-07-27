@@ -193,6 +193,8 @@ async def test_autocomplete_records_per_call_without_token(mock_redis, monkeypat
             request=_fake_request(),
             input="abc",
             session_token=None,
+            location=None,
+            radius=None,
             current_user={"id": "rider_1"},
         )
 

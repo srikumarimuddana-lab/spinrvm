@@ -239,10 +239,21 @@ class TestApplyPromo:
 
         req = ApplyPromoRequest(code="SAVE5", ride_id=RIDE_ID)
 
+        # apply_promo computes ride_fare as base+distance+time ("ride portion
+        # only", per the code's own comment -- distinct from grand_total,
+        # which is total_fare) and calls _validate_promo_for_user directly,
+        # not the public validate_promo wrapper this test previously patched.
+        ride = {
+            **_ride(total_fare=20.00),
+            "base_fare": 5.00,
+            "distance_fare": 10.00,
+            "time_fare": 5.00,
+        }
+
         validate_calls = []
 
-        async def _fake_validate(req_inner, user):
-            validate_calls.append(req_inner.ride_fare)
+        async def _fake_validate(code, user_id, ride_fare, ride_id=None, grand_total=None):
+            validate_calls.append(ride_fare)
             return {
                 "valid": True,
                 "code": "SAVE5",
@@ -255,16 +266,17 @@ class TestApplyPromo:
             }
 
         with (
-            patch("backend.routes.promotions.db_supabase.find_one", AsyncMock(return_value=_ride(total_fare=20.00))),
+            patch("backend.routes.promotions.db_supabase.find_one", AsyncMock(return_value=ride)),
             patch("backend.routes.promotions.db_supabase.insert_one", AsyncMock()),
             patch("backend.routes.promotions.db_supabase.get_rows", AsyncMock(return_value=[_promo()])),
             patch("backend.routes.promotions.increment_promo_uses", AsyncMock(return_value=True)),
-            patch("backend.routes.promotions.validate_promo", AsyncMock(side_effect=_fake_validate)),
+            patch("backend.routes.promotions.db_supabase.claim_promo_user_slot", AsyncMock(return_value=True)),
+            patch("backend.routes.promotions._validate_promo_for_user", AsyncMock(side_effect=_fake_validate)),
         ):
             result = await apply_promo(req=req, current_user={"id": USER_ID})
 
         assert result["success"] is True
-        # Server fare ($20) was used, not anything from the client
+        # Server fare (base+distance+time = $20) was used, not anything from the client
         assert validate_calls[0] == Decimal("20.00")
 
     async def test_non_owner_apply_raises_403(self):
@@ -340,13 +352,16 @@ class TestWalletPay:
         return result, updated, txns
 
     async def test_wallet_pay_deducts_balance(self):
-        result, _, _ = await self._pay(amount=15.00, wallet_balance=50.00, ride_fare=20.00)
+        # wallet_pay now validates the client-supplied amount exactly matches
+        # the server-stored fare (+/- $0.01) to prevent under/overpayment --
+        # amount and ride_fare must agree, not test a partial-payment case.
+        result, _, _ = await self._pay(amount=15.00, wallet_balance=50.00, ride_fare=15.00)
 
         assert "balance" in result
         assert float(result["balance"]) == pytest.approx(35.00, abs=0.01)
 
     async def test_wallet_pay_marks_ride_paid(self):
-        _, updated, _ = await self._pay(amount=15.00, wallet_balance=50.00)
+        _, updated, _ = await self._pay(amount=15.00, wallet_balance=50.00, ride_fare=15.00)
 
         ride_updates = [(t, d) for t, d in updated if t == "rides"]
         assert ride_updates, "Ride was not updated after payment"

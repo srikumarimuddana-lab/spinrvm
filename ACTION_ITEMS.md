@@ -14,16 +14,48 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 ## P0 — Launch gating (code)
 
 ### A1. Per-module test-coverage floors for money paths
-- [ ] **Status:** open — the single biggest remaining gap
+- [ ] **Status:** in progress (2026-07-27) — measured actual current per-file
+  coverage (full local suite run, `coverage.xml`), which changes the shape of
+  this item from what it originally assumed:
+  - `routes/payments.py`: **90.72%** — already meets the 90% target.
+  - `services/fare_service.py`: **99.36%** — already meets the 90% target.
+  - `services/dispatch_service.py`: was 75.86%, **now 92.53%** after adding
+    10 tests (`tests/services/test_dispatch_service.py`) covering the
+    previously-untested Spinr Pass gate block in
+    `DispatchService.find_candidate_drivers` — required-area subscription
+    filter, parent-area inheritance, expired-subscription handling, the daily
+    ride-allowance/quota filter, and both fail-open exception paths (quota
+    lookup failure, general pass-filter DB error). Meets the 80% target.
+  - `routes/rides.py` no longer exists as a single file — the god-file split
+    (see `backend/CLAUDE.md` / `docs/refactors/god-file-split.md`) replaced it
+    with a `routes/rides/` package, and CLAUDE.md's target was never updated
+    to reflect that. Per-file coverage in that package is **highly uneven**
+    and several files are well below 80%: `lost_found.py` 25%, `receipts.py`
+    58.3%, `matching.py` 64.7%, `lifecycle.py` 65.1%, `booking.py` 65.7%,
+    `queries.py` 69.2%, `estimates.py`/`cancellation.py` 71.0%,
+    `rides/payments.py` 79.5%. This is the real remaining gap, not
+    payments/fare — `matching.py` and `lifecycle.py` are the highest-priority
+    files (ride state-machine transitions, dispatch-adjacent) per CLAUDE.md's
+    own "every new state transition must have a test" rule.
 - **Why:** CLAUDE.md mandates ≥90% for `routes/payments.py` + `services/fare_service.py`
-  and ≥80% for `routes/rides.py` + `services/dispatch_service.py`; the global floor
-  in `backend/pytest.ini` is only 60%.
-- **Files:** `backend/pytest.ini`, new tests under `backend/tests/`
+  and ≥80% for `routes/rides.py` (now the `routes/rides/` package) +
+  `services/dispatch_service.py`; the global floor in `backend/pytest.ini` is
+  only 60%.
+- **Files:** `backend/pytest.ini`, new tests under `backend/tests/` — done so
+  far: `backend/tests/services/test_dispatch_service.py`. Next:
+  `backend/tests/` coverage for `routes/rides/lost_found.py`,
+  `routes/rides/receipts.py`, `routes/rides/matching.py`,
+  `routes/rides/lifecycle.py`, `routes/rides/booking.py`, in roughly that
+  priority order (worst-covered / highest-stakes first).
 - **Approach:** measure current per-file coverage (`pytest --cov --cov-report=term-missing`),
   write tests for the uncovered branches (fare tiers, surge, corporate, promo, refund,
-  webhook types), then enforce with `coverage report --fail-under` per path or a
-  `ci-guardrails` step. Ratchet, don't big-bang.
-- **Acceptance:** CI fails if payments/fare coverage drops below 90% or rides/dispatch below 80%.
+  webhook types, ride-state transitions), then enforce with
+  `coverage report --fail-under` per path or a `ci-guardrails` step. Ratchet,
+  don't big-bang — one file/PR at a time, per CLAUDE.md's ≤3-files-per-subtask
+  rule.
+- **Acceptance:** CI fails if payments/fare coverage drops below 90% or
+  `routes/rides/*` / dispatch below 80%. Payments and fare already satisfy
+  this; dispatch now does too. `routes/rides/` package files remain open.
 
 ### A2. Post-deploy smoke test in CI
 - [ ] **Status:** open

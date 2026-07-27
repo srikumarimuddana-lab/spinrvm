@@ -3781,3 +3781,150 @@ async def test_process_payment_company_allowance_master_debit_fails():
     # master wallet a SECOND time via its own negative master delta,
     # compounding the failure instead of compensating it).
     mock_allowance_svc.apply_ride_debit_reversal.assert_called_once()
+
+
+# ── rider_report_lost_item ────────────────────────────────────────────────────
+
+
+def _lost_item_req(**kw):
+    from backend.routes.rides import RiderLostItemRequest
+
+    base = {"item_description": "Blue jacket left on back seat", "item_category": "clothing"}
+    base.update(kw)
+    return RiderLostItemRequest(**base)
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_ride_not_found():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as exc:
+            await rider_report_lost_item(ride_id=_RIDE_ID, req=_lost_item_req(), current_user=_USER)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_wrong_rider():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other-rider"))
+        with pytest.raises(HTTPException) as exc:
+            await rider_report_lost_item(ride_id=_RIDE_ID, req=_lost_item_req(), current_user=_USER)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_not_completed():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="in_progress", rider_id=_RIDER_ID))
+        with pytest.raises(HTTPException) as exc:
+            await rider_report_lost_item(ride_id=_RIDE_ID, req=_lost_item_req(), current_user=_USER)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_no_driver_assigned():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID, driver_id=None))
+        with pytest.raises(HTTPException) as exc:
+            await rider_report_lost_item(ride_id=_RIDE_ID, req=_lost_item_req(), current_user=_USER)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_invalid_category_falls_back_to_other():
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID, driver_id=_DRIVER_ID))
+        mock_db.create_lost_and_found = AsyncMock(side_effect=lambda data: {**data})
+        mock_db.get_driver_by_id = AsyncMock(return_value=None)
+        result = await rider_report_lost_item(
+            ride_id=_RIDE_ID, req=_lost_item_req(item_category="not-a-real-category"), current_user=_USER
+        )
+    assert result["success"] is True
+    assert result["item"]["item_category"] == "other"
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_notifies_driver_and_marks_notified():
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID, driver_id=_DRIVER_ID))
+        mock_db.create_lost_and_found = AsyncMock(side_effect=lambda data: {**data})
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        mock_db.get_user_by_id = AsyncMock(return_value={"id": "driver-user-1"})
+        mock_db.update_lost_and_found = AsyncMock()
+        with patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock) as mock_push:
+            result = await rider_report_lost_item(ride_id=_RIDE_ID, req=_lost_item_req(), current_user=_USER)
+
+    assert result["success"] is True
+    mock_push.assert_awaited_once()
+    assert mock_push.call_args.kwargs["target_app"] == "driver"
+    mock_db.update_lost_and_found.assert_awaited_once()
+    update_call = mock_db.update_lost_and_found.await_args
+    assert update_call.args[1]["status"] == "driver_notified"
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_driver_with_no_user_id_skips_notification():
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID, driver_id=_DRIVER_ID))
+        mock_db.create_lost_and_found = AsyncMock(side_effect=lambda data: {**data})
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": None})
+        with patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock) as mock_push:
+            result = await rider_report_lost_item(ride_id=_RIDE_ID, req=_lost_item_req(), current_user=_USER)
+
+    assert result["success"] is True
+    mock_push.assert_not_awaited()
+    mock_db.update_lost_and_found.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_driver_lookup_failure_is_swallowed():
+    """The item report itself must succeed even if the best-effort driver
+    notification blows up -- the rider's report is not lost."""
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID, driver_id=_DRIVER_ID))
+        mock_db.create_lost_and_found = AsyncMock(side_effect=lambda data: {**data})
+        mock_db.get_driver_by_id = AsyncMock(side_effect=RuntimeError("db down"))
+        result = await rider_report_lost_item(ride_id=_RIDE_ID, req=_lost_item_req(), current_user=_USER)
+    assert result["success"] is True
+
+
+@pytest.mark.anyio
+async def test_rider_report_lost_item_push_failure_is_swallowed():
+    from backend.routes.rides import rider_report_lost_item
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID, driver_id=_DRIVER_ID))
+        mock_db.create_lost_and_found = AsyncMock(side_effect=lambda data: {**data})
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        mock_db.get_user_by_id = AsyncMock(return_value={"id": "driver-user-1"})
+        with patch(
+            "backend.routes.rides._deps.send_push_notification",
+            AsyncMock(side_effect=RuntimeError("push provider down")),
+        ):
+            result = await rider_report_lost_item(ride_id=_RIDE_ID, req=_lost_item_req(), current_user=_USER)
+    assert result["success"] is True
+    mock_db.update_lost_and_found.assert_not_called()

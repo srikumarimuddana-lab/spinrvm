@@ -190,11 +190,18 @@ class TestPayment3DSRetry:
         assert data["$set"]["payment_retry_count"] == MAX_RETRIES
 
     async def test_ride_at_max_retries_is_skipped(self):
-        """A ride that already exhausted retries must not trigger another confirm."""
+        """A ride that already exhausted retries must not trigger another confirm.
+
+        A ride newly hitting MAX_RETRIES gets a one-time admin-alert
+        update_one (admin_alerted_payment_exhausted: False -> True); model
+        the already-fully-handled case (that alert already fired) so this
+        test's real intent -- no further writes on a re-tick -- still holds.
+        """
         from backend.utils.payment_retry import MAX_RETRIES
 
         updates, _, mock_stripe = await self._run_retry(
-            [_ride("failed", retry_count=MAX_RETRIES)], "requires_confirmation"
+            [_ride("failed", retry_count=MAX_RETRIES, admin_alerted_payment_exhausted=True)],
+            "requires_confirmation",
         )
 
         mock_stripe.PaymentIntent.confirm.assert_not_called()
@@ -428,10 +435,27 @@ class TestClaimQuestReward:
     """
 
     async def test_completed_quest_credits_wallet_and_claims(self):
+        """Quest rewards are PAYABLE driver earnings, not a rider-wallet
+        credit: claim_quest_reward atomically claims (status filter guards
+        against a double-claim race, surfacing 409 on a lost race) then
+        records a driver_bonuses row (folds into payable_balance / normal
+        Stripe-Transfer payout), not a wallets table credit -- the old
+        wallet path left the money invisible/unpayable in the driver app.
+        """
         from backend.routes.quests import claim_quest_reward
 
-        wallet = {"id": "w1", "user_id": DRIVER_USER_ID, "balance": 50.0, "is_active": True}
         db_updates = []
+        insert_calls = []
+
+        async def _fake_update_one(_table, _query, fields):
+            db_updates.append((_table, fields))
+            # Atomic claim-before-pay: a truthy return means this call
+            # matched (and claimed) the row.
+            return {"id": PROGRESS_ID}
+
+        async def _fake_insert_one(table, payload):
+            insert_calls.append((table, payload))
+            return payload
 
         with (
             patch(
@@ -444,11 +468,8 @@ class TestClaimQuestReward:
                     ]
                 ),
             ),
-            patch(
-                "backend.routes.quests.db.update_one", AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, d)))
-            ),
-            patch("backend.routes.wallet.get_or_create_wallet", AsyncMock(return_value=wallet)),
-            patch("backend.routes.wallet._record_transaction", AsyncMock()),
+            patch("backend.routes.quests.db.update_one", AsyncMock(side_effect=_fake_update_one)),
+            patch("backend.routes.quests.db.insert_one", AsyncMock(side_effect=_fake_insert_one)),
         ):
             result = await claim_quest_reward(
                 progress_id=PROGRESS_ID,
@@ -457,9 +478,15 @@ class TestClaimQuestReward:
 
         assert result["status"] == "claimed"
         assert result["reward_amount"] == 20.0
+        assert result["reward_type"] == "driver_bonus"
         # Progress row must be marked claimed
         claimed_updates = [d for t, d in db_updates if d.get("$set", {}).get("status") == "claimed"]
         assert claimed_updates, "Progress row not marked as claimed"
+        # Reward recorded as a payable driver_bonuses row, not a wallet credit.
+        bonus_inserts = [p for t, p in insert_calls if t == "driver_bonuses"]
+        assert bonus_inserts, "Expected a driver_bonuses row for the quest reward"
+        assert float(bonus_inserts[0]["amount"]) == 20.0
+        assert bonus_inserts[0]["kind"] == "quest"
 
     async def test_not_completed_quest_returns_400(self):
         from fastapi import HTTPException

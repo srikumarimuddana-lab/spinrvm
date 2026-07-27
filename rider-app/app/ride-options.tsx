@@ -592,7 +592,11 @@ function RideOptionsScreenContent() {
               strokeColor="transparent"
               onReady={onReadyDirections}
               onError={(err: any) => console.warn('[RideOptions] Directions API error:', err?.message ?? err)}
-              optimizeWaypoints
+              // NO optimizeWaypoints: the backend prices + dispatches `stops` in
+              // the rider-entered order, so Directions must keep that order.
+              // Optimising would let onReady persist a reordered polyline as
+              // planned_route_polyline, making the map show a different stop
+              // sequence than the actual ride contract.
             />
           )}
           {/* Real derived route, drawn via the shared orange→red gradient line. */}

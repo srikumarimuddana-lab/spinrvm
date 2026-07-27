@@ -79,6 +79,7 @@ export default function TrackRide() {
   // Last driver position used for the current route line — used to decide
   // whether to re-fetch from OSRM when the driver moves.
   const lastRoutedDriverRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastRoutedLegRef = useRef<'pickup' | 'dropoff' | null>(null);
 
   // ── Poll the public backend endpoint every 5 s ──────────────────────────────
   useEffect(() => {
@@ -247,22 +248,31 @@ export default function TrackRide() {
     // Route origin = driver (when assigned) or pickup (no driver yet).
     // Route destination = pickup (driver en route to pickup) or dropoff (trip in progress).
     const hasDriver = d?.lat != null && d?.lng != null;
+    const currentLeg: 'pickup' | 'dropoff' = EN_ROUTE_TO_PICKUP.has(ride.status) ? 'pickup' : 'dropoff';
+    // Reroute when: we've never routed yet, OR the leg changed (e.g. the ride
+    // flips driver_arrived → in_progress while the driver is stationary, so the
+    // destination switches pickup → dropoff), OR the driver moved past the
+    // threshold. The leg check fixes the "stuck showing driver→pickup" bug; not
+    // re-fetching on an unchanged leg fixes the every-5s identical-request loop
+    // when there is no driver (position-based reroute can't fire).
+    const legChanged = lastRoutedLegRef.current !== currentLeg;
     const driverMoved =
-      !lastRoutedDriverRef.current ||
-      (hasDriver && (
-        Math.abs(d!.lat! - lastRoutedDriverRef.current.lat) > ROUTE_REROUTE_THRESHOLD ||
-        Math.abs(d!.lng! - lastRoutedDriverRef.current.lng) > ROUTE_REROUTE_THRESHOLD
-      ));
+      hasDriver &&
+      lastRoutedDriverRef.current != null &&
+      (Math.abs(d!.lat! - lastRoutedDriverRef.current.lat) > ROUTE_REROUTE_THRESHOLD ||
+        Math.abs(d!.lng! - lastRoutedDriverRef.current.lng) > ROUTE_REROUTE_THRESHOLD);
+    const neverRouted = lastRoutedLegRef.current === null;
 
-    if (driverMoved && ride.pickup_lat != null && ride.dropoff_lat != null) {
+    if ((neverRouted || legChanged || driverMoved) && ride.pickup_lat != null && ride.dropoff_lat != null) {
       const originLat  = hasDriver ? d!.lat!  : ride.pickup_lat;
       const originLng  = hasDriver ? d!.lng!  : ride.pickup_lng!;
-      const destLat    = EN_ROUTE_TO_PICKUP.has(ride.status) ? ride.pickup_lat  : ride.dropoff_lat;
-      const destLng    = EN_ROUTE_TO_PICKUP.has(ride.status) ? ride.pickup_lng! : ride.dropoff_lng!;
+      const destLat    = currentLeg === 'pickup' ? ride.pickup_lat  : ride.dropoff_lat;
+      const destLng    = currentLeg === 'pickup' ? ride.pickup_lng! : ride.dropoff_lng!;
 
-      if (hasDriver) {
-        lastRoutedDriverRef.current = { lat: d!.lat!, lng: d!.lng! };
-      }
+      lastRoutedLegRef.current = currentLeg;
+      // Track driver position for the move-based reroute; clear it when there is
+      // no driver so we don't re-fetch until the leg changes or a driver appears.
+      lastRoutedDriverRef.current = hasDriver ? { lat: d!.lat!, lng: d!.lng! } : null;
 
       const url =
         `https://router.project-osrm.org/route/v1/driving/` +

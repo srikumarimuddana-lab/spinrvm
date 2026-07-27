@@ -204,8 +204,13 @@ function RideInProgressScreenContent() {
   // store or from a fresh Directions fetch). Using state instead of a ref so
   // the haversine effect below re-runs immediately when the flag flips — a ref
   // change is invisible to React's dependency tracking.
+  // Seed from tripRouteCoords (NOT just the cross-screen cache): when
+  // planned_route_polyline seeds the local route but activeRideRouteCoords is
+  // null, a path already exists so Directions is skipped — routeFetched must
+  // already be true so the haversine ETA effect runs instead of leaving a stale
+  // ETA when /live-route is unavailable.
   const [routeFetched, setRouteFetched] = useState(
-    !!(activeRideRouteCoords && activeRideRouteCoords.length > 1),
+    !!(tripRouteCoords && tripRouteCoords.length > 1),
   );
 
   // Update ETA from driver's live position via haversine — no Maps API call.

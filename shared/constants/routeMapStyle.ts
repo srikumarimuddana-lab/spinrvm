@@ -83,6 +83,42 @@ export function buildPathGradient(
 }
 
 /**
+ * Colour MULTIPLE route sections (v2 capture segments) as one orange→red
+ * gradient WITHOUT bridging them. Each section is drawn independently — the end
+ * of one capture session is never chorded to the start of the next across a GPS
+ * gap — but the colour runs continuously across the whole trip by global
+ * position. This preserves the backend's gap contract (sections must never be
+ * concatenated) while keeping the uniform look. Returns [] when no section has
+ * ≥ 2 valid points.
+ */
+export function buildMultiPathGradient(
+  sections: (LatLng[] | null | undefined)[] | null | undefined,
+  segments: number = ROUTE_GRADIENT_SEGMENTS,
+): RouteGradientSegment[] {
+  const clean = (sections ?? [])
+    .map((s) => (s ?? []).filter(_valid))
+    .filter((s) => s.length >= 2);
+  if (clean.length === 0) return [];
+  const totalPts = clean.reduce((a, s) => a + s.length, 0);
+  const out: RouteGradientSegment[] = [];
+  let seen = 0;
+  for (const sec of clean) {
+    const chunks = Math.max(1, Math.round((segments * sec.length) / totalPts));
+    const per = (sec.length - 1) / chunks;
+    for (let c = 0; c < chunks; c++) {
+      const start = Math.floor(c * per);
+      const end = c === chunks - 1 ? sec.length - 1 : Math.floor((c + 1) * per);
+      const slice = sec.slice(start, end + 1);
+      if (slice.length >= 2) {
+        out.push({ coordinates: slice, color: routeGradientColorAt((seen + (start + end) / 2) / totalPts) });
+      }
+    }
+    seen += sec.length;
+  }
+  return out;
+}
+
+/**
  * Straight pickup→destination gradient — the fallback when a surface has no real
  * path yet (e.g. a pre-dispatch booking preview). Same colour language as
  * buildPathGradient so the two never clash.

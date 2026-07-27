@@ -319,8 +319,12 @@ def render_ride_snapshot(
     # navigating_to_pickup leg is excluded from the snapshot.
     trip_trail = _coerce_polyline((phase_polylines or {}).get("trip_in_progress"))
 
+    # Build the route_polyline fallback UNCONDITIONALLY so a sparse trip trail can
+    # defer to it (mirrors the Google renderer's < 10-point density check) — a
+    # 2-point trip trail must not be drawn as one long chord when a usable
+    # route_polyline exists.
     legacy_trail: list[tuple[float, float]] = []
-    if not trip_trail and route_polyline:
+    if route_polyline:
         for pt in route_polyline:
             try:
                 lat = float(pt[0])
@@ -348,10 +352,12 @@ def render_ride_snapshot(
         # (lng, lat) — convert to (lat, lng) for the shared gradient helpers.
         if route_segments is not None:
             trails = _extract_segment_trails(route_segments)
-        elif trip_trail:
+        elif len(trip_trail) >= 10:
             trails = [[(la, ln) for ln, la in trip_trail]]
         elif legacy_trail:
             trails = [[(la, ln) for ln, la in legacy_trail]]
+        elif trip_trail:  # sparse, but the only geometry available
+            trails = [[(la, ln) for ln, la in trip_trail]]
         else:
             trails = []
 

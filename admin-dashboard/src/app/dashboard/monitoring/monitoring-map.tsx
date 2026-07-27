@@ -11,9 +11,37 @@ import {
     fitBoundsToGeoJSON,
     makeCircleMarkerEl,
 } from "@/lib/map/maplibre-base";
+import {
+    buildPathGradient,
+    ROUTE_PIN_COLORS,
+    ROUTE_STROKE_WIDTH,
+} from "@spinr/shared/constants/routeMapStyle";
 import { MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
 
 const DEFAULT_ZOOM = 12;
+
+/**
+ * Colour a real ride line (OSRM road route or the interim straight fallback,
+ * both as [lng, lat] positions) as the shared orange→red gradient. Geometry is
+ * unchanged — every coordinate is kept; only the per-feature `color` is derived
+ * from position along the path. Render with paint `["get", "color"]`.
+ */
+function rideLineGradientFeatureCollection(
+    coords: [number, number][],
+): GeoJSON.FeatureCollection {
+    const features: GeoJSON.Feature[] = [];
+    for (const chunk of buildPathGradient(coords.map(([lng, lat]) => [lat, lng] as [number, number]))) {
+        features.push({
+            type: "Feature",
+            properties: { color: chunk.color },
+            geometry: {
+                type: "LineString",
+                coordinates: chunk.coordinates.map(([lat, lng]) => [lng, lat]),
+            },
+        });
+    }
+    return { type: "FeatureCollection", features };
+}
 
 // Cache OSRM route lookups per ride_id so panning / re-renders don't re-fetch.
 // In-memory only — clears on hard reload, which is the desired behaviour
@@ -234,7 +262,7 @@ export function MonitoringMap({
 
         if (!entry) {
             const pickupEl = makeCircleMarkerEl({
-                color: "#3b82f6",
+                color: ROUTE_PIN_COLORS.pickup,
                 label: "P",
                 title: `Pickup: ${ride.pickup_address ?? ""}`,
                 size: 20,
@@ -243,7 +271,7 @@ export function MonitoringMap({
             const pickup = new maplibregl.Marker({ element: pickupEl }).setLngLat(pickupLngLat);
 
             const dropoffEl = makeCircleMarkerEl({
-                color: "#ef4444",
+                color: ROUTE_PIN_COLORS.dropoff,
                 label: "D",
                 title: `Dropoff: ${ride.dropoff_address ?? ""}`,
                 size: 20,
@@ -256,14 +284,7 @@ export function MonitoringMap({
 
             mapRef.current.addSource(sourceId, {
                 type: "geojson",
-                data: {
-                    type: "Feature",
-                    properties: {},
-                    geometry: {
-                        type: "LineString",
-                        coordinates: [pickupLngLat, dropoffLngLat],
-                    },
-                },
+                data: rideLineGradientFeatureCollection([pickupLngLat, dropoffLngLat]),
             });
             mapRef.current.addLayer({
                 id: layerId,
@@ -271,8 +292,8 @@ export function MonitoringMap({
                 source: sourceId,
                 layout: { "line-cap": "round", "line-join": "round" },
                 paint: {
-                    "line-color": "#3b82f6",
-                    "line-width": 3,
+                    "line-color": ["get", "color"],
+                    "line-width": ROUTE_STROKE_WIDTH,
                     "line-opacity": 0.75,
                 },
             });
@@ -295,11 +316,9 @@ export function MonitoringMap({
                 if (!coords || !mapRef.current) return;
                 const src = mapRef.current.getSource(sourceId);
                 if (src && "setData" in src) {
-                    (src as maplibregl.GeoJSONSource).setData({
-                        type: "Feature",
-                        properties: {},
-                        geometry: { type: "LineString", coordinates: coords },
-                    });
+                    (src as maplibregl.GeoJSONSource).setData(
+                        rideLineGradientFeatureCollection(coords),
+                    );
                 }
             });
         } else {
@@ -312,11 +331,9 @@ export function MonitoringMap({
                 // back to the straight line until OSRM responds.
                 const cached = routeCache.get(ride.id);
                 const coords: [number, number][] = cached ?? [pickupLngLat, dropoffLngLat];
-                (src as maplibregl.GeoJSONSource).setData({
-                    type: "Feature",
-                    properties: {},
-                    geometry: { type: "LineString", coordinates: coords },
-                });
+                (src as maplibregl.GeoJSONSource).setData(
+                    rideLineGradientFeatureCollection(coords),
+                );
             }
             setRideVisible(ride.id, filters.showRides);
         }

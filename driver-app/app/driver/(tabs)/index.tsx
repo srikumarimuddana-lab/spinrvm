@@ -347,7 +347,10 @@ function DriverDashboard() {
     setOsrmRouteActive(false);
 
     const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
-    const canUseSaved = Array.isArray(savedPoly) && savedPoly.length >= 2;
+    const canUseSaved =
+      Array.isArray(savedPoly) &&
+      savedPoly.length >= 2 &&
+      (rideState === 'ride_offered' || rideState === 'trip_in_progress');
 
     if (canUseSaved) {
       const coords = savedPoly
@@ -406,6 +409,11 @@ function DriverDashboard() {
         if (Array.isArray(data.polyline) && data.polyline.length > 1) {
           setRouteCoords(data.polyline.map((p) => ({ latitude: p[0], longitude: p[1] })));
           setOsrmRouteActive(true);
+        } else {
+          setOsrmRouteActive(false);
+          if (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') {
+            setRouteCoords([]);
+          }
         }
         if (typeof data.eta_seconds === 'number' && data.eta_seconds > 0) {
           setRouteEtaMinutes(Math.max(1, Math.ceil(data.eta_seconds / 60)));
@@ -414,9 +422,14 @@ function DriverDashboard() {
           setRouteDistanceKm(data.distance_km);
         }
       } catch {
-        // OSRM unavailable — keep the saved-polyline route + existing ETA and
-        // let Google Directions resume as the live-route fallback.
-        if (!cancelled) setOsrmRouteActive(false);
+        // OSRM unavailable — let Google Directions resume as the live-route
+        // fallback. Pre-pickup must never retain pickup -> dropoff geometry.
+        if (!cancelled) {
+          setOsrmRouteActive(false);
+          if (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') {
+            setRouteCoords([]);
+          }
+        }
       }
     };
     fetchLiveRoute();
@@ -719,7 +732,10 @@ function DriverDashboard() {
         {ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
           const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
           const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
-          const useSavedRoute = hasSavedRoute;
+          // The saved route always describes pickup -> dropoff. Before pickup,
+          // only a live route (OSRM or Directions) can describe driver -> pickup.
+          const useSavedRoute = hasSavedRoute &&
+            (rideState === 'ride_offered' || rideState === 'trip_in_progress');
           const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive;
 
           const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
@@ -774,6 +790,7 @@ function DriverDashboard() {
                 }}
                 onError={(err) => {
                   console.warn('Directions error — falling back to straight line:', err);
+                  setRouteCoords([]);
                   setDirectionsFailed(true);
                   if (mapRef.current) {
                     mapRef.current.fitToCoordinates([origin, destination], {

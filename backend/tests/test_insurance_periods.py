@@ -3,6 +3,14 @@
 Compliance-grade audit logging — these tests pin the behaviour we
 explicitly need under failure: programmer-error inputs raise, but DB
 errors NEVER propagate to the caller.
+
+record_period_transition does the close-old + open-new insurance
+period transition via ONE atomic Postgres RPC
+(record_insurance_period_transition) rather than two separate
+.table().update() + .table().insert() calls — the RPC owns atomicity
+around the partial unique index `driver_insurance_periods_open` (see
+the module's own docstring). Tests here mock/assert against
+sb.rpc("record_insurance_period_transition", ...) accordingly.
 """
 
 from __future__ import annotations
@@ -16,59 +24,41 @@ from backend.utils import insurance_periods
 pytestmark = pytest.mark.unit
 
 
-def _fake_supabase(close_data=None, insert_raises: Exception | None = None) -> MagicMock:
-    """Build a minimal Supabase mock that records the calls we make."""
+def _fake_supabase(rpc_data=None, rpc_raises: Exception | None = None) -> MagicMock:
+    """Build a minimal Supabase mock around the single RPC call the
+    real code makes: sb.rpc("record_insurance_period_transition", params).execute()."""
     sb = MagicMock()
-    table = MagicMock()
-    sb.table.return_value = table
-
-    # update().eq().is_().execute() chain — for the close step.
-    update_chain = MagicMock()
-    table.update.return_value = update_chain
-    update_chain.eq.return_value = update_chain
-    update_chain.is_.return_value = update_chain
-    update_resp = MagicMock()
-    update_resp.data = close_data or []
-    update_chain.execute.return_value = update_resp
-
-    # insert().execute() chain — for the open step.
-    insert_chain = MagicMock()
-    table.insert.return_value = insert_chain
-    if insert_raises is not None:
-        insert_chain.execute.side_effect = insert_raises
+    rpc_chain = MagicMock()
+    sb.rpc.return_value = rpc_chain
+    if rpc_raises is not None:
+        rpc_chain.execute.side_effect = rpc_raises
     else:
-        insert_resp = MagicMock()
-        insert_resp.data = [{"id": "new"}]
-        insert_chain.execute.return_value = insert_resp
-
+        resp = MagicMock()
+        resp.data = rpc_data if rpc_data is not None else {"status": "ok"}
+        rpc_chain.execute.return_value = resp
     return sb
 
 
 @pytest.mark.anyio
 async def test_happy_path_period_1_no_prior() -> None:
-    """First go_online: nothing to close, one INSERT for period 1."""
-    sb = _fake_supabase(close_data=[])
+    """First go_online: one atomic RPC call opens period 1, nothing prior to close."""
+    sb = _fake_supabase(rpc_data={"status": "ok"})
     with patch.object(insurance_periods.db_supabase, "supabase", sb):
         await insurance_periods.record_period_transition(
             driver_id="d1",
             new_period=1,
         )
 
-    # close UPDATE was attempted...
-    sb.table.assert_any_call("driver_insurance_periods")
-    sb.table.return_value.update.assert_called_once()
-    # ...and an INSERT followed.
-    sb.table.return_value.insert.assert_called_once()
-    inserted = sb.table.return_value.insert.call_args.args[0]
-    assert inserted["driver_id"] == "d1"
-    assert inserted["period"] == 1
-    assert "ride_id" not in inserted
+    sb.rpc.assert_called_once_with(
+        "record_insurance_period_transition",
+        {"p_driver_id": "d1", "p_new_period": 1, "p_ride_id": None},
+    )
 
 
 @pytest.mark.anyio
 async def test_transition_period_1_to_period_2_with_ride() -> None:
-    """Prior period open → close it, then open period 2 carrying ride_id."""
-    sb = _fake_supabase(close_data=[{"id": "old"}])
+    """Prior period open → RPC atomically closes it and opens period 2 carrying ride_id."""
+    sb = _fake_supabase(rpc_data={"status": "ok"})
     with patch.object(insurance_periods.db_supabase, "supabase", sb):
         await insurance_periods.record_period_transition(
             driver_id="d1",
@@ -76,13 +66,10 @@ async def test_transition_period_1_to_period_2_with_ride() -> None:
             ride_id="r99",
         )
 
-    sb.table.return_value.update.assert_called_once()
-    update_payload = sb.table.return_value.update.call_args.args[0]
-    assert "ended_at" in update_payload
-    sb.table.return_value.insert.assert_called_once()
-    inserted = sb.table.return_value.insert.call_args.args[0]
-    assert inserted["period"] == 2
-    assert inserted["ride_id"] == "r99"
+    sb.rpc.assert_called_once_with(
+        "record_insurance_period_transition",
+        {"p_driver_id": "d1", "p_new_period": 2, "p_ride_id": "r99"},
+    )
 
 
 @pytest.mark.anyio
@@ -107,10 +94,7 @@ async def test_period_3_without_ride_raises_value_error() -> None:
 @pytest.mark.anyio
 async def test_db_failure_is_swallowed(caplog: pytest.LogCaptureFixture) -> None:
     """A boom from the DB layer must never propagate — caller doesn't see it."""
-    sb = _fake_supabase(
-        close_data=[],
-        insert_raises=RuntimeError("supabase exploded"),
-    )
+    sb = _fake_supabase(rpc_raises=RuntimeError("supabase exploded"))
     with patch.object(insurance_periods.db_supabase, "supabase", sb):
         with caplog.at_level("ERROR"):
             # Must NOT raise.
@@ -125,11 +109,10 @@ async def test_db_failure_is_swallowed(caplog: pytest.LogCaptureFixture) -> None
 async def test_unique_violation_with_no_close_is_noop(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Race / no-op transition: insert hits 23505 and close affected 0 rows."""
-    sb = _fake_supabase(
-        close_data=[],
-        insert_raises=Exception("duplicate key value violates unique constraint (23505)"),
-    )
+    """Race / no-op transition: the RPC itself reports status="noop" when the
+    driver already has this period open (the partial unique index serialises
+    racing callers; the loser gets this status rather than an exception)."""
+    sb = _fake_supabase(rpc_data={"status": "noop"})
     with patch.object(insurance_periods.db_supabase, "supabase", sb):
         with caplog.at_level("INFO"):
             await insurance_periods.record_period_transition(
@@ -147,48 +130,46 @@ async def test_period_2_to_0_driver_offline_mid_ride() -> None:
     """Driver goes offline while period 2 is open (ride in driver_assigned).
     The prior period 2 row closes and period 0 (offline) is opened.
     """
-    sb = _fake_supabase(close_data=[{"id": "period2_row"}])
+    sb = _fake_supabase(rpc_data={"status": "ok"})
     with patch.object(insurance_periods.db_supabase, "supabase", sb):
         await insurance_periods.record_period_transition(
             driver_id="d1",
             new_period=0,
         )
 
-    update_payload = sb.table.return_value.update.call_args.args[0]
-    assert "ended_at" in update_payload
-    inserted = sb.table.return_value.insert.call_args.args[0]
-    assert inserted["period"] == 0
-    assert "ride_id" not in inserted
+    sb.rpc.assert_called_once_with(
+        "record_insurance_period_transition",
+        {"p_driver_id": "d1", "p_new_period": 0, "p_ride_id": None},
+    )
 
 
 @pytest.mark.anyio
 async def test_period_2_to_1_on_ride_cancel_after_driver_arrived() -> None:
     """Rider cancels after driver_arrived: period 2 closes, period 1 opened."""
-    sb = _fake_supabase(close_data=[{"id": "period2_row"}])
+    sb = _fake_supabase(rpc_data={"status": "ok"})
     with patch.object(insurance_periods.db_supabase, "supabase", sb):
         await insurance_periods.record_period_transition(
             driver_id="d1",
             new_period=1,
         )
 
-    update_payload = sb.table.return_value.update.call_args.args[0]
-    assert "ended_at" in update_payload
-    inserted = sb.table.return_value.insert.call_args.args[0]
-    assert inserted["period"] == 1
-    assert "ride_id" not in inserted
+    sb.rpc.assert_called_once_with(
+        "record_insurance_period_transition",
+        {"p_driver_id": "d1", "p_new_period": 1, "p_ride_id": None},
+    )
 
 
 @pytest.mark.anyio
 async def test_period_3_to_1_on_ride_complete() -> None:
     """Trip completes: period 3 closes (ride_id present), period 1 opened."""
-    sb = _fake_supabase(close_data=[{"id": "period3_row"}])
+    sb = _fake_supabase(rpc_data={"status": "ok"})
     with patch.object(insurance_periods.db_supabase, "supabase", sb):
         await insurance_periods.record_period_transition(
             driver_id="d1",
             new_period=1,
         )
 
-    update_payload = sb.table.return_value.update.call_args.args[0]
-    assert "ended_at" in update_payload
-    inserted = sb.table.return_value.insert.call_args.args[0]
-    assert inserted["period"] == 1
+    sb.rpc.assert_called_once_with(
+        "record_insurance_period_transition",
+        {"p_driver_id": "d1", "p_new_period": 1, "p_ride_id": None},
+    )

@@ -89,7 +89,7 @@ class TestAdminGetRides:
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=rides)),
             patch("backend.routes.admin.rides._batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
         ):
-            result = asyncio.run(admin_rides.admin_get_rides(limit=50, offset=0))
+            result = asyncio.run(admin_rides.admin_get_rides(limit=50, offset=0, search=None, sort_dir=None))
 
         assert result["total_count"] == 1
         assert len(result["rides"]) == 1
@@ -103,7 +103,7 @@ class TestAdminGetRides:
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.admin.rides._batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
         ):
-            result = asyncio.run(admin_rides.admin_get_rides(limit=50, offset=0, status="completed"))
+            result = asyncio.run(admin_rides.admin_get_rides(limit=50, offset=0, status="completed", search=None, sort_dir=None))
 
         assert result["total_count"] == 0
 
@@ -117,7 +117,7 @@ class TestAdminGetRides:
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=scheduled)),
             patch("backend.routes.admin.rides._batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
         ):
-            result = asyncio.run(admin_rides.admin_get_rides(limit=50, offset=0, is_scheduled=True))
+            result = asyncio.run(admin_rides.admin_get_rides(limit=50, offset=0, is_scheduled=True, search=None, sort_dir=None))
 
         assert result["total_count"] == 1
 
@@ -167,6 +167,11 @@ class TestAdminGetStats:
         with (
             patch("backend.routes.admin.rides.db_supabase.count_documents", AsyncMock(return_value=10)),
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            # admin_get_stats aggregates today/month revenue via a Postgres
+            # RPC (admin_ride_money_rollup) rather than fetching+summing rows
+            # in Python -- mock the RPC directly instead of going through the
+            # real supabase.rpc(...).execute() chain.
+            patch("backend.routes.admin.rides.db_supabase.rpc", AsyncMock(return_value=[{}])),
         ):
             result = asyncio.run(admin_rides.admin_get_stats())
 
@@ -187,10 +192,19 @@ class TestAdminGetStats:
         from backend.routes.admin import rides as admin_rides
 
         ride_with_fare = [{"total_fare": 25.0, "driver_earnings": 25.0, "admin_earnings": 0, "tip_amount": 3.0}]
+        rollup_row = [
+            {
+                "sum_total_fare": 25.0,
+                "sum_driver_earnings": 25.0,
+                "sum_admin_earnings": 0.0,
+                "sum_tip": 3.0,
+            }
+        ]
 
         with (
             patch("backend.routes.admin.rides.db_supabase.count_documents", AsyncMock(return_value=5)),
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=ride_with_fare)),
+            patch("backend.routes.admin.rides.db_supabase.rpc", AsyncMock(return_value=rollup_row)),
         ):
             result = asyncio.run(admin_rides.admin_get_stats())
 
@@ -205,6 +219,7 @@ class TestAdminGetRideStats:
         with (
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.admin.rides.db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("backend.routes.admin.rides.db_supabase.rpc", AsyncMock(return_value=[{}])),
         ):
             result = asyncio.run(admin_rides.admin_get_ride_stats())
 
@@ -569,7 +584,10 @@ class TestAdminGetEarnings:
 
         rides = [{"total_fare": 20.0, "driver_earnings": 20.0, "tip_amount": 2.0}]
 
-        with patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=rides)):
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("backend.routes.admin.rides.db_supabase.rpc", AsyncMock(return_value=[{}])),
+        ):
             result = asyncio.run(admin_rides.admin_get_earnings(period="month"))
 
         assert isinstance(result, dict)
@@ -577,7 +595,10 @@ class TestAdminGetEarnings:
     def test_empty_period_returns_zeros(self):
         from backend.routes.admin import rides as admin_rides
 
-        with patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.admin.rides.db_supabase.rpc", AsyncMock(return_value=[{}])),
+        ):
             result = asyncio.run(admin_rides.admin_get_earnings(period="week"))
 
         assert isinstance(result, dict)

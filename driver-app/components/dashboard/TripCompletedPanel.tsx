@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useLanguageStore } from '../../store/languageStore';
 import { showAlert } from '../AlertDialog';
 
@@ -516,13 +517,13 @@ function createStyles(colors: ThemeColors) {
       width: 12,
       height: 12,
       borderRadius: 6,
-      backgroundColor: colors.info,
+      backgroundColor: ROUTE_PIN_COLORS.pickup,
     },
     dropoffDot: {
       width: 12,
       height: 12,
       borderRadius: 6,
-      backgroundColor: colors.success,
+      backgroundColor: ROUTE_PIN_COLORS.dropoff,
     },
     routeLine: {
       width: 2,

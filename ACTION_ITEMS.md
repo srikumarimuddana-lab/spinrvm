@@ -31,10 +31,11 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     with a `routes/rides/` package, and CLAUDE.md's target was never updated
     to reflect that. Per-file coverage in that package was **highly uneven**:
     `lost_found.py` 25% (now **100%** — see below, meets target),
-    `receipts.py` 58.3%, `matching.py` 64.7% (now **72.48%** — see below,
-    still below target), `lifecycle.py` 65.1% (now **87.88%** — meets
-    target), `booking.py` 65.7%, `queries.py` 69.2%,
-    `estimates.py`/`cancellation.py` 71.0%, `rides/payments.py` 79.5%.
+    `receipts.py` 58.3% (now **100%** — see below, meets target),
+    `matching.py` 64.7% (now **72.48%** — see below, still below target),
+    `lifecycle.py` 65.1% (now **87.88%** — meets target), `booking.py` 65.7%,
+    `queries.py` 69.2%, `estimates.py`/`cancellation.py` 71.0%,
+    `rides/payments.py` 79.5%.
   - `routes/rides/lost_found.py`: was 25%, **now 100%** after adding 10 tests
     (`tests/test_lost_found.py`) covering the 404/403/400 guard clauses,
     category-validation fallback, the driver-notification success path (push
@@ -71,6 +72,16 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     attempt given its size; it needs its own dedicated subtask(s), likely
     split further by the algorithm's internal phases (candidate fetch,
     ranking, offer batching, claim) rather than attempted as one PR.
+  - `routes/rides/receipts.py`: was 58.3%, **now 100%** after adding 15 tests
+    (`tests/test_coverage_rides.py`) covering both endpoints end-to-end:
+    `get_ride_receipt`'s no-driver-shows-"Unknown Driver" branch, the
+    vehicle-type lookup, the corporate-account "Corporate Account" payment
+    method + name branch, the cancelled-ride cancellation-fee sum, the
+    fare-lock snapshot path (including the synthesized tip line when the
+    snapshot predates the tip), and the settings-lookup-failure fallback to
+    the dynamic (non-locked) rebuild; plus `email_ride_receipt` end-to-end
+    (404/403/400 guards, success, and the 503-on-send-failure path). Meets
+    the 80% target.
 - **Why:** CLAUDE.md mandates ≥90% for `routes/payments.py` + `services/fare_service.py`
   and ≥80% for `routes/rides.py` (now the `routes/rides/` package) +
   `services/dispatch_service.py`; the global floor in `backend/pytest.ini` is
@@ -78,12 +89,12 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Files:** `backend/pytest.ini`, new tests under `backend/tests/` — done so
   far: `backend/tests/services/test_dispatch_service.py`,
   `backend/tests/test_lost_found.py`,
-  `backend/tests/test_coverage_rides.py` (lifecycle functions),
+  `backend/tests/test_coverage_rides.py` (lifecycle + receipts functions),
   `backend/tests/test_offer_timeout.py` + `backend/tests/test_p0_ship_blockers.py`
-  (matching.py's smaller functions). Next: `_match_driver_to_ride_attempt`
-  (the big one — needs its own subtask), then `routes/rides/receipts.py`,
-  `routes/rides/booking.py`, in roughly that
-  priority order (worst-covered / highest-stakes first).
+  (matching.py's smaller functions). Next: `routes/rides/booking.py`,
+  `routes/rides/queries.py`, `routes/rides/estimates.py`,
+  `routes/rides/cancellation.py`, then `_match_driver_to_ride_attempt` (the
+  big one — needs its own dedicated subtask given its ~780-line size).
 - **Approach:** measure current per-file coverage (`pytest --cov --cov-report=term-missing`),
   write tests for the uncovered branches (fare tiers, surge, corporate, promo, refund,
   webhook types, ride-state transitions), then enforce with
@@ -92,10 +103,10 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   rule.
 - **Acceptance:** CI fails if payments/fare coverage drops below 90% or
   `routes/rides/*` / dispatch below 80%. Payments, fare, dispatch,
-  `lost_found.py`, and `lifecycle.py` now meet target. `matching.py`
-  improved but still below target (72.48%, needs the
+  `lost_found.py`, `lifecycle.py`, and `receipts.py` now meet target.
+  `matching.py` improved but still below target (72.48%, needs the
   `_match_driver_to_ride_attempt` follow-up). Remaining `routes/rides/`
-  package files (`receipts.py`, `booking.py`, `queries.py`, `estimates.py`,
+  package files (`booking.py`, `queries.py`, `estimates.py`,
   `cancellation.py`) still open.
 
 ### A2. Post-deploy smoke test in CI

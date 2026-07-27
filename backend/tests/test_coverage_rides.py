@@ -1353,6 +1353,8 @@ async def test_match_driver_to_ride_assigns_driver():
         "lng": -106.6,
         "is_online": True,
         "is_available": True,
+        "is_verified": True,
+        "status": "active",
         "vehicle_type_id": "vt-1",
         "rating": 4.9,
     }
@@ -1376,15 +1378,31 @@ async def test_match_driver_to_ride_assigns_driver():
         mock_db.claim_driver_atomic = AsyncMock(return_value={"id": _DRIVER_ID})
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.update_ride = AsyncMock()
+        mock_db.set_driver_available = AsyncMock()
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alice", "last_name": "R"})
+        # The ride_offers insert goes through db_supabase.run_sync(lambda: ...
+        # .supabase.table("ride_offers").insert(offer_rows).execute()) --
+        # actually invoke the lambda against a mocked query-builder chain so
+        # the insert call (and its offer_rows payload) can be inspected.
+        mock_db.run_sync = AsyncMock(side_effect=lambda fn: fn())
+        mock_db.supabase = MagicMock()
         mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True))
         mock_manager.send_personal_message = AsyncMock()
 
         await match_driver_to_ride(_RIDE_ID, ride=ride)
 
-    mock_db.update_ride.assert_called_once()
-    update_args = mock_db.update_ride.call_args[0]
-    assert update_args[1]["status"] == "driver_assigned"
+    # Dispatch is batch-offer: the RIDE stays "searching" with pending offers
+    # to (potentially several) drivers -- it only transitions to
+    # driver_assigned when a driver accepts, which happens in
+    # routes/drivers/ride_flow.py, not here. So the correct assertion for
+    # this function is that a ride_offers row was inserted for the claimed
+    # driver, not that the ride was updated.
+    mock_db.update_ride.assert_not_called()
+    mock_db.supabase.table.assert_any_call("ride_offers")
+    inserted_rows = mock_db.supabase.table.return_value.insert.call_args[0][0]
+    assert inserted_rows[0]["driver_id"] == _DRIVER_ID
+    assert inserted_rows[0]["ride_id"] == _RIDE_ID
+    assert inserted_rows[0]["status"] == "pending"
 
 
 # ── offer_timeout_handler ─────────────────────────────────────────────────────

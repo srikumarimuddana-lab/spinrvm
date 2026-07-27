@@ -6,9 +6,9 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useLanguageStore } from '../../store/languageStore';
 import { showAlert } from '../AlertDialog';
-import { ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 
 const n = (v: number | string | null | undefined): number => {
   if (v == null) return 0;

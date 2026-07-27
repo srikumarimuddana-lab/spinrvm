@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
@@ -42,6 +43,7 @@ function DriverArrivedScreenContent() {
   const bottomSheetRef = React.useRef<any>(null);
   const snapPoints = useMemo(() => ['42%', '70%'], []);
   const resumeKey = useAppResumeKey();
+  const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
   const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
@@ -51,6 +53,7 @@ function DriverArrivedScreenContent() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', variant: 'info' });
   const [reasonVisible, setReasonVisible] = useState(false);
+  const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -164,8 +167,28 @@ function DriverArrivedScreenContent() {
           userInterfaceStyle={isDark ? "dark" : "light"}
         >
 
-          {/* Uniform route: one straight orange→red gradient line pickup→dropoff. */}
+          {/* Route: pickup → dropoff */}
+          {GOOGLE_MAPS_API_KEY && (
+            <MapViewDirections
+              origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+              destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+              apikey={GOOGLE_MAPS_API_KEY}
+              strokeWidth={0}
+              strokeColor="transparent"
+              onReady={(result: any) => {
+                setRouteCoords(result.coordinates);
+                if (mapRef.current && result.coordinates?.length > 1) {
+                  mapRef.current.fitToCoordinates(result.coordinates, {
+                    edgePadding: { top: 100, right: 60, bottom: 320, left: 60 },
+                    animated: true,
+                  });
+                }
+              }}
+            />
+          )}
+          {/* Real pickup → dropoff route, drawn via the shared gradient line + pins. */}
           <RouteLine
+            path={routeCoords}
             pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
             destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
           />
@@ -404,26 +427,6 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: '#EE2B2B', borderRadius: 24,
     },
     mapRetryText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
-
-    // Map markers
-    pickupMarkerWrap: { alignItems: 'center', justifyContent: 'center', width: 56, height: 56 },
-    pickupPulse: {
-      position: 'absolute', width: 56, height: 56, borderRadius: 28,
-      backgroundColor: 'rgba(238, 43, 43, 0.12)',
-    },
-    pickupPin: {
-      width: 36, height: 36, borderRadius: 18,
-      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 3, borderColor: '#FFF',
-      elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
-    },
-
-    dropoffPin: {
-      width: 32, height: 32, borderRadius: 16,
-      backgroundColor: '#EF4444', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 2, borderColor: '#FFF',
-      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
-    },
 
     // Header
     headerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },

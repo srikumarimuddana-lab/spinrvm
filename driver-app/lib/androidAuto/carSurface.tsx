@@ -8,10 +8,10 @@
  * `useCarMapCamera` (the surface is non-interactive: Android Auto forbids
  * in-surface touch and routes interaction through buttons).
  *
- * During a ride it additionally draws the shared uniform route: one straight
- * pickup→dropoff line (orange→red gradient) with green pickup / red dropoff pins
- * — so there is no live Routes/Directions API spend (turn-by-turn is handed off
- * to the driver's Google Maps / Waze; see carRoute.ts + register.ts).
+ * During a ride it additionally draws the route we ALREADY stored at ride
+ * creation (`rides.planned_route_polyline`) with the destination pinned — so
+ * there is no live Routes/Directions API spend (turn-by-turn is handed off to the
+ * driver's Google Maps / Waze; see carRoute.ts + register.ts).
  *
  * Reads the SAME useDriverStore the phone uses (single source of truth).
  * react-native-maps' native view is absent in Expo Go / web / tests, so it is
@@ -28,6 +28,10 @@ import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
 import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
+// RouteLine / RoutePins hard-import react-native-maps, so they are lazy-required
+// AFTER the maps guard below (never at module scope) — otherwise loading this
+// file in a maps-less context (web / Expo Go / tests) would crash before the
+// guarded require, defeating the graceful null fallback.
 
 // Saskatoon — Spinr is Saskatchewan-first. Used only until the first fix /
 // last-known location loads, so the idle map never opens on null-island (0,0).
@@ -68,11 +72,9 @@ export function CarMapSurface(): React.ReactElement | null {
     CarMarker = null;
   }
 
-  // The shared uniform route renderers also hard-import react-native-maps, so
-  // require them behind the same maps guard — keeps the surface degrading to
-  // null (web / Expo Go / tests) instead of crashing on module load.
-  let RouteLine: React.ComponentType<any> | null = null;
-  let RoutePins: React.ComponentType<any> | null = null;
+  // Same guard for the shared route renderers (they hard-import react-native-maps).
+  let RouteLine: typeof import('@shared/components/RouteLine').RouteLine | null = null;
+  let RoutePins: typeof import('@shared/components/RoutePins').RoutePins | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     RouteLine = require('@shared/components/RouteLine').RouteLine;
@@ -108,8 +110,19 @@ export function CarMapSurface(): React.ReactElement | null {
           longitudeDelta: delta,
         }}
       >
-        {route && RouteLine && <RouteLine pickup={route.pickup} destination={route.dropoff} />}
-        {route && RoutePins && <RoutePins pickup={route.pickup} dropoff={route.dropoff} />}
+        {/* THE uniform route line + pins. `route.polyline` is the SAME stored
+            pickup→dropoff geometry as before (empty on the pre-pickup leg); it is
+            now drawn as one orange→red gradient via the shared RouteLine so the
+            car surface reads identically to the phone. Pins follow the leg: green
+            pickup while heading to the rider; green pickup (route start) + red
+            dropoff once the trip is under way. */}
+        {route && RouteLine && <RouteLine path={route.polyline} />}
+        {route && RoutePins && (
+          <RoutePins
+            pickup={route.leg === 'pickup' ? route.destination : (route.polyline[0] ?? null)}
+            dropoff={route.leg === 'dropoff' ? route.destination : null}
+          />
+        )}
         {here && CarMarker && (
           <CarMarker
             coordinate={{ latitude: here.latitude, longitude: here.longitude }}

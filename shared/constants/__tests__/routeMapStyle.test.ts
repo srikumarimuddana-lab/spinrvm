@@ -3,50 +3,55 @@ import {
   ROUTE_GRADIENT_END,
   ROUTE_PIN_COLORS,
   routeGradientColorAt,
+  buildPathGradient,
   buildStraightRouteGradient,
 } from '../routeMapStyle';
 
 describe('routeGradientColorAt', () => {
-  it('is orange at the pickup end and red at the destination end', () => {
+  it('is orange at the start and red at the end', () => {
     expect(routeGradientColorAt(0).toUpperCase()).toBe(ROUTE_GRADIENT_START);
     expect(routeGradientColorAt(1).toUpperCase()).toBe(ROUTE_GRADIENT_END);
   });
-  it('clamps out-of-range and non-finite t', () => {
-    expect(routeGradientColorAt(-5).toUpperCase()).toBe(ROUTE_GRADIENT_START);
-    expect(routeGradientColorAt(5).toUpperCase()).toBe(ROUTE_GRADIENT_END);
+  it('clamps out-of-range / NaN', () => {
+    expect(routeGradientColorAt(-9).toUpperCase()).toBe(ROUTE_GRADIENT_START);
+    expect(routeGradientColorAt(9).toUpperCase()).toBe(ROUTE_GRADIENT_END);
     expect(routeGradientColorAt(NaN).toUpperCase()).toBe(ROUTE_GRADIENT_START);
-  });
-  it('blends toward red as t increases', () => {
-    const mid = routeGradientColorAt(0.5);
-    expect(mid).not.toBe(ROUTE_GRADIENT_START);
-    expect(mid).not.toBe(ROUTE_GRADIENT_END);
   });
 });
 
-describe('buildStraightRouteGradient', () => {
-  const A: [number, number] = [50.44, -104.62];
-  const B: [number, number] = [50.40, -104.66];
-
-  it('returns a straight chain of N segments pickup→destination', () => {
-    const segs = buildStraightRouteGradient(A, B, 10);
-    expect(segs).toHaveLength(10);
-    // First point is pickup, last point is destination — always a straight line.
-    expect(segs[0].coordinates[0]).toEqual(A);
-    expect(segs[segs.length - 1].coordinates[1][0]).toBeCloseTo(B[0]);
-    expect(segs[segs.length - 1].coordinates[1][1]).toBeCloseTo(B[1]);
-    // Adjacent segments join end-to-start (continuous line, no gaps).
-    expect(segs[1].coordinates[0]).toEqual(segs[0].coordinates[1]);
+describe('buildPathGradient (real route, colours only)', () => {
+  const path: [number, number][] = [
+    [50.44, -104.62], [50.445, -104.63], [50.45, -104.64], [50.455, -104.65], [50.46, -104.66],
+  ];
+  it('keeps every real point and stays continuous end-to-start', () => {
+    const segs = buildPathGradient(path, 2);
+    // First point = route start, last point = route end (real geometry preserved).
+    expect(segs[0].coordinates[0]).toEqual(path[0]);
+    expect(segs[segs.length - 1].coordinates.slice(-1)[0]).toEqual(path[path.length - 1]);
+    // Adjacent chunks share an endpoint (unbroken line).
+    expect(segs[0].coordinates.slice(-1)[0]).toEqual(segs[1].coordinates[0]);
   });
-
-  it('colours run orange→red across the segments', () => {
-    const segs = buildStraightRouteGradient(A, B, 4);
+  it('colours run orange→red across the chunks', () => {
+    const segs = buildPathGradient(path, 4);
     expect(segs[0].color).not.toBe(segs[segs.length - 1].color);
   });
+  it('never bridges more chunks than points and drops junk', () => {
+    expect(buildPathGradient([[1, 2]])).toEqual([]);
+    expect(buildPathGradient(null)).toEqual([]);
+    // 2 valid points → exactly one chunk even if more requested.
+    expect(buildPathGradient([[1, 2], [3, 4]], 24)).toHaveLength(1);
+  });
+});
 
-  it('returns [] for missing endpoints or a zero-length line', () => {
-    expect(buildStraightRouteGradient(null, B)).toEqual([]);
-    expect(buildStraightRouteGradient(A, undefined)).toEqual([]);
-    expect(buildStraightRouteGradient(A, A)).toEqual([]);
+describe('buildStraightRouteGradient (fallback)', () => {
+  it('draws a straight gradient when no real path exists', () => {
+    const segs = buildStraightRouteGradient([50.44, -104.62], [50.40, -104.66], 4);
+    expect(segs).toHaveLength(4);
+    expect(segs[0].coordinates[0]).toEqual([50.44, -104.62]);
+  });
+  it('returns [] for missing/degenerate endpoints', () => {
+    expect(buildStraightRouteGradient(null, [1, 2])).toEqual([]);
+    expect(buildStraightRouteGradient([1, 2], [1, 2])).toEqual([]);
   });
 });
 
@@ -55,5 +60,26 @@ describe('marker colours', () => {
     expect(ROUTE_PIN_COLORS.pickup).toBe('#10B981');
     expect(ROUTE_PIN_COLORS.dropoff).toBe('#EF4444');
     expect(ROUTE_PIN_COLORS.completion).toBe('#F59E0B');
+  });
+});
+
+import { buildMultiPathGradient } from '../routeMapStyle';
+
+describe('buildMultiPathGradient (v2 sections — no gap chord)', () => {
+  const A: [number, number][] = [[50.44, -104.62], [50.445, -104.625], [50.45, -104.63]];
+  const B: [number, number][] = [[50.50, -104.70], [50.505, -104.705], [50.51, -104.71]];
+  it('never bridges across sections (no false chord over the GPS gap)', () => {
+    const segs = buildMultiPathGradient([A, B]);
+    // No sub-polyline spans the ~6 km jump between section A and section B.
+    for (const s of segs) {
+      const lats = s.coordinates.map((c) => c[0]);
+      expect(Math.max(...lats) - Math.min(...lats)).toBeLessThan(0.03);
+    }
+  });
+  it('colours continuously across sections and drops empty ones', () => {
+    const segs = buildMultiPathGradient([A, B]);
+    expect(segs[0].color).not.toBe(segs[segs.length - 1].color);
+    expect(buildMultiPathGradient([[], [[1, 2]]])).toEqual([]);
+    expect(buildMultiPathGradient(null)).toEqual([]);
   });
 });

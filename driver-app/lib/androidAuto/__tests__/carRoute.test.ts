@@ -2,9 +2,12 @@
  * Unit tests for lib/androidAuto/carRoute.ts — the pure route-selection +
  * hand-off logic behind the Android Auto map. No native module / head unit.
  */
+import fs from 'fs';
+import path from 'path';
 import {
   buildHandoffUrl,
   defaultNavButtons,
+  extractPolyline,
   isNavState,
   resolveNavButtons,
   selectCarRoute,
@@ -41,27 +44,59 @@ describe('isNavState', () => {
   });
 });
 
+describe('extractPolyline', () => {
+  it('parses a [[lat,lng], …] line off activeRide.ride', () => {
+    const line = extractPolyline(makeRide());
+    expect(line).toHaveLength(3);
+    expect(line[0]).toEqual({ latitude: 52.13, longitude: -106.67 });
+    expect(line[2]).toEqual({ latitude: 52.2, longitude: -106.6 });
+  });
+
+  it('returns [] for null ride, missing line, or non-array junk', () => {
+    expect(extractPolyline(null)).toEqual([]);
+    expect(extractPolyline(makeRide({ planned_route_polyline: undefined }))).toEqual([]);
+    expect(extractPolyline(makeRide({ planned_route_polyline: 'nope' }))).toEqual([]);
+  });
+
+  it('drops malformed points instead of rendering (0,0)', () => {
+    const line = extractPolyline(
+      makeRide({
+        planned_route_polyline: [[52.1, -106.6], ['x', 1], [1], [52.2, -106.5]],
+      })
+    );
+    expect(line).toEqual([
+      { latitude: 52.1, longitude: -106.6 },
+      { latitude: 52.2, longitude: -106.5 },
+    ]);
+  });
+});
+
 describe('selectCarRoute', () => {
-  it('targets the PICKUP before the trip starts, exposing the uniform pickup→dropoff line', () => {
+  it('targets the PICKUP before the trip starts, with NO route line drawn', () => {
     for (const s of ['navigating_to_pickup', 'arrived_at_pickup'] as RideState[]) {
       const route = selectCarRoute(s, makeRide());
       expect(route?.leg).toBe('pickup');
       expect(route?.destination).toEqual({ latitude: 52.13, longitude: -106.67 });
       expect(route?.destinationLabel).toBe('101 Pickup St');
-      // The uniform straight line always spans the ride's pickup → dropoff,
-      // regardless of which leg the driver is on.
-      expect(route?.pickup).toEqual({ latitude: 52.13, longitude: -106.67 });
-      expect(route?.dropoff).toEqual({ latitude: 52.2, longitude: -106.6 });
+      // The stored line is pickup→dropoff; it must NOT be drawn on the
+      // driver→pickup leg (it would point away from the pickup hand-off).
+      expect(route?.polyline).toEqual([]);
     }
   });
 
-  it('targets the DROPOFF once in progress, still spanning pickup → dropoff', () => {
+  it('targets the DROPOFF once in progress and exposes the FULL stored route line', () => {
     const route = selectCarRoute('trip_in_progress', makeRide());
     expect(route?.leg).toBe('dropoff');
     expect(route?.destination).toEqual({ latitude: 52.2, longitude: -106.6 });
     expect(route?.destinationLabel).toBe('202 Dropoff Ave');
-    expect(route?.pickup).toEqual({ latitude: 52.13, longitude: -106.67 });
-    expect(route?.dropoff).toEqual({ latitude: 52.2, longitude: -106.6 });
+    // The real geometry is kept in full — NOT reduced to endpoints — so the
+    // shared <RouteLine> can draw the true road shape on the car surface.
+    expect(route?.polyline).toHaveLength(3);
+    expect(route?.polyline).toEqual([
+      { latitude: 52.13, longitude: -106.67 },
+      { latitude: 52.16, longitude: -106.64 },
+      { latitude: 52.2, longitude: -106.6 },
+    ]);
   });
 
   it('returns null for non-nav states and a null ride', () => {
@@ -79,14 +114,13 @@ describe('selectCarRoute', () => {
     expect(route).toBeNull();
   });
 
-  it('still returns a route with pickup/dropoff endpoints even without a stored polyline', () => {
+  it('still returns a route when the polyline is absent — marker + handoff only', () => {
     const route = selectCarRoute(
       'navigating_to_pickup',
       makeRide({ planned_route_polyline: undefined })
     );
     expect(route).not.toBeNull();
-    expect(route?.pickup).toEqual({ latitude: 52.13, longitude: -106.67 });
-    expect(route?.dropoff).toEqual({ latitude: 52.2, longitude: -106.6 });
+    expect(route?.polyline).toEqual([]);
   });
 });
 
@@ -160,3 +194,21 @@ describe('resolveNavButtons (CarPlay install detection)', () => {
   });
 });
 
+describe('car surface route presentation contract (carSurface.tsx)', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '..', 'carSurface.tsx'), 'utf8');
+
+  it('draws the stored route through the shared RouteLine + RoutePins', () => {
+    expect(source).toContain("RouteLine = require('@shared/components/RouteLine').RouteLine");
+    expect(source).toContain("RoutePins = require('@shared/components/RoutePins').RoutePins");
+    expect(source).toContain('<RouteLine path={route.polyline} />');
+    expect(source).toContain('<RoutePins');
+    expect(source).toContain('dropoff={route.leg === \'dropoff\' ? route.destination : null}');
+  });
+
+  it('drops the bespoke SPINR_RED Polyline + bare destination Marker', () => {
+    expect(source).not.toContain('SPINR_RED');
+    expect(source).not.toContain('<Polyline');
+    // The lone destination <Marker> is replaced by the shared RoutePins.
+    expect(source).not.toContain('<Marker coordinate={route.destination}');
+  });
+});

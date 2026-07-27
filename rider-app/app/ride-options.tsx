@@ -21,6 +21,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Circle, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
 
@@ -75,7 +76,7 @@ function RideOptionsScreenContent() {
     requiresWav, setRequiresWav, showWavOption,
     scheduledTime, setScheduledTime, quietMode, setQuietMode,
     availablePromos, appliedPromo, fetchAvailablePromos, applyPromo,
-    routePolyline,
+    setRoutePolyline, routePolyline,
   } = useRideStore();
 
   // Vehicle type config (marker variant + custom marker image), synced once
@@ -327,22 +328,36 @@ function RideOptionsScreenContent() {
     }
   }, [workModeEnabled, corporateAccounts.length]);
 
-  // Keep the server-provided route polyline (returned with the estimate) only to
-  // frame the map via fitToCoordinates — the drawn line itself is the uniform
-  // straight pickup→dropoff gradient (see RouteLine below), not this path.
+  // Populate route coordinates from the server-provided polyline (returned
+  // with the estimate response). Falls back to MapViewDirections on-device
+  // if the backend didn't return one.
   useEffect(() => {
     if (routePolyline && routePolyline.length >= 2) {
       const coords = routePolyline.map(([lat, lng]: [number, number]) => ({ latitude: lat, longitude: lng }));
       setRouteCoordinates(coords);
     } else {
       // The store clears routePolyline whenever a waypoint changes (e.g. the
-      // rider went back and picked a new destination/stop). Drop the cached
-      // framing coords too so the map re-frames from pickup/dropoff.
+      // rider went back and picked a new destination/stop). Drop the old drawn
+      // route too so a stale trace doesn't linger on the map and the
+      // MapViewDirections fallback can redraw for the new route.
       setRouteCoordinates([]);
     }
   }, [routePolyline]);
 
   // ── Handlers ──
+
+  const onReadyDirections = (result: any) => {
+    if (result.coordinates) {
+      setRouteCoordinates(result.coordinates);
+      setRoutePolyline(result.coordinates);
+    }
+    if (mapRef.current && mapReady) {
+      mapRef.current.fitToCoordinates(result.coordinates, {
+        edgePadding: { top: 60, right: 50, bottom: mapBottomInset, left: 50 },
+        animated: true,
+      });
+    }
+  };
 
   const handleSelect = (index: number) => {
     if (!estimates[index]?.available) {
@@ -565,8 +580,28 @@ function RideOptionsScreenContent() {
             latitudeDelta: 0.05, longitudeDelta: 0.05,
           }}
         >
-          {/* Uniform route: one straight orange→red gradient line pickup→dropoff. */}
+          {/* Fallback: only call Google Directions client-side if the backend
+              didn't return a route_polyline with the estimate response. */}
+          {GOOGLE_MAPS_API_KEY && routeCoordinates.length === 0 && (
+            <MapViewDirections
+              origin={{ latitude: pickup.lat, longitude: pickup.lng }}
+              destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
+              waypoints={stops.filter(s => s.lat && s.lng).map(s => ({ latitude: s.lat, longitude: s.lng }))}
+              apikey={GOOGLE_MAPS_API_KEY}
+              strokeWidth={0}
+              strokeColor="transparent"
+              onReady={onReadyDirections}
+              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err?.message ?? err)}
+              // NO optimizeWaypoints: the backend prices + dispatches `stops` in
+              // the rider-entered order, so Directions must keep that order.
+              // Optimising would let onReady persist a reordered polyline as
+              // planned_route_polyline, making the map show a different stop
+              // sequence than the actual ride contract.
+            />
+          )}
+          {/* Real derived route, drawn via the shared orange→red gradient line. */}
           <RouteLine
+            path={routeCoordinates}
             pickup={{ latitude: pickup.lat, longitude: pickup.lng }}
             destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
           />

@@ -22,7 +22,7 @@ import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
-import { routeQualityLabel, toReactNativeRouteSections } from '@shared/utils/routeSegments';
+import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -86,27 +86,22 @@ function RideCompletedScreenContent() {
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
 
-  // Route geometry still feeds the quality LABEL only — the drawn line is now the
-  // uniform straight pickup→dropoff gradient (see RouteLine below), not the GPS
-  // reconstruction. actualSections is kept solely to decide the label text.
   const actualSections = useMemo(
     () => toReactNativeRouteSections(currentRide?.actual_route_segments),
     [currentRide?.actual_route_segments],
   );
+  const plannedSegments = useMemo(
+    () => toReactNativeSegments(currentRide?.planned_route_polyline ? [currentRide.planned_route_polyline] : []),
+    [currentRide?.planned_route_polyline],
+  );
   const isV2Route = toNum(currentRide?.route_schema_version) >= 2;
   const hasActualRoute = actualSections.length > 0;
-  // Frame the map on the straight route endpoints (+ completion fix if present).
-  const mapCoordinates = useMemo(() => {
-    const pts: any[] = [];
-    const pLat = Number(currentRide?.pickup_lat);
-    const pLng = Number(currentRide?.pickup_lng);
-    const dLat = Number(currentRide?.dropoff_lat);
-    const dLng = Number(currentRide?.dropoff_lng);
-    if (Number.isFinite(pLat) && Number.isFinite(pLng)) pts.push({ latitude: pLat, longitude: pLng });
-    if (Number.isFinite(dLat) && Number.isFinite(dLng)) pts.push({ latitude: dLat, longitude: dLng });
-    if (currentRide?.actual_completion_point) pts.push(currentRide.actual_completion_point);
-    return pts;
-  }, [currentRide?.pickup_lat, currentRide?.pickup_lng, currentRide?.dropoff_lat, currentRide?.dropoff_lng, currentRide?.actual_completion_point]);
+  const mapCoordinates = useMemo(
+    () => hasActualRoute
+      ? actualSections.reduce<any[]>((all, section) => all.concat(section.coordinates), [])
+      : (isV2Route ? [] : plannedSegments).reduce<any[]>((all, segment) => all.concat(segment), []),
+    [actualSections, hasActualRoute, isV2Route, plannedSegments],
+  );
   const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
   const routeQuality = routeQualityLabel(currentRide?.route_quality);
   const routeIsProcessing =
@@ -612,15 +607,20 @@ function RideCompletedScreenContent() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
-              {/* Uniform route: one straight orange→red gradient line pickup→dropoff. */}
-              <RouteLine
-                pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
-                destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
-              />
+              {/* Real reconstructed route as one shared orange→red gradient.
+                  v2 sections are passed SEPARATELY (paths) so a GPS gap is never
+                  bridged by a false chord; the legacy planned polyline is one
+                  continuous path. No straight fallback: an unmeasured route draws
+                  nothing. */}
+              {hasActualRoute ? (
+                <RouteLine paths={actualSections.map((s) => s.coordinates)} />
+              ) : (
+                <RouteLine path={mapCoordinates} />
+              )}
               <RoutePins
                 pickup={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
                 dropoff={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
-                completion={currentRide.actual_completion_point ?? null}
+                completion={currentRide.actual_completion_point || null}
               />
             </MapView>
 
@@ -1028,12 +1028,6 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.border, borderWidth: 1, borderColor: colors.border,
     },
     map: { flex: 1 },
-    mapPin: {
-      width: 26, height: 26, borderRadius: 13,
-      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 2, borderColor: '#FFF',
-      elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2,
-    },
         mapOverlay: {
       position: 'absolute', bottom: 8, left: 8, right: 8,
       backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 10, padding: 10, paddingHorizontal: 14,

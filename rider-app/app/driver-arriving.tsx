@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
 import { useRideStore } from '../store/rideStore';
@@ -54,6 +55,8 @@ function DriverArrivingScreenContent() {
     currentRide, currentDriver, fetchRide, triggerEmergency,
     isLoading, error, driverEtaSeconds, cancelRide, clearRide,
     wsConnected,
+    activeRideRouteCoords, activeDriverRouteCoords,
+    setActiveRideRouteCoords, setActiveDriverRouteCoords, setLastEtaMin,
   } = useRideStore();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<any>(null);
@@ -72,6 +75,20 @@ function DriverArrivingScreenContent() {
       setServiceAreaPolygons(polys);
     }).catch(() => {});
   }, []);
+  // Seed from store so returning to this screen after a brief navigation
+  // (e.g. opening chat) shows the already-fetched route immediately.
+  const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>(activeDriverRouteCoords ?? []);
+  const [rideRouteCoords, setRideRouteCoords] = useState<any[]>(() => {
+    if (activeRideRouteCoords && activeRideRouteCoords.length > 1) return activeRideRouteCoords;
+    const savedPoly = (currentRide as any)?.planned_route_polyline || (currentRide as any)?.route_polyline;
+    if (Array.isArray(savedPoly) && savedPoly.length >= 2) {
+      const coords = savedPoly
+        .filter((p: any) => Array.isArray(p) && p.length >= 2)
+        .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
+      if (coords.length >= 2) return coords;
+    }
+    return [];
+  });
   const [isCancelling, setIsCancelling] = useState(false);
   const [driverPhotoError, setDriverPhotoError] = useState(false);
   const cancelInitiatedRef = useRef(false);
@@ -95,6 +112,54 @@ function DriverArrivingScreenContent() {
   const rideCoords = useMemo(() => getRideMapCoords(currentRide), [currentRide]);
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
 
+  // Capture the driver's position the first time valid coords arrive.
+  // Latches on first non-null GPS so MapViewDirections only fetches once per
+  // driver assignment. Reset when the driver changes (reassignment after a
+  // cancel) so the new driver's route is fetched from scratch.
+  const [driverOriginSnapshot, setDriverOriginSnapshot] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const prevDriverIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const newId = currentDriver?.id;
+    if (prevDriverIdRef.current !== undefined && prevDriverIdRef.current !== newId) {
+      // Driver was reassigned — discard the cached route for the old driver.
+      setDriverOriginSnapshot(null);
+      setActiveDriverRouteCoords(null);
+    }
+    prevDriverIdRef.current = newId;
+  }, [currentDriver?.id]);
+  useEffect(() => {
+    if (
+      driverOriginSnapshot === null &&
+      currentDriver?.lat != null &&
+      currentDriver?.lng != null
+    ) {
+      setDriverOriginSnapshot({
+        latitude: currentDriver.lat,
+        longitude: currentDriver.lng,
+      });
+    }
+  }, [currentDriver?.lat, currentDriver?.lng]);
+
+  // Stable pickup→dropoff refs — ride endpoints never change mid-ride.
+  const rideRouteOrigin = useMemo(
+    () =>
+      rideCoords
+        ? { latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRide?.id, rideCoords?.pickupLat, rideCoords?.pickupLng],
+  );
+  const rideRouteDestination = useMemo(
+    () =>
+      rideCoords
+        ? { latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRide?.id, rideCoords?.dropoffLat, rideCoords?.dropoffLng],
+  );
   const freeCancelWindowSeconds = (currentRide as any)?.free_cancel_window_seconds ?? 120;
 
   // ── ETA logic ──
@@ -274,12 +339,52 @@ function DriverArrivingScreenContent() {
             latitudeDelta: 0.02, longitudeDelta: 0.02,
           }}
         >
-          {/* Uniform route: one straight orange→red gradient line pickup→dropoff.
-              No driver→pickup road route is drawn — the picture is identical on
-              every map. */}
+          {/* Driver → pickup route: origin is snapshotted on first driver fix so
+              MapViewDirections only calls Directions API once per assigned driver.
+              The car marker updates live; re-fetching the route on every GPS ping
+              would cost ~$0.10 extra per pickup phase for no visible benefit since
+              driverEtaSeconds from the backend already drives the ETA countdown. */}
+          {/* Only fetch if we don't already have coords from a previous screen visit */}
+          {driverOriginSnapshot && activeDriverRouteCoords === null && (
+            <MapViewDirections
+              origin={driverOriginSnapshot}
+              destination={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
+              apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
+              strokeWidth={0} strokeColor="transparent"
+              onReady={(r: any) => {
+                if (!r.coordinates?.length) return;
+                setMapEtaMinutes(Math.ceil(r.duration));
+                // Intentionally NOT writing lastEtaMin here: that value is the
+                // driver→pickup duration and must not seed the in-trip ETA on
+                // the next screen (ride-in-progress reads lastEtaMin on mount).
+                setDriverRouteCoords(r.coordinates);
+                setActiveDriverRouteCoords(r.coordinates);
+              }}
+            />
+          )}
+          {/* Driver → pickup leg — same real coords, drawn via the shared gradient. */}
+          <RouteLine path={driverRouteCoords} />
+
+          {/* Pickup → dropoff route: use saved polyline or cached coords first;
+              only call Directions API as a last resort. */}
+          {rideRouteOrigin && rideRouteDestination && activeRideRouteCoords === null && rideRouteCoords.length < 2 && (
+            <MapViewDirections
+              origin={rideRouteOrigin}
+              destination={rideRouteDestination}
+              apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
+              strokeWidth={0} strokeColor="transparent"
+              onReady={(r: any) => {
+                if (!r.coordinates?.length) return;
+                setRideRouteCoords(r.coordinates);
+                setActiveRideRouteCoords(r.coordinates);
+              }}
+            />
+          )}
+          {/* Pickup → dropoff route — real coords, shared gradient line + pins. */}
           <RouteLine
-            pickup={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
-            destination={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
+            path={rideRouteCoords}
+            pickup={rideRouteOrigin}
+            destination={rideRouteDestination}
           />
           <RoutePins
             pickup={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
@@ -571,12 +676,6 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     loadingText: {
       marginTop: 12, fontSize: sf(14), fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
     },
-    markerWrap: {
-      backgroundColor: '#FFF', padding: 3, borderRadius: 12,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
-    },
-    markerDot: { width: 12, height: 12, borderRadius: 6 },
-
     // ── Floating header ──
     floatingHeader: {
       position: 'absolute', left: 0, right: 0, zIndex: 20,

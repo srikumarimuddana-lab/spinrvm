@@ -188,11 +188,20 @@ class TestSearchFaqsSemantic:
             patch.object(tools_support.asyncio, "create_task", side_effect=_capture_create_task),
         ):
             result, ok = await execute_tool("search_faqs", {"query": "when do I get my earnings"}, user=RIDER)
+            # Await the captured task(s) while the patches above are still
+            # active -- `create_task` only schedules the coroutine, it doesn't
+            # run it, so the task's own first await point (inside
+            # _persist_embedding, calling db_supabase.update_one) may not
+            # execute until we explicitly await it here. Doing that *outside*
+            # this `with` block let the patches get torn down first, so the
+            # task silently called the real (unmocked) update_one instead of
+            # `update` -- that race, not the sleep(0.05) it replaced, was the
+            # actual remaining source of flakiness.
+            assert created_tasks, "expected the embedding-persist background task to be scheduled"
+            for task in created_tasks:
+                await task
         assert ok
         assert [r["question"] for r in result["results"]] == ["When are payouts made?"]
-        assert created_tasks, "expected the embedding-persist background task to be scheduled"
-        for task in created_tasks:
-            await task
         update.assert_awaited()  # freshly embedded rows were persisted in the background
 
     @pytest.mark.anyio

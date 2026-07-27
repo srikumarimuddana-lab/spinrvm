@@ -4,6 +4,15 @@
 -- UUID DEFAULT NULL) plus its implicit EXECUTE grants. No schema/table
 -- change — this only replaces the function signature + body.
 --
+-- migration-override-ok: intentionally redefines corporate_allowance_apply_delta
+-- (last defined in 258_corporate_allowance_cap_in_rpc.sql, originally 214/29).
+-- This is a deliberate fix for a real regression -- 248 and 258 each
+-- silently reverted 214's p_actor_user_id UUID->TEXT widening -- documented
+-- in full below and in docs/change-log/2026-07-27-fix-corporate-allowance-
+-- actor-user-id-regression.md. Unlike 248/258 this changes the parameter
+-- TYPE, not just the body, which is why the DROP FUNCTION below (and the
+-- REVOKE/GRANT re-apply further down) are required, not optional.
+--
 -- Bug: migration 214 widened corporate_wallet_transactions.actor_user_id and
 -- the corporate_allowance_apply_delta RPC's p_actor_user_id parameter from
 -- UUID to TEXT, because the admin manual wallet-adjust flow records a

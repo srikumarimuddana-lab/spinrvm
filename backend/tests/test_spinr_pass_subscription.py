@@ -1110,7 +1110,7 @@ class TestVehicleTypeEnforcement:
                 AsyncMock(return_value={"require_driver_subscription": True}),
             ),
             patch("backend.routes.drivers._deps.clear_presence", AsyncMock()),
-            patch("backend.routes.drivers.set_presence", AsyncMock()),
+            patch("backend.routes.drivers._deps.mark_present", AsyncMock()),
             patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
             patch("backend.routes.drivers._deps.manager", MagicMock()),
         ):

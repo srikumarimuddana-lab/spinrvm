@@ -157,9 +157,15 @@ function LocationSuggestionsCard({
         <Ionicons name="location-outline" size={17} color={colors.primary} />
         <Text style={styles.locationTitle}>{title}</Text>
       </View>
-      {item.action.candidates.slice(0, 3).map((candidate, index) => {
+      {item.action.candidates.slice(0, 10).map((candidate, index) => {
         const primary = candidate.name || candidate.address || `Option ${index + 1}`;
         const secondary = candidate.name && candidate.address ? candidate.address : candidate.service_area;
+        const routeSummary =
+          candidate.driving_distance_km != null
+            ? `${candidate.driving_distance_km.toFixed(1)} km by road${
+                candidate.driving_duration_minutes != null ? ` · about ${candidate.driving_duration_minutes} min` : ''
+              }`
+            : null;
         return (
           <TouchableOpacity
             key={`${candidate.lat}:${candidate.lng}:${index}`}
@@ -178,6 +184,11 @@ function LocationSuggestionsCard({
               {secondary ? (
                 <Text style={styles.locationSecondary} numberOfLines={2}>
                   {secondary}
+                </Text>
+              ) : null}
+              {routeSummary ? (
+                <Text style={styles.locationRoute} numberOfLines={1}>
+                  {index === 0 ? `Closest · ${routeSummary}` : routeSummary}
                 </Text>
               ) : null}
             </View>
@@ -641,6 +652,7 @@ const createStyles = (colors: ThemeColors) =>
     locationCopy: { flex: 1 },
     locationPrimary: { fontSize: 14, fontWeight: '700', color: colors.text },
     locationSecondary: { fontSize: 12, color: colors.textDim, lineHeight: 16 },
+    locationRoute: { fontSize: 12, color: colors.primary, fontWeight: '600', marginTop: 3 },
     rideBanner: {
       marginHorizontal: 12,
       marginTop: 4,

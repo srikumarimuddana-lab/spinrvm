@@ -36,10 +36,9 @@ interface RoutePinsProps {
 }
 
 /**
- * THE pickup / destination / completion markers for every react-native map.
- * One style, one size, one colour set (green pickup, red dropoff, amber
- * completion) reused on every screen so the "navigation points" look identical
- * everywhere. Any point that is null is simply not rendered.
+ * THE pickup / destination / completion markers for every react-native map:
+ * one style, size, and colour set (green pickup / red dropoff / amber
+ * completion). Any null point is not rendered.
  */
 export function RoutePins({ pickup, dropoff, completion }: RoutePinsProps) {
   return (

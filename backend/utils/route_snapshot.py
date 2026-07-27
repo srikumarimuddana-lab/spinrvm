@@ -26,37 +26,34 @@ _WIDTH = 640
 _HEIGHT = 320
 _STATIC_MAPS_URL = "https://maps.googleapis.com/maps/api/staticmap"
 
-# Uniform route line — mirrors shared/constants/routeMapStyle.ts so the receipt
-# PNG matches every in-app map: ONE straight pickup→destination line drawn as an
-# orange→red gradient. GPS reconstruction still feeds distance + the SGI audit;
-# it no longer changes the drawn picture.
+# Uniform route styling — mirrors shared/constants/routeMapStyle.ts so the receipt
+# PNG reads the same as every in-app map: the REAL route trail coloured as ONE
+# orange→red gradient along its length (orange at the start, red at the end).
 _ROUTE_STROKE_WIDTH = 4
-_GRADIENT_START_RGB = (255, 149, 0)  # #FF9500 orange (pickup end)
-_GRADIENT_END_RGB = (238, 43, 43)  # #EE2B2B red (destination end)
-_ROUTE_GRADIENT_SEGMENTS = 12  # fewer than the apps' 24 to keep the URL short
+_GRADIENT_START_RGB = (255, 149, 0)  # #FF9500
+_GRADIENT_END_RGB = (238, 43, 43)  # #EE2B2B
+_GRADIENT_TOTAL = 24  # total colour sub-segments across the whole route (URL budget)
 
 
-def _gradient_at(t: float) -> tuple[int, int, int]:
+def _gradient_rgb(t: float) -> tuple[int, int, int]:
     t = 0.0 if t != t else max(0.0, min(1.0, t))  # NaN → 0
     return tuple(round(_GRADIENT_START_RGB[i] + (_GRADIENT_END_RGB[i] - _GRADIENT_START_RGB[i]) * t) for i in range(3))  # type: ignore[return-value]
 
 
-def _straight_gradient(
-    pickup: tuple[float, float],
-    dropoff: tuple[float, float],
-    n: int = _ROUTE_GRADIENT_SEGMENTS,
-) -> list[tuple[tuple[float, float], tuple[float, float], tuple[int, int, int]]]:
-    """Straight pickup→dropoff line split into n colour-interpolated (lat,lng) sub-segments."""
-    (plat, plng), (dlat, dlng) = pickup, dropoff
-    if plat == dlat and plng == dlng:
-        return []
-    out = []
-    for i in range(max(1, n)):
-        t0, t1 = i / n, (i + 1) / n
-        a = (plat + (dlat - plat) * t0, plng + (dlng - plng) * t0)
-        b = (plat + (dlat - plat) * t1, plng + (dlng - plng) * t1)
-        out.append((a, b, _gradient_at((t0 + t1) / 2)))
-    return out
+def _gradient_runs(trails: list[list[tuple[float, float]]]) -> tuple[list[list[tuple[float, float]]], int]:
+    """Sample + gap-split the real route into drawable runs and the total segment
+    count, with a bounded sample budget so the gradient stays cheap."""
+    runs = [t for t in trails if len(t) >= 2]
+    if not runs:
+        return [], 0
+    per = max(2, _GRADIENT_TOTAL // len(runs) + 1)
+    pieces: list[list[tuple[float, float]]] = []
+    for trail in runs:
+        for run in _split_on_gaps(_sample_trail(trail, maximum=per)):
+            if len(run) >= 2:
+                pieces.append(run)
+    total = sum(len(p) - 1 for p in pieces)
+    return pieces, total
 
 
 async def render_ride_snapshot_google(
@@ -89,16 +86,28 @@ async def render_ride_snapshot_google(
     if completion:
         params.append(f"markers=color:orange|label:C|{completion[0]},{completion[1]}")
 
-    # Uniform route line: one straight pickup→destination line, orange→red
-    # gradient, drawn as colour-interpolated `path` segments. route_segments /
-    # phase_polylines / route_polyline are intentionally no longer drawn — the
-    # map is the same on every surface regardless of GPS provenance.
-    for (a_lat, a_lng), (b_lat, b_lng), (r, g, b) in _straight_gradient(
-        (pickup_lat, pickup_lng), (dropoff_lat, dropoff_lng)
-    ):
-        params.append(
-            f"path=color:0x{r:02X}{g:02X}{b:02X}FF|weight:{_ROUTE_STROKE_WIDTH}|{a_lat},{a_lng}|{b_lat},{b_lng}"
-        )
+    # The REAL route trail, coloured as one orange→red gradient along its length
+    # (uniform with every in-app map). Segment boundaries / gaps are still
+    # preserved — never flattened into a chord — but every drawn segment is now
+    # coloured by its position, not a two-tone by index.
+    if route_segments is not None:
+        trails = _extract_segment_trails(route_segments)
+    else:
+        legacy = _extract_trail((phase_polylines or {}).get("trip_in_progress"))
+        if len(legacy) < 10:
+            legacy = _extract_trail(route_polyline)
+        trails = [legacy] if len(legacy) >= 2 else []
+
+    pieces, total = _gradient_runs(trails)
+    idx = 0
+    for run in pieces:
+        for i in range(len(run) - 1):
+            r, g, b = _gradient_rgb((idx + 0.5) / total) if total else _GRADIENT_START_RGB
+            params.append(
+                f"path=color:0x{r:02X}{g:02X}{b:02X}FF|weight:{_ROUTE_STROKE_WIDTH}|"
+                f"{run[i][0]},{run[i][1]}|{run[i + 1][0]},{run[i + 1][1]}"
+            )
+            idx += 1
 
     params.append(f"key={api_key}")
     url = f"{_STATIC_MAPS_URL}?{'&'.join(params)}"
@@ -306,6 +315,24 @@ def render_ride_snapshot(
 
     import io
 
+    # Trip leg only — see render_ride_snapshot_google for why the
+    # navigating_to_pickup leg is excluded from the snapshot.
+    trip_trail = _coerce_polyline((phase_polylines or {}).get("trip_in_progress"))
+
+    # Build the route_polyline fallback UNCONDITIONALLY so a sparse trip trail can
+    # defer to it (mirrors the Google renderer's < 10-point density check) — a
+    # 2-point trip trail must not be drawn as one long chord when a usable
+    # route_polyline exists.
+    legacy_trail: list[tuple[float, float]] = []
+    if route_polyline:
+        for pt in route_polyline:
+            try:
+                lat = float(pt[0])
+                lng = float(pt[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            legacy_trail.append((lng, lat))
+
     try:
         _OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         m = StaticMap(640, 320, url_template=_OSM_TILE_URL, padding_x=30, padding_y=30)
@@ -319,13 +346,29 @@ def render_ride_snapshot(
             m.add_marker(CircleMarker((completion_lng, completion_lat), "#ffffff", 14))
             m.add_marker(CircleMarker((completion_lng, completion_lat), "#f59e0b", 10))
 
-        # Uniform route line: one straight pickup→destination line drawn as an
-        # orange→red gradient (matches the Google renderer + every in-app map).
-        # GPS trails are no longer drawn. staticmap uses (lng, lat).
-        for (a_lat, a_lng), (b_lat, b_lng), (r, g, b) in _straight_gradient(
-            (pickup_lat, pickup_lng), (dropoff_lat, dropoff_lng)
-        ):
-            m.add_line(Line([(a_lng, a_lat), (b_lng, b_lat)], f"#{r:02x}{g:02x}{b:02x}", _ROUTE_STROKE_WIDTH))
+        # The real route trail coloured as one orange→red gradient (uniform with
+        # the Google renderer + every in-app map). Gap-split runs are preserved
+        # (never chorded); staticmap uses (lng, lat). trip_trail/legacy_trail are
+        # (lng, lat) — convert to (lat, lng) for the shared gradient helpers.
+        if route_segments is not None:
+            trails = _extract_segment_trails(route_segments)
+        elif len(trip_trail) >= 10:
+            trails = [[(la, ln) for ln, la in trip_trail]]
+        elif legacy_trail:
+            trails = [[(la, ln) for ln, la in legacy_trail]]
+        elif trip_trail:  # sparse, but the only geometry available
+            trails = [[(la, ln) for ln, la in trip_trail]]
+        else:
+            trails = []
+
+        pieces, total = _gradient_runs(trails)
+        idx = 0
+        for run in pieces:
+            for i in range(len(run) - 1):
+                r, g, b = _gradient_rgb((idx + 0.5) / total) if total else _GRADIENT_START_RGB
+                (a_lat, a_lng), (b_lat, b_lng) = run[i], run[i + 1]
+                m.add_line(Line([(a_lng, a_lat), (b_lng, b_lat)], f"#{r:02x}{g:02x}{b:02x}", _ROUTE_STROKE_WIDTH))
+                idx += 1
 
         image = m.render()
         buf = io.BytesIO()

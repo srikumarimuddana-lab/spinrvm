@@ -15,8 +15,8 @@ const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import api from '@shared/api/client';
-import RouteLine from '@shared/components/RouteLine';
-import RoutePins from '@shared/components/RoutePins';
+import { RouteLine } from '@shared/components/RouteLine';
+import { RoutePins } from '@shared/components/RoutePins';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
@@ -156,8 +156,7 @@ export default function RideDetailScreen() {
     return (
         <View style={styles.container}>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
-                {/* Route Map — shared uniform spec: one straight pickup→dropoff
-                    line (orange→red) + green/red/amber pins. */}
+                {/* Route Map — actual GPS evidence is never replaced with directions */}
                 {hasPickup && hasDropoff && (
                     <View style={styles.mapContainer}>
                         <MapView
@@ -170,10 +169,17 @@ export default function RideDetailScreen() {
                             rotateEnabled={false}
                             onMapReady={() => setRouteMapReady(true)}
                         >
-                            <RouteLine
-                                pickup={{ latitude: navPickupLat, longitude: navPickupLng }}
-                                destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
-                            />
+                            {/* THE uniform route line: the flattened REAL actual-
+                                route coords (v2 segments joined in order, or the
+                                legacy planned line for pre-v2 rides) drawn as one
+                                orange→red gradient — identical to every other
+                                Spinr map. v2 sections are passed SEPARATELY so a
+                                GPS gap is never bridged by a false chord. */}
+                            {hasActualRoute ? (
+                                <RouteLine paths={actualSections.map((s) => s.coordinates)} />
+                            ) : (
+                                <RouteLine path={mapCoordinates} />
+                            )}
                             <RoutePins
                                 pickup={{ latitude: navPickupLat, longitude: navPickupLng }}
                                 dropoff={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}

@@ -150,6 +150,40 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** `docker-image-scan` job passes with 0 HIGH/CRITICAL findings for
   PyJWT; all auth tests still pass.
 
+### A6. Flaky backend tests: `test_no_double_accept`, `test_ranks_by_vector_similarity_with_no_lexical_overlap`
+- [ ] **Status:** open — found while driving PR #2421 (A4 closure) to green
+  (2026-07-27). Confirmed flaky via two `backend-test` CI runs on the identical
+  commit (`b1b4408`) producing different results (2 failed / 4665 passed, then
+  1 failed / 4666 passed, each time a different subset of these two tests) and
+  via 10 local isolated runs (5x each) that all passed. Neither test's file is
+  touched by PR #2421 — pre-existing flakiness, not a regression from that PR.
+- **Why:**
+  - `tests/test_rides.py::test_no_double_accept` races two `asyncio.gather`
+    coroutines against `patch("backend.routes.drivers._deps.db.update_one",
+    AsyncMock(side_effect=[accepted_ride, None]))` — a fixed-order list. Real
+    concurrent scheduling under `asyncio.gather` does not guarantee call order
+    matches list order, so whichever coroutine's `update_one` call lands second
+    can pull the `accepted_ride` slot meant for the "winner," or exhaust the
+    list before both calls resolve, raising `StopAsyncIteration` and failing
+    with `AttributeError: 'StopAsyncIteration' object has no attribute
+    'status_code'`. The test is asserting a real race condition's outcome with
+    a mock that assumes a deterministic race — the mock, not the race handling
+    it's testing, is the bug.
+  - `tests/test_ai_tools_support.py::TestSearchFaqsSemantic::test_ranks_by_vector_similarity_with_no_lexical_overlap`
+    fails intermittently with `AssertionError: Expected mock to have been
+    awaited.` — root cause not yet investigated; likely a similar
+    async-scheduling/timing assumption. Needs its own read of the test and the
+    code it covers before proposing a fix.
+- **Fix:** for `test_no_double_accept`, mock at a level that doesn't depend on
+  call order (e.g. an `update_one` fake with real "only the first caller for a
+  given ride_id wins" semantics, keyed by an in-memory dict guarded by an
+  `asyncio.Lock`, rather than a fixed-order `side_effect` list) so the test
+  exercises the actual race-handling logic instead of coincidental scheduling.
+  For the promo/FAQ test, root-cause the await-assertion timing before fixing.
+- **Files:** `backend/tests/test_rides.py`, `backend/tests/test_ai_tools_support.py`
+- **Acceptance:** both tests pass deterministically across ≥10 consecutive local
+  runs and ≥3 consecutive CI `backend-test` runs on an unchanged commit.
+
 ## P1 — Fix before launch (code)
 
 ### B1. `track_driver_online` accepts raw GPS for third-party analytics

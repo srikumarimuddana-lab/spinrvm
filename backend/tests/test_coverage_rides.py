@@ -373,7 +373,12 @@ async def test_get_ride_history_returns_completed_rides():
         r["id"] = f"ride-{i}"
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=completed)
+        # _fetch_ride_history_page now builds a raw Supabase query chain
+        # (table/select/eq/or_/order/limit) wrapped in db_supabase.run_sync,
+        # instead of going through get_rows/find_one -- mock the awaited
+        # call directly rather than faking the whole query-builder chain.
+        # The real query LIMITs to `limit + 1` rows to detect has-more.
+        mock_db.run_sync = AsyncMock(return_value=completed[:4])
         mock_db.find_one = AsyncMock(return_value=None)
 
         result = await get_ride_history(request=req, limit=3, before=None, current_user=_USER)
@@ -392,7 +397,10 @@ async def test_get_ride_history_cursor_pagination():
     rides_after_cursor = [{"id": f"r-{i}", "status": "completed", "driver_id": _DRIVER_ID} for i in range(2, 5)]
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=rides_after_cursor)
+        # See test_get_ride_history_returns_completed_rides -- the cursor
+        # filter is pushed into the DB query itself now, so run_sync's
+        # return already reflects "only rides after the cursor".
+        mock_db.run_sync = AsyncMock(return_value=rides_after_cursor)
         mock_db.find_one = AsyncMock(return_value={"id": "r-1", "created_at": "2024-01-02T00:00:00Z"})
 
         result = await get_ride_history(request=req, limit=20, before="r-1", current_user=_USER)
@@ -408,14 +416,17 @@ async def test_get_ride_history_filters_cancelled_without_driver():
     from backend.routes.rides import get_ride_history
 
     req = _starlette_request()
+    # The visibility filter (completed, or cancelled-with-a-driver) is now
+    # pushed into the DB query itself (_RIDE_HISTORY_VISIBLE_OR) rather than
+    # applied in Python, so the mocked run_sync return already reflects a
+    # real query's output -- r-1 would never come back from Supabase.
     rides = [
-        {"id": "r-1", "status": "cancelled", "driver_id": None},  # excluded
         {"id": "r-2", "status": "completed", "driver_id": _DRIVER_ID},  # included
         {"id": "r-3", "status": "cancelled", "driver_id": _DRIVER_ID},  # included
     ]
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=rides)
+        mock_db.run_sync = AsyncMock(return_value=rides)
         mock_db.find_one = AsyncMock(return_value=None)
 
         result = await get_ride_history(request=req, limit=20, before=None, current_user=_USER)
@@ -2600,7 +2611,10 @@ async def test_get_ride_history_with_cursor():
     # simulates that by returning only rides older than the cursor.
     rides_after_cursor = [_ride(status="completed", **{"id": f"r-{i}", "driver_id": _DRIVER_ID}) for i in range(2, 5)]
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=rides_after_cursor)
+        # See test_get_ride_history_returns_completed_rides -- filtering is
+        # now pushed into the DB query itself, mock the awaited run_sync
+        # call directly instead of get_rows (never called by this path).
+        mock_db.run_sync = AsyncMock(return_value=rides_after_cursor)
         mock_db.find_one = AsyncMock(return_value={"id": "r-1", "created_at": "2024-01-02T00:00:00Z"})
         result = await get_ride_history(
             request=_starlette_request(),

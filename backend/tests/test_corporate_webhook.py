@@ -95,6 +95,22 @@ def test_non_corporate_topup_passes_through(test_client):
     event = _event()
     event["data"]["object"]["metadata"] = {"ride_id": "r1", "user_id": "u1"}
 
+    # The ride-payment branch now fetches the ride to enforce the underpay
+    # guard (verifies amount_received covers grand_total/total_fare+tip)
+    # before marking it paid -- an unmocked get_ride returned None, which
+    # this handler treats as "payment unlinked" and 500s. Mark the ride
+    # already settled (payment_status="paid") so the idempotent-bookkeeping
+    # branch (record_payment_event/send_ride_receipt) is skipped too, since
+    # this test only cares that apply_topup is never called.
+    ride = {
+        "id": "r1",
+        "rider_id": "u1",
+        "grand_total": 500.0,
+        "total_fare": 500.0,
+        "tip_amount": 0,
+        "payment_status": "paid",
+    }
+
     with (
         patch(
             "routes.webhooks.get_app_settings",
@@ -103,7 +119,8 @@ def test_non_corporate_topup_passes_through(test_client):
         patch("stripe.Webhook.construct_event", return_value=event),
         patch("routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
         patch("routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-        patch("routes.webhooks.db_supabase.update_ride", AsyncMock()),
+        patch("routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("routes.webhooks.db_supabase.update_ride", AsyncMock(return_value=ride)),
         patch("routes.webhooks.send_push_notification", AsyncMock()),
         patch("services.corporate_wallet_service.apply_topup", AsyncMock()) as m_apply,
     ):

@@ -951,7 +951,9 @@ async def test_create_ride_banned_user():
             await create_ride(request=req, body=body, current_user=_USER)
 
     assert exc.value.status_code == 403
-    assert "suspended" in exc.value.detail.lower() or "banned" in exc.value.detail.lower()
+    # Copy changed to "deactivated" (see test_create_ride_banned_user_v2,
+    # which only asserts the status code and already passes).
+    assert "deactivated" in exc.value.detail.lower()
 
 
 @pytest.mark.anyio
@@ -1563,15 +1565,24 @@ async def test_cancel_ride_rider_searching():
         mock_db.find_one = AsyncMock(return_value=searching)
         mock_db.update_one = AsyncMock()
         mock_supabase.update_ride = AsyncMock()
+        # The atomic cancel claim now goes through _deps.db_supabase.update_one
+        # directly (status-filtered $in guard against a race with driver
+        # start), not _deps.db.update_one -- a None return means "claim
+        # rejected" -> 409, so this must be a truthy value.
+        mock_supabase.update_one = AsyncMock(return_value=cancelled)
         # get_ride called for verification — must return "cancelled" to pass the check
         mock_supabase.get_ride = AsyncMock(return_value=cancelled)
         mock_manager.send_personal_message = AsyncMock()
         mock_manager.broadcast_ride_status = AsyncMock()
         mock_manager.broadcast_to_admins = AsyncMock()
 
+        # reason has a Query("") default -- calling the endpoint function
+        # directly bypasses FastAPI's dependency resolution, so an unpassed
+        # `reason` arrives as the raw Query sentinel object instead of "".
         result = await cancel_ride_rider(
             request=req,
             ride_id=_RIDE_ID,
+            reason="",
             current_user=_USER,
         )
 
@@ -1604,6 +1615,8 @@ async def test_cancel_ride_rider_driver_arrived_fee():
         mock_db.insert_one = AsyncMock()
         mock_supabase.get_driver_by_id = AsyncMock(return_value=driver)
         mock_supabase.update_ride = AsyncMock()
+        # Atomic cancel claim -- see test_cancel_ride_rider_searching.
+        mock_supabase.update_one = AsyncMock(return_value=cancelled)
         # get_ride verification returns cancelled
         mock_supabase.get_ride = AsyncMock(return_value=cancelled)
         mock_supabase.set_driver_available = AsyncMock()
@@ -1611,9 +1624,13 @@ async def test_cancel_ride_rider_driver_arrived_fee():
         mock_manager.broadcast_ride_status = AsyncMock()
         mock_manager.broadcast_to_admins = AsyncMock()
 
+        # reason has a Query("") default -- calling the endpoint function
+        # directly bypasses FastAPI's dependency resolution, so an unpassed
+        # `reason` arrives as the raw Query sentinel object instead of "".
         result = await cancel_ride_rider(
             request=req,
             ride_id=_RIDE_ID,
+            reason="",
             current_user=_USER,
         )
 

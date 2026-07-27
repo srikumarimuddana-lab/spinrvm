@@ -2977,11 +2977,20 @@ async def test_process_payment_wallet_success():
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.routes.rides._deps.db") as mock_ddb,
-        patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
+        # settle_wallet (services/payment_service.py) uses its own db_supabase
+        # import, not routes.rides._deps.db_supabase -- patching only the
+        # latter leaves find_one/wallet_pay_for_ride hitting the real,
+        # unmocked DB layer. routes.wallet.get_or_create_wallet is never
+        # called by this code path at all.
+        patch("backend.services.payment_service.db_supabase") as mock_pay_db,
         patch("backend.routes.wallet._record_transaction", new_callable=AsyncMock),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
         mock_ddb.update_one = AsyncMock()
+        mock_pay_db.find_one = AsyncMock(return_value=wallet)
+        mock_pay_db.wallet_pay_for_ride = AsyncMock(return_value=Decimal("35.00"))
+        mock_pay_db.update_ride = AsyncMock()
+        mock_pay_db.insert_one = AsyncMock()
 
         result = await process_payment(
             ride_id=_RIDE_ID,
@@ -3009,8 +3018,12 @@ async def test_process_payment_wallet_suspended():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
+        # settle_wallet uses its own db_supabase import -- see the happy-path
+        # test above for the full explanation.
+        patch("backend.services.payment_service.db_supabase") as mock_pay_db,
     ):
+        mock_pay_db.find_one = AsyncMock(return_value=wallet)
+        mock_pay_db.update_ride = AsyncMock()
         with pytest.raises(HTTPException) as exc:
             await process_payment(
                 ride_id=_RIDE_ID,
@@ -3039,8 +3052,13 @@ async def test_process_payment_wallet_insufficient_balance():
 
     with (
         patch("backend.routes.rides._deps.db_supabase", mock_db),
-        patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
+        # settle_wallet uses its own db_supabase import -- see the happy-path
+        # test above for the full explanation.
+        patch("backend.services.payment_service.db_supabase") as mock_pay_db,
     ):
+        mock_pay_db.find_one = AsyncMock(return_value=wallet)
+        mock_pay_db.update_ride = AsyncMock()
+        mock_pay_db.wallet_pay_for_ride = AsyncMock(side_effect=ValueError("insufficient_funds"))
         with pytest.raises(HTTPException) as exc:
             await process_payment(
                 ride_id=_RIDE_ID,

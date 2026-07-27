@@ -1261,3 +1261,135 @@ class TestDropoffLabelGuard:
         assert result["_client_action"]["type"] == "booking_proposal"
         dropoff_lookups = [c for c in lookup.await_args_list if "Wakeling" not in c.kwargs["query"]]
         assert dropoff_lookups == []
+
+    @pytest.mark.anyio
+    async def test_lookup_error_fails_closed(self):
+        # A transient Maps failure must not wave the stale pair through —
+        # that would disable the guard exactly when Google blips. Distinct
+        # retryable result, not a mismatch verdict.
+        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": self.LABEL}
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
+            patch.object(
+                tools_booking,
+                "_lookup_place_candidates",
+                AsyncMock(return_value={"error": "place lookup failed"}),
+            ),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["needs_correction"] == "dropoff_unverified"
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_coordinate_label_must_match_the_pin(self):
+        # A coordinate-shaped label carries its own numbers — gluing a current
+        # pin label onto stale coordinates is the same incident, and it must
+        # be caught numerically, without spending a Maps call.
+        maps = AsyncMock(side_effect=AssertionError("coordinate label must not geocode"))
+        with patch.object(tools_booking, "_places_available", maps):
+            refusal = await tools_booking._dropoff_pair_refusal(
+                self.STALE["lat"],
+                self.STALE["lng"],
+                f"{self.WALMART['lat']:.5f}, {self.WALMART['lng']:.5f}",
+            )
+        assert refusal is not None
+        assert refusal["needs_correction"] == "dropoff_label_mismatch"
+
+    @pytest.mark.anyio
+    async def test_coordinate_label_matching_the_pin_passes(self):
+        maps = AsyncMock(side_effect=AssertionError("coordinate label must not geocode"))
+        with patch.object(tools_booking, "_places_available", maps):
+            refusal = await tools_booking._dropoff_pair_refusal(
+                self.STALE["lat"], self.STALE["lng"], f"{self.STALE['lat']:.5f}, {self.STALE['lng']:.5f}"
+            )
+        assert refusal is None
+
+    @pytest.mark.anyio
+    async def test_street_address_label_needs_precise_agreement(self):
+        # An APPROXIMATE centroid drifting near the stale pin must not vouch
+        # for a numbered street address when Google DID pin the real building
+        # precisely — elsewhere.
+        async def lookup(*, api_key, query, near_lat=None, near_lng=None, **kwargs):
+            if "Wakeling" in query:
+                return {
+                    "candidates": [
+                        {
+                            "lat": self.PICKUP["pickup_lat"],
+                            "lng": self.PICKUP["pickup_lng"],
+                            "address": self.PICKUP["pickup_address"],
+                            "in_service_area": True,
+                            "precise": True,
+                        }
+                    ]
+                }
+            return {
+                "candidates": [
+                    # Neighbourhood centroid beside the stale pin — imprecise.
+                    {
+                        "lat": self.STALE["lat"] + 0.001,
+                        "lng": self.STALE["lng"],
+                        "address": "Gordon Rd area, Regina",
+                        "in_service_area": True,
+                        "precise": False,
+                    },
+                    # Google's actual rooftop for the address — far from the pin.
+                    {
+                        "lat": self.WALMART["lat"],
+                        "lng": self.WALMART["lng"],
+                        "address": self.LABEL,
+                        "in_service_area": True,
+                        "precise": True,
+                    },
+                ]
+            }
+
+        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": "4500 Gordon Rd, Regina"}
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
+            patch.object(tools_booking, "_lookup_place_candidates", AsyncMock(side_effect=lookup)),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["needs_correction"] == "dropoff_label_mismatch"
+
+    @pytest.mark.anyio
+    async def test_street_address_label_with_only_imprecise_candidates_stays_lenient(self):
+        # With NO precise candidate anywhere, refusing on centroid distance
+        # would block odd-but-real addresses — keep the lenient fallback.
+        async def lookup(*, api_key, query, near_lat=None, near_lng=None, **kwargs):
+            if "Wakeling" in query:
+                return {
+                    "candidates": [
+                        {
+                            "lat": self.PICKUP["pickup_lat"],
+                            "lng": self.PICKUP["pickup_lng"],
+                            "address": self.PICKUP["pickup_address"],
+                            "in_service_area": True,
+                            "precise": True,
+                        }
+                    ]
+                }
+            return {
+                "candidates": [
+                    {
+                        "lat": self.STALE["lat"] + 0.001,
+                        "lng": self.STALE["lng"],
+                        "address": "Gordon Rd area, Regina",
+                        "in_service_area": True,
+                        "precise": False,
+                    }
+                ]
+            }
+
+        args = {**self.PICKUP, "dropoff_lat": self.STALE["lat"], "dropoff_lng": self.STALE["lng"], "dropoff_address": "4500 Gordon Rd, Regina"}
+        with (
+            _patch_area(),
+            patch.object(tools_booking, "_places_available", AsyncMock(return_value=("key", None))),
+            patch.object(tools_booking, "_lookup_place_candidates", AsyncMock(side_effect=lookup)),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert result["_client_action"]["type"] == "booking_proposal"

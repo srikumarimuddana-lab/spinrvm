@@ -21,6 +21,34 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TextInput, TouchableOpacity, Text } from 'react-native';
 
+// react-native's real FlatList mounts VirtualizedList, which schedules its
+// own internal setState via a real (non-fake-timer-controlled) setTimeout on
+// every render — even with an empty `data` array (this screen always renders
+// one, for the recents/saved-places ListHeaderComponent). That timer firing
+// outside any test's act() call raced this suite's other 48 files when run
+// together in CI, intermittently pushing one test's wall-clock past Jest's
+// 5000ms timeout (CR-2026-005) in a way two different fake-timer mitigations
+// couldn't reliably suppress. A minimal non-virtualized stand-in — just the
+// header plus a synchronous item map — renders everything this screen and
+// these tests actually need with no internal timers at all.
+jest.mock('react-native/Libraries/Lists/FlatList', () => {
+  const ReactLib = require('react');
+  const MockFlatList = ({ ListHeaderComponent, data, renderItem, keyExtractor }: any) =>
+    ReactLib.createElement(
+      ReactLib.Fragment,
+      null,
+      ListHeaderComponent,
+      ...(data ?? []).map((item: any, index: number) =>
+        ReactLib.createElement(
+          ReactLib.Fragment,
+          { key: keyExtractor ? keyExtractor(item, index) : String(index) },
+          renderItem({ item, index }),
+        ),
+      ),
+    );
+  return { __esModule: true, default: MockFlatList };
+});
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), back: jest.fn() }),
@@ -119,37 +147,16 @@ beforeEach(() => {
 
 describe('editing the destination text', () => {
   it('clears the previously selected dropoff pin (no stale-pair booking)', async () => {
-    // The screen schedules real setTimeout calls on mount (the 100ms
-    // focus-active-field effect, plus FlatList/VirtualizedList's own internal
-    // cell-render timer once the recents/predictions list mounts). Left as
-    // real timers, those callbacks fire on the actual event loop rather than
-    // inside this test's act() calls — under CI load (this test file runs
-    // alongside 48 others in the same worker) that occasionally ballooned
-    // past Jest's 5000ms per-test timeout, even though this test's own
-    // assertion never depends on them firing (CR-2026-005). Fake timers make
-    // the render deterministic; flushing them inside act() (rather than
-    // leaving them pending-but-frozen) settles VirtualizedList's internal
-    // setState before the test ends, instead of that update landing outside
-    // any act() call and racing the next test file in the same worker.
-    jest.useFakeTimers();
-    try {
-      useRideStore.setState({ dropoff: GORDON });
-      const renderer = await renderScreen();
+    useRideStore.setState({ dropoff: GORDON });
+    const renderer = await renderScreen();
 
-      act(() => {
-        jest.runOnlyPendingTimers();
-      });
+    await act(async () => {
+      dropoffInput(renderer).props.onChangeText('4321 wakeling');
+    });
 
-      await act(async () => {
-        dropoffInput(renderer).props.onChangeText('4321 wakeling');
-      });
-
-      // The store pair is gone — Search is disabled until a fresh selection
-      // re-binds address and coordinates atomically.
-      expect(useRideStore.getState().dropoff).toBeNull();
-    } finally {
-      jest.useRealTimers();
-    }
+    // The store pair is gone — Search is disabled until a fresh selection
+    // re-binds address and coordinates atomically.
+    expect(useRideStore.getState().dropoff).toBeNull();
   });
 
   it('does not clear the pin when the text still equals the selected address', async () => {

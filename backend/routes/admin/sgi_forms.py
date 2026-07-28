@@ -24,7 +24,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from routes.drivers._shared import _decrypt_driver_pii
-    from services.data_transfer import sgi_field_maps, sgi_form_filler
+    from services.data_transfer import observability, sgi_field_maps, sgi_form_filler
     from utils.audit_logger import log_admin_action
 
 logger = logging.getLogger(__name__)

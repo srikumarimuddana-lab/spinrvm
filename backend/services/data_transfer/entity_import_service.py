@@ -28,6 +28,7 @@ try:
     from . import bundle_document_uploader
 except ImportError:
     import db_supabase
+    from routes.drivers._shared import _vault_encrypt
 
     from . import bundle_document_uploader
 

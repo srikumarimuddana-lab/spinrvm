@@ -19,6 +19,7 @@ try:
 except ImportError:
     import db_supabase
     from documents import _extract_storage_key
+    from routes.drivers._shared import _decrypt_driver_pii
     from supabase_client import supabase
 
 logger = logging.getLogger(__name__)

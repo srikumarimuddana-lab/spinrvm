@@ -36,9 +36,12 @@ for _m in _STUBS:
 
 def _fake_supabase_with_rows(rows):
     fake = MagicMock()
-    # Configure the select chain used by _tick to return `rows`.
+    # Configure the select chain used by _tick to return `rows`. Must mirror
+    # _tick's actual chain exactly (.is_().not_.is_().lt()...) — MagicMock
+    # auto-creates any unconfigured attribute access as a fresh child mock,
+    # so a chain shape mismatch here silently no-ops instead of raising.
     (
-        fake.table.return_value.select.return_value.is_.return_value.lt.return_value.limit.return_value.execute.return_value.data
+        fake.table.return_value.select.return_value.is_.return_value.not_.is_.return_value.lt.return_value.limit.return_value.execute.return_value.data
     ) = rows
     return fake
 
@@ -59,7 +62,7 @@ async def test_tick_deletes_expired_objects_and_marks_rows():
         patch.object(mod, "supabase", fake_sb),
         patch.object(mod, "run_sync", AsyncMock(side_effect=fake_run_sync)),
     ):
-        await mod._tick()
+        await mod._tick("data_export_objects", mod._BUCKET)
 
     # Each object's Storage path was removed.
     remove = fake_sb.storage.from_.return_value.remove
@@ -82,7 +85,7 @@ async def test_tick_noop_when_no_expired_rows():
         patch.object(mod, "supabase", fake_sb),
         patch.object(mod, "run_sync", AsyncMock(side_effect=fake_run_sync)),
     ):
-        await mod._tick()
+        await mod._tick("data_export_objects", mod._BUCKET)
 
     fake_sb.storage.from_.return_value.remove.assert_not_called()
 
@@ -114,7 +117,7 @@ async def test_tick_isolates_per_row_failure():
         patch.object(mod, "supabase", fake_sb),
         patch.object(mod, "run_sync", AsyncMock(side_effect=fake_run_sync)),
     ):
-        await mod._tick()
+        await mod._tick("data_export_objects", mod._BUCKET)
 
     # The good row was still processed (update called for it) despite the bad one.
     assert fake_sb.table.return_value.update.called

@@ -281,6 +281,9 @@ class AppSettings(BaseModel):
     ai_max_output_tokens: int = 1024
     ai_max_tool_iterations: int = 6
     ai_daily_message_cap: int = 50
+    # Per-user/day tool-call cap on the /mcp surface (machine clients poll
+    # harder than humans chat). 0 → fall back to ai_daily_message_cap.
+    ai_mcp_daily_tool_cap: int = 0
     ai_history_max_messages: int = 12
     # FAQ response cache: replay a stored answer for identical, self-contained,
     # impersonal opener questions (same or different user) so common FAQ turns

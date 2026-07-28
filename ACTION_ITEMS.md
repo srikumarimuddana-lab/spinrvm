@@ -833,6 +833,33 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   (`routes/admin/analytics.py:72`), drops dashboard DB load ~98%.
 - [ ] **D8. Payment-retry admin alert via WS broadcast** — replace per-admin push loop
   (`utils/payment_retry.py:80`) with one `broadcast_to_admins`.
+- [ ] **D9. `compliance_export_events` has no purge job for its claimed 7-year
+  retention** — `backend/migrations/263_compliance_export_events.sql`'s table
+  comment states "7-year retention" but no background loop or scheduled job
+  enforces it; rows accumulate forever today. Long time horizon (first purge
+  wouldn't be due until 2033), so not urgent, but the claim in the migration
+  comment currently overstates what the system actually does — nothing
+  deletes a row past 7 years yet. Migration itself is append-only and merged
+  (can't be edited per `backend/migrations/CLAUDE.md`); the fix is a new
+  migration/cron adding a scheduled purge (mirror the pattern in
+  `utils/retention_purge.py`) before 2033, not a comment edit. Tracked here
+  as gap G8 from `reports/audits/2026-07-28-compliance-reporting-module-lifecycle-audit-v1.md`.
+- [x] **D10. `compliance_export_events` rollback command not re-verified
+  against real staging** — `DROP TABLE IF EXISTS compliance_export_events;`
+  (the migration's documented rollback) was verified by applying the
+  migration to the local dev clone and dropping it there, never against the
+  real staging Supabase project (`spinrmobileapp`) the migration was
+  actually applied to during PR #2675's smoke test. **Status:** accepted as
+  sufficient, not re-verified — per the audit's own framing (gap G10), this
+  is optional given the table currently holds zero real rows in staging
+  (confirmed during that same smoke test), so a `DROP TABLE IF EXISTS` on an
+  empty table is exceedingly unlikely to behave differently in staging than
+  locally. Re-running a destructive `DROP TABLE` against the shared staging
+  project purely to prove a rollback command — without a concrete need to
+  actually roll back — is not worth the risk for a statement this
+  well-supported already; CLAUDE.md's guidance on destructive/hard-to-reverse
+  actions favors skipping an unnecessary one over running it "just to be
+  sure." Revisit if the table ever holds real data before this is re-verified.
 
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 

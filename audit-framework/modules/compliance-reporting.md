@@ -66,9 +66,9 @@ for full detail, reasoning, and rejected alternatives per gap.
 | G5 | No Sentry/metrics instrumentation | **Fixed** (PR #2688) |
 | G6 | No rate limiting | **Fixed** (PR #2688) |
 | G7 | No ADR for branded/fixed_format design split | **Fixed** — `docs/adr/008-report-branding-fixed-vs-branded.md` |
-| G8 | `compliance_export_events`' claimed 7-year retention has no enforcement | Tracked in `ACTION_ITEMS.md` (low priority, long time horizon) |
+| G8 | `compliance_export_events`' claimed 7-year retention has no enforcement | Tracked — `ACTION_ITEMS.md` D9 (P3, purge job not yet built; migration comment's claim is currently aspirational) |
 | G9 | No audit-framework module scope file | **Fixed** — this file |
-| G10 | Rollback command verified locally, never against real staging | Tracked in `ACTION_ITEMS.md` (low priority — table currently empty in staging) |
+| G10 | Rollback command verified locally, never against real staging | **Accepted as sufficient, not re-verified** — `ACTION_ITEMS.md` D10 (table holds zero real rows in staging; re-running a destructive `DROP TABLE` against shared staging purely to prove the command isn't worth the risk) |
 
 ---
 

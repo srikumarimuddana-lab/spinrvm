@@ -155,3 +155,47 @@ def test_signup_rejects_invalid_payload(test_client, _user_override):
     del bad["business_number"]  # KYB field mandatory on self-serve
     resp = test_client.post(_SIGNUP_PATH, json=bad)
     assert resp.status_code == 422
+
+
+def test_signup_insert_returns_no_row_is_503(test_client, _user_override):
+    """insert_corporate_account can return None/empty on a degraded write path
+    (no exception raised, but no row echoed back) — must not be treated as success."""
+    _user_override(_FAKE_EMAIL_USER)
+    p_count, _p_insert, p_boot, p_del, p_audit, p_mail = _patches()
+    empty_insert = patch("routes.corporate_signup.insert_corporate_account", AsyncMock(return_value=None))
+    with p_count, empty_insert, p_boot as m_boot, p_del, p_audit as m_audit, p_mail:
+        resp = test_client.post(_SIGNUP_PATH, json=_valid_body())
+
+    assert resp.status_code == 503
+    m_boot.assert_not_awaited()
+    m_audit.assert_not_awaited()
+
+
+def test_signup_insert_returns_row_without_id_is_503(test_client, _user_override):
+    _user_override(_FAKE_EMAIL_USER)
+    p_count, _p_insert, p_boot, p_del, p_audit, p_mail = _patches()
+    no_id_insert = patch(
+        "routes.corporate_signup.insert_corporate_account", AsyncMock(return_value={"name": "Acme Corp"})
+    )
+    with p_count, no_id_insert, p_boot as m_boot, p_del, p_audit, p_mail:
+        resp = test_client.post(_SIGNUP_PATH, json=_valid_body())
+
+    assert resp.status_code == 503
+    m_boot.assert_not_awaited()
+
+
+def test_signup_rollback_delete_failure_still_returns_503_from_bootstrap_error(test_client, _user_override):
+    """If the compensating delete itself fails after a bootstrap error, the
+    original 503 must still surface (not a 500 from an unhandled second exception)."""
+    _user_override(_FAKE_EMAIL_USER)
+    p_count, p_insert, _p_boot, _p_del, p_audit, p_mail = _patches()
+    boot_fail = patch("routes.corporate_signup.bootstrap_owner", AsyncMock(side_effect=RuntimeError("db down")))
+    del_fail = patch(
+        "routes.corporate_signup.delete_corporate_account", AsyncMock(side_effect=RuntimeError("delete also down"))
+    )
+    with p_count, p_insert, boot_fail, del_fail as m_del, p_audit as m_audit, p_mail:
+        resp = test_client.post(_SIGNUP_PATH, json=_valid_body())
+
+    assert resp.status_code == 503
+    m_del.assert_awaited_once_with("c9")
+    m_audit.assert_not_awaited()

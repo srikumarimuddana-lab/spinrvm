@@ -1178,6 +1178,24 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   docstring** — `routes/admin/ai_console.py` claims turns count against the
   daily cap; the orchestrator deliberately exempts them, and the endpoint has
   no `@ai_chat_limit` equivalent (super-admin-only + audited, so low risk).
+- [ ] **AI14. Accepted risk: a tapped suggestion is trusted even when its
+  geocode is only APPROXIMATE** — prompt rule 6b (PR #2774) treats any
+  rider-tapped `location_suggestions` candidate as confirmed, so a numbered
+  street address Google could only resolve to a street/neighbourhood centroid
+  can be quoted and booked at that centroid rather than the building.
+  `_dropoff_pair_refusal` does not catch this (it is a label-vs-pin
+  *consistency* check biased near the passed pin, not a precision check).
+  **This is deliberate**, not an oversight: the alternative — routing
+  imprecise taps through `request_map_pin` — was considered and rejected for
+  this iteration because it adds a step for every rider and degrades to a
+  dead end on clients that don't advertise the `map_pin` capability
+  (`tools_booking.py` returns `shown: False` there), which is the exact
+  no-exit state that produced the original infinite loop. Raised by Codex
+  review on PR #2774 (`backend/ai/prompts.py:96`).
+  **Middle ground if this is revisited:** have `find_place` surface
+  `precise=False` on the card and let the assistant quote immediately while
+  offering the map pin as an optional refinement (the "quote + note" option),
+  rather than gating the quote.
 - [ ] **AI13. No output-side leakage filter** — prompt rules (added
   2026-07-28) are the only defense against the model printing tool names /
   internal jargon; nothing greps the reply stream. A lightweight post-filter

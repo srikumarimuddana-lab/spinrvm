@@ -48,6 +48,20 @@ async def test_record_call_increments_per_sku_counter(mock_redis):
     assert 0.010 < spent < 0.012
 
 
+@pytest.mark.anyio
+async def test_text_search_new_sku_counts_toward_budget(mock_redis):
+    """B5: the AI booking tool's named-place lookup used to call
+    record_call("places_text_search") — a string outside the Sku Literal
+    and _PRICE_USD dict — so every such call was silently invisible to
+    estimate_today_usd()'s budget total. text_search_new is the real SKU
+    now; pin that it actually counts."""
+    from utils import maps_budget
+
+    await maps_budget.record_call("text_search_new")
+
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == pytest.approx(maps_budget._PRICE_USD["text_search_new"], rel=0.01)
+
 
 @pytest.mark.anyio
 async def test_record_autocomplete_request_counts_abandoned_session_until_close(mock_redis):

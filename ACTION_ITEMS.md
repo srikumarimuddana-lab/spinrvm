@@ -575,23 +575,52 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   to confirm no regressions elsewhere.
 
 ### B5. Migrate AI place lookup to Places API (New) with hard locationRestriction
-- [ ] **Status:** open — follow-up to the AI location/pricing incident fixes
-  (branch `claude/app-location-pricing-bugs-gxgk3z`)
-- **Why:** `backend/ai/tools_booking.py` still uses legacy Geocoding + Text
-  Search. The incident fixes added a soft `bounds` bias and nearest-first
-  sorting, but the rider app's `utils/google_places_new.py` path gets a HARD
-  `locationRestriction` circle + `origin` ranking — full parity closes the
-  remaining "Google returns only far matches" gap. Related deferred items:
-  a hard estimate_token price-lock across the chat→card gap, a blocking
-  surge sheet on the AI confirm card (parity with `ride-options.tsx`), a
-  structured (non-prose) payload for quote-card taps, and Maps budget
-  accounting for `places_text_search` + the fare Directions calls (neither
-  is a priced SKU in `utils/maps_budget.py`, so real spend is undercounted).
-- **Files:** `backend/ai/tools_booking.py`, `backend/utils/google_places_new.py`,
-  `backend/utils/maps_budget.py`
-- **Acceptance:** AI place lookups never return a candidate outside the bias
-  circle without an explicit flag, and `estimate_today_usd` counts every
-  Google call the platform makes.
+- [x] **Status:** done (2026-07-28) — the named-place ("places") branch of
+  `_lookup_place_candidates` in `backend/ai/tools_booking.py` now calls
+  Places API (New) Text Search (`places:searchText`) instead of the legacy
+  Text Search API. Text Search (New)'s `locationRestriction` only accepts a
+  **rectangle** (not a circle, unlike Autocomplete New) — that rectangle IS
+  a hard filter: Google cannot return a candidate outside it at all, unlike
+  the legacy API's soft `bounds`/`radius` params. A soft `locationBias`
+  circle (matching the rider-app's Autocomplete-New pattern) rides alongside
+  it purely as a relevance-ranking nudge. New helpers
+  `build_text_search_payload` / `legacy_place_results_from_text_search` live
+  in `backend/utils/google_places_new.py`, alongside the existing
+  Autocomplete/Details helpers, and translate to/from the same legacy
+  candidate shape the rest of `tools_booking.py` already expects — no
+  downstream code (`_candidates_from_results`, dedup, precision flagging)
+  needed to change.
+  - **Also fixed, found while implementing**: `record_call("places_text_search")`
+    was a string outside `maps_budget.py`'s `Sku` Literal and `_PRICE_USD`
+    dict — every such call silently miscounted against a Redis key
+    `estimate_today_usd()` never reads, so the circuit breaker was blind to
+    this entire call type. Added the real `text_search_new` SKU (Places API
+    (New) Text Search Pro pricing) so it now counts toward the daily budget.
+  - **Verified NOT a gap** (the backlog text's other budget claim was
+    stale): the fare Directions calls already call
+    `record_call("directions")` (`utils/route_distance.py:734`), and
+    `"directions"` was already a priced SKU — no fix needed there.
+  - **Not in scope, intentionally**: the geocode branch (street addresses)
+    stays on the legacy Geocoding API — Places API (New) has no forward-
+    geocoding surface to migrate it to. The hard-filter fix for THAT branch
+    is `components=locality:<city>`, already tracked separately as B7
+    (blocked on `service_areas` gaining a real locality column).
+  - **Deferred, not done here** (explicitly out of this item's title/scope):
+    a hard `estimate_token` price-lock across the chat→card gap, a blocking
+    surge sheet on the AI confirm card, and a structured (non-prose) payload
+    for quote-card taps — these remain open follow-ups, not touched.
+- **Files:** `backend/utils/google_places_new.py` (new payload
+  builder/translator), `backend/ai/tools_booking.py` (new `_maps_post`
+  helper + "places" branch rewrite), `backend/utils/maps_budget.py` (new
+  `text_search_new` SKU), `backend/tests/test_ai_tools_booking.py` (rewrote
+  `PLACES_OK` fixture + affected tests to the New API response shape; added
+  `TestFindPlaceHardRestriction` pinning the hard rectangle, the no-bias-point
+  case, and error-status handling), `backend/tests/test_maps_proxy.py`
+  (pinned `text_search_new` counts toward `estimate_today_usd`).
+- **Acceptance:** ✅ met — AI place lookups (named-place branch) never return
+  a candidate outside the bias rectangle; `estimate_today_usd` now counts
+  Text Search (New) calls (previously invisible) and already counted
+  Directions calls (verified, not a real gap).
 
 ### B6. Measure Directions latency and re-tune the fare-estimate wait
 - [ ] **Status:** open — follow-up to the AI location/pricing incident fixes

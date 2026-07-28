@@ -39,16 +39,29 @@ except ImportError:
 try:
     from .. import db_supabase
     from ..settings_loader import get_app_settings
+    from ..utils.google_places_new import (
+        PLACES_NEW_TEXT_SEARCH_FIELD_MASK,
+        PLACES_NEW_TEXT_SEARCH_URL,
+        build_text_search_payload,
+        legacy_place_results_from_text_search,
+        places_new_headers,
+    )
     from ..utils.maps_budget import check_budget, record_call
 except ImportError:
     import db_supabase
     from settings_loader import get_app_settings
+    from utils.google_places_new import (  # type: ignore
+        PLACES_NEW_TEXT_SEARCH_FIELD_MASK,
+        PLACES_NEW_TEXT_SEARCH_URL,
+        build_text_search_payload,
+        legacy_place_results_from_text_search,
+        places_new_headers,
+    )
     from utils.maps_budget import check_budget, record_call
 
 logger = logging.getLogger(__name__)
 
 _GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
-_PLACES_TEXT_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 _DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
 _HTTP_TIMEOUT = 4.0
 _CENT = Decimal("0.01")
@@ -131,6 +144,15 @@ async def _maps_get(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         resp = await client.get(url, params=params)
         return resp.json()
+
+
+async def _maps_post(url: str, headers: Dict[str, str], json_body: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
+    """Places API (New) endpoints are POST-only and report errors via HTTP
+    status + an ``error`` body, not a legacy ``status`` field — callers must
+    check the returned status code themselves."""
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        resp = await client.post(url, headers=headers, json=json_body)
+        return resp.status_code, resp.json()
 
 
 # Google Geocoding `geometry.location_type` values that actually pin a
@@ -237,17 +259,22 @@ async def _lookup_place_candidates(
     for kind in attempts:
         try:
             if kind == "places":
-                params: Dict[str, Any] = {
-                    "query": query,
-                    "region": "ca",
-                    "key": api_key,
-                    "language": "en",
-                }
-                if near_lat is not None and near_lng is not None:
-                    params["location"] = f"{near_lat},{near_lng}"
-                    params["radius"] = _PLACE_RADIUS_METERS
-                data = await _maps_get(_PLACES_TEXT_URL, params)
-                allowed = ("OK", "ZERO_RESULTS")
+                # Places API (New) Text Search — locationRestriction here is a
+                # RECTANGLE and, unlike the legacy Geocoding/Text-Search bounds
+                # param below, a HARD filter: Google cannot return a candidate
+                # outside it at all (B5). Falls through to the legacy geocode
+                # branch (or an empty result) if nothing matches inside it.
+                payload = build_text_search_payload(query, near_lat, near_lng, _PLACE_RADIUS_METERS)
+                status_code, data = await _maps_post(
+                    PLACES_NEW_TEXT_SEARCH_URL,
+                    places_new_headers(api_key, PLACES_NEW_TEXT_SEARCH_FIELD_MASK),
+                    payload,
+                )
+                if status_code != 200:
+                    logger.error("ai find_place Places API (New) error: %s", data.get("error") or status_code)
+                    return {"error": "place lookup failed — try again or pick the location in the app"}
+                await record_call("text_search_new")
+                results = legacy_place_results_from_text_search(data)
             else:
                 # NOTE: `components=locality:<city>` would be a HARD filter here
                 # (unlike `bounds`, which the Geocoding API may ignore) and is
@@ -256,6 +283,9 @@ async def _lookup_place_candidates(
                 # which is a display label ("Regina Metro") — a wrong locality
                 # yields ZERO_RESULTS and breaks lookups outright, so a filter
                 # built on it is worse than none. Tracked in ACTION_ITEMS B7.
+                # (No "Places API (New)" equivalent applies here — pure
+                # forward-geocoding has no New-API surface; B5 only covers the
+                # named-place ["places"] branch above.)
                 params = {
                     "address": query,
                     "components": "country:CA",
@@ -275,17 +305,16 @@ async def _lookup_place_candidates(
                     dlng = dlat / max(math.cos(math.radians(near_lat)), 0.2)
                     params["bounds"] = f"{near_lat - dlat},{near_lng - dlng}|{near_lat + dlat},{near_lng + dlng}"
                 data = await _maps_get(_GEOCODE_URL, params)
-                allowed = ("OK", "ZERO_RESULTS")
+                if data.get("status") not in ("OK", "ZERO_RESULTS"):
+                    logger.error("ai find_place maps API error: %s", data.get("status"))
+                    return {"error": "place lookup failed — try again or pick the location in the app"}
+                await record_call("geocode")
+                results = data.get("results") or []
         except Exception:
             logger.error("ai find_place maps request failed", exc_info=True)
             return {"error": "place lookup failed — try again or pick the location in the app"}
 
-        if data.get("status") not in allowed:
-            logger.error("ai find_place maps API error: %s", data.get("status"))
-            return {"error": "place lookup failed — try again or pick the location in the app"}
-
-        await record_call("places_text_search" if kind == "places" else "geocode")
-        candidates = await _candidates_from_results(data.get("results") or [], near_lat=near_lat, near_lng=near_lng)
+        candidates = await _candidates_from_results(results, near_lat=near_lat, near_lng=near_lng)
         if candidates:
             return {"candidates": candidates, "source": kind}
 

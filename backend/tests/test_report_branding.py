@@ -164,17 +164,22 @@ class TestRenderPdfTable:
 class TestBrandedExcel:
     def test_new_branded_workbook_and_table(self):
         pytest.importorskip("openpyxl")
+        # The real logo asset is checked in (backend/static/branding/
+        # spinr_logo.png), so has_logo_asset() is True here — title/subtitle
+        # land in column C, leaving A/B for the logo image anchor.
         wb, ws = report_branding.new_branded_workbook("GST/PST Remittance Summary", "July 2026")
-        assert ws["A1"].value == "GST/PST Remittance Summary"
-        assert ws["A2"].value == "July 2026"
+        assert ws["C1"].value == "GST/PST Remittance Summary"
+        assert ws["C2"].value == "July 2026"
 
         report_branding.write_branded_table(
             ws, ["month", "gst", "pst"], [{"month": "2026-07", "gst": "123.45", "pst": "148.14"}]
         )
-        assert ws["A4"].value == "month"
-        assert ws["B4"].value == "gst"
-        assert ws["A5"].value == "2026-07"
-        assert ws["B5"].value == "123.45"
+        # Header cells are title-cased ("month" -> "Month") to match the
+        # PDF/Word header treatment; row data is untouched.
+        assert ws["A6"].value == "Month"
+        assert ws["B6"].value == "Gst"
+        assert ws["A7"].value == "2026-07"
+        assert ws["B7"].value == "123.45"
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -184,20 +189,28 @@ class TestBrandedExcel:
         pytest.importorskip("openpyxl")
         _, ws = report_branding.new_branded_workbook("Report")
         report_branding.write_branded_table(ws, ["value"], [{"value": "=SUM(A1)"}])
-        assert ws["A5"].value == "'=SUM(A1)"
+        assert ws["A7"].value == "'=SUM(A1)"
 
 
 class TestBrandedWord:
     def test_new_branded_document_and_table(self):
         pytest.importorskip("docx")
+        # With the real logo asset present, paragraph 0 is the logo image
+        # (empty text) and the heading is paragraph 1.
         doc = report_branding.new_branded_document("GST/PST Remittance Summary", "July 2026")
-        assert doc.paragraphs[0].text == "GST/PST Remittance Summary"
+        assert doc.paragraphs[0].text == ""
+        assert doc.paragraphs[1].text == "GST/PST Remittance Summary"
+        assert doc.paragraphs[2].text == "July 2026"
+        # The accent rule is a paragraph border, not a table — doc.tables
+        # must be empty until the caller adds its own data table.
+        assert len(doc.tables) == 0
 
         report_branding.add_branded_table(
             doc, ["month", "gst", "pst"], [{"month": "2026-07", "gst": "123.45", "pst": "148.14"}]
         )
         table = doc.tables[0]
-        assert table.rows[0].cells[0].text == "month"
+        # Header cells are title-cased to match the PDF/Excel treatment.
+        assert table.rows[0].cells[0].text == "Month"
         assert table.rows[1].cells[0].text == "2026-07"
 
         buf = io.BytesIO()

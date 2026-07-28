@@ -234,13 +234,23 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   already better- or worse-covered than assumed).
 - **Approach — Track 1 (money/safety/compliance-adjacent, recommend first):**
   measure current coverage for, in priority order:
-  1. `backend/services/corporate_wallet_service.py`,
-     `corporate_membership_service.py`, `corporate_policy_service.py` —
-     the corporate billing layer (money-adjacent, and likely to be touched
-     by the corporate-module work the user is starting in a separate
-     session next — coordinate so this doesn't collide with in-flight
-     corporate feature work; check with the user before starting if a
-     corporate-module session is already active).
+  1. Corporate billing layer — **measured 2026-07-28** (post PRs #2615,
+     #2696): module aggregate ~52% against a proposed 80% target (see
+     `CLAUDE.md`'s coverage-minimums table and `.claude/context/domain-corporate.md`).
+     New code from the lifecycle-audit fixes is well-covered (79–90%); the
+     gap is concentrated in pre-existing files, priority order for a future
+     session:
+     - `routes/corporate_accounts.py` — **39%**, highest priority: this is
+       the file every lifecycle-audit fix (gaps #1-3, Findings 1/4/6/7) is
+       wired into, so ~60% of the surrounding code in the same handler has
+       zero test coverage.
+     - `services/corporate_wallet_service.py` — 41%, `services/corporate_allowance_service.py` — 39% (money math)
+     - `routes/corporate_company_bookings.py` — 38%
+     - `routes/corporate_rider.py`, `routes/corporate_signup.py`,
+       `routes/corporate_company_kyb.py` — 32-33% (rider-facing/onboarding,
+       lower risk than the above, do last)
+     - `services/corporate_membership_service.py` — 27%, `services/corporate_policy_service.py` — 68% (already close)
+     No work started on closing this gap yet — scoping/measurement only.
   2. `backend/utils/insurance_periods.py`, safety check-in / SOS-related
      routes (see `.claude/context/domain-safety.md`) — regulatory +
      rider/driver safety consequence if untested code has a latent bug.

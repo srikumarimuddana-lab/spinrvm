@@ -28,6 +28,10 @@ async def test_reset_runs_for_stale_allowances():
             AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active"}),
         ),
         patch(
+            "utils.allowance_reset.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "status": "active"}),
+        ),
+        patch(
             "utils.allowance_reset.get_corporate_wallet_by_company",
             AsyncMock(return_value={"id": "w1", "soft_negative_floor": -50}),
         ),
@@ -70,6 +74,10 @@ async def test_reset_skips_rollover_flag():
         patch(
             "utils.allowance_reset.get_corporate_member_by_id",
             AsyncMock(return_value={"id": "m2", "company_id": "c2", "status": "active"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c2", "status": "active"}),
         ),
         patch(
             "utils.allowance_reset.get_corporate_wallet_by_company",
@@ -115,6 +123,52 @@ async def test_reset_skips_removed_member():
         patch(
             "utils.allowance_reset.get_corporate_member_by_id",
             AsyncMock(return_value={"id": "m3", "company_id": "c3", "status": "removed"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_wallet_by_company",
+            AsyncMock(),
+        ) as m_wallet,
+        patch("utils.allowance_reset.apply_reset", AsyncMock()) as m_reset,
+        patch("utils.allowance_reset.reset_allowance_period", AsyncMock()) as m_period,
+    ):
+        from utils.allowance_reset import run_allowance_reset_tick
+
+        processed = await run_allowance_reset_tick(now=date(2026, 4, 1))
+
+    assert processed == 0
+    m_wallet.assert_not_awaited()
+    m_reset.assert_not_awaited()
+    m_period.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reset_skips_suspended_company():
+    """Corporate module lifecycle audit Finding 2: this loop previously only
+    checked the MEMBER's own status, never the company's — a suspended
+    company's still-active members kept getting their monthly allowance
+    auto-refilled indefinitely."""
+    due = {
+        "id": "a4",
+        "member_id": "m4",
+        "type": "fixed_recurring",
+        "status": "active",
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "rollover": False,
+        "used": -100,
+    }
+    with (
+        patch(
+            "utils.allowance_reset.list_allowances_due_for_reset",
+            AsyncMock(return_value=[due]),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m4", "company_id": "c4", "status": "active"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c4", "status": "suspended"}),
         ),
         patch(
             "utils.allowance_reset.get_corporate_wallet_by_company",

@@ -719,3 +719,146 @@ def test_invite_email_failure_surfaced_not_swallowed(test_client, rider_override
     data = resp.json()
     assert data["email_sent"] is False  # UI shows the copy-link fallback
     assert data["web_invite_url"]  # link still available for manual delivery
+
+
+def test_reactivating_suspended_member_writes_audit_log(test_client, rider_override):
+    """Corporate module lifecycle audit Finding 6: _maybe_revoke_access_on_removal
+    only fires for transitions INTO removed/suspended — the mirror-image
+    access-GRANTING transition (suspended -> active) was never logged at
+    all, unlike every other status change in this file."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "suspended"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "active"}),
+        ),
+        patch(
+            "routes.corporate_company.cancel_pre_pickup_rides_for_member",
+            AsyncMock(),
+        ) as mock_cancel,
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.patch("/company/c1/members/m1", json={"status": "active"})
+    assert resp.status_code == 200, resp.text
+    mock_cancel.assert_not_awaited()  # reactivation never cancels rides
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["details"]["old_status"] == "suspended"
+    assert mock_audit.await_args.kwargs["details"]["new_status"] == "active"
+
+
+def test_reactivating_already_active_member_is_idempotent_noop(test_client, rider_override):
+    """Repeat-PATCH status=active on an already-active member must not
+    re-fire the audit log — same idempotent-repeat guard as the removal
+    path."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "active"}),
+        ),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.patch("/company/c1/members/m1", json={"status": "active"})
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_not_awaited()
+
+
+def test_put_policy_writes_audit_log(test_client, rider_override):
+    """Corporate module lifecycle audit Finding 9 (rows 13/14): a policy
+    create/replace can tighten fare caps or payment-source rules but was
+    never audit-logged."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=_ADMIN_MEMBERSHIPS),
+        ),
+        patch(
+            "routes.corporate_company.upsert_corporate_policy",
+            AsyncMock(return_value={**_FAKE_POLICY, "max_fare_per_ride": 100.0}),
+        ),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.put(
+            "/company/c1/policy",
+            json={"max_fare_per_ride": 100.0, "allowed_payment_source": "both"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_policy_replaced"
+
+
+def test_patch_policy_writes_audit_log(test_client, rider_override):
+    """Same Finding 9 gap on the PATCH (partial-update) path."""
+    updated = {**_FAKE_POLICY, "allowed_payment_source": "allowance_only"}
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=_ADMIN_MEMBERSHIPS),
+        ),
+        patch(
+            "routes.corporate_company.upsert_corporate_policy",
+            AsyncMock(return_value=updated),
+        ),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.patch(
+            "/company/c1/policy",
+            json={"allowed_payment_source": "allowance_only"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_policy_patched"
+
+
+def test_patch_policy_empty_body_does_not_write_audit_log(test_client, rider_override):
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=_ADMIN_MEMBERSHIPS),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_policy",
+            AsyncMock(return_value=_FAKE_POLICY),
+        ),
+        patch("routes.corporate_company.upsert_corporate_policy", AsyncMock()),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.patch("/company/c1/policy", json={})
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_not_awaited()
+
+
+def test_invite_writes_audit_log(test_client, rider_override):
+    """Corporate module lifecycle audit Finding 9 (row 5): granting a NEW
+    membership is the access-GRANTING mirror of removal, which already is
+    audit-logged — invite never was."""
+    p_guard, p_invite, p_company, p_mail = _invite_mocks()
+    with (
+        p_guard,
+        p_invite,
+        p_company,
+        p_mail,
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.post(
+            "/company/c1/members/invite",
+            json={"email": "new@acme.com", "role": "member"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_member_invited"
+    assert mock_audit.await_args.kwargs["details"]["email"] == "new@acme.com"

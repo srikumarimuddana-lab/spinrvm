@@ -32,15 +32,14 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     to reflect that. Per-file coverage in that package was **highly uneven**:
     `lost_found.py` 25% (now **100%** — see below, meets target),
     `receipts.py` 58.3% (now **100%** — see below, meets target),
-    `matching.py` 64.7% (now **75.84%** in this branch — see below, still
-    below target; PR #2557, open in parallel, independently adds another
-    +3.57pp on top of the same 72.48% baseline via a different test file —
-    once both merge the two gains combine), `lifecycle.py` 65.1% (now
-    **87.88%** — meets target), `booking.py` 65.7% (now **84.54%** — meets
-    target, PR #2559), `queries.py` 69.2% (now **92.20%** — meets target,
-    PR #2544), `estimates.py` 71.0% (now **93.99%** — meets target,
-    PR #2552), `cancellation.py` 71.0% (now **95.06%** — meets target,
-    PR #2555), `rides/payments.py` 79.5%.
+    `matching.py` 64.7% (now **76.05%**, PR #2557, merged — see below, this
+    PR adds another independent increment on top; see below for the
+    combined total), `lifecycle.py` 65.1% (now **87.88%** — meets target),
+    `booking.py` 65.7% (now **84.54%** — meets target, PR #2559),
+    `queries.py` 69.2% (now **92.20%** — meets target, PR #2544),
+    `estimates.py` 71.0% (now **93.99%** — meets target, PR #2552),
+    `cancellation.py` 71.0% (now **95.06%** — meets target, PR #2555),
+    `rides/payments.py` 79.5%.
   - `routes/rides/lost_found.py`: was 25%, **now 100%** after adding 10 tests
     (`tests/test_lost_found.py`) covering the 404/403/400 guard clauses,
     category-validation fallback, the driver-notification success path (push
@@ -61,31 +60,45 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     `routes/rides/` files below.
   - `routes/rides/matching.py`: was 64.7%, then 72.48% (25 tests,
     `tests/test_offer_timeout.py` + `tests/test_p0_ship_blockers.py`,
-    covering the file's smaller, self-contained functions —
-    `create_demo_drivers`, `_dispatch_retry`, `process_expired_offer`,
-    `_batch_offer_timeout_handler`, `ride_search_timeout` — see prior PRs
-    for the full branch list), then two independent, parallel follow-ups
-    both targeting `_match_driver_to_ride_attempt` (lines 151-933, ~780
-    lines — the core dispatch/ranking algorithm) from that same 72.48%
-    baseline: **PR #2557** (`tests/test_dispatch_match_attempt_branches.py`,
-    +3.57pp) covering the guard clauses and fail-open/fail-closed exception
-    paths (stale-status skip, subscription/quota filter fail-closed/open,
-    cascade sub-filter + exceptions, `ride_offers`-insert failure releasing
-    the claim, no-eligible-drivers retry, no-driver-claimed return); and
-    **this PR** (`tests/test_dispatch_notify_loop_branches.py`, 72.48% →
-    **75.84%** in isolation) covering the ETA-ranking/batch-claim/parallel-
-    enrichment/per-driver-notify block (~lines 650-930): a full happy-path
-    test building the WS `new_ride_assignment` payload end-to-end (quest
-    progress, active incentive, signed offer-card URL, FCM push all
-    populated) plus the ETA-ranking Distance-Matrix-failure fallback and the
-    notify loop's three fail-open exception paths (quest-progress lookup,
-    offer-card URL signing, FCM push spawn). **Both PRs still leave the file
-    below the 80% target in isolation** — once merged together (same base
-    file, non-overlapping line ranges, no conflict expected) the combined
-    gain should clear or come very close to 80%; if not, one more small pass
-    over whatever remains (likely the cascade-map's presence/Redis-fail-open
-    sub-branches inside the ETA/claim section, or the `_offer_timeout_handler`
-    / `process_expired_offer` functions further down the file) closes it out.
+    covering the file's smaller, self-contained functions:
+    `create_demo_drivers` (deprecated no-op), `_dispatch_retry`'s
+    attempt-cap/ride-left-searching guards and error-backoff reschedule,
+    `process_expired_offer`'s claim-lost-returns-False path, the
+    auto-offline-at-threshold branch, and its two fail-open exception paths
+    (Redis skip-key write, WS notify), `_batch_offer_timeout_handler`'s two
+    early-returns and settings-fetch-failure fallback plus its outer
+    exception handler, and `ride_search_timeout`'s pre-auth-release
+    success/failure branches, the attribution-column-fallback retry, the
+    guest-booking SMS branch, and its outer exception handler), **then
+    76.05%** (PR #2557, merged) after adding 8 more tests
+    (`tests/test_dispatch_match_attempt_branches.py`) covering
+    `_match_driver_to_ride_attempt`'s (lines 151-933, ~780 lines) most
+    self-contained guard clauses and fail-open/fail-closed exception paths:
+    the stale-ride-status skip (dispatch already progressed past
+    `searching`), the subscription filter's fail-**closed** exception
+    (empties the pool — a subscription-gated area must never leak an offer
+    to a non-subscriber on a DB hiccup), the daily-quota filter's fail-**open**
+    exception (must NOT drop the pool — a transient quota-lookup error can't
+    strand every ride), the cascade pool's own subscription sub-filter
+    (drops non-subscribed cascade/upgrade-type drivers, and its own
+    fail-closed exception), the cascade lookup's outer exception (non-fatal —
+    falls through to the no-eligible-drivers retry), the
+    `ride_offers`-insert failure (releases the claimed driver back to
+    available *before* re-raising, so a transient insert failure can't
+    strand a driver as claimed-but-never-offered), the final
+    no-eligible-drivers-after-all-filters retry, and the
+    no-drivers-could-be-claimed early return (claim lost to a race). **This
+    PR** adds a further increment on top of that 76.05% baseline (5 tests,
+    `tests/test_dispatch_notify_loop_branches.py`) covering the
+    ETA-ranking/batch-claim/parallel-enrichment/per-driver-notify block
+    (~lines 650-930): a full happy-path test building the WS
+    `new_ride_assignment` payload end-to-end (quest progress, active
+    incentive, signed offer-card URL, FCM push all populated) plus the
+    ETA-ranking Distance-Matrix-failure fallback and the notify loop's three
+    fail-open exception paths (quest-progress lookup, offer-card URL
+    signing, FCM push spawn). See the combined coverage figure measured
+    after this PR merges — the two PRs' gains are additive since they touch
+    disjoint line ranges of the same function.
   - `routes/rides/receipts.py`: was 58.3%, **now 100%** after adding 15 tests
     (`tests/test_coverage_rides.py`) covering both endpoints end-to-end:
     `get_ride_receipt`'s no-driver-shows-"Unknown Driver" branch, the
@@ -163,7 +176,7 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   + `backend/tests/test_create_ride_remaining_branches.py` (booking.py),
   `backend/tests/test_ride_estimate_branches.py` (estimates.py),
   `backend/tests/test_ride_cancellation_branches.py` (cancellation.py).
-  Next: once PR #2557 and this PR both merge, re-measure `matching.py`'s
+  Next: once this PR merges (PR #2557 already has), re-measure `matching.py`'s
   combined coverage — if still short of 80%, one more small pass over
   whatever remains (see the `matching.py` entry above for likely
   candidates). This is the last open file in the `routes/rides/` package.
@@ -177,9 +190,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   `routes/rides/*` / dispatch below 80%. Payments, fare, dispatch,
   `lost_found.py`, `lifecycle.py`, `receipts.py`, `queries.py`,
   `estimates.py`, `cancellation.py`, and `booking.py` now meet target.
-  `matching.py` is the last file below target — two independent PRs
-  (#2557, this one) are in flight against its `_match_driver_to_ride_attempt`
-  gap; see above for expected combined result.
+  `matching.py` (72.48% → 76.05% via merged PR #2557, plus this PR's own
+  further increment) is the last file below target — re-measure once this
+  PR merges; see above for likely next steps if still short.
 
 ### A2. Post-deploy smoke test in CI
 - [ ] **Status:** open

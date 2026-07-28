@@ -268,7 +268,14 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   goal without confirming, per the "explicitly NOT recommended" note above.
 
 ### A2. Post-deploy smoke test in CI
-- [ ] **Status:** open
+- [x] **Status:** done — already implemented before this checklist was last
+  reviewed. `.github/workflows/ci.yml`'s `smoke-test` job curls `/health` +
+  DB check, `app_settings`, `vehicle-types`, and confirms auth/fare-estimate
+  return 401 not 500; `notify-failure` job alerts on failure. `deploy-fly.yml`/
+  `deploy-backend.yml` already have health-poll-and-rollback logic. Landed in
+  commit `3bae3db`. (Note: a prior attempt to mark this done, PR #2504,
+  reported `merged: true` on GitHub but its commit never actually landed on
+  `main` — re-applying the doc fix here.)
 - **Why:** deploys to Fly/Railway succeed or fail silently; a bad deploy is currently
   discovered by users. The smoke script from PR #172 already exists.
 - **Files:** `.github/workflows/deploy-fly.yml`, `.github/workflows/deploy-backend.yml`
@@ -277,7 +284,13 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** a deliberately broken deploy turns the workflow red within minutes.
 
 ### A3. PIPEDA breach record register
-- [ ] **Status:** open (regulatory)
+- [x] **Status:** done — already implemented before this checklist was last
+  reviewed. `docs/audit/breach-record.md` exists with a superset of the
+  requested columns (date, scope, RROSH assessment, notified?, evidence
+  location) and the required "no entries to date" first row. Created in PR
+  #2222 (2026-07-25). (Note: a prior attempt to mark this done, PR #2504,
+  reported `merged: true` on GitHub but its commit never actually landed on
+  `main` — re-applying the doc fix here.)
 - **Why:** referenced by `docs/runbooks/data-breach.md` but never created; PIPEDA
   requires a 24-month breach record.
 - **Files:** create `docs/audit/breach-record.md`

@@ -225,6 +225,8 @@ class SettingsUpdateRequest(BaseModel):
     ai_max_output_tokens: Optional[int] = Field(default=None, ge=128, le=4096)
     ai_max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=10)
     ai_daily_message_cap: Optional[int] = Field(default=None, ge=1, le=500)
+    # 0 = "not set" → /mcp falls back to ai_daily_message_cap (schemas.py).
+    ai_mcp_daily_tool_cap: Optional[int] = Field(default=None, ge=0, le=5000)
     ai_history_max_messages: Optional[int] = Field(default=None, ge=2, le=50)
     ai_faq_cache_enabled: Optional[bool] = None
     ai_faq_cache_ttl_seconds: Optional[int] = Field(default=None, ge=60, le=86400)

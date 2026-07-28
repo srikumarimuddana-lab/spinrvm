@@ -100,6 +100,56 @@ def test_rider_prompt_requires_fresh_closest_search_without_disclosing_tools():
     assert "Never print identifiers" in prompt
 
 
+def test_maps_fanout_tools_carry_extended_timeout():
+    """The three booking tools that fan out to Google Maps must keep a
+    generous per-tool timeout (ToolSpec.timeout_seconds) — losing it
+    reintroduces the mid-quote 'the lookup took too long' failure the
+    override exists to fix. Lives here (not test_ai_tools_core) because the
+    core suite isolates/clears the registry, and domain tools only register
+    on first module import."""
+    from backend.ai.tools import TOOL_REGISTRY, TOOL_TIMEOUT_SECONDS, ensure_registry_loaded
+
+    ensure_registry_loaded()
+    for name in ("find_place", "get_fare_quote", "propose_ride_booking"):
+        spec = TOOL_REGISTRY[name]
+        assert spec.timeout_seconds is not None and spec.timeout_seconds > TOOL_TIMEOUT_SECONDS, name
+
+
+def test_prompts_forbid_internal_detail_leakage():
+    """The rider-facing 'it only resolved approximately, so I can't quote or
+    book to it yet' incident was the model faithfully paraphrasing an internal
+    tool-result warning (provider name, match-quality jargon, model-facing
+    directives). Both personas must be told to translate notes into plain
+    language, and the driver persona must carry the same tool-name secrecy
+    rule as the rider one."""
+    rider = build_system_prompt({}, "rider")
+    assert "notes and warnings are guidance for YOU" in rider
+    assert "resolved approximately" in rider  # named as a forbidden phrase
+    assert "provider or service names" in rider
+    driver = build_system_prompt({}, "driver")
+    assert "Tool names, function names" in driver
+    assert "Never print identifiers" in driver
+    assert "guidance for YOU" in driver
+    assert "Never ask for or repeat payment card numbers" in driver
+
+
+def test_rider_prompt_trusts_tapped_suggestion_coordinates():
+    """A tapped location-suggestion card sends "Use <address> [lat,lng] as my
+    pickup/dropoff". Without an explicit trust rule, rule 6's "never
+    coordinates you saw in an older bracketed message" wording makes the model
+    re-run find_place on the address text, which re-trips the
+    imprecise_address gate — the infinite "check the exact street address"
+    loop. The prompt must (a) trust the tapped candidate verbatim and (b)
+    never re-ask the same address question twice."""
+    prompt = build_system_prompt({}, "rider")
+    assert "taps one of your location suggestions" in prompt
+    assert "never re-run find_place on that address" in prompt
+    assert "rider-chosen candidate" in prompt
+    assert "Never ask the rider to fix the same address twice" in prompt
+    # The recency constraint must still cover the new case (it follows it).
+    assert prompt.index("taps one of your location suggestions") < prompt.index("Bracketed coordinates count")
+
+
 def _patch_last_ride(rows=None):
     return patch.object(tools_booking.db_supabase, "get_rows", AsyncMock(return_value=rows or []))
 

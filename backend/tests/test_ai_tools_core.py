@@ -170,6 +170,53 @@ class TestExecuteTool:
         assert "too long" in result["error"]
 
     @pytest.mark.anyio
+    async def test_per_tool_timeout_override_shrinks(self):
+        """A spec-level timeout wins over the global default (tight side)."""
+
+        async def slow(user, **args):
+            await asyncio.sleep(1)
+            return {}
+
+        register(_spec(handler=slow, timeout_seconds=0.01))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is False
+        assert "too long" in result["error"]
+
+    @pytest.mark.anyio
+    async def test_per_tool_timeout_override_extends(self, monkeypatch):
+        """A spec-level timeout also wins on the generous side — the Maps
+        fan-out tools (find_place / get_fare_quote / propose_ride_booking)
+        legitimately exceed the 5 s global default at their worst case, and
+        used to die mid-quote with 'the lookup took too long'."""
+        monkeypatch.setattr(ai_tools, "TOOL_TIMEOUT_SECONDS", 0.01)
+
+        async def slowish(user, **args):
+            await asyncio.sleep(0.05)
+            return {"ok": True}
+
+        register(_spec(handler=slowish, timeout_seconds=2.0))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result["ok"] is True
+
+    def test_maps_fanout_tools_carry_extended_timeout(self):
+        """The three booking tools that fan out to Google Maps must keep a
+        generous per-tool timeout — losing it reintroduces the mid-quote
+        timeout this override exists to fix."""
+        saved = dict(TOOL_REGISTRY)
+        TOOL_REGISTRY.clear()
+        ai_tools._registry_loaded = False
+        try:
+            ai_tools.ensure_registry_loaded()
+            for name in ("find_place", "get_fare_quote", "propose_ride_booking"):
+                spec = TOOL_REGISTRY[name]
+                assert spec.timeout_seconds is not None and spec.timeout_seconds > ai_tools.TOOL_TIMEOUT_SECONDS, name
+        finally:
+            TOOL_REGISTRY.clear()
+            TOOL_REGISTRY.update(saved)
+            ai_tools._registry_loaded = True
+
+    @pytest.mark.anyio
     async def test_oversized_result_capped(self):
         async def huge(user, **args):
             return {"rows": ["x" * 100] * 200}

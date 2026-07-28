@@ -478,6 +478,89 @@ class TestGeocodeBias:
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok
         assert "confirm the exact address" in result["note"]
+
+
+class TestGeocodeLocalityFilter:
+    """B7: `components=locality:<city>` is a HARD Geocoding API filter, unlike
+    `bounds` — the strongest available defence against cross-city
+    mis-resolution. Only applied when the rider's location resolves to a
+    service area with a populated `city`; degrades to unfiltered on
+    ZERO_RESULTS or when no city is known."""
+
+    NEAR = {"near_lat": 50.41, "near_lng": -104.65}
+
+    @pytest.mark.anyio
+    async def test_known_city_adds_locality_filter(self):
+        http_patch, client = _patch_http_capture(GEOCODE_OK)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            http_patch,
+            _patch_area({"id": "area-1", "name": "Regina", "city": "Regina"}),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok and result["candidates"]
+        params = client.get.call_args.kwargs.get("params") or client.get.call_args.args[1]
+        assert params["components"] == "locality:Regina|country:CA"
+        client.get.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_no_city_on_area_sends_no_locality_filter(self):
+        http_patch, client = _patch_http_capture(GEOCODE_OK)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            http_patch,
+            _patch_area({"id": "area-1", "name": "Saskatoon"}),  # no "city" key
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok and result["candidates"]
+        params = client.get.call_args.kwargs.get("params") or client.get.call_args.args[1]
+        assert params["components"] == "country:CA"
+        client.get.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_no_area_resolved_sends_no_locality_filter(self):
+        http_patch, client = _patch_http_capture(GEOCODE_OK)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            http_patch,
+            _patch_area(None),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok and result["candidates"]
+        params = client.get.call_args.kwargs.get("params") or client.get.call_args.args[1]
+        assert params["components"] == "country:CA"
+
+    @pytest.mark.anyio
+    async def test_zero_results_with_locality_retries_unfiltered(self):
+        zero_resp = MagicMock()
+        zero_resp.json.return_value = {"status": "ZERO_RESULTS", "results": []}
+        ok_resp = MagicMock()
+        ok_resp.json.return_value = GEOCODE_OK
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=[zero_resp, ok_resp])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            patch.object(tools_booking.httpx, "AsyncClient", MagicMock(return_value=ctx)),
+            _patch_area({"id": "area-1", "name": "Regina", "city": "Regina"}),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
+        assert ok and result["candidates"]
+        assert client.get.await_count == 2
+        first_params = client.get.await_args_list[0].kwargs.get("params") or client.get.await_args_list[0].args[1]
+        second_params = client.get.await_args_list[1].kwargs.get("params") or client.get.await_args_list[1].args[1]
+        assert first_params["components"] == "locality:Regina|country:CA"
+        assert second_params["components"] == "country:CA"
         assert "km from the rider's search area" in result["note"]
 
     @pytest.mark.anyio

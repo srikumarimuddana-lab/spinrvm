@@ -267,6 +267,12 @@ def _ride_get_rows_side_effect(*args, **kwargs):
         return [{"id": "vt_standard", "name": "Standard", "is_active": True}]
     if table == "rides":
         return []
+    if table == "corporate_members":
+        # Backs booking.py's explicit active-membership re-check (gap #3
+        # fail-closed fix) — without this the company_allowance path 403s
+        # even though list_active_memberships_for_user above is stubbed
+        # active, since that stub doesn't back this separate query.
+        return [{"id": _MEMBER_ID, "company_id": _CORP_COMPANY_ID, "status": "active"}]
     return []
 
 

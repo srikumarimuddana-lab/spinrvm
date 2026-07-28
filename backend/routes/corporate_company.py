@@ -88,6 +88,23 @@ except ImportError:
     from services.corporate_allowance_service import apply_grant  # type: ignore
     from services.corporate_membership_service import invite_member  # type: ignore
 
+try:
+    from ..services.corporate_member_offboarding_service import cancel_pre_pickup_rides_for_member  # type: ignore
+except ImportError:
+    from services.corporate_member_offboarding_service import (  # type: ignore
+        cancel_pre_pickup_rides_for_member,
+    )
+
+try:
+    from ..settings_loader import get_app_settings  # type: ignore
+except ImportError:
+    from settings_loader import get_app_settings  # type: ignore
+
+try:
+    from ..utils.audit_logger import log_user_action  # type: ignore
+except ImportError:
+    from utils.audit_logger import log_user_action  # type: ignore
+
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +206,58 @@ async def invite(
     }
 
 
+async def _maybe_revoke_access_on_removal(
+    *,
+    company_id: str,
+    member_id: str,
+    previous_status: str,
+    new_status: str,
+    actor: dict,
+) -> None:
+    """Access revocation for a member transitioning into 'removed' or
+    'suspended'. Mirrors corporate_suspension_service's company-level
+    pattern at member scope — see corporate module review gap #3.
+
+    Only fires on the transition itself (not already-removed → removed), so
+    an idempotent repeat call doesn't re-cancel or re-notify.
+    """
+    if new_status not in ("removed", "suspended") or previous_status == new_status:
+        return
+
+    cancelled_rides = 0
+    settings = await get_app_settings()
+    if settings.get("corporate_member_removal_cancels_pre_pickup_rides", True):
+        try:
+            cancelled_rides = await cancel_pre_pickup_rides_for_member(company_id, member_id)
+        except Exception:
+            logger.error(
+                "Pre-pickup ride cancellation failed for removed member %s (company %s)",
+                member_id,
+                company_id,
+                exc_info=True,
+            )
+
+    try:
+        await log_user_action(
+            user=actor,
+            action="corporate_member_status_changed",
+            resource="corporate_member",
+            resource_id=str(member_id),
+            details={
+                "company_id": company_id,
+                "old_status": previous_status,
+                "new_status": new_status,
+                "pre_pickup_rides_cancelled": cancelled_rides,
+            },
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_member_status_changed member=%s",
+            member_id,
+            exc_info=True,
+        )
+
+
 @router.patch("/members/{member_id}")
 async def update_member(
     company_id: str,
@@ -221,7 +290,16 @@ async def update_member(
                 # Cross-company (or archived) section assignment is a
                 # tenancy violation, not a typo — refuse loudly.
                 raise HTTPException(status_code=404, detail="Section not found for this company")
-    return await update_corporate_member(member_id, patch) or existing
+    updated = await update_corporate_member(member_id, patch) or existing
+    if "status" in patch:
+        await _maybe_revoke_access_on_removal(
+            company_id=company_id,
+            member_id=member_id,
+            previous_status=existing.get("status"),
+            new_status=patch["status"],
+            actor=guard["user"],
+        )
+    return updated
 
 
 @router.delete("/members/{member_id}")
@@ -233,7 +311,15 @@ async def remove_member(
     existing = await get_corporate_member_by_id(member_id)
     if not existing or existing.get("company_id") != company_id:
         raise HTTPException(status_code=404, detail="Member not found")
-    return await update_corporate_member(member_id, {"status": "removed"}) or existing
+    updated = await update_corporate_member(member_id, {"status": "removed"}) or existing
+    await _maybe_revoke_access_on_removal(
+        company_id=company_id,
+        member_id=member_id,
+        previous_status=existing.get("status"),
+        new_status="removed",
+        actor=guard["user"],
+    )
+    return updated
 
 
 # ---------- Allowances ----------

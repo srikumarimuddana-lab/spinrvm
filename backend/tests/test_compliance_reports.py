@@ -182,14 +182,15 @@ class TestInsurancePeriodRows:
             rows, truncated = asyncio.run(compliance._insurance_period_rows(_START, _END, None))
 
         assert not truncated
+        # driver_id/ride_id are intentionally excluded from the rendered
+        # report (product decision) -- driver_name already identifies the
+        # driver on the report itself.
         assert rows == [
             {
-                "driver_id": "d1",
                 "driver_name": "Jane Doe",
                 "period": "2 — En route to pickup (primary commercial)",
                 "started_at": "2026-07-01T09:00:00Z",
                 "ended_at": "(open)",
-                "ride_id": "r1",
             }
         ]
 

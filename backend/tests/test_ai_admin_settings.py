@@ -66,6 +66,18 @@ class TestUpdateValidation:
         fields = body.model_dump(exclude_none=True)
         assert fields == {"ai_assistant_enabled": True}
 
+    def test_mcp_daily_tool_cap_round_trips(self):
+        # Codex review on PR #2774: the cap read by mcp_server must be a real
+        # persistable settings field, not a phantom key that always falls back.
+        body = SettingsUpdateRequest(ai_mcp_daily_tool_cap=200)
+        assert body.model_dump(exclude_none=True) == {"ai_mcp_daily_tool_cap": 200}
+        # 0 is valid and means "unset — fall back to ai_daily_message_cap"
+        assert SettingsUpdateRequest(ai_mcp_daily_tool_cap=0).ai_mcp_daily_tool_cap == 0
+        with pytest.raises(ValueError):
+            SettingsUpdateRequest(ai_mcp_daily_tool_cap=-1)
+        with pytest.raises(ValueError):
+            SettingsUpdateRequest(ai_mcp_daily_tool_cap=5001)
+
     def test_auto_heal_flag_is_settable_and_defaults_unset(self):
         # The stripe_auto_heal_processing flag must round-trip through the
         # settings model so ops can toggle it via PUT /api/admin/settings.

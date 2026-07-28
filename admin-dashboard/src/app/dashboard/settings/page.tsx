@@ -492,6 +492,18 @@ export default function SettingsPage() {
                                                 onCheckedChange={(v) => update("ai_mcp_enabled", v)}
                                             />
                                         </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="ai_mcp_daily_tool_cap">MCP daily tool calls per user</Label>
+                                            <Input
+                                                id="ai_mcp_daily_tool_cap"
+                                                type="number" min={0} max={5000}
+                                                value={settings.ai_mcp_daily_tool_cap ?? 0}
+                                                onChange={(e) => update("ai_mcp_daily_tool_cap", parseInt(e.target.value))}
+                                            />
+                                            <p className="text-xs text-muted-foreground">
+                                                0 = use the chat daily-message cap above.
+                                            </p>
+                                        </div>
                                         <div className="flex items-center justify-between">
                                             <div>
                                                 <Label>AI escalation opens Zoho tickets</Label>

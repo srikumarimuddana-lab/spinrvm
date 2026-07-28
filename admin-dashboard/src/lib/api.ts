@@ -3404,19 +3404,20 @@ export interface DataTransferExportEntityRef {
     entity_type: "driver" | "rider";
     entity_id: string;
 }
-export interface DataTransferExportResult {
+// The export route is backgrounded (see backend/routes/admin/data_transfer_export.py) --
+// it returns only a job_id immediately; the caller polls getDataTransferJob
+// until status leaves "pending", then fetches the download link separately.
+export interface DataTransferExportQueuedResult {
     job_id: string;
-    entity_count: number;
+    status: "pending";
     requested_count: number;
-    download_url: string;
-    expires_at: string;
 }
 export const exportDataTransferEntities = (
     entities: DataTransferExportEntityRef[],
     format: DataTransferExportFormat,
     docTypes?: string[],
 ) =>
-    request<DataTransferExportResult>("/api/admin/data-transfer/export", {
+    request<DataTransferExportQueuedResult>("/api/admin/data-transfer/export", {
         method: "POST",
         body: JSON.stringify({ entities, format, doc_types: docTypes ?? null }),
     });
@@ -3498,5 +3499,7 @@ export interface DataTransferJob {
 }
 export const listDataTransferJobs = (limit = 50) =>
     request<{ jobs: DataTransferJob[] }>(`/api/admin/data-transfer/jobs?limit=${limit}`);
+export const getDataTransferJob = (jobId: string) =>
+    request<DataTransferJob>(`/api/admin/data-transfer/jobs/${jobId}`);
 export const regenerateDataTransferJobDownload = (jobId: string) =>
     request<{ download_url: string }>(`/api/admin/data-transfer/jobs/${jobId}/download`);

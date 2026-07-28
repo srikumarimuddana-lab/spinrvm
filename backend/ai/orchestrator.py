@@ -154,7 +154,10 @@ async def run_chat_turn(
     prior_turns = max(len(history) - 1, 0)
     faq_cache_enabled = bool(settings.get("ai_faq_cache_enabled"))
     faq_cache_ttl = int(settings.get("ai_faq_cache_ttl_seconds") or 3600)
-    cache_eligible = faq_cache_enabled and admin_actor_id is None and prior_turns == 0
+    # Threat-flagged turns must never enter (or be served from) the
+    # cross-user FAQ cache: a crafted first message that slips a payload past
+    # the scrubber would otherwise be replayed verbatim to other users.
+    cache_eligible = faq_cache_enabled and admin_actor_id is None and prior_turns == 0 and not threat_hit
     if cache_eligible:
         cached = await response_cache.get_cached(audience, scrubbed)
         if cached is not None:

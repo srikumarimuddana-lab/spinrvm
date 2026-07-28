@@ -100,6 +100,21 @@ def test_rider_prompt_requires_fresh_closest_search_without_disclosing_tools():
     assert "Never print identifiers" in prompt
 
 
+def test_maps_fanout_tools_carry_extended_timeout():
+    """The three booking tools that fan out to Google Maps must keep a
+    generous per-tool timeout (ToolSpec.timeout_seconds) — losing it
+    reintroduces the mid-quote 'the lookup took too long' failure the
+    override exists to fix. Lives here (not test_ai_tools_core) because the
+    core suite isolates/clears the registry, and domain tools only register
+    on first module import."""
+    from backend.ai.tools import TOOL_REGISTRY, TOOL_TIMEOUT_SECONDS, ensure_registry_loaded
+
+    ensure_registry_loaded()
+    for name in ("find_place", "get_fare_quote", "propose_ride_booking"):
+        spec = TOOL_REGISTRY[name]
+        assert spec.timeout_seconds is not None and spec.timeout_seconds > TOOL_TIMEOUT_SECONDS, name
+
+
 def test_prompts_forbid_internal_detail_leakage():
     """The rider-facing 'it only resolved approximately, so I can't quote or
     book to it yet' incident was the model faithfully paraphrasing an internal

@@ -269,7 +269,12 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
        block (untestable per the dual-import convention, not a real gap).
      - `routes/corporate_rider.py`, `routes/corporate_company_kyb.py` — 32-33%
        (rider-facing/onboarding, lower risk than the above, do last)
-     - `services/corporate_membership_service.py` — 27%, `services/corporate_policy_service.py` — 68% (already close)
+     - `services/corporate_membership_service.py` — **100%** (was 27%,
+       closed 2026-07-28: 17 unit tests added for the invite/accept race
+       branches, domain auto-match edge cases, `join_via_domain` fallback,
+       `_uuid_or_none` actor-id coercion, and both `bootstrap_owner` modes
+       — test-only change, see `docs/change-log/2026-07-28-corporate-membership-service-coverage-80.md`),
+       `services/corporate_policy_service.py` — 68% (already close)
      No work started on closing this gap yet — scoping/measurement only.
   2. `backend/utils/insurance_periods.py`, safety check-in / SOS-related
      routes (see `.claude/context/domain-safety.md`) — regulatory +

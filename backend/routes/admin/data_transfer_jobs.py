@@ -9,18 +9,20 @@ response left the browser. This is that endpoint.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...documents import _extract_signed_url
     from ...supabase_client import supabase
+    from ...utils.rate_limiter import data_transfer_jobs_limit
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from documents import _extract_signed_url
     from supabase_client import supabase
+    from utils.rate_limiter import data_transfer_jobs_limit
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,9 @@ _LIST_COLUMNS = (
 
 
 @router.get("/data-transfer/jobs")
+@data_transfer_jobs_limit
 async def list_data_transfer_jobs(
+    request: Request,
     limit: int = Query(50, ge=1, le=200),
     admin: dict = Depends(get_admin_user),
 ):
@@ -58,7 +62,9 @@ async def list_data_transfer_jobs(
 
 
 @router.get("/data-transfer/jobs/{job_id}")
+@data_transfer_jobs_limit
 async def get_data_transfer_job(
+    request: Request,
     job_id: str,
     admin: dict = Depends(get_admin_user),
 ):
@@ -74,7 +80,9 @@ async def get_data_transfer_job(
 
 
 @router.get("/data-transfer/jobs/{job_id}/download")
+@data_transfer_jobs_limit
 async def regenerate_job_download_link(
+    request: Request,
     job_id: str,
     admin: dict = Depends(get_admin_user),
 ):

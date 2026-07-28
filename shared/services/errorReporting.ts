@@ -13,7 +13,9 @@
  * app's _layout.tsx). All call sites in ErrorBoundary, stores, and screens
  * go through this module, so the backend's Sentry conventions are enforced
  * in one place:
- *   - tags: surface (rider-app/driver-app), env — set at init
+ *   - tags: surface (rider-app/driver-app), env — set at init; captureException
+ *     promotes domain/ride_id/driver_id/rider_id from context into tags so
+ *     events stay filterable and line up with the backend's conventions.
  *   - PIPEDA: no PII in events. sendDefaultPii stays false, user is id-only,
  *     console breadcrumbs are dropped (they routinely contain GPS coords).
  */
@@ -50,6 +52,13 @@ export function initErrorReporting(config: ErrorReportingConfig): void {
       initialScope: { tags: { surface: config.surface } },
       // Console breadcrumbs routinely carry GPS coordinates and ride
       // payloads from debug logging — drop the whole category.
+      //
+      // Message-level scrubbing was tried and reverted: Sentry's console
+      // integration also puts the *raw, unserialized* arguments in
+      // `breadcrumb.data.arguments`, which a message-only filter never sees,
+      // and `safeJoin` renders object arguments as "[object Object]" so the
+      // message itself carries nothing to scrub. Any future attempt to keep
+      // this trail must delete `breadcrumb.data` outright, not filter text.
       beforeBreadcrumb(breadcrumb: any) {
         return breadcrumb?.category === 'console' ? null : breadcrumb;
       },
@@ -100,10 +109,22 @@ function crashlytics() {
  * Record an exception. Goes to Sentry when initialised, else Crashlytics.
  * `context` values are attached as custom attributes before recording.
  */
+// CLAUDE.md "Sentry tags": these must be indexed tags, not `extra`, or events
+// can't be filtered by domain or correlated with the backend's events.
+const TAG_KEYS = new Set(['domain', 'surface', 'ride_id', 'driver_id', 'rider_id', 'env']);
+
 export function captureException(error: Error, context?: Record<string, unknown>): void {
   try {
     if (_sentry) {
-      _sentry.captureException(error, context ? { extra: context } : undefined);
+      let scope: { tags?: Record<string, string>; extra?: Record<string, unknown> } | undefined;
+      if (context) {
+        scope = {};
+        for (const [k, v] of Object.entries(context)) {
+          if (TAG_KEYS.has(k)) (scope.tags ??= {})[k] = String(v);
+          else (scope.extra ??= {})[k] = v;
+        }
+      }
+      _sentry.captureException(error, scope);
     } else {
       const c = crashlytics();
       if (c) {

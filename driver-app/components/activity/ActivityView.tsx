@@ -3,10 +3,10 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   FlatList,
   ActivityIndicator,
   TouchableOpacity,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -26,6 +26,13 @@ const PAGE_SIZE = 50;
 
 export default function ActivityView() {
   const router = useRouter();
+  // Filter pills wrap onto a second row rather than scrolling horizontally, so
+  // every option stays visible and tappable without a discovery gesture (same
+  // reasoning as payout-history.tsx). On narrow phones the pills also tighten
+  // their padding/type so the wrap happens later. 380 matches the sibling
+  // rider-app Activity screen; BREAKPOINTS.sm (375) would miss a 375dp iPhone SE.
+  const { width } = useWindowDimensions();
+  const isCompactFilterLayout = width < 380;
   const {
     earnings,
     earningsByPeriod,
@@ -284,10 +291,20 @@ export default function ActivityView() {
         {(['today', 'week', 'month', 'all'] as Period[]).map((item) => (
           <TouchableOpacity
             key={item}
-            style={[styles.pill, period === item && styles.pillActive]}
+            style={[
+              styles.pill,
+              isCompactFilterLayout && styles.pillCompact,
+              period === item && styles.pillActive,
+            ]}
             onPress={() => setPeriod(item)}
           >
-            <Text style={[styles.pillText, period === item && styles.pillTextActive]}>
+            <Text
+              style={[
+                styles.pillText,
+                isCompactFilterLayout && styles.pillTextCompact,
+                period === item && styles.pillTextActive,
+              ]}
+            >
               {item === 'all' ? 'All Time' : item === 'today' ? 'Today' : item === 'week' ? 'This Week' : 'This Month'}
             </Text>
           </TouchableOpacity>
@@ -391,20 +408,30 @@ export default function ActivityView() {
               <Text style={styles.rideCount}>{filteredRides.length} rides</Text>
             </View>
 
-            {/* Status filter pills */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusPillRow}>
+            {/* Status filter pills — wrap to match the period row above. */}
+            <View style={styles.statusPillRow}>
               {(['all', 'completed', 'scheduled', 'cancelled'] as StatusFilter[]).map((item) => (
                 <TouchableOpacity
                   key={item}
-                  style={[styles.statusPill, statusFilter === item && styles.statusPillActive]}
+                  style={[
+                    styles.statusPill,
+                    isCompactFilterLayout && styles.statusPillCompact,
+                    statusFilter === item && styles.statusPillActive,
+                  ]}
                   onPress={() => setStatusFilter(item)}
                 >
-                  <Text style={[styles.statusPillText, statusFilter === item && styles.statusPillTextActive]}>
+                  <Text
+                    style={[
+                      styles.statusPillText,
+                      isCompactFilterLayout && styles.statusPillTextCompact,
+                      statusFilter === item && styles.statusPillTextActive,
+                    ]}
+                  >
                     {item === 'all' ? 'All Status' : item.charAt(0).toUpperCase() + item.slice(1)}
                   </Text>
                 </TouchableOpacity>
               ))}
-            </ScrollView>
+            </View>
           </View>
         </>
       )}
@@ -466,6 +493,9 @@ const styles = StyleSheet.create({
   // Period pills
   pillRow: {
     flexDirection: 'row',
+    // Wrap so the last pill ("All Time") is never pushed off-screen and
+    // untappable on a 360dp/375dp phone.
+    flexWrap: 'wrap',
     paddingHorizontal: 16,
     gap: 10,
     marginTop: 12,
@@ -478,6 +508,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3f4f6',
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    // Never let a pill squeeze its own label; wrap the row instead.
+    flexShrink: 0,
+    // MIN_TOUCH from shared/utils/responsive.ts — the old 8px padding + 13px
+    // text was ~34pt tall, under the WCAG 2.1 AA target size.
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Narrow phones: tighten padding/type so the row wraps later.
+  pillCompact: {
+    paddingHorizontal: 12,
   },
   pillActive: {
     backgroundColor: '#ef4444',
@@ -488,9 +529,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  pillTextCompact: {
+    fontSize: 12,
+  },
   pillTextActive: {
+    // No fontSize here — it would override pillTextCompact (12px) and render
+    // the selected pill larger than the rest on narrow screens.
     color: '#fff',
-    fontSize: 13,
     fontWeight: '700',
   },
   // Earnings card
@@ -612,6 +657,11 @@ const styles = StyleSheet.create({
   },
   // Status filter pills
   statusPillRow: {
+    // Was a horizontal ScrollView's contentContainerStyle; now a plain wrapping
+    // row so every status stays visible, matching the period row above. The
+    // 16px inset comes from the parent `ridesSection`.
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     marginBottom: 16,
   },
@@ -622,6 +672,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3f4f6',
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    flexShrink: 0,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statusPillCompact: {
+    paddingHorizontal: 10,
   },
   statusPillActive: {
     backgroundColor: '#1f2937',
@@ -631,6 +688,9 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     fontSize: 12,
     fontWeight: '600',
+  },
+  statusPillTextCompact: {
+    fontSize: 11,
   },
   statusPillTextActive: {
     color: '#fff',

@@ -64,10 +64,23 @@ describe('facade routing once Sentry is active', () => {
     initErrorReporting({ dsn: DSN, surface: 'rider-app' });
   });
 
-  it('captureException → Sentry.captureException with extra context', () => {
+  it('captureException sends CLAUDE.md tag keys as indexed tags, not extra', () => {
+    // `domain`/`ride_id`/`driver_id`/`rider_id` must be tags so events are
+    // filterable and correlate with the backend's Sentry events.
     const err = new Error('boom');
-    captureException(err, { ride_id: 'r-1' });
-    expect(Sentry.captureException).toHaveBeenCalledWith(err, { extra: { ride_id: 'r-1' } });
+    captureException(err, { ride_id: 'r-1', domain: 'dispatch' });
+    expect(Sentry.captureException).toHaveBeenCalledWith(err, {
+      tags: { ride_id: 'r-1', domain: 'dispatch' },
+    });
+  });
+
+  it('captureException keeps non-tag context in extra', () => {
+    const err = new Error('boom');
+    captureException(err, { domain: 'safety', attempt: 3 });
+    expect(Sentry.captureException).toHaveBeenCalledWith(err, {
+      tags: { domain: 'safety' },
+      extra: { attempt: 3 },
+    });
   });
 
   it('captureMessage maps log → info', () => {

@@ -725,7 +725,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   rates reflecting its class (XL/Premium priced above Economy).
 
 ### B9. Address+coordinate pairs are stored server-side with zero consistency validation
-- [ ] **Status:** open — follow-up to the Glide Crescent wrong-pin incident
+- [x] **Status:** partially done — geocode-verify + dedupe fix shipped; `place_id`
+  storage and `CreateRideRequest` cross-field validation explicitly deferred
+  (see below)
 - **Why:** the client-side carriers of mismatched pairs are fixed (recents v2,
   search-screen pin integrity, map-pick label binding), but the backend still
   accepts and replays unvalidated pairs:
@@ -744,10 +746,33 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Action:** store `place_id` with saved addresses and re-resolve on save;
   geocode-verify pairs at write time (reject > ~1 km mismatch); fix the
   favorites dedupe to compare both axes of both endpoints.
+- **Done this pass:** added `backend/utils/address_verification.py` —
+  best-effort geocode check used by both `POST /addresses` and
+  `POST /favorites` (which `save_favorite_from_ride` delegates into, so both
+  entry points from the Why section are covered). Fails OPEN on no API key,
+  exhausted Maps budget, API/network error, `ZERO_RESULTS`, `partial_match`,
+  or an imprecise (non-ROOFTOP/RANGE_INTERPOLATED) geocode — only rejects
+  (400) on a confident precise-geocode mismatch > 1 km. Also fixed the
+  favorites dedupe (`favorites.py`) to compare both lat AND lng of both
+  pickup and dropoff, not latitude only.
+- **Explicitly deferred:**
+  - `place_id` storage + re-resolve-on-save — needs a new
+    `saved_addresses.place_id` migration column; the write-time verification
+    above is the actual safety net, so this is an enhancement on top, not
+    required to close the core gap. Left for a follow-up.
+  - `CreateRideRequest` cross-field validation in `schemas.py` — ride
+    creation is a live, state-machine-critical, money-adjacent surface;
+    changing what it accepts needs its own dedicated pass (dry run against
+    `mock_supabase_client`, feature-flag consideration) rather than bundling
+    into this PR per CLAUDE.md's pre-merge release gates.
 - **Files:** `backend/routes/addresses.py`, `backend/routes/favorites.py`,
-  `backend/schemas.py`
+  `backend/utils/address_verification.py` (new),
+  `backend/tests/test_address_verification.py` (new),
+  `backend/tests/test_p3_addresses_favorites_safety_disputes.py`
 - **Acceptance:** no endpoint persists an address whose stored coordinate is
-  more than ~1 km from where that address geocodes.
+  more than ~1 km from where that address geocodes, when Google is confident
+  about the geocode (met for `/addresses` and `/favorites`; `CreateRideRequest`
+  still open — see deferred above).
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

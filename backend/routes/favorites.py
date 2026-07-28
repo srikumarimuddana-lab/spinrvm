@@ -14,9 +14,11 @@ from pydantic import BaseModel, Field
 try:
     from ..db import db
     from ..dependencies import get_current_user
+    from ..utils.address_verification import verify_address_matches_coordinate
 except ImportError:
     from db import db
     from dependencies import get_current_user
+    from utils.address_verification import verify_address_matches_coordinate
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/favorites", tags=["Favorite Routes"])
@@ -55,11 +57,12 @@ async def get_favorite_routes(
 
 
 @api_router.post("")
-async def save_favorite_route(
-    req: SaveFavoriteRequest, current_user: dict = Depends(get_current_user)
-):
+async def save_favorite_route(req: SaveFavoriteRequest, current_user: dict = Depends(get_current_user)):
     """Save a route as a favorite for quick rebooking."""
-    # Check for duplicate (same pickup + dropoff)
+    # Check for duplicate (same pickup + dropoff). B9: compares both lat AND
+    # lng of both endpoints — the original only compared latitude, so two
+    # routes sharing a latitude but with completely different longitudes
+    # (e.g. opposite sides of the city) were wrongly treated as duplicates.
     try:
         existing = await db.get_rows(
             "favorite_routes",
@@ -69,11 +72,27 @@ async def save_favorite_route(
         for fav in existing:
             if (
                 abs(fav.get("pickup_lat", 0) - req.pickup_lat) < 0.001
+                and abs(fav.get("pickup_lng", 0) - req.pickup_lng) < 0.001
                 and abs(fav.get("dropoff_lat", 0) - req.dropoff_lat) < 0.001
+                and abs(fav.get("dropoff_lng", 0) - req.dropoff_lng) < 0.001
             ):
                 return fav  # Already saved
     except Exception as e:
         logger.debug(f"Duplicate check failed: {e}")
+
+    # B9: same best-effort address<->coordinate check as POST /addresses —
+    # closes the "poisoned ride laundered into a permanent favorite" gap,
+    # since save_favorite_from_ride routes through this same function.
+    for role, address, lat, lng in (
+        ("pickup", req.pickup_address, req.pickup_lat, req.pickup_lng),
+        ("dropoff", req.dropoff_address, req.dropoff_lat, req.dropoff_lng),
+    ):
+        ok, mismatch_reason = await verify_address_matches_coordinate(address, lat, lng)
+        if not ok:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{role.capitalize()} address and location don't match: {mismatch_reason}",
+            )
 
     fav_data = {
         "id": str(uuid.uuid4()),
@@ -94,13 +113,9 @@ async def save_favorite_route(
 
 
 @api_router.post("/{favorite_id}/use")
-async def use_favorite_route(
-    favorite_id: str, current_user: dict = Depends(get_current_user)
-):
+async def use_favorite_route(favorite_id: str, current_user: dict = Depends(get_current_user)):
     """Increment use count when rider books from a favorite. Returns the route data."""
-    fav = await db.find_one(
-        "favorite_routes", {"id": favorite_id, "user_id": current_user["id"]}
-    )
+    fav = await db.find_one("favorite_routes", {"id": favorite_id, "user_id": current_user["id"]})
     if not fav:
         raise HTTPException(status_code=404, detail="Favorite not found")
 
@@ -118,13 +133,9 @@ async def use_favorite_route(
 
 
 @api_router.delete("/{favorite_id}")
-async def delete_favorite_route(
-    favorite_id: str, current_user: dict = Depends(get_current_user)
-):
+async def delete_favorite_route(favorite_id: str, current_user: dict = Depends(get_current_user)):
     """Remove a favorite route."""
-    fav = await db.find_one(
-        "favorite_routes", {"id": favorite_id, "user_id": current_user["id"]}
-    )
+    fav = await db.find_one("favorite_routes", {"id": favorite_id, "user_id": current_user["id"]})
     if not fav:
         raise HTTPException(status_code=404, detail="Favorite not found")
 

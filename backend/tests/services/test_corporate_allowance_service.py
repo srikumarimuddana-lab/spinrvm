@@ -139,3 +139,38 @@ async def test_apply_ride_debit_reversal_uses_reversal_type():
     _, params = mock_sb.rpc.call_args[0]
     assert params["p_type"] == "ride_debit_reversal"
     assert params["p_amount"] == "50"
+
+
+@pytest.mark.asyncio
+async def test_apply_ride_debit_reversal_rejects_non_positive():
+    from services.corporate_allowance_service import apply_ride_debit_reversal
+
+    with pytest.raises(ValueError):
+        await apply_ride_debit_reversal(wallet_id="w1", allowance_id="a1", member_id="m1", amount=0)
+
+
+@pytest.mark.asyncio
+async def test_apply_rollback_rejects_non_positive():
+    from services.corporate_allowance_service import apply_rollback
+
+    with pytest.raises(ValueError):
+        await apply_rollback(wallet_id="w1", allowance_id="a1", member_id="m1", amount=0)
+
+
+@pytest.mark.asyncio
+async def test_apply_raises_when_rpc_returns_no_row():
+    """The RPC is defined RETURNS TABLE and always RETURN NEXTs exactly one
+    row on success (see migration 258) — an empty response means something
+    upstream (a bad wallet_id/allowance_id that somehow didn't RAISE, or a
+    client/PostgREST-layer truncation) is silently dropping the result. Must
+    fail loudly rather than let a caller dereference an empty dict for
+    balances it never got, per CLAUDE.md's "don't silently swallow DB
+    errors" rule."""
+    with patch("services.corporate_allowance_service.supabase") as mock_sb:
+        empty = MagicMock()
+        empty.data = []
+        mock_sb.rpc.return_value.execute.return_value = empty
+        from services.corporate_allowance_service import apply_grant
+
+        with pytest.raises(RuntimeError, match="allowance RPC returned no row"):
+            await apply_grant(wallet_id="w1", allowance_id="a1", member_id="m1", amount=100)

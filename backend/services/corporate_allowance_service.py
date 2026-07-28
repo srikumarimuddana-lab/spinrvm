@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, Union
 try:
     from ..db_supabase import run_sync  # type: ignore
     from ..supabase_client import supabase  # type: ignore
-except ImportError:
+except ImportError:  # pragma: no cover - dual import path
     from db_supabase import run_sync  # type: ignore
     from supabase_client import supabase  # type: ignore
 

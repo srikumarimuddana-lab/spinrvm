@@ -118,6 +118,68 @@ async def test_refund_routes_with_ride_id():
 
 
 @pytest.mark.asyncio
+async def test_refund_rejects_non_positive_amount():
+    from services.corporate_wallet_service import apply_refund
+
+    with pytest.raises(ValueError, match="positive"):
+        await apply_refund(wallet_id="w1", amount=0, ride_id="ride_1")
+    with pytest.raises(ValueError, match="positive"):
+        await apply_refund(wallet_id="w1", amount=-5, ride_id="ride_1")
+
+
+@pytest.mark.asyncio
+async def test_money_str_rounds_half_up_and_accepts_various_numeric_types():
+    """Decimal rounding must be ROUND_HALF_UP, not banker's rounding, and
+    the RPC boundary must accept int/float/str/Decimal inputs uniformly
+    (Postgres numeric receives a lossless decimal string either way)."""
+    rows = [{"transaction_id": "t4", "balance_after": "10.13"}]
+    rpc = _build_rpc(rows)
+    with patch("services.corporate_wallet_service.supabase") as mock_sb:
+        mock_sb.rpc = rpc
+        from services.corporate_wallet_service import apply_topup
+
+        # 10.125 half-up should round to 10.13, not banker's-round to 10.12
+        await apply_topup(wallet_id="w1", amount="10.125", stripe_payment_intent_id="pi_r1")
+    params = rpc.call_args.args[1]
+    assert params["p_delta"] == "10.13"
+
+
+@pytest.mark.asyncio
+async def test_adjustment_without_floor_omits_floor_param():
+    rows = [{"transaction_id": "t5", "balance_after": "5.00"}]
+    rpc = _build_rpc(rows)
+    with patch("services.corporate_wallet_service.supabase") as mock_sb:
+        mock_sb.rpc = rpc
+        from services.corporate_wallet_service import apply_adjustment
+
+        await apply_adjustment(wallet_id="w1", amount=5, notes="bonus", actor_user_id="admin_1")
+    params = rpc.call_args.args[1]
+    assert params["p_floor"] is None
+
+
+@pytest.mark.asyncio
+async def test_apply_propagates_rpc_exception_without_swallowing():
+    """A DB/RPC failure (e.g. lock timeout, constraint violation) must
+    surface loudly, never be swallowed into a generic fallback (CLAUDE.md
+    'do not silently swallow errors'). run_sync wraps the underlying
+    exception in a DatabaseError (see repositories/_base.py) rather than
+    letting it disappear — assert that wrapped error carries the original
+    message so the root cause stays visible."""
+    from utils.error_handling import DatabaseError
+
+    builder = MagicMock()
+    builder.execute = MagicMock(side_effect=RuntimeError("db unavailable"))
+    rpc = MagicMock(return_value=builder)
+    with patch("services.corporate_wallet_service.supabase") as mock_sb:
+        mock_sb.rpc = rpc
+        from services.corporate_wallet_service import apply_topup
+
+        with pytest.raises(DatabaseError) as exc_info:
+            await apply_topup(wallet_id="w1", amount=100, stripe_payment_intent_id="pi_err")
+    assert "db unavailable" in exc_info.value.details["original"]
+
+
+@pytest.mark.asyncio
 async def test_raises_when_rpc_returns_empty():
     rpc = _build_rpc([])
     with patch("services.corporate_wallet_service.supabase") as mock_sb:

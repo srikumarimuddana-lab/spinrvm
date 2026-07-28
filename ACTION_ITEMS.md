@@ -913,6 +913,37 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** runbook exists and is concrete/testable (not just "revert
   the commit"); all four listed files reach ≥90% coverage.
 
+### B13. 22 drivers have no `regulatory_authority`/`regulatory_region` set (blocks the SGI-forms segregation guard from covering them)
+- [ ] **Status:** open — grandfathered around, not fixed. `routes/admin/sgi_forms.py`
+  now hard-blocks generating an SGI D00032/D00033 for any driver whose
+  `regulatory_authority` is explicitly set to something other than `"SGI"`
+  (Alberta-expansion safety guard). As of 2026-07-28, 22 of 209 real
+  drivers in production have `regulatory_authority IS NULL` (pre-dating
+  the field's backfill) — the guard treats NULL as in-scope rather than
+  blocking these legitimate Saskatchewan drivers from getting their forms
+  generated, which is the right call for today (single-province operation)
+  but stops being safe reasoning once Alberta drivers start being
+  onboarded, since a NULL Alberta driver would also pass the guard.
+- **Why:** confirmed directly against the real staging schema
+  (`SELECT regulatory_authority, regulatory_region, count(*) FROM drivers
+  GROUP BY 1, 2`): 187 rows are `SGI`/`SK`, 21 are fully NULL, 1 has
+  `region=SK` but `authority=NULL`. All are currently real Saskatchewan
+  drivers (there's no Alberta data yet — the `provinces` table only has
+  one row, `SK`) — so this is a backfill gap, not a misclassification.
+- **Action:** backfill `regulatory_authority='SGI', regulatory_region='SK'`
+  for the 22 affected rows (one-time UPDATE, low risk — verify each is
+  genuinely a Saskatchewan driver first, e.g. via `service_area_id` ->
+  `service_areas.regulatory_authority`). Once done, the NULL-passes
+  allowance in `sgi_forms.py`'s `_out_of_scope_drivers()` can be tightened
+  to require an explicit `regulatory_authority == "SGI"` match instead of
+  treating NULL as in-scope — do this tightening only after the backfill,
+  and only after Alberta's own `driver_import_service` onboarding path is
+  confirmed to always populate the field for new AB drivers (otherwise
+  the tightened guard would start blocking legitimate new AB drivers'
+  own province-specific forms once those exist, not just protect against
+  cross-province mixing).
+- **Files:** `backend/routes/admin/sgi_forms.py`, one-time backfill script/migration.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

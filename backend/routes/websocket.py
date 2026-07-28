@@ -691,16 +691,15 @@ async def websocket_endpoint(
                 await websocket.send_json({"type": "error", "message": "invalid_json"})
                 continue
 
-            # B-P1-12: Per-USER rate limiting (not per-connection).
-            # Replaces the old closure-scoped _msg_timestamps which an
-            # attacker could side-step by opening N sockets to get
-            # N×WS_MAX_MESSAGES_PER_SECOND throughput. The manager's
-            # bucket aggregates across every WebSocket the user has
-            # open on this machine. See docs/runbooks/websockets.md
-            # for the multi-replica caveat. We drop the offending
-            # message but keep the socket alive — a brief burst from
-            # a buggy reconnect should not force a re-auth round-trip.
-            if not manager.note_user_message(
+            # B-P1-12 / B4: Per-USER rate limiting, enforced fleet-wide via
+            # Redis (falls back to per-machine when Redis is unavailable —
+            # see socket_manager.note_user_message). Replaces the old
+            # closure-scoped _msg_timestamps which an attacker could side-
+            # step by opening N sockets to get N×WS_MAX_MESSAGES_PER_SECOND
+            # throughput. We drop the offending message but keep the socket
+            # alive — a brief burst from a buggy reconnect should not force
+            # a re-auth round-trip.
+            if not await manager.note_user_message(
                 user["id"],
                 max_per_second=WS_MAX_MESSAGES_PER_SECOND,
             ):

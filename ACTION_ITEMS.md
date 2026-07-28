@@ -552,11 +552,27 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
      and at complete_ride before trail aggregation (tests: `test_breadcrumb_buffer.py`).
 
 ### B4. WS per-user rate limit is per-replica only
-- [ ] **Status:** open (acknowledged P3 in code; formalized here)
-- **Files:** `backend/socket_manager.py:27-37`
-- **Approach:** promote the message counter to Redis (`INCR` + `EXPIRE` 1s window)
-  with in-process fallback when Redis is absent.
-- **Acceptance:** cap holds at N msg/s per user across all replicas.
+- [x] **Status:** done (2026-07-28) — `ConnectionManager.note_user_message`
+  now enforces the 30 msg/s cap via a Redis fixed-window counter (`INCR`
+  then `EXPIRE 1` on the first increment), keyed on `user_id` and shared
+  fleet-wide. `utils/redis_client.py` already transparently falls back to
+  an in-process dict when `REDIS_URL` is unset, so local/dev/test needed
+  no branching. If Redis IS configured but a call raises (network blip,
+  Redis down), the limiter fails **open** to the original per-machine
+  sliding-window bucket (renamed `_note_user_message_local`) rather than
+  blocking every WS message fleet-wide on a transient Redis hiccup —
+  matching the non-security-critical fail-open precedent already in
+  `utils/rate_limiter.py`'s `RedisRateLimiter` (OTP keys fail closed;
+  general limits degrade to memory).
+- **Files:** `backend/socket_manager.py`, `backend/routes/websocket.py`
+  (awaited the now-async call), `docs/runbooks/websockets.md`,
+  `backend/tests/test_websocket_per_user_rate_limit.py`,
+  `backend/tests/test_websocket_auth.py`.
+- **Acceptance:** ✅ met — cap holds at N msg/s per user across all
+  replicas via the shared Redis counter; verified with the existing
+  30/31-message contract tests plus new coverage for the Redis-failure
+  fallback path and its bucket cleanup. Full local backend suite re-run
+  to confirm no regressions elsewhere.
 
 ### B5. Migrate AI place lookup to Places API (New) with hard locationRestriction
 - [ ] **Status:** open — follow-up to the AI location/pricing incident fixes

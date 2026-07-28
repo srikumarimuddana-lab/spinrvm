@@ -97,6 +97,18 @@ def report_mode(report_type: str) -> ReportMode:
     return REPORT_FORMAT_REGISTRY[report_type]["mode"]
 
 
+def pdf_safe(text: str) -> str:
+    """fpdf2's core fonts (Helvetica etc.) only support Latin-1 — any
+    caller text with an em dash, curly quote, warning glyph, or other
+    common-but-non-Latin-1 character crashes FPDFUnicodeEncodingException
+    at render time instead of failing at build time. Normalize the
+    characters our own report text actually uses, then fall back to '?'
+    for anything else so an unexpected character degrades a report instead
+    of crashing it outright."""
+    text = text.replace("—", "-").replace("–", "-").replace("’", "'").replace("⚠", "!")
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def new_branded_pdf(title: str, subtitle: str = ""):
     """Return an fpdf2 FPDF instance, portrait A4, with the standard Spinr
     branded header band already drawn (mirrors utils/receipt_pdf.py's
@@ -122,11 +134,11 @@ def new_branded_pdf(title: str, subtitle: str = ""):
         pdf.image(str(LOGO_PATH), x=left, y=6, h=14)
         pdf.set_xy(left + 40, 8)
     pdf.set_font(BRAND_FONT, "B", 18)
-    pdf.cell(0, 8, title, ln=True)
+    pdf.cell(0, 8, pdf_safe(title), ln=True)
     pdf.set_x(left)
     if subtitle:
         pdf.set_font(BRAND_FONT, "", 10)
-        pdf.cell(0, 6, subtitle, ln=True)
+        pdf.cell(0, 6, pdf_safe(subtitle), ln=True)
 
     pdf.set_y(36)
     pdf.set_text_color(0, 0, 0)
@@ -213,8 +225,8 @@ def add_branded_table(doc, fieldnames: list[str], rows: list[dict]) -> None:
     shaded cells, bold white text) followed by one row per dict in `rows`.
     Cell values are not CSV-sanitized (Word has no formula-injection risk
     the way CSV/Excel do when opened by a spreadsheet app)."""
-    from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
     from docx.shared import RGBColor
 
     table = doc.add_table(rows=1, cols=len(fieldnames))
@@ -250,4 +262,4 @@ def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> N
     authority = province_letterhead.get("default_regulatory_authority", "")
     line = f"Spinr Mobility Inc. — {name}" + (f" — regulator of record: {authority}" if authority else "")
     pdf.set_y(-15)
-    pdf.cell(0, 5, line, align="C")
+    pdf.cell(0, 5, pdf_safe(line), align="C")

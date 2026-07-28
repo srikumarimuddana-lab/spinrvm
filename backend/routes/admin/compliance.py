@@ -218,12 +218,12 @@ def _render_tabular_report(
     pdf.set_font(report_branding.BRAND_FONT, "B", 9)
     col_w = min(45, 190 // max(len(fieldnames), 1))
     for name in fieldnames:
-        pdf.cell(col_w, 8, name.replace("_", " ").title(), border=1)
+        pdf.cell(col_w, 8, report_branding.pdf_safe(name.replace("_", " ").title()), border=1)
     pdf.ln()
     pdf.set_font(report_branding.BRAND_FONT, "", 9)
     for row in rows:
         for name in fieldnames:
-            pdf.cell(col_w, 7, str(row.get(name, "")), border=1)
+            pdf.cell(col_w, 7, report_branding.pdf_safe(str(row.get(name, ""))), border=1)
         pdf.ln()
     return Response(
         content=bytes(pdf.output()),

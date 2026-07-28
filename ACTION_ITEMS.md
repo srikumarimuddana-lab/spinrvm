@@ -32,10 +32,10 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     to reflect that. Per-file coverage in that package was **highly uneven**:
     `lost_found.py` 25% (now **100%** — see below, meets target),
     `receipts.py` 58.3% (now **100%** — see below, meets target),
-    `matching.py` 64.7% (now **76.05%** — see below, still below target,
-    PR #2557, merged — plus PR #2561, open, independently adding more on
-    top), `lifecycle.py` 65.1% (now **87.88%** — meets target),
-    `booking.py` 65.7% (now **84.54%** — see below, meets target),
+    `matching.py` 64.7% (now **79.41%** combined — PR #2557 merged, this PR
+    adds the remaining increment; see below — just under the 80% target),
+    `lifecycle.py` 65.1% (now **87.88%** — meets target),
+    `booking.py` 65.7% (now **84.54%** — meets target, PR #2559),
     `queries.py` 69.2% (now **92.20%** — meets target, PR #2544),
     `estimates.py` 71.0% (now **93.99%** — meets target, PR #2552),
     `cancellation.py` 71.0% (now **95.06%** — meets target, PR #2555),
@@ -69,8 +69,8 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     early-returns and settings-fetch-failure fallback plus its outer
     exception handler, and `ride_search_timeout`'s pre-auth-release
     success/failure branches, the attribution-column-fallback retry, the
-    guest-booking SMS branch, and its outer exception handler), **now
-    76.05%** after adding 8 more tests
+    guest-booking SMS branch, and its outer exception handler), **then
+    76.05%** (PR #2557, merged) after adding 8 more tests
     (`tests/test_dispatch_match_attempt_branches.py`) covering
     `_match_driver_to_ride_attempt`'s (lines 151-933, ~780 lines) most
     self-contained guard clauses and fail-open/fail-closed exception paths:
@@ -87,14 +87,21 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     available *before* re-raising, so a transient insert failure can't
     strand a driver as claimed-but-never-offered), the final
     no-eligible-drivers-after-all-filters retry, and the
-    no-drivers-could-be-claimed early return (claim lost to a race).
-    **Still below the 80% target** — the remaining gap is almost entirely
-    the ETA-ranking/batch-claim-loop internals, the parallel
-    rider/incentive/service-area-polygon enrichment, and the per-driver
-    notify loop (roughly lines 650-930): all algorithm-heavy, multi-branch
-    sections that need their own dedicated follow-up subtask(s), ideally
-    split further by phase (ranking, enrichment, notify) rather than
-    attempted as one more PR.
+    no-drivers-could-be-claimed early return (claim lost to a race). **This
+    PR** adds a further increment on top of that 76.05% baseline (5 tests,
+    `tests/test_dispatch_notify_loop_branches.py`) covering the
+    ETA-ranking/batch-claim/parallel-enrichment/per-driver-notify block
+    (~lines 650-930): a full happy-path test building the WS
+    `new_ride_assignment` payload end-to-end (quest progress, active
+    incentive, signed offer-card URL, FCM push all populated) plus the
+    ETA-ranking Distance-Matrix-failure fallback and the notify loop's three
+    fail-open exception paths (quest-progress lookup, offer-card URL
+    signing, FCM push spawn). **Combined with PR #2557: 76.05% → 79.41%** —
+    just under the 80% target. Full local suite confirmed 0 new/different
+    failures (4821 passed, same known 9 A7 `test_ai_tools_booking.py`
+    failures). Remaining gap (~0.6pp) is scattered across the file's
+    smallest remaining uncovered branches — deferred as low-priority; not
+    worth a dedicated follow-up PR for under a percentage point.
   - `routes/rides/receipts.py`: was 58.3%, **now 100%** after adding 15 tests
     (`tests/test_coverage_rides.py`) covering both endpoints end-to-end:
     `get_ride_receipt`'s no-driver-shows-"Unknown Driver" branch, the
@@ -140,19 +147,6 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     the 80% target.
   - `routes/rides/cancellation.py`: was 71.0%, **now 95.06%** (PR #2555) —
     meets the 80% target.
-  - `routes/rides/matching.py`'s `_match_driver_to_ride_attempt` (the
-    ~780-line core dispatch algorithm): **72.48% → 76.05%** (PR #2557) after
-    8 tests (`tests/test_dispatch_match_attempt_branches.py`) covering its
-    self-contained guard clauses and fail-open/fail-closed exception paths
-    (stale-ride-status skip, subscription-filter fail-closed, quota-filter
-    fail-open, cascade subscription sub-filter + its own fail-closed
-    exception, cascade outer exception, `ride_offers`-insert failure
-    releasing the claim before re-raising, no-eligible-drivers retry,
-    no-driver-claimed early return). **Still below the 80% target** — the
-    remaining gap is the ETA-ranking/batch-claim-loop internals, the
-    parallel rider/incentive/service-area-polygon enrichment, and the
-    per-driver notify loop (~lines 650-930), all deferred to a further
-    follow-up subtask split by phase.
 - **Why:** CLAUDE.md mandates ≥90% for `routes/payments.py` + `services/fare_service.py`
   and ≥80% for `routes/rides.py` (now the `routes/rides/` package) +
   `services/dispatch_service.py`; the global floor in `backend/pytest.ini` is
@@ -164,16 +158,18 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   functions), `backend/tests/test_rider_stats_empty.py` (queries.py),
   `backend/tests/test_offer_timeout.py` + `backend/tests/test_p0_ship_blockers.py`
   (matching.py's smaller functions), `backend/tests/test_dispatch_match_attempt_branches.py`
-  (`_match_driver_to_ride_attempt`'s guard/fail-open branches),
+  (PR #2557, matching.py's guard/fail-open branches),
+  `backend/tests/test_dispatch_notify_loop_branches.py` (this PR,
+  matching.py's ETA-ranking/enrichment/notify-loop branches),
   `backend/tests/test_ride_insert_and_dispatch_prep.py`
   + `backend/tests/test_ride_preauth_booking.py`
-  + `backend/tests/test_create_ride_remaining_branches.py` (booking.py's
-  helpers + `create_ride`'s remaining branches), `backend/tests/test_ride_estimate_branches.py`
-  (estimates.py), `backend/tests/test_ride_cancellation_branches.py`
-  (cancellation.py). Next: PR #2561 (open, independent) adds a further
-  `_match_driver_to_ride_attempt` increment targeting its ETA-ranking/
-  enrichment/notify-loop internals (~lines 650-930) — `matching.py` is the
-  last file below target in the `routes/rides/` package once that lands.
+  + `backend/tests/test_create_ride_remaining_branches.py` (booking.py),
+  `backend/tests/test_ride_estimate_branches.py` (estimates.py),
+  `backend/tests/test_ride_cancellation_branches.py` (cancellation.py).
+  Combined with PR #2557 (merged): `matching.py` **64.7% → 79.41%** — the
+  only remaining file in the `routes/rides/` package, ~0.6pp short of the
+  80% target. Not scheduling a dedicated follow-up for the remainder; see
+  Acceptance below.
 - **Approach:** measure current per-file coverage (`pytest --cov --cov-report=term-missing`),
   write tests for the uncovered branches (fare tiers, surge, corporate, promo, refund,
   webhook types, ride-state transitions), then enforce with
@@ -183,9 +179,11 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** CI fails if payments/fare coverage drops below 90% or
   `routes/rides/*` / dispatch below 80%. Payments, fare, dispatch,
   `lost_found.py`, `lifecycle.py`, `receipts.py`, `queries.py`,
-  `estimates.py`, `cancellation.py`, and now `booking.py` meet target.
-  `matching.py` (72.48% → 76.05%) improved but still below target — PR
-  #2561 (open, independent) targets its remaining core-algorithm gap.
+  `estimates.py`, `cancellation.py`, and `booking.py` now meet target.
+  `matching.py` (64.7% → 79.41% combined, PRs #2557 + #2561) is the only
+  file still ~0.6pp short of the 80% target — not worth a dedicated
+  follow-up PR; can be closed opportunistically alongside a future change
+  to the file.
 
 ### A2. Post-deploy smoke test in CI
 - [ ] **Status:** open

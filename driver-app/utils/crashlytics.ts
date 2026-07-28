@@ -17,9 +17,13 @@ export function recordNonFatal(
   error: unknown,
   context?: Record<string, string>
 ): void {
+  // Default the CLAUDE.md-mandated tags. Callers predating the Sentry routing
+  // pass domain-less context (`{ store, action }`, `{ module, reason }`); without
+  // a default those events would land in Sentry untagged and be unfilterable.
+  // An explicit domain from the caller always wins. `env` is set by Sentry init.
   // captureException swallows its own failures by contract, so no try/catch here.
   captureException(
     error instanceof Error ? error : new Error(String(error)),
-    context,
+    { domain: 'drivers', surface: 'driver-app', ...context },
   );
 }

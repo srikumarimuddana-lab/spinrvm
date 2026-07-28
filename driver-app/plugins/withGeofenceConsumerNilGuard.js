@@ -30,10 +30,11 @@ const withGeofenceConsumerNilGuard = (config) => {
                 path.join(iosRoot, '..', 'node_modules'),
             ];
 
-            const patterns = [
-                '**/EXGeofencingTaskConsumer.m',
-                '**/EXGeofencingTaskConsumer.swift',
-            ];
+            // Objective-C only — see the note in withTaskServiceNilGuard.js.
+            // The Swift form of this guard cannot be written safely without
+            // knowing whether the region parameter is optional, and it could
+            // not be compile-verified here.
+            const patterns = ['**/EXGeofencingTaskConsumer.m'];
 
             const candidates = [];
             for (const dir of searchDirs) {
@@ -47,7 +48,7 @@ const withGeofenceConsumerNilGuard = (config) => {
 
             if (candidates.length === 0) {
                 console.warn(
-                    '[withGeofenceConsumerNilGuard] WARNING: No EXGeofencingTaskConsumer.m or .swift found — ' +
+                    '[withGeofenceConsumerNilGuard] WARNING: No EXGeofencingTaskConsumer.m found — ' +
                     'the nil-region guard will NOT be active in this build. ' +
                     'Verify expo-location is installed and pod install has run.',
                 );
@@ -64,35 +65,6 @@ const withGeofenceConsumerNilGuard = (config) => {
                     continue;
                 }
 
-                if (filePath.endsWith('.swift')) {
-                    // Swift: match executeTaskWithRegion / executeTask(with region:
-                    const swiftSig =
-                        /(func\s+executeTask\s*\(\s*(?:with\s+)?region\s*:[^)]*,\s*eventType\s*:[^)]*\)\s*\{)/;
-                    if (!swiftSig.test(src)) {
-                        console.warn(
-                            `[withGeofenceConsumerNilGuard] Could not match Swift executeTask(withRegion:) in ${path.relative(iosRoot, filePath)}`,
-                        );
-                        continue;
-                    }
-
-                    src = src.replace(swiftSig, [
-                        '$1',
-                        '    /* EXGeofenceConsumer-nil-guard */',
-                        '    guard let regionId = region?.identifier, !regionId.isEmpty else {',
-                        '      NSLog("[EXGeofenceConsumer-nil-guard] Skipping task — region or identifier is nil/empty")',
-                        '      return',
-                        '    }',
-                    ].join('\n'));
-
-                    fs.writeFileSync(filePath, src);
-                    patchedCount++;
-                    console.log(
-                        `[withGeofenceConsumerNilGuard] Patched (Swift) ${path.relative(iosRoot, filePath)}`,
-                    );
-                    continue;
-                }
-
-                // Objective-C (.m) source.
                 const methodSig =
                     /(-\s*\(void\)\s*executeTaskWithRegion:\s*\([^)]*\)\s*region\s+eventType:\s*\([^)]*\)\s*eventType\s*\{)/;
 

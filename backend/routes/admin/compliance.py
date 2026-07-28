@@ -17,6 +17,7 @@ import io
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
@@ -31,8 +32,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/compliance", tags=["Admin Compliance"])
-
-_ALLOWED_FORMATS = ("pdf", "csv", "xlsx", "docx")
 
 
 def _d(v) -> Decimal:
@@ -81,8 +80,25 @@ async def _log_compliance_export(admin: dict, report_type: str, params: dict, ro
 # is surfaced as its own column rather than folded into GST/PST/HST.
 _KNOWN_TAX_LABELS = ("GST", "PST", "QST", "HST")
 
+# Applies to every source query in this module. A regulatory/tax export
+# that silently drops rows past this cap would misstate the filing with no
+# visible signal — _check_truncated() below turns that into a loud error
+# log plus a visible "(TRUNCATED)" marker on the exported report instead.
+_ROW_LIMIT = 10000
 
-async def _gst_pst_rows(start_date: datetime, end_date: datetime) -> tuple[list[dict], Decimal, Decimal, Decimal]:
+
+def _check_truncated(fetched_count: int, report_type: str) -> bool:
+    if fetched_count < _ROW_LIMIT:
+        return False
+    logger.error(
+        f"{report_type} export hit the {_ROW_LIMIT}-row fetch limit — report is truncated "
+        f"and may misstate the true totals for the requested range. Narrow the date range "
+        f"or add a driver_id filter to get a complete export."
+    )
+    return True
+
+
+async def _gst_pst_rows(start_date: datetime, end_date: datetime) -> tuple[list[dict], Decimal, Decimal, Decimal, bool]:
     """Sum GST/PST/HST from completed rides' persisted tax_breakdown, grouped
     by calendar month. Reads what was actually charged (ride.tax_breakdown),
     the same field the rider receipt (utils/receipt_pdf.py) and email
@@ -94,8 +110,9 @@ async def _gst_pst_rows(start_date: datetime, end_date: datetime) -> tuple[list[
             "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
         },
         columns="id,ride_completed_at,tax_breakdown,total_fare",
-        limit=10000,
+        limit=_ROW_LIMIT,
     )
+    truncated = _check_truncated(len(rides), "gst_pst_remittance")
 
     by_month: dict[str, dict[str, Decimal]] = {}
     gst_total = Decimal("0")
@@ -148,7 +165,71 @@ async def _gst_pst_rows(start_date: datetime, end_date: datetime) -> tuple[list[
         }
         for month, v in sorted(by_month.items())
     ]
-    return rows, gst_total, pst_total, hst_total
+    return rows, gst_total, pst_total, hst_total, truncated
+
+
+def _render_tabular_report(
+    *,
+    title: str,
+    filename_base: str,
+    fieldnames: list[str],
+    rows: list[dict],
+    subtitle: str,
+    format: str,
+) -> Response:
+    """Shared branded-report rendering for any (fieldnames, rows) tabular
+    report — used by both the GST/PST remittance and insurance-period audit
+    endpoints so format handling (pdf/csv/xlsx/docx) lives in one place."""
+    if format == "csv":
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+        return Response(
+            content=buf.getvalue().encode("utf-8-sig"),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+        )
+
+    if format == "xlsx":
+        wb, ws = report_branding.new_branded_workbook(title, subtitle)
+        report_branding.write_branded_table(ws, fieldnames, rows)
+        buf = io.BytesIO()
+        wb.save(buf)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
+        )
+
+    if format == "docx":
+        doc = report_branding.new_branded_document(title, subtitle)
+        report_branding.add_branded_table(doc, fieldnames, rows)
+        buf = io.BytesIO()
+        doc.save(buf)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.docx"'},
+        )
+
+    # default: pdf
+    pdf = report_branding.new_branded_pdf(title, subtitle)
+    pdf.set_font(report_branding.BRAND_FONT, "B", 9)
+    col_w = min(45, 190 // max(len(fieldnames), 1))
+    for name in fieldnames:
+        pdf.cell(col_w, 8, name.replace("_", " ").title(), border=1)
+    pdf.ln()
+    pdf.set_font(report_branding.BRAND_FONT, "", 9)
+    for row in rows:
+        for name in fieldnames:
+            pdf.cell(col_w, 7, str(row.get(name, "")), border=1)
+        pdf.ln()
+    return Response(
+        content=bytes(pdf.output()),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
+    )
 
 
 @api_router.get("/gst-pst-remittance")
@@ -165,7 +246,7 @@ async def get_gst_pst_remittance(
     end_date = datetime.now(timezone.utc)
 
     try:
-        rows, gst_total, pst_total, hst_total = await _gst_pst_rows(start_date, end_date)
+        rows, gst_total, pst_total, hst_total, truncated = await _gst_pst_rows(start_date, end_date)
     except Exception as e:
         logger.error(f"Failed to build GST/PST remittance summary: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
@@ -175,6 +256,8 @@ async def get_gst_pst_remittance(
         f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — "
         f"Total GST ${gst_total:.2f}, Total PST ${pst_total:.2f}, Total HST ${hst_total:.2f}"
     )
+    if truncated:
+        subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
 
     await _log_compliance_export(
         admin,
@@ -183,53 +266,118 @@ async def get_gst_pst_remittance(
         len(rows),
     )
 
-    if format == "csv":
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-        return Response(
-            content=buf.getvalue().encode("utf-8-sig"),
-            media_type="text/csv",
-            headers={"Content-Disposition": 'attachment; filename="gst_pst_remittance.csv"'},
-        )
+    return _render_tabular_report(
+        title="GST/PST Remittance Summary",
+        filename_base="gst_pst_remittance",
+        fieldnames=fieldnames,
+        rows=rows,
+        subtitle=subtitle,
+        format=format,
+    )
 
-    if format == "xlsx":
-        wb, ws = report_branding.new_branded_workbook("GST/PST Remittance Summary", subtitle)
-        report_branding.write_branded_table(ws, fieldnames, rows)
-        buf = io.BytesIO()
-        wb.save(buf)
-        return Response(
-            content=buf.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": 'attachment; filename="gst_pst_remittance.xlsx"'},
-        )
 
-    if format == "docx":
-        doc = report_branding.new_branded_document("GST/PST Remittance Summary", subtitle)
-        report_branding.add_branded_table(doc, fieldnames, rows)
-        buf = io.BytesIO()
-        doc.save(buf)
-        return Response(
-            content=buf.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": 'attachment; filename="gst_pst_remittance.docx"'},
-        )
+# ── Insurance-Period Regulatory Audit ────────────────────────────────
 
-    # default: pdf
-    pdf = report_branding.new_branded_pdf("GST/PST Remittance Summary", subtitle)
-    pdf.set_font(report_branding.BRAND_FONT, "B", 9)
-    col_w = 45
-    for name in fieldnames:
-        pdf.cell(col_w, 8, name.replace("_", " ").title(), border=1)
-    pdf.ln()
-    pdf.set_font(report_branding.BRAND_FONT, "", 9)
-    for row in rows:
-        for name in fieldnames:
-            pdf.cell(col_w, 7, str(row.get(name, "")), border=1)
-        pdf.ln()
-    return Response(
-        content=bytes(pdf.output()),
-        media_type="application/pdf",
-        headers={"Content-Disposition": 'attachment; filename="gst_pst_remittance.pdf"'},
+
+_PERIOD_LABELS = {
+    0: "0 — Offline",
+    1: "1 — Available (contingent liability)",
+    2: "2 — En route to pickup (primary commercial)",
+    3: "3 — Passenger aboard (primary commercial, full)",
+}
+
+
+async def _insurance_period_rows(
+    start_date: datetime, end_date: datetime, driver_id: Optional[str]
+) -> tuple[list[dict], bool]:
+    """Pull driver_insurance_periods rows for the requested window (append-
+    only regulatory audit table, migration 64), joined with each driver's
+    name for readability — mirrors the driver-identification already shown
+    on the real SGI forms (sgi_field_maps.py), not new PII exposure."""
+    filters: dict = {"started_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()}}
+    if driver_id:
+        filters["driver_id"] = driver_id
+
+    periods = await db_supabase.get_rows(
+        "driver_insurance_periods",
+        filters,
+        columns="id,driver_id,period,started_at,ended_at,ride_id",
+        order="started_at",
+        desc=True,
+        limit=_ROW_LIMIT,
+    )
+    truncated = _check_truncated(len(periods), "insurance_period_audit")
+    if not periods:
+        return [], truncated
+
+    driver_ids = sorted({p["driver_id"] for p in periods if p.get("driver_id")})
+    driver_names: dict[str, str] = {}
+    for i in range(0, len(driver_ids), 200):
+        batch = driver_ids[i : i + 200]
+        driver_rows = await db_supabase.get_rows(
+            "drivers", {"id": {"$in": batch}}, columns="id,full_name", limit=len(batch)
+        )
+        driver_names.update({d["id"]: d.get("full_name") or d["id"] for d in driver_rows})
+
+    rows = [
+        {
+            "driver_id": p["driver_id"],
+            "driver_name": driver_names.get(p["driver_id"], p["driver_id"]),
+            "period": _PERIOD_LABELS.get(p.get("period"), str(p.get("period"))),
+            "started_at": p.get("started_at") or "",
+            "ended_at": p.get("ended_at") or "(open)",
+            "ride_id": p.get("ride_id") or "",
+        }
+        for p in periods
+    ]
+    return rows, truncated
+
+
+@api_router.get("/insurance-period-audit")
+async def get_insurance_period_audit(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    driver_id: Optional[str] = None,
+    format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Driver insurance-period transition audit export — for SGI or a
+    future province's regulator audit of TNC insurance-period
+    classification (CLAUDE.md's Insurance periods table). Spinr-branded;
+    this is Spinr's own audit trail, not a fixed regulator form."""
+    start_date = _parse_date_range(date_range)
+    end_date = datetime.now(timezone.utc)
+
+    try:
+        rows, truncated = await _insurance_period_rows(start_date, end_date, driver_id)
+    except Exception as e:
+        logger.error(f"Failed to build insurance-period audit export: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
+
+    fieldnames = ["driver_id", "driver_name", "period", "started_at", "ended_at", "ride_id"]
+    subtitle = f"{start_date.date().isoformat()} to {end_date.date().isoformat()}" + (
+        f" — driver {driver_id}" if driver_id else " — all drivers"
+    )
+    if truncated:
+        subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow the date range or filter by driver_id"
+
+    await _log_compliance_export(
+        admin,
+        "insurance_period_audit",
+        {
+            "date_range": date_range,
+            "format": format,
+            "driver_id": driver_id,
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+        },
+        len(rows),
+    )
+
+    return _render_tabular_report(
+        title="Driver Insurance-Period Audit",
+        filename_base="insurance_period_audit",
+        fieldnames=fieldnames,
+        rows=rows,
+        subtitle=subtitle,
+        format=format,
     )

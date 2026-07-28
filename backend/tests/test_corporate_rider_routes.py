@@ -156,7 +156,97 @@ def test_accept_invite_returns_409_when_already_consumed(test_client, rider_over
     assert resp.status_code == 409
 
 
-def test_balance_404s_when_not_a_member(test_client, rider_override):
+def test_join_domain_requires_verified_email(test_client, rider_override):
+    from backend.server import app
+    from dependencies import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: {**_FAKE_USER, "email_verified": False}
+    try:
+        resp = test_client.post(
+            "/rider/work-profile/join-domain",
+            json={"company_id": "c1", "email": "a@acme.com"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "ERR_EMAIL_UNVERIFIED"
+
+
+def test_join_domain_no_email_on_account_is_400(test_client, rider_override):
+    from backend.server import app
+    from dependencies import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        **_FAKE_USER,
+        "email_verified": True,
+        "phone_or_email": "",
+        "email": "",
+    }
+    try:
+        resp = test_client.post(
+            "/rider/work-profile/join-domain",
+            json={"company_id": "c1", "email": "a@acme.com"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert resp.status_code == 400
+
+
+def test_join_domain_unauthorized_domain_is_403(test_client, rider_override):
+    from backend.server import app
+    from dependencies import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        **_FAKE_USER,
+        "email_verified": True,
+        "phone_or_email": "alice@notallowed.com",
+    }
+    try:
+        with patch("routes.corporate_rider.get_rows", AsyncMock(return_value=[])):
+            resp = test_client.post(
+                "/rider/work-profile/join-domain",
+                json={"company_id": "c1", "email": "alice@notallowed.com"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert resp.status_code == 403
+
+
+def test_join_domain_success(test_client, rider_override):
+    from backend.server import app
+    from dependencies import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        **_FAKE_USER,
+        "email_verified": True,
+        "phone_or_email": "alice@acme.com",
+    }
+    try:
+        with (
+            patch("routes.corporate_rider.get_rows", AsyncMock(return_value=[{"domain": "acme.com"}])),
+            patch(
+                "routes.corporate_rider.join_via_domain",
+                AsyncMock(return_value={"id": "m1", "status": "active"}),
+            ) as m_join,
+            patch(
+                "routes.corporate_rider.get_corporate_account_by_id",
+                AsyncMock(return_value={"id": "c1", "name": "Acme"}),
+            ),
+        ):
+            resp = test_client.post(
+                "/rider/work-profile/join-domain",
+                json={"company_id": "c1", "email": "alice@acme.com"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["company"]["name"] == "Acme"
+    assert body["member"]["id"] == "m1"
+    m_join.assert_awaited_once_with(company_id="c1", user_id=_FAKE_USER["id"], email="alice@acme.com")
+
+
+def test_balance_403_when_not_a_member(test_client, rider_override):
     with patch(
         "routes.corporate_rider.list_active_memberships_for_user",
         AsyncMock(return_value=[{"id": "m1", "company_id": "other-co", "role": "member"}]),
@@ -206,103 +296,6 @@ def test_balance_missing_amount_has_no_remaining(test_client, rider_override):
     assert resp.json()["remaining"] is None
 
 
-def test_join_domain_rejects_unverified_email(test_client, rider_override):
-    from backend.server import app
-    from dependencies import get_current_user
-
-    app.dependency_overrides[get_current_user] = lambda: {
-        "id": "u1",
-        "email_verified": False,
-    }
-    try:
-        resp = test_client.post(
-            "/rider/work-profile/join-domain",
-            json={"company_id": "c1", "email": "a@acme.com"},
-        )
-    finally:
-        app.dependency_overrides[get_current_user] = lambda: _FAKE_USER
-    assert resp.status_code == 403
-    assert resp.json()["detail"] == "ERR_EMAIL_UNVERIFIED"
-
-
-def test_join_domain_rejects_account_with_no_email(test_client, rider_override):
-    from backend.server import app
-    from dependencies import get_current_user
-
-    app.dependency_overrides[get_current_user] = lambda: {
-        "id": "u1",
-        "email_verified": True,
-        "phone_or_email": "+15550002222",
-    }
-    try:
-        resp = test_client.post(
-            "/rider/work-profile/join-domain",
-            json={"company_id": "c1", "email": "a@acme.com"},
-        )
-    finally:
-        app.dependency_overrides[get_current_user] = lambda: _FAKE_USER
-    assert resp.status_code == 400
-
-
-def test_join_domain_rejects_unauthorized_domain(test_client, rider_override):
-    from backend.server import app
-    from dependencies import get_current_user
-
-    app.dependency_overrides[get_current_user] = lambda: {
-        "id": "u1",
-        "email_verified": True,
-        "email": "alice@notacme.com",
-    }
-    try:
-        with patch(
-            "routes.corporate_rider.get_rows",
-            AsyncMock(return_value=[]),
-        ):
-            resp = test_client.post(
-                "/rider/work-profile/join-domain",
-                json={"company_id": "c1", "email": "alice@notacme.com"},
-            )
-    finally:
-        app.dependency_overrides[get_current_user] = lambda: _FAKE_USER
-    assert resp.status_code == 403
-    assert resp.json()["detail"] == "Your email domain is not authorized for this company"
-
-
-def test_join_domain_succeeds(test_client, rider_override):
-    from backend.server import app
-    from dependencies import get_current_user
-
-    app.dependency_overrides[get_current_user] = lambda: {
-        "id": "u1",
-        "email_verified": True,
-        "email": "alice@acme.com",
-    }
-    try:
-        with (
-            patch(
-                "routes.corporate_rider.get_rows",
-                AsyncMock(return_value=[{"company_id": "c1", "domain": "acme.com"}]),
-            ),
-            patch(
-                "routes.corporate_rider.join_via_domain",
-                AsyncMock(return_value={"id": "m1", "status": "active"}),
-            ),
-            patch(
-                "routes.corporate_rider.get_corporate_account_by_id",
-                AsyncMock(return_value={"id": "c1", "name": "Acme"}),
-            ),
-        ):
-            resp = test_client.post(
-                "/rider/work-profile/join-domain",
-                json={"company_id": "c1", "email": "alice@acme.com"},
-            )
-    finally:
-        app.dependency_overrides[get_current_user] = lambda: _FAKE_USER
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["company"]["name"] == "Acme"
-    assert resp.json()["member"]["status"] == "active"
-
-
 def test_my_rides_returns_empty_when_no_payment_sources(test_client, rider_override):
     with (
         patch(
@@ -317,6 +310,35 @@ def test_my_rides_returns_empty_when_no_payment_sources(test_client, rider_overr
         resp = test_client.get("/rider/work-profile/c1/rides")
     assert resp.status_code == 200, resp.text
     assert resp.json() == []
+
+
+def test_my_rides_joins_rides_and_applies_to_date_ceiling(test_client, rider_override):
+    rps_rows = [
+        {"ride_id": "r1", "created_at": "2026-07-01T00:00:00Z"},
+        {"ride_id": "r2", "created_at": "2026-07-15T00:00:00Z"},
+    ]
+    rides = [{"id": "r1", "status": "completed"}, {"id": "r2", "status": "completed"}]
+
+    async def _get_rows(table, filters, **kwargs):
+        if table == "ride_payment_sources":
+            return rps_rows
+        if table == "rides":
+            return rides
+        return []
+
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch("routes.corporate_rider.get_rows", AsyncMock(side_effect=_get_rows)),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/rides?to=2026-07-10")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["id"] == "r1"
+    assert body[0]["payment_source"]["ride_id"] == "r1"
 
 
 def test_my_rides_joins_rides_and_applies_to_date_filter(test_client, rider_override):
@@ -352,6 +374,91 @@ def test_my_rides_joins_rides_and_applies_to_date_filter(test_client, rider_over
     assert len(rows) == 1
     assert rows[0]["id"] == "r1"
     assert rows[0]["payment_source"]["ride_id"] == "r1"
+
+
+def test_submit_request_auto_approved_applies_grant(test_client, rider_override):
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch("routes.corporate_rider.list_pending_allowance_requests_for_member", AsyncMock(return_value=[])),
+        patch(
+            "routes.corporate_rider.get_member_allowance",
+            AsyncMock(
+                return_value={
+                    "id": "a1",
+                    "auto_approve_topup_amount": "100.00",
+                    "auto_approve_monthly_count": 3,
+                    "auto_approved_this_period": 0,
+                }
+            ),
+        ),
+        patch(
+            "routes.corporate_rider.insert_allowance_request",
+            AsyncMock(return_value={"id": "req1", "status": "auto_approved"}),
+        ),
+        patch(
+            "routes.corporate_rider.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_rider.apply_grant", AsyncMock(return_value={"master_balance_after": "400.00"})
+        ) as m_grant,
+    ):
+        resp = test_client.post(
+            "/rider/work-profile/c1/allowance-requests",
+            json={"amount": 50, "reason": "client dinner"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "auto_approved"
+    m_grant.assert_awaited_once()
+    assert m_grant.call_args.kwargs["wallet_id"] == "w1"
+    assert m_grant.call_args.kwargs["allowance_id"] == "a1"
+
+
+@pytest.mark.anyio
+async def test_submit_request_over_auto_cap_goes_pending():
+    """Above the auto-approve cap: falls through to a plain pending request,
+    no wallet/allowance RPC call at all."""
+    from decimal import Decimal
+
+    from routes.corporate_rider import AllowanceRequestCreate, submit_request
+
+    with (
+        patch(
+            "routes.corporate_rider.list_pending_allowance_requests_for_member",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "routes.corporate_rider.get_member_allowance",
+            AsyncMock(
+                return_value={
+                    "id": "a1",
+                    "auto_approve_topup_amount": "10.00",
+                    "auto_approve_monthly_count": 3,
+                    "auto_approved_this_period": 0,
+                }
+            ),
+        ),
+        patch(
+            "routes.corporate_rider.insert_allowance_request",
+            AsyncMock(return_value={"id": "req2", "status": "pending"}),
+        ) as m_insert,
+        patch("routes.corporate_rider.apply_grant", AsyncMock()) as m_grant,
+        patch(
+            "routes.corporate_rider._ensure_member",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1"}),
+        ),
+    ):
+        result = await submit_request(
+            "c1",
+            AllowanceRequestCreate(amount=Decimal("500.00"), reason="over cap"),
+            {"id": "u1"},
+        )
+    assert result["status"] == "pending"
+    m_grant.assert_not_called()
+    assert m_insert.call_args.kwargs["status"] == "pending"
 
 
 def test_allowance_request_auto_approves_within_cap(test_client, rider_override):

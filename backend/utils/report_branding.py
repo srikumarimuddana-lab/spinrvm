@@ -28,6 +28,18 @@ BRAND_RGB = (238, 43, 43)  # #ee2b2b — matches utils/receipt_pdf.py's _BRAND
 BRAND_HEX = "EE2B2B"
 BRAND_FONT = "Helvetica"  # fpdf2 core font name; closest match to product UI font
 
+# Report palette: brand red is an accent (thin rule, table-header underline),
+# never a full-bleed block — a solid red banner read as an alert/warning
+# rather than a professional document header (user feedback on the first
+# design pass). Body text is dark charcoal, not pure black, matching how
+# print-oriented reports usually read as less harsh.
+INK_RGB = (33, 33, 33)  # near-black body/heading text
+MUTED_RGB = (110, 110, 110)  # grey subtitle/footer text
+MUTED_HEX = "6E6E6E"
+HEADER_BG_RGB = (245, 245, 245)  # light grey table-header fill
+HEADER_BG_HEX = "F5F5F5"
+RULE_RGB = (224, 224, 224)  # light grey divider lines
+
 _ASSET_DIR = Path(__file__).resolve().parents[1] / "static" / "branding"
 LOGO_PATH = _ASSET_DIR / "spinr_logo.png"
 
@@ -109,11 +121,17 @@ def pdf_safe(text: str) -> str:
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def new_branded_pdf(title: str, subtitle: str = ""):
-    """Return an fpdf2 FPDF instance, portrait A4, with the standard Spinr
-    branded header band already drawn (mirrors utils/receipt_pdf.py's
-    header). Caller starts writing content at the current cursor position
-    (y ~36mm) after this returns.
+def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
+    """Return an fpdf2 FPDF instance (A4, portrait unless landscape=True)
+    with the standard Spinr branded header already drawn: a thin red accent
+    rule at the very top, the logo, dark title text, and a grey subtitle —
+    not a full-bleed color block, which reads as an alert banner rather
+    than a document header. Caller starts writing content at the current
+    cursor position (y ~34mm) after this returns.
+
+    Pass landscape=True for tables with several columns or long cell
+    values (e.g. UUIDs, ISO timestamps) — portrait's ~180mm usable width
+    is too narrow for those without wrapping every cell.
 
     Only for report_type entries registered as "branded" in
     REPORT_FORMAT_REGISTRY — fixed_format reports (SGI etc.) must never call
@@ -121,68 +139,109 @@ def new_branded_pdf(title: str, subtitle: str = ""):
     """
     from fpdf import FPDF  # type: ignore[import-untyped]
 
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf = FPDF(orientation="L" if landscape else "P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     left = 15
+    page_w = pdf.w
 
+    # Thin brand-red accent rule across the top edge — the only full-width
+    # color in the header, everything else is white background / dark text.
     pdf.set_fill_color(*BRAND_RGB)
-    pdf.rect(0, 0, 210, 28, "F")
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_xy(left, 8)
+    pdf.rect(0, 0, page_w, 3, "F")
+
+    pdf.set_xy(left, 10)
     if has_logo_asset():
-        pdf.image(str(LOGO_PATH), x=left, y=6, h=14)
-        pdf.set_xy(left + 40, 8)
-    pdf.set_font(BRAND_FONT, "B", 18)
+        pdf.image(str(LOGO_PATH), x=left, y=10, h=11)
+        pdf.set_xy(left + 32, 11)
+    pdf.set_text_color(*INK_RGB)
+    pdf.set_font(BRAND_FONT, "B", 17)
     pdf.cell(0, 8, pdf_safe(title), ln=True)
-    pdf.set_x(left)
+    pdf.set_x(left + (32 if has_logo_asset() else 0))
     if subtitle:
+        pdf.set_text_color(*MUTED_RGB)
         pdf.set_font(BRAND_FONT, "", 10)
         pdf.cell(0, 6, pdf_safe(subtitle), ln=True)
 
+    # Divider rule under the header block.
+    pdf.set_draw_color(*RULE_RGB)
+    pdf.line(left, 30, page_w - left, 30)
+
     pdf.set_y(36)
-    pdf.set_text_color(0, 0, 0)
+    pdf.set_text_color(*INK_RGB)
+    # Reset fill from the top accent rule — otherwise fpdf2's Table API
+    # (render_pdf_table) would inherit brand red as every cell's
+    # background, including data rows that should stay white.
+    pdf.set_fill_color(255, 255, 255)
     return pdf
 
 
 def new_branded_workbook(title: str, subtitle: str = ""):
-    """Return (Workbook, Worksheet) with a Spinr-branded title block already
-    written: row 1 = title (brand color, bold), row 2 = subtitle (grey,
-    optional), row 3 = blank spacer. Caller starts writing its header row at
-    row 4.
+    """Return (Workbook, Worksheet) with a Spinr-branded title block:
+    the logo image (if the asset exists) anchored at A1, title (dark,
+    bold) and subtitle (grey) in the columns beside it, then a thin
+    brand-red rule under row 4. Caller starts writing its header row at
+    DEFAULT_TABLE_START_ROW (row 6) — logo image height needs more
+    vertical room than plain text did.
 
     Only for report_type entries registered as "branded" — fixed_format
     reports never go through openpyxl branding; they fill the regulator's
     own template.
     """
     from openpyxl import Workbook  # noqa: PLC0415 — optional dep, only needed for this format
-    from openpyxl.styles import Font
+    from openpyxl.styles import Font, PatternFill
 
     wb = Workbook()
     ws = wb.active
     ws.title = "report"
 
-    brand_hex = BRAND_HEX
-    ws["A1"] = title
-    ws["A1"].font = Font(name=BRAND_FONT, bold=True, size=14, color=brand_hex)
+    title_col = "A"
+    if has_logo_asset():
+        from openpyxl.drawing.image import Image as XLImage
+
+        img = XLImage(str(LOGO_PATH))
+        # Scale to a compact header height (~40px tall) preserving aspect ratio.
+        target_h = 40
+        scale = target_h / img.height
+        img.height = target_h
+        img.width = int(img.width * scale)
+        img.anchor = "A1"
+        ws.add_image(img)
+        ws.row_dimensions[1].height = 32
+        ws.row_dimensions[2].height = 32
+        title_col = "C"  # leave room beside the logo image
+
+    ws[f"{title_col}1"] = title
+    ws[f"{title_col}1"].font = Font(name=BRAND_FONT, bold=True, size=14, color="212121")
     if subtitle:
-        ws["A2"] = subtitle
-        ws["A2"].font = Font(name=BRAND_FONT, size=10, color="8C8C8C")
+        ws[f"{title_col}2"] = subtitle
+        ws[f"{title_col}2"].font = Font(name=BRAND_FONT, size=10, color=MUTED_HEX)
+
+    # Thin brand-red accent rule under the header block (row 4), matching
+    # the PDF/Word header treatment — accent only, not a full color block.
+    rule_fill = PatternFill(start_color=BRAND_HEX, end_color=BRAND_HEX, fill_type="solid")
+    for col in range(1, 9):
+        ws.cell(row=4, column=col).fill = rule_fill
+    ws.row_dimensions[4].height = 2
     return wb, ws
 
 
-def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: int = 4) -> None:
-    """Write a header row (brand-color fill, white bold text) at `start_row`
-    followed by one row per dict in `rows`, using the same CSV-injection-safe
-    cell sanitization as services/data_transfer/tabular_writer.py so a value
-    round-tripped through either export path renders identically in Excel."""
+DEFAULT_TABLE_START_ROW = 6
+
+
+def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: int = DEFAULT_TABLE_START_ROW) -> None:
+    """Write a header row (light-grey fill, dark bold text — not a full
+    brand-red block) at `start_row` followed by one row per dict in `rows`,
+    using the same CSV-injection-safe cell sanitization as
+    services/data_transfer/tabular_writer.py so a value round-tripped
+    through either export path renders identically in Excel."""
     from openpyxl.styles import Font, PatternFill
 
-    header_fill = PatternFill(start_color=BRAND_HEX, end_color=BRAND_HEX, fill_type="solid")
-    header_font = Font(name=BRAND_FONT, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color=HEADER_BG_HEX, end_color=HEADER_BG_HEX, fill_type="solid")
+    header_font = Font(name=BRAND_FONT, bold=True, color="212121")
 
     for col, name in enumerate(fieldnames, start=1):
-        cell = ws.cell(row=start_row, column=col, value=name)
+        cell = ws.cell(row=start_row, column=col, value=name.replace("_", " ").title())
         cell.fill = header_fill
         cell.font = header_font
 
@@ -192,39 +251,61 @@ def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: 
 
 
 def new_branded_document(title: str, subtitle: str = ""):
-    """Return a python-docx Document with a Spinr-branded title block
-    already written: a heading in the brand color, an optional grey
-    subtitle line, then a blank paragraph spacer. Caller appends its own
-    content (paragraphs, tables) after this returns.
+    """Return a python-docx Document with a Spinr-branded title block: the
+    logo image (if the asset exists), a dark heading (not brand-red — a
+    full-color heading read as an alert rather than a document title), an
+    optional grey subtitle line, a thin brand-red accent rule, then a blank
+    paragraph spacer. Caller appends its own content (paragraphs, tables)
+    after this returns.
 
     Only for report_type entries registered as "branded" — fixed_format
     reports never go through python-docx branding.
     """
     from docx import Document
-    from docx.shared import Pt, RGBColor
-
-    brand_color = RGBColor(*BRAND_RGB)
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Inches, Pt, RGBColor
 
     doc = Document()
+
+    if has_logo_asset():
+        logo_para = doc.add_paragraph()
+        logo_para.add_run().add_picture(str(LOGO_PATH), height=Inches(0.35))
+
     heading = doc.add_heading(title, level=1)
     for run in heading.runs:
-        run.font.color.rgb = brand_color
+        run.font.color.rgb = RGBColor(*INK_RGB)
         run.font.name = BRAND_FONT
 
     if subtitle:
         sub = doc.add_paragraph(subtitle)
         sub.runs[0].font.size = Pt(10)
-        sub.runs[0].font.color.rgb = RGBColor(0x8C, 0x8C, 0x8C)
+        sub.runs[0].font.color.rgb = RGBColor(*MUTED_RGB)
+
+    # Thin brand-red accent rule via a paragraph bottom-border (python-docx
+    # has no table/rule primitive) — deliberately NOT a 1-cell table, which
+    # would pollute doc.tables[0] ahead of the caller's own data table.
+    rule_para = doc.add_paragraph()
+    p_pr = rule_para._p.get_or_add_pPr()
+    p_bdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "18")  # eighths of a point; ~2.25pt rule
+    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:color"), BRAND_HEX)
+    p_bdr.append(bottom)
+    p_pr.append(p_bdr)
 
     doc.add_paragraph("")
     return doc
 
 
 def add_branded_table(doc, fieldnames: list[str], rows: list[dict]) -> None:
-    """Append a table to a python-docx Document: header row (brand-color
-    shaded cells, bold white text) followed by one row per dict in `rows`.
-    Cell values are not CSV-sanitized (Word has no formula-injection risk
-    the way CSV/Excel do when opened by a spreadsheet app)."""
+    """Append a table to a python-docx Document: header row (light-grey
+    shading, dark bold text — not a full brand-red block) followed by one
+    row per dict in `rows`. Cell values are not CSV-sanitized (Word has no
+    formula-injection risk the way CSV/Excel do when opened by a
+    spreadsheet app)."""
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
     from docx.shared import RGBColor
@@ -233,18 +314,58 @@ def add_branded_table(doc, fieldnames: list[str], rows: list[dict]) -> None:
     table.style = "Table Grid"
     header_cells = table.rows[0].cells
     for col, name in enumerate(fieldnames):
-        header_cells[col].text = name
+        header_cells[col].text = name.replace("_", " ").title()
         run = header_cells[col].paragraphs[0].runs[0]
         run.font.bold = True
-        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        run.font.color.rgb = RGBColor(*INK_RGB)
         shading = OxmlElement("w:shd")
-        shading.set(qn("w:fill"), BRAND_HEX)
+        shading.set(qn("w:fill"), HEADER_BG_HEX)
         header_cells[col]._tc.get_or_add_tcPr().append(shading)
 
     for row in rows:
         cells = table.add_row().cells
         for col, name in enumerate(fieldnames):
             cells[col].text = str(row.get(name, "") if row.get(name) is not None else "")
+
+
+def render_pdf_table(
+    pdf,
+    fieldnames: list[str],
+    rows: list[dict],
+    col_widths: list[float] | None = None,
+    font_size: int = 8,
+) -> None:
+    """Render a table into a branded PDF using fpdf2's native Table API,
+    which wraps long cell text and syncs row heights automatically —
+    unlike hand-rolled fixed-width pdf.cell() calls, which clip/overlap
+    instead of wrapping when content (UUIDs, ISO timestamps, long labels)
+    exceeds the column width.
+
+    col_widths are relative ratios (not absolute mm) across the fieldnames,
+    e.g. [2, 3, 2, 2, 2, 2] to give column 2 more room than the others;
+    omit for equal-width columns.
+    """
+    from fpdf.fonts import FontFace  # type: ignore[import-untyped]
+
+    header_names = [pdf_safe(name.replace("_", " ").title()) for name in fieldnames]
+    pdf.set_font(BRAND_FONT, "", font_size)
+    pdf.set_text_color(*INK_RGB)
+    # Light grey header (not full brand-red) with dark bold text — a
+    # professional table header, not an alert banner; matches the toned-down
+    # header treatment in new_branded_pdf().
+    headings_style = FontFace(emphasis="BOLD", color=INK_RGB, fill_color=HEADER_BG_RGB)
+    with pdf.table(
+        col_widths=col_widths,
+        text_align="LEFT",
+        headings_style=headings_style,
+    ) as table:
+        header_row = table.row()
+        for name in header_names:
+            header_row.cell(name)
+        for row in rows:
+            data_row = table.row()
+            for name in fieldnames:
+                data_row.cell(pdf_safe(str(row.get(name, ""))))
 
 
 def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> None:
@@ -257,7 +378,7 @@ def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> N
     if not province_letterhead:
         return
     pdf.set_font(BRAND_FONT, "", 7)
-    pdf.set_text_color(140, 140, 140)
+    pdf.set_text_color(*MUTED_RGB)
     name = province_letterhead.get("name", "")
     authority = province_letterhead.get("default_regulatory_authority", "")
     line = f"Spinr Mobility Inc. — {name}" + (f" — regulator of record: {authority}" if authority else "")

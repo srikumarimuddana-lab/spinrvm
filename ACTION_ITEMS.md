@@ -14,7 +14,18 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 ## P0 — Launch gating (code)
 
 ### A1. Per-module test-coverage floors for money paths
-- [ ] **Status:** in progress (2026-07-27) — measured actual current per-file
+- [x] **Status:** DONE (2026-07-28) — `matching.py` and `rides/payments.py`,
+  the two remaining files below the 80% target, are now closed:
+  - `routes/rides/matching.py`: 78% → **89%** (18 new tests,
+    `backend/tests/test_rides_matching_coverage.py`), commit `3c83ee8`.
+  - `routes/rides/payments.py`: 70% → **96%** (14 new tests,
+    `backend/tests/test_rides_payments_coverage.py`), commit `297b776`.
+  Test-only, additive changes — no production code touched. All files in the
+  `routes/rides/` package and the money-path modules listed below now meet
+  or exceed their 80%/90% targets.
+  <details><summary>History</summary>
+
+  **Status (2026-07-27):** in progress — measured actual current per-file
   coverage (full local suite run, `coverage.xml`), which changes the shape of
   this item from what it originally assumed:
   - `routes/payments.py`: **90.72%** — already meets the 90% target.
@@ -197,11 +208,10 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** CI fails if payments/fare coverage drops below 90% or
   `routes/rides/*` / dispatch below 80%. Payments, fare, dispatch,
   `lost_found.py`, `lifecycle.py`, `receipts.py`, `queries.py`,
-  `estimates.py`, `cancellation.py`, and `booking.py` now meet target.
-  `matching.py` (64.7% → 79.41% combined, PRs #2557 + #2561) is the only
-  file still ~0.6pp short of the 80% target — not worth a dedicated
-  follow-up PR; can be closed opportunistically alongside a future change
-  to the file.
+  `estimates.py`, `cancellation.py`, `booking.py`, `matching.py` (89%), and
+  `rides/payments.py` (96%) all meet target as of 2026-07-28. All A1-scoped
+  money/dispatch paths now meet their coverage floors.
+  </details>
 
 ### A1b. Backend test-coverage floor for the rest of the codebase (scoped, not started)
 - [ ] **Status:** open — scoping only, no work started. Raised 2026-07-27 when

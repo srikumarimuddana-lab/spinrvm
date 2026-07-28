@@ -571,6 +571,24 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   (ADMIN_MFA_ENFORCED). Ensure ≥2 active super_admin accounts exist for the
   lost-phone reset path.
 
+### C5. Re-enable Railway standby deploys (currently paused)
+- [ ] **Status:** open — `deploy-backend.yml` (Railway) is deliberately blocked via a
+  GitHub Environment protection rule (confirmed 2026-07-27). This was meant to be
+  **temporary** but has no expiry/owner attached, so Railway has been silently
+  drifting from `main` since the pause started — contradicts ADR-007's "hot standby,
+  not a paper fallback" design, and means a Fly outage right now would fail over to
+  a stale (possibly vulnerable, possibly schema-mismatched) build.
+- **Action:** confirm the original reason for pausing no longer applies, then remove
+  the Environment protection rule (or update its required reviewers/branch
+  restriction) so `deploy-backend.yml` resumes auto-deploying on every push to
+  `main`. Before flipping it back on: verify secret parity between Railway and Fly
+  per ADR-007's own risk section (`JWT_SECRET`, `SUPABASE_*`, `FIREBASE_*`, Redis
+  URLs), since Railway's env vars may also have drifted during the pause. Re-run
+  the failover drill (C1) afterward to confirm the standby actually works end to
+  end, not just that it deploys.
+- **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
+  doesn't become a permanently-forgotten "temporary" gap.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 - [ ] **D1. PostGIS surge query** — `surge_engine.py` caps at 500 drivers with Python

@@ -120,13 +120,22 @@ const NAV_GROUPS: NavGroup[] = [
             // the isSuperAdmin bypass this makes the entry super-admin-only;
             // the page and the backend re-check the role themselves.
             { href: "/dashboard/ai-console", label: "AI Console", icon: Sparkles, module: "ai_console" },
-            // Same super-admin-only mechanism: "bulk_operations" is granted to
-            // no staff role; the page + backend enforce strict super_admin.
-            // Consolidates the former rider-import section of Bulk Operations
-            // and the Drivers → Bulk Import page: search/select, export,
-            // import, and SGI compliance forms. Bulk Operations itself stays
-            // (it also hosts the still-separate legacy Stripe mapping tool,
-            // out of this module's scope).
+            // Two entries share the "bulk_operations" module key with two
+            // DIFFERENT access models — do not assume they're equivalent:
+            //  - Data Transfer: gated the normal way, via useRequireModule
+            //    ("bulk_operations") — grantable to any staff role through
+            //    Staff Management's ALL_MODULES (staff/page.tsx). Consolidates
+            //    the former rider-import section of Bulk Operations and the
+            //    Drivers → Bulk Import page: search/select, export, import,
+            //    and SGI compliance forms.
+            //  - Bulk Operations: independently hard-codes role ===
+            //    "super_admin" in its own page component (see that page's
+            //    file-header comment) — NOT gated by the module grant, so
+            //    making "bulk_operations" grantable (staff/page.tsx) does not
+            //    open this page to non-super-admins. Hosts the still-separate
+            //    legacy Stripe mapping tool, out of Data Transfer's scope.
+            // See reports/audits/2026-07-28-data-transfer-module-lifecycle-audit-v1.md
+            // gap H9 for the full reasoning on why this split exists and is safe.
             { href: "/dashboard/data-transfer", label: "Data Transfer", icon: Upload, module: "bulk_operations" },
             { href: "/dashboard/bulk-operations", label: "Bulk Operations", icon: Upload, module: "bulk_operations" },
             // GST/PST remittance + insurance-period audit exports. Granted

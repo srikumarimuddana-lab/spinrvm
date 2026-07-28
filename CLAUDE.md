@@ -96,7 +96,13 @@ ruff format .                      # format
 
 ```bash
 cd backend
-python migrate.py --env production   # ordered SQL runner over backend/migrations/
+python scripts/migrate.py            # ordered SQL runner over backend/migrations/; no --env flag —
+                                      # environment is selected by whichever SUPABASE_URL /
+                                      # SUPABASE_SERVICE_ROLE_KEY (or PG_CONNECTION_STRING /
+                                      # DATABASE_URL) are set when it runs. Add --dry-run to preview.
+                                      # The direct db.<ref>.supabase.co host is IPv6-only; on
+                                      # IPv4-only networks set PG_CONNECTION_STRING to the Session
+                                      # pooler connection string instead (takes precedence).
 ```
 
 ## Architecture
@@ -227,7 +233,7 @@ Rules:
 
 ## Database & Migration Conventions
 
-Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
+Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/migrate.py`.
 
 Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number — check the current highest with `ls backend/migrations | sort -V | tail -1` before picking the next one. Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. Duplicate numeric prefixes exist from history and are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.
 

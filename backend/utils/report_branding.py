@@ -83,3 +83,57 @@ def report_mode(report_type: str) -> ReportMode:
     rather than silently defaulting — an unregistered compliance report is a
     bug, not a case to guess at."""
     return REPORT_FORMAT_REGISTRY[report_type]["mode"]
+
+
+def new_branded_pdf(title: str, subtitle: str = ""):
+    """Return an fpdf2 FPDF instance, portrait A4, with the standard Spinr
+    branded header band already drawn (mirrors utils/receipt_pdf.py's
+    header). Caller starts writing content at the current cursor position
+    (y ~36mm) after this returns.
+
+    Only for report_type entries registered as "branded" in
+    REPORT_FORMAT_REGISTRY — fixed_format reports (SGI etc.) must never call
+    this; they fill the regulator's own template via sgi_form_filler.
+    """
+    from fpdf import FPDF  # type: ignore[import-untyped]
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    left = 15
+
+    pdf.set_fill_color(*BRAND_RGB)
+    pdf.rect(0, 0, 210, 28, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_xy(left, 8)
+    if has_logo_asset():
+        pdf.image(str(LOGO_PATH), x=left, y=6, h=14)
+        pdf.set_xy(left + 40, 8)
+    pdf.set_font(BRAND_FONT, "B", 18)
+    pdf.cell(0, 8, title, ln=True)
+    pdf.set_x(left)
+    if subtitle:
+        pdf.set_font(BRAND_FONT, "", 10)
+        pdf.cell(0, 6, subtitle, ln=True)
+
+    pdf.set_y(36)
+    pdf.set_text_color(0, 0, 0)
+    return pdf
+
+
+def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> None:
+    """Draw a small grey footer with province/regulator letterhead info
+    (from the `provinces` table, e.g. {"name": "Saskatchewan",
+    "default_regulatory_authority": "SGI"}) plus a generation timestamp
+    placeholder the caller fills in. No-op if letterhead is not supplied —
+    callers pass None for reports that aren't province-scoped (e.g. a
+    company-wide DSAR lookup)."""
+    if not province_letterhead:
+        return
+    pdf.set_font(BRAND_FONT, "", 7)
+    pdf.set_text_color(140, 140, 140)
+    name = province_letterhead.get("name", "")
+    authority = province_letterhead.get("default_regulatory_authority", "")
+    line = f"Spinr Mobility Inc. — {name}" + (f" — regulator of record: {authority}" if authority else "")
+    pdf.set_y(-15)
+    pdf.cell(0, 5, line, align="C")

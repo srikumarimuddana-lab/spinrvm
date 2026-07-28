@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -19,6 +21,7 @@ export function ImportTab() {
     const [validating, setValidating] = useState(false);
     const [committing, setCommitting] = useState(false);
     const [report, setReport] = useState<DataTransferImportReport | DataTransferImportCommitResult | null>(null);
+    const [updateExisting, setUpdateExisting] = useState(false);
 
     const onFileSelected = (f: File | null) => {
         setFile(f);
@@ -42,12 +45,16 @@ export function ImportTab() {
         if (!file) return;
         setCommitting(true);
         try {
-            const result = await adminCommitDataTransferImport(file);
+            const result = await adminCommitDataTransferImport(file, undefined, updateExisting);
             setReport(result);
             if (result.committed) {
+                const updateSummary =
+                    updateExisting && ((result.updated_users ?? 0) > 0 || (result.updated_drivers ?? 0) > 0)
+                        ? `, ${result.updated_users ?? 0} user(s) and ${result.updated_drivers ?? 0} driver(s) updated`
+                        : "";
                 toast({
                     title: "Import committed",
-                    description: `${result.created_users ?? 0} user(s), ${result.created_drivers ?? 0} driver(s), ${result.documents_replayed ?? 0} document(s) created.`,
+                    description: `${result.created_users ?? 0} user(s), ${result.created_drivers ?? 0} driver(s), ${result.documents_replayed ?? 0} document(s) created${updateSummary}.`,
                 });
             } else {
                 toast({
@@ -68,6 +75,21 @@ export function ImportTab() {
     return (
         <div className="space-y-4">
             <BundleDropzone file={file} onFileSelected={onFileSelected} />
+
+            <div className="flex items-center gap-2">
+                <Switch
+                    id="update-existing"
+                    checked={updateExisting}
+                    onCheckedChange={setUpdateExisting}
+                    disabled={committing}
+                />
+                <Label htmlFor="update-existing" className="text-sm font-normal">
+                    Update already-imported entities
+                </Label>
+                <span className="text-sm text-muted-foreground">
+                    — sync profile fields and replay any new documents/insurance periods instead of skipping them
+                </span>
+            </div>
 
             <div className="flex gap-2">
                 <Button onClick={onValidate} disabled={!file || validating || committing} variant="outline">
@@ -90,7 +112,9 @@ export function ImportTab() {
                         )}
                         <span>
                             {report.counts.entities} entities — {report.counts.new} new,{" "}
-                            {report.counts.existing_match} already imported, {report.counts.conflict} conflicts
+                            {report.counts.existing_match} already imported (
+                            {updateExisting ? "will be updated" : "will be skipped"}), {report.counts.conflict}{" "}
+                            conflicts
                         </span>
                     </div>
 

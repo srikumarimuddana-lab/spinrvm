@@ -176,6 +176,15 @@ class AppSettings(BaseModel):
     # at the member level. Defaults to true for the same reason. See
     # services/corporate_member_offboarding_service.py.
     corporate_member_removal_cancels_pre_pickup_rides: bool = True
+    # When true, booking a company_allowance (or work_profile) ride for a
+    # suspended or closed corporate account is rejected at booking time (403)
+    # instead of silently proceeding. Suspension/close already cancels that
+    # company's in-flight pre-pickup rides (corporate_suspend_cancels_pre_pickup_rides);
+    # without this flag new bookings could keep being created against the same
+    # inactive account, only failing later at settlement. Defaults to true —
+    # the un-flagged behavior (fail open) was a bug. Flip to false only to
+    # roll back without a redeploy. See routes/rides/booking.py.
+    corporate_inactive_company_blocks_booking: bool = True
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no

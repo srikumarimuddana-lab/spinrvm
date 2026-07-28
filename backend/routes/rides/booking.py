@@ -718,6 +718,32 @@ async def create_ride(
     # Only runs when rider explicitly books with company_allowance payment method.
     _corp_member_id: Optional[str] = None
     if body.corporate_account_id and body.payment_method == "company_allowance":
+        # Fail closed on a suspended/closed company: suspension already cancels
+        # this company's in-flight pre-pickup rides (corporate_suspension_service),
+        # so letting new company_allowance bookings through during the same
+        # suspension would be inconsistent with why the account was suspended —
+        # and for a closed account the wallet may already be refunded to zero
+        # (corporate_wallet_winddown_service), so a new ride would silently fall
+        # through to payment_status="pending" or the master-wallet fallback
+        # instead of failing loudly. See corporate module review Finding 1.
+        try:
+            _bk_settings_company = await _deps.get_app_settings() or {}
+        except Exception:
+            _bk_settings_company = {}
+        if _bk_settings_company.get("corporate_inactive_company_blocks_booking", True):
+            _corp_company_row = await _deps.db_supabase.get_corporate_account_by_id(body.corporate_account_id)
+            if _corp_company_row and (_corp_company_row.get("status") or "").lower() in ("suspended", "closed"):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "message": (
+                            "Your company account is currently inactive and can't be used "
+                            "for new bookings. Contact your company admin, or use a personal "
+                            "payment method."
+                        ),
+                        "failed_rules": ["company_inactive"],
+                    },
+                )
         _policy_result = await _deps.evaluate_policy_for_ride(
             corporate_account_id=body.corporate_account_id,
             rider_id=current_user["id"],
@@ -857,6 +883,23 @@ async def create_ride(
     # disturbed. Personal rides (no work_profile flag) skip this block entirely.
     if body.work_profile and body.corporate_account_id:
         _corp_company_id = body.corporate_account_id
+
+        # Same fail-closed company-status guard as the company_allowance path
+        # above — list_active_memberships_for_user (step 1 below) only filters
+        # on the MEMBER's own status, never the company's, so without this a
+        # suspended/closed company's still-active members could keep booking
+        # work_profile rides indefinitely. See corporate module review Finding 1.
+        try:
+            _bk_settings_wp = await _deps.get_app_settings() or {}
+        except Exception:
+            _bk_settings_wp = {}
+        if _bk_settings_wp.get("corporate_inactive_company_blocks_booking", True):
+            _corp_company_row_wp = await _deps.db_supabase.get_corporate_account_by_id(_corp_company_id)
+            if _corp_company_row_wp and (_corp_company_row_wp.get("status") or "").lower() in ("suspended", "closed"):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"reason": "company_inactive"},
+                )
 
         # 1. Resolve active membership
         _memberships = await _deps.db_supabase.list_active_memberships_for_user(current_user["id"])

@@ -671,7 +671,48 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
             result.error,
             result.status_code,
         )
+    elif not result.already_paid:
+        # Meta Purchase for the corporate-guest path. This settlement is
+        # server-driven and never touches a rider's device, so without this
+        # hook these rides would be the one class of paid ride that produces
+        # no conversion at all.
+        await _fire_guest_purchase_conversion(ride, ride_id, result.charged_amount)
     return result
+
+
+async def _fire_guest_purchase_conversion(ride: dict, ride_id: str, charged_amount) -> None:
+    """Queue Meta Purchase for a guest corporate ride. Never raises.
+
+    Runs inside an already-backgrounded settlement, so the send is awaited
+    here rather than spawned again — but every failure is still contained so a
+    Meta problem cannot mark a successful settlement as crashed and hand the
+    ride back to the retry sweep.
+    """
+    try:
+        from .meta_conversions_service import send_ride_purchase
+    except ImportError:
+        try:
+            from services.meta_conversions_service import send_ride_purchase  # type: ignore
+        except ImportError:
+            logger.error("meta: conversions service unavailable — skipping guest Purchase", exc_info=True)
+            return
+
+    rider_id = ride.get("rider_id")
+    user: dict = {"id": rider_id}
+    try:
+        # The guest's hashed phone/email are what make this conversion
+        # matchable at all, so a lookup failure is worth a log line — but the
+        # event still goes out with external_id alone rather than not at all.
+        fetched = await db_supabase.get_user_by_id(rider_id) if rider_id else None
+        if fetched:
+            user = fetched
+    except Exception:
+        logger.error("meta: could not load rider for guest Purchase on ride %s", ride_id, exc_info=True)
+
+    try:
+        await send_ride_purchase(ride, user, charged_amount)
+    except Exception:
+        logger.error("meta: guest Purchase send failed for ride %s", ride_id, exc_info=True)
 
 
 # ── Card (Stripe) settlement ─────────────────────────────────────────

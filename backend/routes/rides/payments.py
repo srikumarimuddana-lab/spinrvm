@@ -180,6 +180,31 @@ def _record_settlement_metrics(payment_method: str, result, duration_ms: float) 
     _metric_observe("spinr_payment_settlement_duration_ms", duration_ms, {"method": method})
 
 
+def _fire_purchase_conversion(ride: dict, user: dict, charged_amount) -> None:
+    """Queue the Meta Purchase/FirstRide send. Never raises into settlement.
+
+    A conversion-tracking failure must not surface to a rider who has just
+    been charged, and must not roll back a settled payment, so this is spawned
+    rather than awaited and every error is contained here.
+
+    A $0 charge still fires. A fully-subsidised ride (100% promo) is exactly
+    the acquisition the promo_code property exists to measure — suppressing it
+    would hide the most expensive acquisitions from the analyst.
+    """
+    try:
+        from ...services import meta_conversions_service as _meta
+    except ImportError:
+        try:
+            from services import meta_conversions_service as _meta  # type: ignore
+        except ImportError:
+            logger.error("meta: conversions service unavailable — skipping Purchase", exc_info=True)
+            return
+    try:
+        _deps.spawn(_meta.send_ride_purchase(ride, user, charged_amount))
+    except Exception:
+        logger.error("meta: failed to queue Purchase for ride %s", ride.get("id"), exc_info=True)
+
+
 @router.post("/{ride_id}/process-payment")
 @payment_action_limit
 async def process_payment(
@@ -424,6 +449,17 @@ async def process_payment(
         # resend endpoint still awaits delivery and reports it honestly).
         _deps.spawn(send_ride_receipt(ride, current_user["id"], tip_rounded))
         email_sent = True
+
+        # Meta Purchase (+ FirstRide on the rider's first). Fired here rather
+        # than at ride completion because this is the point money actually
+        # moved — a completed ride whose settlement failed is not a purchase.
+        # Guarded by `not result.already_paid`, so an idempotent replay of a
+        # ride that was already settled does not emit a second conversion.
+        #
+        # result.charged_amount is the authoritative figure: post-promo, tip
+        # included, as actually charged. Reading a fare column instead would
+        # let the reported value drift from the real charge.
+        _fire_purchase_conversion(ride, current_user, result.charged_amount)
     return {
         "success": True,
         "charged_amount": _money_str(result.charged_amount),

@@ -59,6 +59,7 @@ from .auth import admin_auth_router
 from .auth import router as auth_router
 from .data_transfer_export import router as data_transfer_export_router
 from .data_transfer_import import router as data_transfer_import_router
+from .data_transfer_search import router as data_transfer_search_router
 from .documents import router as documents_router
 from .driver_import import router as driver_import_router
 from .drivers import router as drivers_router
@@ -118,6 +119,7 @@ admin_router.include_router(stripe_import_router, dependencies=[Depends(require_
 # new module string that no staff role has been granted yet.
 admin_router.include_router(data_transfer_export_router, dependencies=[Depends(require_module("bulk_operations"))])
 admin_router.include_router(data_transfer_import_router, dependencies=[Depends(require_module("bulk_operations"))])
+admin_router.include_router(data_transfer_search_router, dependencies=[Depends(require_module("bulk_operations"))])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])

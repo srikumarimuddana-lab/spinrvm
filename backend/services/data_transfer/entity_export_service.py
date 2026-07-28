@@ -47,14 +47,33 @@ async def _fetch_document_bytes(storage_key: str) -> Optional[bytes]:
         return None
 
 
+_RIDE_GPS_FIELDS = ("pickup_lat", "pickup_lng", "dropoff_lat", "dropoff_lng")
+
+
+def _strip_ride_gps(ride: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in ride.items() if k not in _RIDE_GPS_FIELDS}
+
+
 async def gather_entity_bundle(
-    entity_type: str, entity_id: str, doc_types: Optional[list[str]] = None
+    entity_type: str,
+    entity_id: str,
+    doc_types: Optional[list[str]] = None,
+    include_ride_gps: bool = True,
+    include_document_bytes: bool = True,
 ) -> dict[str, Any]:
     """Collect everything needed to reconstruct a user/driver in another environment.
 
     ``entity_type`` is "driver" or "rider". ``entity_id`` is the ``users.id``.
     ``doc_types`` optionally filters ``driver_documents.document_type`` to the
     checked subset; ``None`` means include every document type.
+
+    ``include_ride_gps``/``include_document_bytes`` (PIA recommendation R-B,
+    ACTION_ITEMS.md B11) default to the module's original full-fidelity
+    behavior — set either to False to opt a lower-sensitivity export out of
+    exact pickup/dropoff coordinates or document file bytes. Ride rows and
+    document metadata are still included either way (only the specific
+    high-sensitivity fields are dropped), so record counts and structure
+    stay consistent regardless of these flags.
     """
     if entity_type not in ("driver", "rider"):
         raise ValueError(f"Unknown entity_type: {entity_type!r}")
@@ -94,15 +113,21 @@ async def gather_entity_bundle(
     if doc_types:
         documents = [d for d in documents if d.get("document_type") in doc_types]
 
+    if not include_ride_gps:
+        rides = [_strip_ride_gps(r) for r in rides]
+
     # Attach raw bytes for each document that resolves to a storage key. A
     # document whose bytes can't be fetched still appears in the manifest
     # (metadata intact) but with document_bytes=None — the ZIP builder skips
     # writing a file for it and the import side must not assume every listed
-    # document has a payload.
+    # document has a payload. When include_document_bytes is False, every
+    # document is deliberately left content=None the same way a fetch
+    # failure would — the ZIP builder's existing "no payload" handling
+    # covers this without any new branch there.
     doc_payloads = []
     for doc in documents:
         storage_key = _extract_storage_key(doc.get("document_url") or "")
-        content = await _fetch_document_bytes(storage_key) if storage_key else None
+        content = await _fetch_document_bytes(storage_key) if (storage_key and include_document_bytes) else None
         doc_payloads.append({**doc, "_storage_key": storage_key, "_content": content})
 
     return {
@@ -118,13 +143,17 @@ async def gather_entity_bundle(
 
 
 async def gather_entity_bundles(
-    entities: list[tuple[str, str]], doc_types: Optional[list[str]] = None
+    entities: list[tuple[str, str]],
+    doc_types: Optional[list[str]] = None,
+    include_ride_gps: bool = True,
+    include_document_bytes: bool = True,
 ) -> list[dict[str, Any]]:
     """Batch gather for multi-entity export. A single entity failing to resolve
     does not abort the batch — it's reported by omission (caller can diff
     requested vs. returned entity_ids) so one bad row doesn't block the rest."""
     results = await asyncio.gather(
-        *(gather_entity_bundle(t, eid, doc_types) for t, eid in entities), return_exceptions=True
+        *(gather_entity_bundle(t, eid, doc_types, include_ride_gps, include_document_bytes) for t, eid in entities),
+        return_exceptions=True,
     )
     bundles = []
     for (entity_type, entity_id), result in zip(entities, results):

@@ -519,12 +519,33 @@ async def settle_corporate(
         },
     )
 
+    # Audit-only: a company suspended/closed mid-ride is grandfathered — the
+    # ride state machine forbids cancelling after trip start, so billing
+    # proceeds normally above. This just makes the fact visible in
+    # corporate_policy_evaluations for ops/finance review; it never blocks
+    # or alters the settlement that already happened.
+    company_status = None
+    try:
+        company_row = await db_supabase.get_corporate_account_by_id(validated_id=company_id) or {}
+        company_status = company_row.get("status")
+    except Exception as _status_exc:
+        logger.error(
+            "[PAYMENT] could not read company status for audit flag ride=%s company=%s: %s",
+            ride_id,
+            company_id,
+            _status_exc,
+            exc_info=True,
+        )
+
     completion_ctx = {
         "final_fare": _f(total),
         "phase": "completion",
         "allowance": allowance,
     }
     completion_eval = evaluate_policy(corp_policy, completion_ctx)
+    if company_status in ("suspended", "closed"):
+        completion_eval["failed_rules"] = [*completion_eval.get("failed_rules", []), "company_inactive_during_ride"]
+        completion_eval["pass"] = False
     if not completion_eval["pass"] or flag_violation:
         await db_supabase.insert_one(
             "corporate_policy_evaluations",

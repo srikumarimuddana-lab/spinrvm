@@ -58,6 +58,11 @@ try:
 except ImportError:
     from services.corporate_membership_service import bootstrap_owner  # type: ignore[no-redef]
 
+try:
+    from ..services.corporate_suspension_service import cancel_pre_pickup_rides_for_company
+except ImportError:
+    from services.corporate_suspension_service import cancel_pre_pickup_rides_for_company  # type: ignore[no-redef]
+
 logger = logging.getLogger(__name__)
 
 # Alias for backward compatibility
@@ -724,6 +729,21 @@ async def change_company_status(
         if wallet and wallet.get("auto_topup_enabled"):
             await update_corporate_wallet_config(wallet_id=wallet["id"], patch={"auto_topup_enabled": False})
 
+    # Pre-pickup rides (no passenger aboard yet) for this company are
+    # auto-cancelled on suspend/close — a suspended company shouldn't keep
+    # dispatching new drivers. Rides already `in_progress` are grandfathered:
+    # the state machine forbids cancelling after trip start, so those bill
+    # normally at settlement (flagged there for audit, not blocked here).
+    cancelled_rides = 0
+    if transition.status in (CompanyStatus.SUSPENDED, CompanyStatus.CLOSED):
+        try:
+            cancelled_rides = await cancel_pre_pickup_rides_for_company(normalized_id)
+        except Exception as _cancel_exc:
+            logger.error(
+                f"Pre-pickup ride cancellation failed for suspended company {normalized_id}: {_cancel_exc}",
+                exc_info=True,
+            )
+
     try:
         await log_admin_action(
             admin=current_admin,
@@ -734,6 +754,7 @@ async def change_company_status(
                 "old_status": current.get("status"),
                 "new_status": transition.status.value,
                 "reason": transition.reason if hasattr(transition, "reason") else None,
+                "pre_pickup_rides_cancelled": cancelled_rides,
             },
         )
     except Exception as _ae:

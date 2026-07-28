@@ -35,6 +35,14 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed step-by-step instructions.
     *   `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase Service Role Key (for backend access).
     *   `JWT_SECRET`: Secret for JWT tokens.
     *   `FIREBASE_SERVICE_ACCOUNT_JSON`: Firebase Admin SDK credentials.
+
+    Meta Conversions API credentials are **not** environment variables. Like
+    the Stripe, Twilio, and Maps keys, they live in the `app_settings` DB row
+    and are edited in the admin dashboard so they rotate without a redeploy:
+    `meta_rider_dataset_id`, `meta_driver_dataset_id`, `meta_capi_access_token`
+    (masked on read), and `meta_test_event_code`. An empty access token
+    disables conversion tracking entirely, which is the default and is safe.
+    See `META_EVENTS.md`.
 3.  **Install Dependencies**:
     ```bash
     cd backend
@@ -56,6 +64,14 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed step-by-step instructions.
 2.  **Environment Variables**: Create `.env` in `frontend/` with:
     *   `EXPO_PUBLIC_BACKEND_URL`: URL of your running backend (e.g., `http://localhost:8000`).
     *   `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`: Google Maps API Key.
+    *   `EXPO_PUBLIC_FB_APP_ID`: Meta App ID for conversion tracking. **Different value per app** — the rider and driver apps have separate Meta Apps and separate datasets. Optional; the app runs normally without it and simply logs no events.
+    *   `EXPO_PUBLIC_FB_CLIENT_TOKEN`: Meta client token, per app. Optional, same as above.
+
+    In EAS builds these come from the per-profile `environment` (`preview` /
+    `production`) rather than a local `.env`. Both are client-side identifiers
+    that ship inside the binary by design and cannot read or write data on
+    their own — the Meta **Conversions API access token**, which can, is a
+    backend secret and never appears in app code. See `META_EVENTS.md`.
 3.  **Install Dependencies**:
     ```bash
     cd frontend

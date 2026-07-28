@@ -33,6 +33,7 @@ const ALL_MODULES = [
   { key: "audit", label: "Audit Logs" },
   { key: "support_tickets", label: "Help Desk (Zoho)" },
   { key: "compliance", label: "Compliance & Tax Reporting" },
+  { key: "bulk_operations", label: "Data Transfer" },
 ];
 
 const ROLE_PRESETS: Record<string, string[]> = {

@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - dual import path
 
 logger = logging.getLogger(__name__)
 
-Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode", "directions"]
+Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode", "directions", "text_search_new"]
 
 # USD per call. Source: Google Maps Platform pricing 2026.
 # Places API (New) charges autocomplete requests separately for sessions that
@@ -43,11 +43,18 @@ Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode", "dir
 # historical counters that may still exist in today's Redis bucket.
 # `directions` is Routes/Directions Essentials (no traffic) — used only as the
 # live-route fallback when self-hosted OSRM is down.
+# `text_search_new` is Places API (New) Text Search Pro — used by the AI
+# booking tool's named-place lookup (ai/tools_booking.py). B5: this SKU did
+# not previously exist here at all — the AI tool called
+# record_call("places_text_search"), a string outside this Literal, so every
+# such call silently miscounted against no bucket and was invisible to
+# estimate_today_usd()'s budget total.
 _PRICE_USD: dict[Sku, float] = {
     "autocomplete": 0.00283,
     "autocomplete_session": 0.017,
     "details": 0.005,
     "geocode": 0.005,
+    "text_search_new": 0.032,
     "directions": 0.005,
 }
 

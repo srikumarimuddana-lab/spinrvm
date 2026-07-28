@@ -3437,6 +3437,8 @@ export interface DataTransferImportCommitResult extends DataTransferImportReport
     committed: boolean;
     created_users?: number;
     created_drivers?: number;
+    updated_users?: number;
+    updated_drivers?: number;
     documents_replayed?: number;
     insurance_periods_replayed?: number;
 }
@@ -3448,10 +3450,11 @@ export const adminValidateDataTransferImport = (file: File) => {
         body: fd,
     });
 };
-export const adminCommitDataTransferImport = (file: File, batch?: string) => {
+export const adminCommitDataTransferImport = (file: File, batch?: string, updateExisting?: boolean) => {
     const fd = new FormData();
     fd.append("bundle_zip", file);
     if (batch) fd.append("batch", batch);
+    if (updateExisting) fd.append("update_existing", "true");
     return request<DataTransferImportCommitResult>("/api/admin/data-transfer/import/commit", {
         method: "POST",
         body: fd,

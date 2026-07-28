@@ -63,3 +63,12 @@ def test_build_filters_combines_text_and_date():
     filters = _build_filters("jane", "2026-01-01", "2026-12-31")
     assert "$or" in filters
     assert filters["created_at"] == {"$gte": "2026-01-01", "$lte": "2026-12-31"}
+
+
+def test_build_filters_respects_table_param():
+    users_filters = _build_filters("jane", None, None, table="users")
+    drivers_filters = _build_filters("jane", None, None, table="drivers")
+    assert users_filters["$or"][0] == {"first_name": {"$regex": "jane", "$options": "i"}}
+    assert drivers_filters["$or"][0] == {"first_name": {"$regex": "jane", "$options": "i"}}
+    assert {"email": {"$regex": "jane", "$options": "i"}} in users_filters["$or"]
+    assert {"email": {"$regex": "jane", "$options": "i"}} not in drivers_filters["$or"]

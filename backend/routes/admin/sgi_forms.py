@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...routes.drivers._shared import _decrypt_driver_pii
     from ...services.data_transfer import sgi_field_maps, sgi_form_filler
     from ...utils.audit_logger import log_admin_action
 except ImportError:
@@ -56,6 +57,11 @@ async def generate_sgi_form(
     driver_rows = await db_supabase.get_rows("drivers", {"id": {"$in": body.driver_ids}})
     if not driver_rows:
         raise HTTPException(status_code=404, detail="None of the requested drivers could be found")
+
+    # license_number is vault-encrypted at rest (a vault.secrets UUID, not the
+    # real value — see routes/drivers/_shared.py's _VAULT_PII_FIELDS). D00032
+    # needs the real licence number on the form, not the encrypted token.
+    driver_rows = [await _decrypt_driver_pii(d) for d in driver_rows]
 
     if body.form_type == "driver_details":
         row_dicts = [sgi_field_maps.driver_to_driver_details_row(d, action=body.action) for d in driver_rows]

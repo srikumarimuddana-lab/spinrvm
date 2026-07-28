@@ -14,6 +14,7 @@ from typing import Any, Optional
 try:
     from ... import db_supabase
     from ...documents import _extract_storage_key
+    from ...routes.drivers._shared import _decrypt_driver_pii
     from ...supabase_client import supabase
 except ImportError:
     import db_supabase
@@ -66,6 +67,15 @@ async def gather_entity_bundle(
         raise EntityNotFoundError(f"No user found for id={entity_id}")
     user = user_rows[0]
     driver = driver_rows[0] if driver_rows else {}
+    # license_number is vault-encrypted at rest as a vault.secrets UUID scoped
+    # to THIS Supabase project — copying that token verbatim into another
+    # project's drivers row (the whole point of this export) would point at
+    # a secret that doesn't exist there. Decrypt to the real value here;
+    # entity_import_service re-encrypts it against the target project's own
+    # vault on commit. Consistent with this export being full-fidelity,
+    # unredacted, admin-to-admin (see module docstring).
+    if driver:
+        driver = await _decrypt_driver_pii(driver)
     driver_id = driver.get("id", "")
 
     rides: list = []

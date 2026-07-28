@@ -215,15 +215,26 @@ def validate_args(schema: Dict[str, Any], args: Dict[str, Any]) -> List[str]:
     return errors
 
 
+# Keys that carry the model-facing guardrail instructions and refusal
+# sentinels ("Do NOT quote on it", needs_correction=...). Truncation must
+# never destroy these: a huge quote result that loses its note while its
+# _client_action card survives would show the rider a card the model was
+# explicitly told not to act on.
+_GUARDRAIL_KEYS = ("note", "needs_confirmation", "needs_correction", "imprecise_address", "error")
+
+
 def _cap_result(result: Dict[str, Any]) -> Dict[str, Any]:
     """Cap the MODEL-facing portion of a result. ``_client_action`` is popped
     by the orchestrator before the result enters the model context, so it
     neither counts against the budget nor gets destroyed by truncation —
-    a rich quote card must survive even when the textual result is huge."""
+    a rich quote card must survive even when the textual result is huge.
+    Guardrail keys (notes, refusal sentinels) are re-attached after
+    truncation for the same reason."""
     client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
     serialized = json.dumps(result, default=str)
     if len(serialized) > TOOL_RESULT_MAX_CHARS:
-        result = {"_truncated": True, "preview": serialized[:TOOL_RESULT_MAX_CHARS]}
+        preserved = {k: result[k] for k in _GUARDRAIL_KEYS if isinstance(result, dict) and k in result}
+        result = {"_truncated": True, "preview": serialized[:TOOL_RESULT_MAX_CHARS], **preserved}
     if client_action is not None:
         result["_client_action"] = client_action
     return result

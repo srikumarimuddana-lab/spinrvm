@@ -109,11 +109,15 @@ def pdf_safe(text: str) -> str:
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def new_branded_pdf(title: str, subtitle: str = ""):
-    """Return an fpdf2 FPDF instance, portrait A4, with the standard Spinr
-    branded header band already drawn (mirrors utils/receipt_pdf.py's
-    header). Caller starts writing content at the current cursor position
-    (y ~36mm) after this returns.
+def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
+    """Return an fpdf2 FPDF instance (A4, portrait unless landscape=True)
+    with the standard Spinr branded header band already drawn (mirrors
+    utils/receipt_pdf.py's header). Caller starts writing content at the
+    current cursor position (y ~36mm) after this returns.
+
+    Pass landscape=True for tables with several columns or long cell
+    values (e.g. UUIDs, ISO timestamps) — portrait's ~180mm usable width
+    is too narrow for those without wrapping every cell.
 
     Only for report_type entries registered as "branded" in
     REPORT_FORMAT_REGISTRY — fixed_format reports (SGI etc.) must never call
@@ -121,13 +125,14 @@ def new_branded_pdf(title: str, subtitle: str = ""):
     """
     from fpdf import FPDF  # type: ignore[import-untyped]
 
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf = FPDF(orientation="L" if landscape else "P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     left = 15
+    page_w = pdf.w
 
     pdf.set_fill_color(*BRAND_RGB)
-    pdf.rect(0, 0, 210, 28, "F")
+    pdf.rect(0, 0, page_w, 28, "F")
     pdf.set_text_color(255, 255, 255)
     pdf.set_xy(left, 8)
     if has_logo_asset():
@@ -142,6 +147,10 @@ def new_branded_pdf(title: str, subtitle: str = ""):
 
     pdf.set_y(36)
     pdf.set_text_color(0, 0, 0)
+    # Reset from the header band's brand-red fill — otherwise fpdf2's Table
+    # API (render_pdf_table) inherits it as every cell's background,
+    # including data rows that should stay white.
+    pdf.set_fill_color(255, 255, 255)
     return pdf
 
 
@@ -245,6 +254,42 @@ def add_branded_table(doc, fieldnames: list[str], rows: list[dict]) -> None:
         cells = table.add_row().cells
         for col, name in enumerate(fieldnames):
             cells[col].text = str(row.get(name, "") if row.get(name) is not None else "")
+
+
+def render_pdf_table(
+    pdf,
+    fieldnames: list[str],
+    rows: list[dict],
+    col_widths: list[float] | None = None,
+    font_size: int = 8,
+) -> None:
+    """Render a table into a branded PDF using fpdf2's native Table API,
+    which wraps long cell text and syncs row heights automatically —
+    unlike hand-rolled fixed-width pdf.cell() calls, which clip/overlap
+    instead of wrapping when content (UUIDs, ISO timestamps, long labels)
+    exceeds the column width.
+
+    col_widths are relative ratios (not absolute mm) across the fieldnames,
+    e.g. [2, 3, 2, 2, 2, 2] to give column 2 more room than the others;
+    omit for equal-width columns.
+    """
+    from fpdf.fonts import FontFace  # type: ignore[import-untyped]
+
+    header_names = [pdf_safe(name.replace("_", " ").title()) for name in fieldnames]
+    pdf.set_font(BRAND_FONT, "", font_size)
+    headings_style = FontFace(emphasis="BOLD", color=255, fill_color=BRAND_RGB)
+    with pdf.table(
+        col_widths=col_widths,
+        text_align="LEFT",
+        headings_style=headings_style,
+    ) as table:
+        header_row = table.row()
+        for name in header_names:
+            header_row.cell(name)
+        for row in rows:
+            data_row = table.row()
+            for name in fieldnames:
+                data_row.cell(pdf_safe(str(row.get(name, ""))))
 
 
 def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> None:

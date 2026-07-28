@@ -100,6 +100,24 @@ def test_rider_prompt_requires_fresh_closest_search_without_disclosing_tools():
     assert "Never print identifiers" in prompt
 
 
+def test_prompts_forbid_internal_detail_leakage():
+    """The rider-facing 'it only resolved approximately, so I can't quote or
+    book to it yet' incident was the model faithfully paraphrasing an internal
+    tool-result warning (provider name, match-quality jargon, model-facing
+    directives). Both personas must be told to translate notes into plain
+    language, and the driver persona must carry the same tool-name secrecy
+    rule as the rider one."""
+    rider = build_system_prompt({}, "rider")
+    assert "notes and warnings are guidance for YOU" in rider
+    assert "resolved approximately" in rider  # named as a forbidden phrase
+    assert "provider or service names" in rider
+    driver = build_system_prompt({}, "driver")
+    assert "Tool names, function names" in driver
+    assert "Never print identifiers" in driver
+    assert "guidance for YOU" in driver
+    assert "Never ask for or repeat payment card numbers" in driver
+
+
 def test_rider_prompt_trusts_tapped_suggestion_coordinates():
     """A tapped location-suggestion card sends "Use <address> [lat,lng] as my
     pickup/dropoff". Without an explicit trust rule, rule 6's "never

@@ -24,7 +24,7 @@ def _patches(reset_return):
         ),
         patch(
             "backend.utils.allowance_reset.get_corporate_member_by_id",
-            AsyncMock(return_value={"company_id": "c1"}),
+            AsyncMock(return_value={"company_id": "c1", "status": "active"}),
         ),
         patch(
             "backend.utils.allowance_reset.get_corporate_wallet_by_company",

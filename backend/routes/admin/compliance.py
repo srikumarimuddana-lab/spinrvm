@@ -19,16 +19,18 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
-    from ...utils import report_branding
+    from ...utils import metrics, report_branding
+    from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
-    from utils import report_branding
+    from utils import metrics, report_branding
+    from utils.rate_limiter import default_limiter as limiter
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/compliance", tags=["Admin Compliance"])
@@ -51,6 +53,22 @@ def _parse_date_range(date_range: str) -> datetime:
         "1y": timedelta(days=365),
     }
     return now - mapping.get(date_range, timedelta(days=30))
+
+
+def _capture_export_failure(report_type: str, error: Exception) -> None:
+    """Explicit domain-tagged Sentry event for a compliance-export failure.
+    Best-effort — never raises, no-op if SENTRY_DSN isn't configured. Same
+    shape as services/data_transfer/observability.py's capture_failure."""
+    try:
+        import sentry_sdk  # type: ignore
+
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("domain", "admin")
+            scope.set_tag("surface", "backend")
+            scope.set_tag("report_type", report_type)
+            sentry_sdk.capture_exception(error)
+    except Exception as sentry_err:
+        logger.debug(f"compliance Sentry capture skipped: {sentry_err}")
 
 
 async def _log_compliance_export(admin: dict, report_type: str, params: dict, row_count: int) -> None:
@@ -176,10 +194,22 @@ def _render_tabular_report(
     rows: list[dict],
     subtitle: str,
     format: str,
+    pdf_landscape: bool = False,
+    pdf_col_widths: list[float] | None = None,
 ) -> Response:
     """Shared branded-report rendering for any (fieldnames, rows) tabular
     report — used by both the GST/PST remittance and insurance-period audit
-    endpoints so format handling (pdf/csv/xlsx/docx) lives in one place."""
+    endpoints so format handling (pdf/csv/xlsx/docx) lives in one place.
+
+    pdf_landscape/pdf_col_widths: reports with several columns or long
+    cell values (UUIDs, ISO timestamps) need landscape orientation and
+    wider ratios for those columns — passed per-report since each report's
+    column shape differs. Regression: an earlier fixed-width single-line
+    pdf.cell() renderer clipped/overlapped text into an unreadable table
+    the moment real data (full UUIDs, microsecond timestamps) was used —
+    confirmed against a real downloaded report from the live admin portal.
+    Now uses fpdf2's native Table API (report_branding.render_pdf_table),
+    which wraps text and syncs row heights instead of clipping."""
     if format == "csv":
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames)
@@ -214,17 +244,8 @@ def _render_tabular_report(
         )
 
     # default: pdf
-    pdf = report_branding.new_branded_pdf(title, subtitle)
-    pdf.set_font(report_branding.BRAND_FONT, "B", 9)
-    col_w = min(45, 190 // max(len(fieldnames), 1))
-    for name in fieldnames:
-        pdf.cell(col_w, 8, report_branding.pdf_safe(name.replace("_", " ").title()), border=1)
-    pdf.ln()
-    pdf.set_font(report_branding.BRAND_FONT, "", 9)
-    for row in rows:
-        for name in fieldnames:
-            pdf.cell(col_w, 7, report_branding.pdf_safe(str(row.get(name, ""))), border=1)
-        pdf.ln()
+    pdf = report_branding.new_branded_pdf(title, subtitle, landscape=pdf_landscape)
+    report_branding.render_pdf_table(pdf, fieldnames, rows, col_widths=pdf_col_widths)
     return Response(
         content=bytes(pdf.output()),
         media_type="application/pdf",
@@ -233,7 +254,9 @@ def _render_tabular_report(
 
 
 @api_router.get("/gst-pst-remittance")
+@limiter.limit("10/minute")
 async def get_gst_pst_remittance(
+    request: Request,
     date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     admin: dict = Depends(get_admin_user),
@@ -249,6 +272,8 @@ async def get_gst_pst_remittance(
         rows, gst_total, pst_total, hst_total, truncated = await _gst_pst_rows(start_date, end_date)
     except Exception as e:
         logger.error(f"Failed to build GST/PST remittance summary: {e}", exc_info=True)
+        _capture_export_failure("gst_pst_remittance", e)
+        metrics.inc("spinr_admin_compliance_export_total", {"report_type": "gst_pst_remittance", "outcome": "error"})
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
 
     fieldnames = ["month", "gst", "pst", "hst", "unrecognized_tax", "total_tax"]
@@ -265,6 +290,7 @@ async def get_gst_pst_remittance(
         {"date_range": date_range, "format": format, "start": start_date.isoformat(), "end": end_date.isoformat()},
         len(rows),
     )
+    metrics.inc("spinr_admin_compliance_export_total", {"report_type": "gst_pst_remittance", "outcome": "success"})
 
     return _render_tabular_report(
         title="GST/PST Remittance Summary",
@@ -336,7 +362,9 @@ async def _insurance_period_rows(
 
 
 @api_router.get("/insurance-period-audit")
+@limiter.limit("10/minute")
 async def get_insurance_period_audit(
+    request: Request,
     date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
     driver_id: Optional[str] = None,
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
@@ -353,6 +381,10 @@ async def get_insurance_period_audit(
         rows, truncated = await _insurance_period_rows(start_date, end_date, driver_id)
     except Exception as e:
         logger.error(f"Failed to build insurance-period audit export: {e}", exc_info=True)
+        _capture_export_failure("insurance_period_audit", e)
+        metrics.inc(
+            "spinr_admin_compliance_export_total", {"report_type": "insurance_period_audit", "outcome": "error"}
+        )
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
 
     fieldnames = ["driver_id", "driver_name", "period", "started_at", "ended_at", "ride_id"]
@@ -374,6 +406,7 @@ async def get_insurance_period_audit(
         },
         len(rows),
     )
+    metrics.inc("spinr_admin_compliance_export_total", {"report_type": "insurance_period_audit", "outcome": "success"})
 
     return _render_tabular_report(
         title="Driver Insurance-Period Audit",
@@ -382,4 +415,11 @@ async def get_insurance_period_audit(
         rows=rows,
         subtitle=subtitle,
         format=format,
+        # 6 columns with long UUID/ISO-timestamp/period-label content need
+        # landscape + wider ratios for driver_id/period/timestamps/ride_id
+        # than the shorter driver_name column — portrait + equal widths is
+        # what produced the overlapping, unreadable table (see docstring
+        # on _render_tabular_report).
+        pdf_landscape=True,
+        pdf_col_widths=[2.2, 1.3, 2.5, 1.8, 1.8, 2.2],
     )

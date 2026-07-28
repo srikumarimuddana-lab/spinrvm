@@ -36,9 +36,12 @@ for _m in _STUBS:
 
 def _fake_supabase_with_rows(rows):
     fake = MagicMock()
-    # Configure the select chain used by _tick to return `rows`.
+    # Configure the select chain used by _tick to return `rows`. Must mirror
+    # _tick's actual chain exactly (.is_().not_.is_().lt()...) — MagicMock
+    # auto-creates any unconfigured attribute access as a fresh child mock,
+    # so a chain shape mismatch here silently no-ops instead of raising.
     (
-        fake.table.return_value.select.return_value.is_.return_value.lt.return_value.limit.return_value.execute.return_value.data
+        fake.table.return_value.select.return_value.is_.return_value.not_.is_.return_value.lt.return_value.limit.return_value.execute.return_value.data
     ) = rows
     return fake
 

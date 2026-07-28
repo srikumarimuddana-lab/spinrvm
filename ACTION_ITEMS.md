@@ -32,9 +32,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     to reflect that. Per-file coverage in that package was **highly uneven**:
     `lost_found.py` 25% (now **100%** — see below, meets target),
     `receipts.py` 58.3% (now **100%** — see below, meets target),
-    `matching.py` 64.7% (now **76.05%**, PR #2557, merged — see below, this
-    PR adds another independent increment on top; see below for the
-    combined total), `lifecycle.py` 65.1% (now **87.88%** — meets target),
+    `matching.py` 64.7% (now **79.41%** combined — PR #2557 merged, this PR
+    adds the remaining increment; see below — just under the 80% target),
+    `lifecycle.py` 65.1% (now **87.88%** — meets target),
     `booking.py` 65.7% (now **84.54%** — meets target, PR #2559),
     `queries.py` 69.2% (now **92.20%** — meets target, PR #2544),
     `estimates.py` 71.0% (now **93.99%** — meets target, PR #2552),
@@ -96,9 +96,12 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     incentive, signed offer-card URL, FCM push all populated) plus the
     ETA-ranking Distance-Matrix-failure fallback and the notify loop's three
     fail-open exception paths (quest-progress lookup, offer-card URL
-    signing, FCM push spawn). See the combined coverage figure measured
-    after this PR merges — the two PRs' gains are additive since they touch
-    disjoint line ranges of the same function.
+    signing, FCM push spawn). **Combined with PR #2557: 76.05% → 79.41%** —
+    just under the 80% target. Full local suite confirmed 0 new/different
+    failures (4821 passed, same known 9 A7 `test_ai_tools_booking.py`
+    failures). Remaining gap (~0.6pp) is scattered across the file's
+    smallest remaining uncovered branches — deferred as low-priority; not
+    worth a dedicated follow-up PR for under a percentage point.
   - `routes/rides/receipts.py`: was 58.3%, **now 100%** after adding 15 tests
     (`tests/test_coverage_rides.py`) covering both endpoints end-to-end:
     `get_ride_receipt`'s no-driver-shows-"Unknown Driver" branch, the
@@ -176,10 +179,10 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   + `backend/tests/test_create_ride_remaining_branches.py` (booking.py),
   `backend/tests/test_ride_estimate_branches.py` (estimates.py),
   `backend/tests/test_ride_cancellation_branches.py` (cancellation.py).
-  Next: once this PR merges (PR #2557 already has), re-measure `matching.py`'s
-  combined coverage — if still short of 80%, one more small pass over
-  whatever remains (see the `matching.py` entry above for likely
-  candidates). This is the last open file in the `routes/rides/` package.
+  Combined with PR #2557 (merged): `matching.py` **64.7% → 79.41%** — the
+  only remaining file in the `routes/rides/` package, ~0.6pp short of the
+  80% target. Not scheduling a dedicated follow-up for the remainder; see
+  Acceptance below.
 - **Approach:** measure current per-file coverage (`pytest --cov --cov-report=term-missing`),
   write tests for the uncovered branches (fare tiers, surge, corporate, promo, refund,
   webhook types, ride-state transitions), then enforce with
@@ -190,9 +193,10 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   `routes/rides/*` / dispatch below 80%. Payments, fare, dispatch,
   `lost_found.py`, `lifecycle.py`, `receipts.py`, `queries.py`,
   `estimates.py`, `cancellation.py`, and `booking.py` now meet target.
-  `matching.py` (72.48% → 76.05% via merged PR #2557, plus this PR's own
-  further increment) is the last file below target — re-measure once this
-  PR merges; see above for likely next steps if still short.
+  `matching.py` (64.7% → 79.41% combined, PRs #2557 + #2561) is the only
+  file still ~0.6pp short of the 80% target — not worth a dedicated
+  follow-up PR; can be closed opportunistically alongside a future change
+  to the file.
 
 ### A2. Post-deploy smoke test in CI
 - [ ] **Status:** open

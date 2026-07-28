@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { EntitySearchTable } from "@/components/data-transfer/EntitySearchTable";
 import { useEntitySelection } from "@/components/data-transfer/useEntitySelection";
+import { ExportTab } from "./ExportTab";
 
 /**
  * Data Transfer module — consolidates the former Bulk Import (drivers) and
@@ -61,14 +62,13 @@ export default function DataTransferPage() {
                     <Card>
                         <CardHeader>
                             <CardTitle>Export</CardTitle>
-                            <CardDescription>Coming soon — select records in Search &amp; Select first.</CardDescription>
+                            <CardDescription>
+                                Export the records selected in Search &amp; Select as a full ZIP bundle or a
+                                profile-summary spreadsheet.
+                            </CardDescription>
                         </CardHeader>
                         <CardContent>
-                            <p className="text-sm text-muted-foreground">
-                                {selection.selectionCount(0) > 0 || selection.selectAllMatching
-                                    ? "Selection carried over from Search & Select."
-                                    : "No records selected yet."}
-                            </p>
+                            <ExportTab selection={selection} />
                         </CardContent>
                     </Card>
                 </TabsContent>

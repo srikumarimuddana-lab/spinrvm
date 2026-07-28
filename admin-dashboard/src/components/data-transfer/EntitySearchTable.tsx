@@ -153,7 +153,7 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
                                 <input
                                     type="checkbox"
                                     checked={selection.isSelected(row.id)}
-                                    onChange={() => selection.toggle(row.id)}
+                                    onChange={() => selection.toggle(row)}
                                     aria-label={`Select ${row.full_name ?? row.id}`}
                                 />
                             </TableCell>

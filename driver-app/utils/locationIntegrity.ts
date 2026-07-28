@@ -12,7 +12,7 @@ const TELEPORT_MIN_INTERVAL_MS = 5_000;
 
 let _lastLocation: { lat: number; lng: number; timestamp: number } | null = null;
 
-function haversineKm(
+export function haversineKm(
   lat1: number, lng1: number, lat2: number, lng2: number
 ): number {
   const R = 6371;

@@ -6,6 +6,15 @@ same records into another Spinr environment the company operates. Full
 fidelity, unredacted — the caller already has admin visibility into the
 source data; see ``services/data_transfer/entity_export_service.py`` for why
 this deliberately does NOT reuse the DSAR self-export redaction lists.
+
+Backgrounded (``BackgroundTasks.add_task``), following the same pattern as
+the DSAR self-export in ``routes/drivers/tax_exports.py``: the route inserts
+a ``pending`` job row and returns immediately; gather + build + upload runs
+after the response, and the Jobs & History tab (``data_transfer_jobs.py``)
+is how the admin discovers completion and gets the download link. This
+replaced an earlier synchronous version that gathered/zipped/uploaded
+inline — a real risk for the max 100-entity batch (up to 500 rides ×
+documents per entity) tying up a request/response cycle.
 """
 
 import logging
@@ -13,7 +22,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 try:
@@ -35,8 +44,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# A batch that's too large ties up the request thread building a big ZIP in
-# memory; cap it the same way driver_import/rider_import cap CSV rows.
+# A batch that's too large would tie up the background task for a long time;
+# cap it the same way driver_import/rider_import cap CSV rows. Backgrounding
+# removes the request-timeout pressure this cap originally guarded against,
+# but a very large batch is still a lot of work for one task — keeping the
+# same cap for now rather than raising it as a side effect of this change.
 MAX_ENTITIES_PER_EXPORT = 100
 
 EXPORT_STORAGE_BUCKET = "data-transfer-exports"
@@ -74,7 +86,7 @@ async def _upload_bundle(admin_id: str, file_bytes: bytes, ext: str, content_typ
     import asyncio  # noqa: PLC0415
 
     if not supabase:
-        raise HTTPException(status_code=503, detail="Storage client not configured")
+        raise RuntimeError("Storage client not configured")
 
     storage_path = f"exports/{admin_id}/{uuid.uuid4()}.{ext}"
     loop = asyncio.get_running_loop()
@@ -101,60 +113,33 @@ async def _upload_bundle(admin_id: str, file_bytes: bytes, ext: str, content_typ
     return _extract_signed_url(res), storage_path
 
 
-@router.post("/data-transfer/export")
-async def export_entities(
-    body: ExportRequest,
-    admin: dict = Depends(get_admin_user),
-):
-    """Gather + bundle the requested entities into a ZIP, upload it, and
-    return a signed download link. Synchronous (not backgrounded) because the
-    admin is waiting on the download — capped batch size keeps this fast
-    enough for a single request/response cycle."""
-    if not body.entities:
-        raise HTTPException(status_code=400, detail="No entities selected")
-    if len(body.entities) > MAX_ENTITIES_PER_EXPORT:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{len(body.entities)} entities requested; the limit is {MAX_ENTITIES_PER_EXPORT} per export",
-        )
-
-    builder, ext, content_type = _FORMAT_BUILDERS[body.format]
-
-    pairs = [(e.entity_type, e.entity_id) for e in body.entities]
-    job_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
-    job_record: dict[str, Any] = {
-        "id": job_id,
-        "requested_by_admin_id": admin.get("id"),
-        "entity_type": _entity_type_summary(body.entities),
-        "entity_ids": [e.entity_id for e in body.entities],
-        "doc_type_filter": body.doc_types,
-        "format": body.format,
-        "status": "pending",
-        "created_at": now.isoformat(),
-    }
+async def _run_export_job(
+    job_id: str,
+    admin: dict,
+    pairs: list[tuple[str, str]],
+    doc_types: Optional[list[str]],
+    fmt: str,
+) -> None:
+    """Background task: gather, build, upload, and update the job row.
+    Any failure here is recorded on the job row (status=failed,
+    error_message) rather than raised — there is no request left to raise
+    to by the time this runs, so the Jobs & History tab is the only place
+    a failure surfaces to the admin."""
+    builder, ext, content_type = _FORMAT_BUILDERS[fmt]
     try:
-        await db_supabase.insert_one("data_transfer_export_jobs", job_record)
-    except Exception:
-        logger.error("data-transfer export: failed to record job %s", job_id, exc_info=True)
-        raise HTTPException(status_code=503, detail="Could not record export job") from None
-
-    try:
-        bundles = await entity_export_service.gather_entity_bundles(pairs, body.doc_types)
+        bundles = await entity_export_service.gather_entity_bundles(pairs, doc_types)
         if not bundles:
-            raise HTTPException(status_code=404, detail="None of the requested entities could be found")
+            raise RuntimeError("None of the requested entities could be found")
         file_bytes = builder(bundles)
         signed_url, storage_path = await _upload_bundle(admin.get("id", "unknown"), file_bytes, ext, content_type)
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error("data-transfer export: job %s failed", job_id, exc_info=True)
         await db_supabase.update_one(
             "data_transfer_export_jobs", {"id": job_id}, {"status": "failed", "error_message": str(e)}
         )
-        raise HTTPException(status_code=502, detail="Export failed; no partial file was produced") from e
+        return
 
-    expires_at = now + timedelta(seconds=_EXPORT_LINK_TTL_SECONDS)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_EXPORT_LINK_TTL_SECONDS)
     await db_supabase.update_one(
         "data_transfer_export_jobs",
         {"id": job_id},
@@ -171,13 +156,55 @@ async def export_entities(
         "data_transfer_export",
         "data_transfer_export_jobs",
         job_id,
-        {"entity_count": len(bundles), "requested": len(pairs), "doc_types": body.doc_types},
+        {"entity_count": len(bundles), "requested": len(pairs), "doc_types": doc_types},
     )
+    # signed_url is intentionally not persisted — it's long-lived (7 days)
+    # but the Jobs tab always mints a fresh one on demand from storage_path
+    # (see data_transfer_jobs.py) rather than trusting a stored URL to still
+    # be valid.
+    _ = signed_url
+
+
+@router.post("/data-transfer/export", status_code=202)
+async def export_entities(
+    body: ExportRequest,
+    background_tasks: BackgroundTasks,
+    admin: dict = Depends(get_admin_user),
+):
+    """Validate the request, record a pending job, and hand the actual
+    gather/build/upload work to a background task. Returns immediately with
+    the job_id — check its status via the Jobs & History tab or
+    GET /data-transfer/jobs/{job_id}."""
+    if not body.entities:
+        raise HTTPException(status_code=400, detail="No entities selected")
+    if len(body.entities) > MAX_ENTITIES_PER_EXPORT:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{len(body.entities)} entities requested; the limit is {MAX_ENTITIES_PER_EXPORT} per export",
+        )
+
+    pairs = [(e.entity_type, e.entity_id) for e in body.entities]
+    job_id = str(uuid.uuid4())
+    job_record: dict[str, Any] = {
+        "id": job_id,
+        "requested_by_admin_id": admin.get("id"),
+        "entity_type": _entity_type_summary(body.entities),
+        "entity_ids": [e.entity_id for e in body.entities],
+        "doc_type_filter": body.doc_types,
+        "format": body.format,
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db_supabase.insert_one("data_transfer_export_jobs", job_record)
+    except Exception:
+        logger.error("data-transfer export: failed to record job %s", job_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="Could not record export job") from None
+
+    background_tasks.add_task(_run_export_job, job_id, admin, pairs, body.doc_types, body.format)
 
     return {
         "job_id": job_id,
-        "entity_count": len(bundles),
+        "status": "pending",
         "requested_count": len(pairs),
-        "download_url": signed_url,
-        "expires_at": expires_at.isoformat(),
     }

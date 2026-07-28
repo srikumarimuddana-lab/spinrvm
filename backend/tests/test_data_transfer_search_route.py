@@ -15,6 +15,34 @@ import pytest
 _ADMIN = {"id": "admin-1", "role": "super_admin", "email": "admin@spinr.app"}
 _ROWS = [{"id": "u1", "first_name": "Jane", "last_name": "Doe", "email": "jane@example.com", "phone": "+15550001111"}]
 
+# Tables the search route itself queries. Anything else recorded on the mock
+# came from somewhere other than this request.
+_ENTITY_TABLES = ("users", "drivers")
+
+
+def _entity_call(get_rows):
+    """Return the get_rows call the search route made for its entity table.
+
+    Deliberately NOT `get_rows.call_args`, which is the *last* call recorded.
+    `backend.db_supabase.get_rows` is patched globally, so any fire-and-forget
+    task spawned by an earlier test can land inside this patch window and
+    register its own call — the Meta conversions sender reading the
+    `settings` row is one such caller. When that happens `.call_args` reflects
+    the stray task rather than the route, and the assertion fails for reasons
+    that have nothing to do with the code under test.
+
+    Selecting the entity-table call states what these tests actually mean:
+    "the route queried table X", not "the most recent database read in the
+    process happened to be X".
+    """
+    for call in get_rows.call_args_list:
+        if call.args and call.args[0] in _ENTITY_TABLES:
+            return call
+    raise AssertionError(
+        "search route made no get_rows call for an entity table; "
+        f"recorded tables: {[c.args[0] if c.args else None for c in get_rows.call_args_list]}"
+    )
+
 
 @pytest.fixture
 def admin_client(test_client):
@@ -41,7 +69,7 @@ def test_search_default_entity_type_queries_users(admin_client):
     body = resp.json()
     assert body["total_count"] == 1
     assert body["rows"] == [{**_ROWS[0], "full_name": "Jane Doe"}]
-    assert get_rows.call_args.args[0] == "users"
+    assert _entity_call(get_rows).args[0] == "users"
 
 
 def test_search_status_filter_is_forwarded(admin_client):
@@ -61,7 +89,7 @@ def test_search_driver_entity_type_queries_drivers_table(admin_client):
     ):
         resp = admin_client.get("/api/admin/data-transfer/search?entity_type=driver")
     assert resp.status_code == 200
-    assert get_rows.call_args.args[0] == "drivers"
+    assert _entity_call(get_rows).args[0] == "drivers"
 
 
 def test_search_rider_entity_type_filters_role(admin_client):
@@ -71,8 +99,9 @@ def test_search_rider_entity_type_filters_role(admin_client):
     ):
         resp = admin_client.get("/api/admin/data-transfer/search?entity_type=rider")
     assert resp.status_code == 200
-    assert get_rows.call_args.args[0] == "users"
-    assert get_rows.call_args.args[1].get("role") == "rider"
+    _users_call = _entity_call(get_rows)
+    assert _users_call.args[0] == "users"
+    assert _users_call.args[1].get("role") == "rider"
 
 
 def test_search_driver_full_name_prefers_name_column(admin_client):
@@ -144,4 +173,4 @@ def test_search_pagination_computes_offset(admin_client):
     ):
         resp = admin_client.get("/api/admin/data-transfer/search?page=3&page_size=20")
     assert resp.status_code == 200
-    assert get_rows.call_args.kwargs.get("offset") == 40
+    assert _entity_call(get_rows).kwargs.get("offset") == 40

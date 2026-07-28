@@ -671,7 +671,29 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
             result.error,
             result.status_code,
         )
+    elif not result.already_paid:
+        # Meta Purchase for the corporate-guest path. This settlement is
+        # server-driven and never touches a rider's device, so without this
+        # hook these rides would be the one class of paid ride that produces
+        # no conversion at all.
+        await _fire_guest_purchase_conversion(ride, ride_id, result.charged_amount)
     return result
+
+
+async def _fire_guest_purchase_conversion(ride: dict, ride_id: str, charged_amount) -> None:
+    """Queue Meta Purchase for a guest corporate ride. Never raises.
+
+    Delegates to the shared entry point used by every server-driven settlement
+    path, so rider lookup and error containment stay in one place.
+    """
+    try:
+        from .meta_conversions_service import send_ride_purchase_for_ride
+    except ImportError:
+        from services.meta_conversions_service import send_ride_purchase_for_ride  # type: ignore
+    try:
+        await send_ride_purchase_for_ride(ride, ride.get("rider_id"), charged_amount)
+    except Exception:
+        logger.error("meta: guest Purchase send failed for ride %s", ride_id, exc_info=True)
 
 
 # ── Card (Stripe) settlement ─────────────────────────────────────────

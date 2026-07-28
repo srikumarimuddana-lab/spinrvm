@@ -1228,6 +1228,46 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
     return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 
+def _fire_driver_approved(driver: dict) -> None:
+    """Queue the Meta DriverApproved send. Never raises into the admin action.
+
+    An admin approving a driver must always succeed and always be audit-logged;
+    a Meta problem cannot be allowed to 500 that request or skip the audit
+    write that follows it.
+
+    The driver's contact details for Advanced Matching are loaded inside the
+    spawned coroutine rather than here, so the admin response is not held up by
+    a users lookup.
+    """
+    try:
+        from ...services import meta_conversions_service as _meta
+        from ...utils.background import spawn as _spawn
+    except ImportError:
+        try:
+            from services import meta_conversions_service as _meta  # type: ignore
+            from utils.background import spawn as _spawn  # type: ignore
+        except ImportError:
+            logger.error("meta: conversions service unavailable — skipping DriverApproved", exc_info=True)
+            return
+
+    async def _send() -> None:
+        user: dict = {"id": driver.get("user_id")}
+        try:
+            fetched = await db_supabase.get_user_by_id(driver.get("user_id")) if driver.get("user_id") else None
+            if fetched:
+                user = fetched
+        except Exception:
+            # Send anyway with external_id only — a lower match quality is
+            # better than a missing conversion.
+            logger.error("meta: could not load user for DriverApproved", exc_info=True)
+        await _meta.send_driver_approved(driver, user)
+
+    try:
+        _spawn(_send())
+    except Exception:
+        logger.error("meta: failed to queue DriverApproved for driver %s", driver.get("id"), exc_info=True)
+
+
 @router.post("/drivers/{driver_id}/verify")
 async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: dict = Depends(get_admin_user)):
     """Verify or unverify a driver.
@@ -1279,6 +1319,14 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: d
                 )
     except Exception as e:
         logger.warning(f"[ADMIN] Push notification failed for driver {driver_id}: {e}")
+
+    # Meta DriverApproved. CAPI-only: approval happens in the admin dashboard,
+    # never on the driver's device, so there is no client event to de-duplicate
+    # against and no shared event_id. Fires on approve only — an unverify is
+    # not a conversion, and the service's dedup_key means a re-approve after an
+    # unverify does not fire a second time.
+    if req.verified:
+        _fire_driver_approved(existing_driver)
 
     await log_admin_action(admin, "driver_verified", "drivers", driver_id, {"verified": req.verified})
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}

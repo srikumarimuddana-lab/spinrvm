@@ -308,16 +308,21 @@ def test_ws_invalid_token_via_admin_jwt_path(app_with_ws):
 
 
 @pytest.mark.anyio
-async def test_ws_message_rate_limit():
-    """ConnectionManager.note_user_message() enforces 30 msg/s per user.
+async def test_ws_message_rate_limit(mock_redis):
+    """ConnectionManager.note_user_message() enforces 30 msg/s per user
+    via the Redis-backed fleet-wide counter (B4; ``mock_redis`` stands in
+    for Redis — see utils/redis_client.py's transparent fallback).
 
-    The 30th call in a 1-second window must return True (allowed).
+    The 30th call in the current window must return True (allowed).
     The 31st call must return False (rate limited) — the socket is NOT closed,
     matching the production behaviour documented in socket_manager.py.
 
     We test the rate-limit logic directly (unit-level) rather than through
     the full WebSocket stack, which would require sending 31 real messages
-    through a TestClient and risk timing flakiness in CI.
+    through a TestClient and risk timing flakiness in CI. Full contract
+    coverage (fleet-wide aggregation, per-user isolation, window reset,
+    Redis-failure fallback, bucket cleanup) lives in
+    test_websocket_per_user_rate_limit.py.
     """
     from backend.socket_manager import ConnectionManager
 
@@ -326,34 +331,34 @@ async def test_ws_message_rate_limit():
 
     # Drive the first 30 messages in — all should be accepted.
     for i in range(30):
-        allowed = mgr.note_user_message(user_id, max_per_second=30)
+        allowed = await mgr.note_user_message(user_id, max_per_second=30)
         assert allowed, f"message {i + 1} should be within the 30/s budget"
 
-    # The 31st message in the same ~instant window must be rejected.
-    over_limit = mgr.note_user_message(user_id, max_per_second=30)
+    # The 31st message in the same window must be rejected.
+    over_limit = await mgr.note_user_message(user_id, max_per_second=30)
     assert not over_limit, "31st message should exceed the 30/s limit"
 
 
 @pytest.mark.anyio
-async def test_ws_message_rate_limit_resets_after_window():
-    """After the 1-second sliding window expires, the bucket clears and
-    messages are accepted again — the socket is never terminated by this path.
-    """
+async def test_ws_message_rate_limit_resets_after_window(mock_redis):
+    """After the 1-second window expires (the Redis key's TTL), the
+    counter resets and messages are accepted again — the socket is never
+    terminated by this path."""
     from backend.socket_manager import ConnectionManager
 
     mgr = ConnectionManager()
     user_id = "rate_limit_reset_user"
 
-    # Fill the bucket.
+    # Fill the window.
     for _ in range(30):
-        mgr.note_user_message(user_id, max_per_second=30)
+        await mgr.note_user_message(user_id, max_per_second=30)
+    assert await mgr.note_user_message(user_id, max_per_second=30) is False
 
-    # Manually rewind all timestamps by 1.1 s so the next call trims the bucket.
-    bucket = mgr._user_msg_timestamps.get(user_id, [])
-    mgr._user_msg_timestamps[user_id] = [t - 1.1 for t in bucket]
+    # Wait out the TTL set on the counter's first increment.
+    time.sleep(1.05)
 
-    # Now the bucket should be clear and a new message should pass.
-    allowed = mgr.note_user_message(user_id, max_per_second=30)
+    # Now the counter should have expired and a new message should pass.
+    allowed = await mgr.note_user_message(user_id, max_per_second=30)
     assert allowed, "after the window expires, the next message should be accepted"
 
 
@@ -659,6 +664,13 @@ async def test_ws_rate_limit_response_keeps_socket_open(app_with_ws):
         patch(
             "backend.routes.websocket.manager.broadcast_to_admins",
             new=AsyncMock(return_value=None),
+        ),
+        # B4: note_user_message's primary path is Redis-backed (fleet-wide);
+        # force the per-machine fallback so pre-filling _user_msg_timestamps
+        # below actually takes effect, same as before B4.
+        patch(
+            "backend.socket_manager.redis_incr",
+            new=AsyncMock(side_effect=ConnectionError("redis down")),
         ),
     )
     try:

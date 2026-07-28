@@ -99,18 +99,21 @@ banner can reuse the same parser.
 - **Do NOT reconnect** — a reconnect doesn't reset the cap (see
   *Bucket lifecycle* below) and just costs a JWT verify round-trip.
 
-### Multi-replica caveat
+### Multi-replica caveat (resolved — B4)
 
-The bucket is **per-machine**. On a typical Fly affinity-LB deploy a
-user's sockets are pinned to one machine, so per-machine ≈ per-user.
-The remaining attack vector — an attacker who can force-balance
-their sockets across replicas — is bounded by `replica_count × cap`.
-At our current 1–2 replica scale that's at worst 60 msg/s, still
-substantially tighter than the prior per-connection-only cap.
+The cap is enforced **fleet-wide** via a Redis fixed-window counter
+(`INCR` + `EXPIRE 1`) keyed on `user_id`, shared across every replica —
+see `ConnectionManager.note_user_message`. `utils/redis_client.py`
+transparently falls back to an in-process dict when `REDIS_URL` is
+unset, so local/dev/test behave the same without branching.
 
-Promoting this to a Redis sliding-window counter keyed on `user_id`
-is a P3 follow-up tracked here. The trigger to do it: replica count
-crossing ≥4 OR an actual incident showing cross-replica abuse.
+If Redis is configured but a call raises (network blip, Redis down),
+the limiter fails **open** to `_note_user_message_local` — the
+original per-machine sliding-window bucket described below — rather
+than blocking every WS message fleet-wide on a transient Redis hiccup.
+That per-machine fallback bounds the fleet-wide attack surface to
+`replica_count × cap` only during a Redis outage, not as steady-state
+behaviour.
 
 ### Bucket lifecycle
 

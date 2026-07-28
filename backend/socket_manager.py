@@ -19,27 +19,34 @@ _ADMIN_LOC_MIN_INTERVAL = 3.0
 try:
     from .logging_utils import diag_logger  # type: ignore
     from .utils.metrics import observe as _metric_observe  # type: ignore
+    from .utils.redis_client import redis_expire, redis_incr  # type: ignore
 except ImportError:
     from logging_utils import diag_logger  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
+    from utils.redis_client import redis_expire, redis_incr  # type: ignore
 
 
-# B-P1-12: per-user inbound message rate-limit. The receive loop in
-# routes/websocket.py used to enforce a per-CONNECTION cap (30 msg/s
-# via a closure-scoped timestamp list), which an attacker could side-
-# step by opening N sockets to get N×30 effective throughput. The
-# bucket below aggregates across every WebSocket the user has open on
-# THIS machine; the cap is now ``WS_MAX_MESSAGES_PER_SECOND_PER_USER``.
+# B-P1-12 / B4: per-user inbound message rate-limit, enforced fleet-wide.
+# The receive loop in routes/websocket.py used to enforce a per-CONNECTION
+# cap (30 msg/s via a closure-scoped timestamp list), which an attacker
+# could side-step by opening N sockets to get N×30 effective throughput.
+# That was fixed by aggregating per-user on this machine — but a user
+# force-balanced across replicas (or simply landing on different
+# machines across reconnects) still got up to ``replica_count × cap``
+# throughput, since each replica's ``ConnectionManager`` held its own
+# in-process bucket.
 #
-# Cross-replica enforcement requires Redis (sliding-window counter
-# keyed on user_id). On a typical Fly affinity-LB deploy a user's
-# sockets are pinned to one machine, so per-machine ≈ per-user. The
-# remaining attack vector — an attacker who can force-balance their
-# sockets across replicas — is bounded by ``replica_count × cap``,
-# which at our current 1-2 replica scale is still the right order of
-# magnitude tighter than the prior per-connection-only cap. Promoting
-# this to Redis is a P3 follow-up tracked in
-# docs/runbooks/websockets.md.
+# note_user_message now enforces the cap via a Redis fixed-window
+# counter (INCR + EXPIRE 1s) keyed on user_id, shared across every
+# replica — ``utils/redis_client.py`` transparently falls back to an
+# in-process dict when REDIS_URL is unset (dev/test), so this degrades
+# to the old per-machine behaviour there with no code branching needed.
+# If Redis IS configured but a call fails (network blip, Redis down),
+# we fail OPEN to the original per-machine sliding-window bucket below
+# rather than blocking every WS message fleet-wide on a transient Redis
+# hiccup — matching the non-security-critical fail-open precedent in
+# ``utils/rate_limiter.py``'s ``RedisRateLimiter`` (OTP keys fail closed;
+# general rate limits degrade to memory).
 WS_MAX_MESSAGES_PER_SECOND_PER_USER = 30
 
 
@@ -124,28 +131,54 @@ class ConnectionManager:
                 counts["riders"] += 1
         return counts
 
-    def note_user_message(
+    async def note_user_message(
         self,
         user_id: str,
         *,
         max_per_second: int = WS_MAX_MESSAGES_PER_SECOND_PER_USER,
     ) -> bool:
         """Record an inbound WebSocket message for ``user_id`` against
-        the per-user sliding-window rate limit (B-P1-12).
+        the per-user rate limit (B-P1-12 / B4), enforced fleet-wide.
 
         Returns True if the message is within budget; False if the user
-        has exceeded ``max_per_second`` messages over the prior 1-second
-        window across ALL their open sockets on this machine. The
+        has exceeded ``max_per_second`` messages over the current 1-second
+        window across every socket they have open, on every replica. The
         caller (routes/websocket.py receive loop) emits a typed
         ``rate_limited`` frame on False and drops the message — the
         socket is NOT closed, matching the prior per-connection
         behaviour so a brief burst doesn't tear down a healthy session.
 
-        Synchronous on purpose: ``time.monotonic()`` doesn't need an
-        event loop, which makes this trivially unit-testable without
-        an async harness. Bucket trimming is in-place to avoid GC
-        churn under sustained high message rates from drivers (one
-        location_update per second is the steady state).
+        Primary path: a Redis fixed-window counter (``INCR`` then
+        ``EXPIRE 1`` on the first increment of each window), keyed on
+        user_id — shared across every replica. ``utils/redis_client.py``
+        transparently falls back to an in-process dict when REDIS_URL is
+        unset, so local/dev/test behave identically without branching
+        here. If Redis IS configured but the call raises (network blip,
+        Redis down), we fail OPEN to ``_note_user_message_local`` — the
+        original per-machine sliding-window bucket — rather than
+        blocking every WS message fleet-wide on a transient Redis
+        hiccup.
+        """
+        key = f"ws:msgrate:{user_id}"
+        try:
+            count = await redis_incr(key)
+            if count == 1:
+                await redis_expire(key, 1)
+            return count <= max_per_second
+        except Exception as e:
+            logger.warning(
+                f"WS rate limiter: Redis unavailable for user_id={user_id}, degrading to per-machine fallback: {e}"
+            )
+            return self._note_user_message_local(user_id, max_per_second)
+
+    def _note_user_message_local(self, user_id: str, max_per_second: int) -> bool:
+        """Per-machine sliding-window fallback used only when the Redis
+        call in ``note_user_message`` raises (Redis configured but
+        unreachable). Same algorithm B-P1-12 originally shipped with —
+        see ``_user_msg_timestamps`` and the bucket-cleanup methods
+        below, which exist solely to bound this fallback's memory under
+        churn (the Redis path needs no such cleanup; its keys expire on
+        their own).
         """
         now_ts = time.monotonic()
         cutoff = now_ts - 1.0

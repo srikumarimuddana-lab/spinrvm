@@ -44,6 +44,16 @@ def test_search_default_entity_type_queries_users(admin_client):
     assert get_rows.call_args.args[0] == "users"
 
 
+def test_search_status_filter_is_forwarded(admin_client):
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])) as get_rows,
+        patch("backend.db_supabase.count_documents", AsyncMock(return_value=0)),
+    ):
+        resp = admin_client.get("/api/admin/data-transfer/search?status=suspended")
+    assert resp.status_code == 200
+    assert get_rows.call_args.args[1].get("status") == "suspended"
+
+
 def test_search_driver_entity_type_queries_drivers_table(admin_client):
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])) as get_rows,

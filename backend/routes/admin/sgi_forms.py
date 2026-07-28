@@ -31,6 +31,29 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# SGI D00032/D00033 are Saskatchewan-only regulator forms (CLAUDE.md's
+# regulatory-sk context; docs/reporting/sgi-form-field-mapping.md). As Spinr
+# expands into Alberta, a driver whose `regulatory_authority` is anything
+# else must never end up on an SGI submission — hard block, not a warning,
+# per the explicit decision on this: a form silently sent to the wrong
+# regulator is a compliance incident, not a UX inconvenience to smooth over.
+_SGI_AUTHORITY = "SGI"
+
+
+def _out_of_scope_drivers(driver_rows: list[dict]) -> list[dict]:
+    """Drivers whose `regulatory_authority` is explicitly populated and is
+    NOT `_SGI_AUTHORITY`. A NULL/missing `regulatory_authority` is treated
+    as in-scope (not blocked) — 22 of 209 real drivers in the (currently
+    single-province) production data predate this field being backfilled;
+    silently blocking them would be a regression on working functionality
+    for legitimate Saskatchewan drivers, not a safety improvement. This is
+    a deliberate grandfather allowance, not an oversight — see
+    ACTION_ITEMS.md for the backfill tracked to close this gap for real.
+    Once every driver has a populated regulatory_authority (post-backfill,
+    and for every new Alberta driver going forward via driver_import_service),
+    this NULL-passes behavior stops mattering in practice."""
+    return [d for d in driver_rows if d.get("regulatory_authority") and d["regulatory_authority"] != _SGI_AUTHORITY]
+
 
 class SgiFormRequest(BaseModel):
     form_type: str = Field(..., pattern="^(driver_details|vehicle_details)$")
@@ -69,6 +92,19 @@ async def generate_sgi_form(
     driver_rows = await db_supabase.get_rows("drivers", {"user_id": {"$in": body.driver_ids}})
     if not driver_rows:
         raise HTTPException(status_code=404, detail="None of the requested drivers could be found")
+
+    out_of_scope = _out_of_scope_drivers(driver_rows)
+    if out_of_scope:
+        authorities = sorted({d["regulatory_authority"] for d in out_of_scope})
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(out_of_scope)} of the selected drivers are regulated by "
+                f"{', '.join(authorities)}, not SGI — SGI forms cannot be generated for them. "
+                "Remove these drivers from the selection and generate their own province's "
+                "form separately."
+            ),
+        )
 
     # license_number is vault-encrypted at rest (a vault.secrets UUID, not the
     # real value — see routes/drivers/_shared.py's _VAULT_PII_FIELDS). D00032

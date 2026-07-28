@@ -49,9 +49,29 @@ const GEOFENCE_CENTRE_KEY = 'spinr_bg_geofence_centre';
 // worst case is one redundant re-arm, which the displacement gate then absorbs.
 let _geofenceRearmPromise: Promise<boolean> | null = null;
 
+// Monotonic fence so a stop is always authoritative regardless of timing.
+// Bumped synchronously (no await between read and write, so no interleaving
+// is possible) at the start of every stopGeofenceRecovery call. Any arm that
+// captured an older value self-detects it has been superseded — even one that
+// slips in during stopGeofenceRecovery's own await window — and undoes itself
+// instead of leaving a stop-requested driver geofenced.
+let _geofenceGeneration = 0;
+
+// Upper bound on how long stopGeofenceRecovery waits for an in-flight arm
+// before proceeding anyway. Waiting first (rather than not waiting at all)
+// avoids the common case of two concurrent native geofencing calls — the
+// class of bug this module exists to prevent — but an unbounded wait would
+// let a hung native call (getBackgroundPermissionsAsync/startGeofencingAsync)
+// stall stopGeofenceRecovery forever, and with it toggleOnline's `finally`
+// (see useDriverDashboard.ts toggleOnline), permanently disabling the online
+// reconcile effect. The generation fence makes it safe to give up: a stale
+// arm that resolves after the timeout will still self-correct.
+const GEOFENCE_STOP_WAIT_TIMEOUT_MS = 8_000;
+
 /** @internal Test-only — reset in-flight gating state between test cases. */
 export function _resetGeofenceDebounce(): void {
   _geofenceRearmPromise = null;
+  _geofenceGeneration = 0;
 }
 
 async function _readGeofenceCentre(): Promise<{ lat: number; lng: number } | null> {
@@ -392,7 +412,7 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
   }
 });
 
-async function _startGeofenceRecoveryInner(lat: number, lng: number): Promise<boolean> {
+async function _startGeofenceRecoveryInner(lat: number, lng: number, myGeneration: number): Promise<boolean> {
   const { status } = await Location.getBackgroundPermissionsAsync();
   if (status !== 'granted') {
     console.warn('[Geofence] Background permission not granted; skipping recovery');
@@ -412,6 +432,12 @@ async function _startGeofenceRecoveryInner(lat: number, lng: number): Promise<bo
     // probe in _shouldSkipRearm instead.
   }
 
+  // A stopGeofenceRecovery call bumps the generation synchronously, so if one
+  // arrived while we were awaiting permissions/stop above, ours is stale — the
+  // driver asked to go offline mid-arm. Don't arm on behalf of a request that
+  // no longer holds.
+  if (myGeneration !== _geofenceGeneration) return false;
+
   await Location.startGeofencingAsync(GEOFENCE_TASK, [
     {
       identifier: GEOFENCE_ID,
@@ -422,6 +448,18 @@ async function _startGeofenceRecoveryInner(lat: number, lng: number): Promise<bo
       notifyOnExit: true,
     },
   ]);
+
+  // Re-check after the native call too: stopGeofenceRecovery may have given up
+  // waiting for us (GEOFENCE_STOP_WAIT_TIMEOUT_MS) and already run its own
+  // stop while we were still arming. Leaving ourselves armed at that point is
+  // exactly the "offline driver still geofenced" bug — undo immediately.
+  if (myGeneration !== _geofenceGeneration) {
+    await Location.stopGeofencingAsync(GEOFENCE_TASK).catch(() => {});
+    await SecureStore.deleteItemAsync(GEOFENCE_CENTRE_KEY).catch(() => {});
+    console.log('[Geofence] Arm superseded by a stop; undone');
+    return false;
+  }
+
   // Persist the centre so the displacement gate survives process death.
   await SecureStore.setItemAsync(GEOFENCE_CENTRE_KEY, JSON.stringify({ lat, lng }))
     .catch(() => { /* Gate degrades to "always re-arm" — safe direction. */ });
@@ -452,20 +490,35 @@ export async function startGeofenceRecovery(lat: number, lng: number): Promise<b
     if (await _shouldSkipRearm(lat, lng)) return true;
   }
 
-  _geofenceRearmPromise = _startGeofenceRecoveryInner(lat, lng).finally(() => {
+  const myGeneration = _geofenceGeneration;
+  _geofenceRearmPromise = _startGeofenceRecoveryInner(lat, lng, myGeneration).finally(() => {
     _geofenceRearmPromise = null;
   });
   return _geofenceRearmPromise;
 }
 
 export async function stopGeofenceRecovery(): Promise<void> {
-  // Let any in-flight arm finish FIRST. Merely dropping the reference does not
-  // cancel it: startGeofencingAsync could land after our stop and leave an
-  // offline driver geofenced, whose next exit would silently resume background
-  // tracking — collecting location while no ride service is being provided.
+  // Bump the fence synchronously, before any await — this is what makes stop
+  // authoritative no matter how the timing works out. Any arm already in
+  // flight (or one that slips in during this function's own await window)
+  // captured or will capture an older generation, and self-corrects in
+  // _startGeofenceRecoveryInner instead of leaving a stop-requested driver
+  // geofenced.
+  _geofenceGeneration++;
+
+  // Best-effort: still wait for an in-flight arm so the common case doesn't
+  // run two native geofencing calls concurrently (the class of bug this
+  // module exists to prevent), but cap the wait — the generation fence above
+  // makes it safe to give up rather than risk stalling the caller
+  // (toggleOnline) forever on a hung native call.
   const inFlight = _geofenceRearmPromise;
   _geofenceRearmPromise = null;
-  if (inFlight) await inFlight.catch(() => {});
+  if (inFlight) {
+    await Promise.race([
+      inFlight.catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, GEOFENCE_STOP_WAIT_TIMEOUT_MS)),
+    ]);
+  }
 
   // Clear the persisted centre so the displacement gate can never suppress a
   // later arm on stale state — a driver toggling offline and back on must

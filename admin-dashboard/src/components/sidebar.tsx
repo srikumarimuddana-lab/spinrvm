@@ -57,7 +57,6 @@ const NAV_GROUPS: NavGroup[] = [
                 children: [
                     { href: "/dashboard/drivers/queue", label: "Approvals", icon: Inbox, module: "drivers" },
                     { href: "/dashboard/drivers/expiring", label: "Expiring Docs", icon: Clock, module: "drivers" },
-                    { href: "/dashboard/drivers/import", label: "Bulk Import", icon: Upload, module: "drivers" },
                 ],
             },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
@@ -123,6 +122,12 @@ const NAV_GROUPS: NavGroup[] = [
             { href: "/dashboard/ai-console", label: "AI Console", icon: Sparkles, module: "ai_console" },
             // Same super-admin-only mechanism: "bulk_operations" is granted to
             // no staff role; the page + backend enforce strict super_admin.
+            // Consolidates the former rider-import section of Bulk Operations
+            // and the Drivers → Bulk Import page: search/select, export,
+            // import, and SGI compliance forms. Bulk Operations itself stays
+            // (it also hosts the still-separate legacy Stripe mapping tool,
+            // out of this module's scope).
+            { href: "/dashboard/data-transfer", label: "Data Transfer", icon: Upload, module: "bulk_operations" },
             { href: "/dashboard/bulk-operations", label: "Bulk Operations", icon: Upload, module: "bulk_operations" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
         ],

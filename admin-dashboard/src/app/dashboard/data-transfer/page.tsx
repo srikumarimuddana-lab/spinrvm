@@ -8,6 +8,7 @@ import { useEntitySelection } from "@/components/data-transfer/useEntitySelectio
 import { ExportTab } from "./ExportTab";
 import { ImportTab } from "./ImportTab";
 import { SgiFormsTab } from "./SgiFormsTab";
+import { JobsTab } from "./JobsTab";
 
 /**
  * Data Transfer module — consolidates the former Bulk Import (drivers) and
@@ -42,6 +43,7 @@ export default function DataTransferPage() {
                     <TabsTrigger value="export">Export</TabsTrigger>
                     <TabsTrigger value="import">Import</TabsTrigger>
                     <TabsTrigger value="sgi-forms">SGI Compliance Forms</TabsTrigger>
+                    <TabsTrigger value="jobs">Jobs &amp; History</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="search">
@@ -100,6 +102,20 @@ export default function DataTransferPage() {
                         </CardHeader>
                         <CardContent>
                             <SgiFormsTab selection={selection} />
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="jobs">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Jobs &amp; History</CardTitle>
+                            <CardDescription>
+                                Recent export batches, with re-downloadable links until they expire.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <JobsTab />
                         </CardContent>
                     </Card>
                 </TabsContent>

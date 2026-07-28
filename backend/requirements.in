@@ -95,6 +95,15 @@ Pillow>=10.4.0
 # Used by backend/utils/t4a_pdf.py for on-demand driver tax slip download.
 fpdf2>=2.8.0
 
+# Admin Data Transfer module (export/import users+drivers between Spinr's
+# own environments; see backend/services/data_transfer/).
+# openpyxl: Excel export format (tabular_writer.py).
+# pypdf: fills the real SGI regulatory AcroForm PDFs (D00032 driver details,
+#   D00033 vehicle details) rather than fpdf2's from-scratch generation —
+#   fpdf2 cannot fill an existing government-issued fillable form.
+openpyxl>=3.1.5
+pypdf>=6.0.0
+
 # Error monitoring
 sentry-sdk>=2.59.0
 

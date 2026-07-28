@@ -8,7 +8,7 @@ import {
     Flame, Building2, LifeBuoy, HelpCircle,
     LogOut, Menu, X, ChevronLeft, ChevronRight,
     Sun, Moon, Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload,
+    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -129,6 +129,10 @@ const NAV_GROUPS: NavGroup[] = [
             // out of this module's scope).
             { href: "/dashboard/data-transfer", label: "Data Transfer", icon: Upload, module: "bulk_operations" },
             { href: "/dashboard/bulk-operations", label: "Bulk Operations", icon: Upload, module: "bulk_operations" },
+            // GST/PST remittance + insurance-period audit exports. Granted
+            // via admin management, same pattern as every other module here
+            // — see backend routes/admin/compliance.py's require_module("compliance").
+            { href: "/dashboard/compliance", label: "Compliance", icon: FileText, module: "compliance" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
         ],
     },

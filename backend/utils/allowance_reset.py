@@ -26,6 +26,7 @@ except ImportError:
 
 try:
     from ..db_supabase import (  # type: ignore
+        get_corporate_account_by_id,
         get_corporate_member_by_id,
         get_corporate_wallet_by_company,
         list_allowances_due_for_reset,
@@ -34,6 +35,7 @@ try:
     from ..services.corporate_allowance_service import apply_reset  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
+        get_corporate_account_by_id,
         get_corporate_member_by_id,
         get_corporate_wallet_by_company,
         list_allowances_due_for_reset,
@@ -84,6 +86,14 @@ async def run_allowance_reset_tick(now: Optional[date] = None) -> int:
                 # still active, so a removed employee's budget kept
                 # resetting to full every period forever. See corporate
                 # module review gap #3.
+                continue
+            company = await get_corporate_account_by_id(member["company_id"])
+            if not company or (company.get("status") or "").lower() != "active":
+                # Same reasoning, at the company level: a suspended company's
+                # still-active members must not keep getting their monthly
+                # allowance auto-refilled — this loop previously checked the
+                # MEMBER's own status but never the company's. Corporate
+                # module lifecycle audit Finding 2.
                 continue
             wallet = await get_corporate_wallet_by_company(member["company_id"])
             if not wallet:

@@ -149,3 +149,59 @@ def test_adjust_requires_notes(test_client, admin_override):
         json={"amount": 50},
     )
     assert resp.status_code == 422, resp.text
+
+
+def test_manual_topup_writes_audit_log(test_client, admin_override):
+    """Corporate module lifecycle audit Finding 9: manual_topup moves real
+    money (creates a Stripe PaymentIntent) but never wrote to the admin
+    audit trail — only the wallet ledger."""
+    active = corporate_account_row("active", id="c1", stripe_customer_id="cus_A")
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_account_by_id",
+            AsyncMock(return_value=active),
+        ),
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "0.00", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_wallet.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
+        patch(
+            "stripe.PaymentIntent.create",
+            return_value=MagicMock(id="pi_x", client_secret="pi_x_secret"),
+        ),
+        patch("routes.corporate_wallet.log_admin_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/topup",
+            json={"amount": 500},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["details"]["payment_intent_id"] == "pi_x"
+
+
+def test_manual_adjust_writes_audit_log(test_client, admin_override):
+    """Same Finding 9 gap — manual_adjust also moved money silently
+    (audit-log-wise)."""
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "100.00", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_wallet.apply_adjustment",
+            AsyncMock(return_value={"transaction_id": "t1", "balance_after": "75.00"}),
+        ),
+        patch("routes.corporate_wallet.log_admin_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/adjust",
+            json={"amount": -25, "notes": "manual correction"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["details"]["notes"] == "manual correction"

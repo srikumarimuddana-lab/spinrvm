@@ -71,6 +71,13 @@ async def _notify_one(wallet: dict) -> None:
     company = await get_corporate_account_by_id(wallet["company_id"])
     if not company or not company.get("billing_email"):
         return
+    if (company.get("status") or "").lower() != "active":
+        # A suspended/closed company must not keep receiving "top up your
+        # wallet" nudges — top-up is deliberately disabled during suspension
+        # (corporate_accounts.py), and a closed account's wallet may already
+        # be refunded to zero, so a low-balance email is confusing at best.
+        # Corporate module lifecycle audit Finding 3.
+        return
     subject = f"[Spinr Business] Wallet balance low — {company.get('name')}"
     body = (
         f"Your corporate wallet balance is ${wallet['balance']} CAD, which is below\n"

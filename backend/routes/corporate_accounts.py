@@ -780,6 +780,28 @@ async def change_company_status(
                 )
                 winddown_result = {"skipped_reason": "unhandled_exception"}
 
+    # Reactivation visibility: change_company_status only ever DISABLES
+    # auto-topup on suspend/close (above) — there's no corresponding "turn it
+    # back on" for the reverse transition, and doing that automatically would
+    # be a real behavior change (silently re-enabling auto-charges) with no
+    # way to know whether the company wanted auto-topup on before it was
+    # suspended. Rather than guess, surface it so an admin notices and
+    # re-enables via the existing wallet-config endpoint if appropriate.
+    # Corporate module lifecycle audit Finding 4.
+    auto_topup_needs_review = False
+    if current.get("status") == CompanyStatus.SUSPENDED.value and transition.status == CompanyStatus.ACTIVE:
+        try:
+            reactivated_wallet = await get_corporate_wallet_by_company(normalized_id)
+            auto_topup_needs_review = bool(reactivated_wallet) and not reactivated_wallet.get(
+                "auto_topup_enabled", True
+            )
+        except Exception:
+            logger.error(
+                "Could not check wallet auto-topup state on reactivation for company %s",
+                normalized_id,
+                exc_info=True,
+            )
+
     try:
         await log_admin_action(
             admin=current_admin,
@@ -792,6 +814,7 @@ async def change_company_status(
                 "reason": transition.reason if hasattr(transition, "reason") else None,
                 "pre_pickup_rides_cancelled": cancelled_rides,
                 "wallet_winddown": winddown_result,
+                "auto_topup_needs_review": auto_topup_needs_review,
             },
         )
     except Exception as _ae:

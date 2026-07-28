@@ -198,6 +198,21 @@ async def invite(
             logger.error("member invite: email delivery failed for member %s", member.get("id"), exc_info=True)
             email_sent = False
 
+    # Corporate module lifecycle audit Finding 9 (extended to row 5): every
+    # other member-status change in this file is audit-logged, but granting
+    # a NEW membership never was — it's the access-GRANTING mirror of
+    # removal, which already is.
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_member_invited",
+            resource="corporate_member",
+            resource_id=str(member.get("id") or ""),
+            details={"company_id": company_id, "email": body.email, "role": body.role.value},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_member_invited company=%s", company_id, exc_info=True)
+
     return {
         "member": member,
         "invite_url": url,
@@ -258,6 +273,54 @@ async def _maybe_revoke_access_on_removal(
         )
 
 
+async def _maybe_log_reactivation(
+    *,
+    company_id: str,
+    member_id: str,
+    previous_status: str,
+    new_status: str,
+    actor: dict,
+) -> None:
+    """Audit-log a member being restored to 'active' from 'removed'/'suspended'.
+
+    _maybe_revoke_access_on_removal only fires for transitions INTO
+    removed/suspended — the mirror-image access-GRANTING transition was never
+    logged at all, unlike every other status change in this file. Security-
+    relevant access changes must be as auditable in both directions per
+    CLAUDE.md's observability convention. See corporate module lifecycle
+    audit Finding 6. Only fires on the transition itself, same idempotent-
+    repeat guard as the removal path.
+    """
+    if (
+        new_status != "active"
+        or previous_status == new_status
+        or previous_status
+        not in (
+            "removed",
+            "suspended",
+        )
+    ):
+        return
+    try:
+        await log_user_action(
+            user=actor,
+            action="corporate_member_status_changed",
+            resource="corporate_member",
+            resource_id=str(member_id),
+            details={
+                "company_id": company_id,
+                "old_status": previous_status,
+                "new_status": new_status,
+            },
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_member_status_changed (reactivation) member=%s",
+            member_id,
+            exc_info=True,
+        )
+
+
 @router.patch("/members/{member_id}")
 async def update_member(
     company_id: str,
@@ -293,6 +356,13 @@ async def update_member(
     updated = await update_corporate_member(member_id, patch) or existing
     if "status" in patch:
         await _maybe_revoke_access_on_removal(
+            company_id=company_id,
+            member_id=member_id,
+            previous_status=existing.get("status"),
+            new_status=patch["status"],
+            actor=guard["user"],
+        )
+        await _maybe_log_reactivation(
             company_id=company_id,
             member_id=member_id,
             previous_status=existing.get("status"),
@@ -512,7 +582,24 @@ async def replace_policy(
             w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
         ]
 
-    return await upsert_corporate_policy(company_id, patch)
+    result = await upsert_corporate_policy(company_id, patch)
+
+    # Corporate module lifecycle audit Finding 9 (extended to rows 13/14):
+    # a policy create/edit can tighten fare caps or payment-source rules —
+    # as security/billing-relevant as any status change in this file — but
+    # was never audit-logged.
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_policy_replaced",
+            resource="corporate_policy",
+            resource_id=str(company_id),
+            details={"company_id": company_id, "patch": patch},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_policy_replaced company=%s", company_id, exc_info=True)
+
+    return result
 
 
 @router.patch("/policy")
@@ -541,7 +628,21 @@ async def patch_policy(
             w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
         ]
 
-    return await upsert_corporate_policy(company_id, patch)
+    result = await upsert_corporate_policy(company_id, patch)
+
+    # See replace_policy above — same Finding 9 (rows 13/14) audit-trail gap.
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_policy_patched",
+            resource="corporate_policy",
+            resource_id=str(company_id),
+            details={"company_id": company_id, "patch": patch},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_policy_patched company=%s", company_id, exc_info=True)
+
+    return result
 
 
 # ---------- Billing (Plan 6) ----------

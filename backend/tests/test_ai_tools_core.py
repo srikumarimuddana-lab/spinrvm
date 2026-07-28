@@ -241,3 +241,26 @@ class TestExecuteTool:
         assert ok is True
         assert result["_truncated"] is True
         assert result["_client_action"] == action
+
+    @pytest.mark.anyio
+    async def test_guardrail_keys_survive_truncation(self):
+        """A multi-vehicle quote can blow the 4000-char cap; before this
+        guard, truncation deleted the 'Do NOT quote on it' note and the
+        needs_correction sentinel while the client card survived — the model
+        lost exactly the instruction that made the oversized result safe."""
+
+        async def huge_with_note(user, **args):
+            return {
+                "rows": ["x" * 100] * 200,
+                "note": "Warning: do NOT quote on it.",
+                "needs_correction": "dropoff_label_mismatch",
+                "imprecise_address": True,
+            }
+
+        register(_spec(handler=huge_with_note))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result["_truncated"] is True
+        assert result["note"] == "Warning: do NOT quote on it."
+        assert result["needs_correction"] == "dropoff_label_mismatch"
+        assert result["imprecise_address"] is True

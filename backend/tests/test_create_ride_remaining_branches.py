@@ -146,11 +146,13 @@ async def test_corporate_policy_check_failure_raises_403():
             AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_FailedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
         mock_supabase.find_one = AsyncMock(return_value=None)
         mock_supabase.get_rows = AsyncMock(return_value=[])
         mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
 
         with pytest.raises(HTTPException) as exc_info:
             await create_ride(
@@ -188,6 +190,7 @@ async def test_corporate_policy_passes_resolves_member_id():
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
         patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
 
@@ -199,6 +202,7 @@ async def test_corporate_policy_passes_resolves_member_id():
         mock_supabase.find_one = AsyncMock(return_value=None)
         mock_supabase.get_rows = AsyncMock(side_effect=_get_rows)
         mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
         inserted = {"id": "ride-cr-1", "status": "searching"}
         mock_supabase.insert_ride = AsyncMock(return_value=inserted)
         mock_supabase.get_ride = AsyncMock(return_value={**inserted, "status": "searching"})
@@ -211,6 +215,96 @@ async def test_corporate_policy_passes_resolves_member_id():
 
     inserted_payload = mock_supabase.insert_ride.await_args.args[0]
     assert inserted_payload["corporate_member_id"] == "corp-member-9"
+
+
+async def test_corporate_policy_passes_but_no_active_membership_fails_closed():
+    """Gap #3: the policy check can pass with no active membership at all
+    (e.g. the company has no policy row, or allowed_payment_source isn't
+    allowance_only) — a removed/never-a-member rider must still be blocked
+    at booking time, not silently create a company_allowance ride that only
+    fails later at settlement."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+
+    class _PassedPolicy:
+        passed = True
+        failed_rules = []
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+        mock_supabase.get_rows = AsyncMock(return_value=[])  # no active corporate_members row
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_ride(
+                request=_starlette_request(),
+                body=_body(payment_method="company_allowance", corporate_account_id="corp-1"),
+                current_user=_USER,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["failed_rules"] == ["membership_inactive"]
+
+
+async def test_corporate_policy_no_active_membership_allowed_when_flag_disabled():
+    """Rollback path: corporate_member_removal_blocks_booking=False must
+    fully restore the old (fail-open) behavior without a redeploy."""
+    from backend.routes.rides import create_ride
+
+    class _PassedPolicy:
+        passed = True
+        failed_rules = []
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch(
+            "backend.routes.rides._deps.get_app_settings",
+            AsyncMock(return_value={"corporate_member_removal_blocks_booking": False}),
+        ),
+        patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+        mock_supabase.get_rows = AsyncMock(return_value=[])
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
+        inserted = {"id": "ride-cr-2", "status": "searching"}
+        mock_supabase.insert_ride = AsyncMock(return_value=inserted)
+        mock_supabase.get_ride = AsyncMock(return_value={**inserted, "status": "searching"})
+
+        await create_ride(
+            request=_starlette_request(),
+            body=_body(payment_method="company_allowance", corporate_account_id="corp-1"),
+            current_user=_USER,
+        )
+
+    inserted_payload = mock_supabase.insert_ride.await_args.args[0]
+    assert "corporate_member_id" not in inserted_payload
+    assert inserted_payload["corporate_account_id"] == "corp-1"
 
 
 async def test_work_profile_without_membership_raises_400():
@@ -228,8 +322,10 @@ async def test_work_profile_without_membership_raises_400():
             "backend.routes.rides._deps.calculate_all_fees",
             AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
         ),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+
         async def _wallet_ok(table, *a, **kw):
             if table == "wallets":
                 return {"id": "wallet-1", "balance": 1000.0}
@@ -239,6 +335,7 @@ async def test_work_profile_without_membership_raises_400():
         mock_supabase.get_rows = AsyncMock(return_value=[])
         mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
         mock_supabase.list_active_memberships_for_user = AsyncMock(return_value=[])
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
 
         with pytest.raises(HTTPException) as exc_info:
             await create_ride(
@@ -277,8 +374,10 @@ async def test_work_profile_policy_violation_raises_400():
             AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_FailedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+
         async def _wallet_ok(table, *a, **kw):
             if table == "wallets":
                 return {"id": "wallet-1", "balance": 1000.0}
@@ -290,6 +389,7 @@ async def test_work_profile_policy_violation_raises_400():
         mock_supabase.list_active_memberships_for_user = AsyncMock(
             return_value=[{"company_id": "corp-1", "policy_override": False}]
         )
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
 
         with pytest.raises(HTTPException) as exc_info:
             await create_ride(
@@ -324,8 +424,10 @@ async def test_work_profile_low_allowance_raises_400():
             AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+
         async def _wallet_ok(table, *a, **kw):
             if table == "wallets":
                 return {"id": "wallet-1", "balance": 1000.0}
@@ -334,6 +436,7 @@ async def test_work_profile_low_allowance_raises_400():
         mock_supabase.find_one = AsyncMock(side_effect=_wallet_ok)
         mock_supabase.get_rows = AsyncMock(return_value=[])
         mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
         mock_supabase.list_active_memberships_for_user = AsyncMock(
             return_value=[{"company_id": "corp-1", "policy_override": False}]
         )
@@ -440,3 +543,250 @@ async def test_calculate_all_fees_failure_raises_503():
             )
 
     assert exc_info.value.status_code == 503
+
+
+async def test_suspended_company_blocks_company_allowance_booking():
+    """Corporate module lifecycle audit Finding 1: neither suspending nor
+    closing a company stopped it from being used for BRAND NEW bookings —
+    only the rides that already existed at the moment of suspension were
+    cancelled (corporate_suspension_service). A suspended company's still-
+    active member must not be able to create another company_allowance ride
+    until the company is reactivated."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+
+    class _PassedPolicy:
+        passed = True
+        failed_rules = []
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        async def _get_rows_member(table, *a, **kw):
+            if table == "corporate_members":
+                return [{"id": "corp-member-9"}]
+            return []
+
+        mock_supabase.get_rows = AsyncMock(side_effect=_get_rows_member)
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "suspended"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_ride(
+                request=_starlette_request(),
+                body=_body(payment_method="company_allowance", corporate_account_id="corp-1"),
+                current_user=_USER,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["failed_rules"] == ["company_inactive"]
+
+
+async def test_closed_company_blocks_company_allowance_booking():
+    """Same as suspended — a closed (terminal) company must also be blocked,
+    and arguably matters more since gap #2 may have already refunded the
+    company's wallet balance to zero, so a booking that slipped through would
+    otherwise silently fall to payment_status='pending' at settlement."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+
+    class _PassedPolicy:
+        passed = True
+        failed_rules = []
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        async def _get_rows_member(table, *a, **kw):
+            if table == "corporate_members":
+                return [{"id": "corp-member-9"}]
+            return []
+
+        mock_supabase.get_rows = AsyncMock(side_effect=_get_rows_member)
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "closed"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_ride(
+                request=_starlette_request(),
+                body=_body(payment_method="company_allowance", corporate_account_id="corp-1"),
+                current_user=_USER,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["failed_rules"] == ["company_inactive"]
+
+
+async def test_active_company_allows_company_allowance_booking():
+    """Control case: an active company must be entirely unaffected by the
+    new guard."""
+    from backend.routes.rides import create_ride
+
+    class _PassedPolicy:
+        passed = True
+        failed_rules = []
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        async def _get_rows_member(table, *a, **kw):
+            if table == "corporate_members":
+                return [{"id": "corp-member-9"}]
+            return []
+
+        mock_supabase.get_rows = AsyncMock(side_effect=_get_rows_member)
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
+        inserted = {"id": "ride-cr-active", "status": "searching"}
+        mock_supabase.insert_ride = AsyncMock(return_value=inserted)
+        mock_supabase.get_ride = AsyncMock(return_value={**inserted, "status": "searching"})
+
+        await create_ride(
+            request=_starlette_request(),
+            body=_body(payment_method="company_allowance", corporate_account_id="corp-1"),
+            current_user=_USER,
+        )
+
+    inserted_payload = mock_supabase.insert_ride.await_args.args[0]
+    assert inserted_payload["corporate_member_id"] == "corp-member-9"
+
+
+async def test_suspended_company_booking_allowed_when_flag_disabled():
+    """Rollback path: corporate_inactive_company_blocks_booking=False must
+    fully restore the old (fail-open) behavior without a redeploy."""
+    from backend.routes.rides import create_ride
+
+    class _PassedPolicy:
+        passed = True
+        failed_rules = []
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch(
+            "backend.routes.rides._deps.get_app_settings",
+            AsyncMock(return_value={"corporate_inactive_company_blocks_booking": False}),
+        ),
+        patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        async def _get_rows_member(table, *a, **kw):
+            if table == "corporate_members":
+                return [{"id": "corp-member-9"}]
+            return []
+
+        mock_supabase.get_rows = AsyncMock(side_effect=_get_rows_member)
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "suspended"})
+        inserted = {"id": "ride-cr-flagoff", "status": "searching"}
+        mock_supabase.insert_ride = AsyncMock(return_value=inserted)
+        mock_supabase.get_ride = AsyncMock(return_value={**inserted, "status": "searching"})
+
+        await create_ride(
+            request=_starlette_request(),
+            body=_body(payment_method="company_allowance", corporate_account_id="corp-1"),
+            current_user=_USER,
+        )
+
+    inserted_payload = mock_supabase.insert_ride.await_args.args[0]
+    assert inserted_payload["corporate_member_id"] == "corp-member-9"
+
+
+async def test_work_profile_blocks_booking_for_suspended_company():
+    """Same Finding 1 guard on the second corporate booking path — work_profile
+    rides resolve membership via list_active_memberships_for_user, which only
+    filters on the MEMBER's own status, never the company's, so without this
+    guard a suspended company's still-active members could keep booking
+    work_profile rides indefinitely."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+
+        async def _wallet_ok(table, *a, **kw):
+            if table == "wallets":
+                return {"id": "wallet-1", "balance": 1000.0}
+            return None
+
+        mock_supabase.find_one = AsyncMock(side_effect=_wallet_ok)
+        mock_supabase.get_rows = AsyncMock(return_value=[])
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.list_active_memberships_for_user = AsyncMock(
+            return_value=[{"company_id": "corp-1", "policy_override": False}]
+        )
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "suspended"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_ride(
+                request=_starlette_request(),
+                body=_body(payment_method="wallet", work_profile=True, corporate_account_id="corp-1"),
+                current_user=_USER,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["reason"] == "company_inactive"

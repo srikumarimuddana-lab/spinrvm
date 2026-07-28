@@ -1,0 +1,146 @@
+"""Unit tests for utils/report_branding.py — the shared Spinr-branded
+report template layer (PDF/Excel/Word/CSV) used by the Compliance & Tax
+Reporting module.
+"""
+
+from __future__ import annotations
+
+import io
+
+import pytest
+
+try:
+    from backend.utils import report_branding
+except ImportError:  # pragma: no cover
+    from utils import report_branding  # type: ignore
+
+pytestmark = pytest.mark.unit
+
+
+class TestReportFormatRegistry:
+    def test_sgi_forms_are_fixed_format(self):
+        assert report_branding.report_mode("sgi_driver_details") == "fixed_format"
+        assert report_branding.report_mode("sgi_vehicle_details") == "fixed_format"
+
+    def test_compliance_reports_are_branded(self):
+        assert report_branding.report_mode("gst_pst_remittance") == "branded"
+        assert report_branding.report_mode("insurance_period_audit") == "branded"
+        assert report_branding.report_mode("dsar_lookup") == "branded"
+
+    def test_unregistered_report_type_raises(self):
+        # An unregistered compliance report is a bug, not something to
+        # silently default — must raise, not guess.
+        with pytest.raises(KeyError):
+            report_branding.report_mode("some_future_report_nobody_registered")
+
+
+class TestLogoFallback:
+    def test_has_logo_asset_false_without_real_file(self):
+        # No real logo file is checked into the repo yet (backend/static/
+        # branding/ only has the README placeholder) — the fallback must
+        # report False, not crash looking for a missing file.
+        assert report_branding.has_logo_asset() is False
+
+
+class TestCsvInjectionSanitization:
+    @pytest.mark.parametrize("lead", ["=", "+", "-", "@", "\t", "\r"])
+    def test_formula_leads_are_neutralized(self, lead):
+        value = f"{lead}SUM(A1)"
+        assert report_branding._sanitize_csv_cell(value) == f"'{value}"
+
+    def test_safe_string_is_unchanged(self):
+        assert report_branding._sanitize_csv_cell("2026-07") == "2026-07"
+
+    def test_non_string_passthrough(self):
+        assert report_branding._sanitize_csv_cell(42) == 42
+        assert report_branding._sanitize_csv_cell(None) is None
+
+
+class TestPdfSafe:
+    def test_em_dash_and_warning_glyph_normalized(self):
+        # Regression: fpdf2's core fonts only support Latin-1. Text built
+        # elsewhere with em dashes ("—", used throughout this module's own
+        # docstrings/subtitles) or a warning glyph ("⚠", used by the
+        # compliance endpoints' truncation notice) crashed
+        # FPDFUnicodeEncodingException at render time instead of failing at
+        # build time — caught by test_new_branded_pdf_renders below, fixed
+        # by routing all PDF text through pdf_safe() first.
+        assert report_branding.pdf_safe("a — b") == "a - b"
+        assert report_branding.pdf_safe("⚠ TRUNCATED") == "! TRUNCATED"
+
+    def test_unknown_unicode_falls_back_to_replacement_not_crash(self):
+        # Any other non-Latin-1 character we haven't explicitly mapped must
+        # degrade gracefully (replaced) rather than raise.
+        result = report_branding.pdf_safe("emoji \U0001f600 test")
+        assert isinstance(result, str)
+
+
+class TestBrandedPdf:
+    def test_new_branded_pdf_renders(self):
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf("Test Report", "subtitle text")
+        pdf.set_font(report_branding.BRAND_FONT, "", 10)
+        pdf.cell(0, 6, "body", ln=True)
+        report_branding.render_branded_pdf_footer(pdf, {"name": "Saskatchewan", "default_regulatory_authority": "SGI"})
+        out = bytes(pdf.output())
+        assert out.startswith(b"%PDF")
+
+    def test_title_and_subtitle_with_em_dash_do_not_crash(self):
+        # Regression for the exact bug: a subtitle built with " — " (used by
+        # both compliance endpoints) must render, not raise.
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf(
+            "GST/PST Remittance Summary", "2026-07-01 to 2026-07-31 — Total GST $5.00 — ⚠ TRUNCATED at 10000 rows"
+        )
+        out = bytes(pdf.output())
+        assert out.startswith(b"%PDF")
+
+    def test_footer_is_noop_without_letterhead(self):
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf("Test Report")
+        # Must not raise when no province letterhead is supplied.
+        report_branding.render_branded_pdf_footer(pdf, None)
+
+
+class TestBrandedExcel:
+    def test_new_branded_workbook_and_table(self):
+        pytest.importorskip("openpyxl")
+        wb, ws = report_branding.new_branded_workbook("GST/PST Remittance Summary", "July 2026")
+        assert ws["A1"].value == "GST/PST Remittance Summary"
+        assert ws["A2"].value == "July 2026"
+
+        report_branding.write_branded_table(
+            ws, ["month", "gst", "pst"], [{"month": "2026-07", "gst": "123.45", "pst": "148.14"}]
+        )
+        assert ws["A4"].value == "month"
+        assert ws["B4"].value == "gst"
+        assert ws["A5"].value == "2026-07"
+        assert ws["B5"].value == "123.45"
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        assert len(buf.getvalue()) > 0
+
+    def test_write_branded_table_sanitizes_formula_leads(self):
+        pytest.importorskip("openpyxl")
+        _, ws = report_branding.new_branded_workbook("Report")
+        report_branding.write_branded_table(ws, ["value"], [{"value": "=SUM(A1)"}])
+        assert ws["A5"].value == "'=SUM(A1)"
+
+
+class TestBrandedWord:
+    def test_new_branded_document_and_table(self):
+        pytest.importorskip("docx")
+        doc = report_branding.new_branded_document("GST/PST Remittance Summary", "July 2026")
+        assert doc.paragraphs[0].text == "GST/PST Remittance Summary"
+
+        report_branding.add_branded_table(
+            doc, ["month", "gst", "pst"], [{"month": "2026-07", "gst": "123.45", "pst": "148.14"}]
+        )
+        table = doc.tables[0]
+        assert table.rows[0].cells[0].text == "month"
+        assert table.rows[1].cells[0].text == "2026-07"
+
+        buf = io.BytesIO()
+        doc.save(buf)
+        assert len(buf.getvalue()) > 0

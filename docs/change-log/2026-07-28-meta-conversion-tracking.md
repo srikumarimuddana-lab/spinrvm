@@ -101,7 +101,7 @@ sign-off before the token is pasted in.
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/264_meta_conversions_tracking.sql` | New: `users.first_ride_completed_at`, `meta_capi_events` table | Once-per-user `FirstRide` gate; persisted `event_id` for backend-only events |
+| `backend/migrations/266_meta_conversions_tracking.sql` | New: `users.first_ride_completed_at`, `meta_capi_events` table | Once-per-user `FirstRide` gate; persisted `event_id` for backend-only events |
 | `backend/utils/meta_capi.py` | New: hashing + Graph API transport | PII hashing, bounded retry, `test_event_code` |
 | `backend/services/meta_conversions_service.py` | New: domain event senders | Row → event dictionary; both dedup gates |
 | `backend/schemas.py` | Added 4 `AppSettings` keys, `VerifyOTPRequest.client_app`, `AuthResponse.meta_event_id` | Config + dedup id transport |
@@ -185,7 +185,7 @@ sufficient here — unusually, but only because the change is additive.
       `auto_settle_guest_corporate` callers, `spawn` usage. Results in §4.
 - [x] **Reviewed against `CLAUDE.md`** — money (Decimal-only: no arithmetic
       added), migrations (append-only, RLS, rollback comment, next free number
-      264), PIPEDA (hashed-only, no GPS/PII in logs), observability (metric
+      266), PIPEDA (hashed-only, no GPS/PII in logs), observability (metric
       naming `spinr_meta_capi_*`, `logger.error` on failures), error handling
       (swallow exception documented and justified).
 - [x] **Effectively flagged** — `meta_capi_access_token` being empty is a hard
@@ -246,7 +246,7 @@ accepting or dismissing it.
 
 | # | Finding | Verdict | Resolution |
 |---|---|---|---|
-| 1 | Migration never adds the 4 Meta columns to `settings` | **True — real bug** | Added to migration 264. Without them every admin save raises PGRST204 and Meta could never be configured. Precedent: migrations 93/95. |
+| 1 | Migration never adds the 4 Meta columns to `settings` | **True — real bug** | Added to migration 266. Without them every admin save raises PGRST204 and Meta could never be configured. Precedent: migrations 93/95. |
 | 2 | `Purchase` misses `preauth_capture` and `payment_retry` | **True — real gap** | Hooked both. Auto-captured holds are a *common* completion path that was emitting nothing. |
 | 3 | Third-party ad SDK violates the repo guardrail | **True** | **Escalated — owner approved the exception.** Scope recorded in `META_EVENTS.md` §7a so it cannot widen by drift. |
 | 4 | Lockfiles not regenerated | True | Already fixed in `063668a`. |
@@ -277,6 +277,15 @@ and let Meta count them twice.
   Safety, Breaking Changes, Test Placement, Change Impact Log — **all green**.
 - Still NOT verified: the EAS/native build, and any event actually reaching
   Meta. Both unchanged from §10.
-- New, NOT verified: migration 264 has not been run against a real Postgres.
+- New, NOT verified: migration 266 has not been run against a real Postgres.
   The `settings`/`marketing_preferences` ALTERs and the CHECK-constraint swap
   were written against the schema in `migrations/`, not executed.
+
+### Migration renumbered 264 → 266
+
+`264_data_transfer_export_reason.sql` and `265_drivers_regulatory_authority_backfill.sql`
+landed on `main` after this branch picked 264, and the CI prefix-uniqueness
+check blocks duplicates. Per `CLAUDE.md` the second PR renames, so this
+migration is now `266_meta_conversions_tracking.sql`. Safe to rename because it
+is unmerged and has never been applied — the runner keys idempotency on the
+full filename, so renaming an *applied* migration would re-run it.

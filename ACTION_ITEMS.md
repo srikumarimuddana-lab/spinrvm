@@ -269,8 +269,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
        block (untestable per the dual-import convention, not a real gap).
      - `routes/corporate_rider.py` — **97%** (closed 2026-07-28, up from
        32-33%, see `docs/change-log/2026-07-28-corporate-rider-coverage-80.md`).
-       `routes/corporate_company_kyb.py` remains at 32-33% (rider-facing/onboarding,
-       lower risk than the above, do last)
+     - `routes/corporate_company_kyb.py` — **closed 2026-07-28: 32-33% →
+       98%** (target was 80%). See
+       `docs/change-log/2026-07-28-corporate-company-kyb-coverage-80.md`.
      - `services/corporate_membership_service.py` — **100%** (was 27%,
        closed 2026-07-28: 17 unit tests added for the invite/accept race
        branches, domain auto-match edge cases, `join_via_domain` fallback,

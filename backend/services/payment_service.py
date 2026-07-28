@@ -537,6 +537,39 @@ async def settle_corporate(
             exc_info=True,
         )
 
+    # Audit-only, same pattern as company_inactive_during_ride above: a policy
+    # edited mid-ride (tighter fare cap, allowed_payment_source narrowed, etc.)
+    # is never re-checked against rides already in flight — evaluate_policy_for_ride
+    # only runs at booking time, and this completion-phase evaluate_policy call
+    # already re-fetches the CURRENT policy, so a tightened rule silently governs
+    # settlement without anyone knowing the rider booked under a looser one.
+    # This does not cancel or re-price anything — it only makes the drift visible
+    # for ops/finance review. Detected without a schema change: corporate_policies
+    # has a DB-trigger-maintained updated_at (migration 27); if the policy was
+    # updated after this ride was created, it changed mid-flight. Proactive
+    # cancellation of in-flight rides on policy edit is a separate, larger
+    # product decision — deliberately out of scope here.
+    policy_changed_since_booking = False
+    try:
+        _policy_updated_at = corp_policy.get("updated_at")
+        _ride_created_at = ride.get("created_at")
+        if _policy_updated_at and _ride_created_at:
+            _policy_dt = datetime.fromisoformat(str(_policy_updated_at).replace("Z", "+00:00"))
+            _ride_dt = datetime.fromisoformat(str(_ride_created_at).replace("Z", "+00:00"))
+            if _policy_dt.tzinfo is None:
+                _policy_dt = _policy_dt.replace(tzinfo=timezone.utc)
+            if _ride_dt.tzinfo is None:
+                _ride_dt = _ride_dt.replace(tzinfo=timezone.utc)
+            policy_changed_since_booking = _policy_dt > _ride_dt
+    except Exception as _policy_ts_exc:
+        logger.error(
+            "[PAYMENT] could not compare policy/ride timestamps for audit flag ride=%s company=%s: %s",
+            ride_id,
+            company_id,
+            _policy_ts_exc,
+            exc_info=True,
+        )
+
     completion_ctx = {
         "final_fare": _f(total),
         "phase": "completion",
@@ -545,6 +578,9 @@ async def settle_corporate(
     completion_eval = evaluate_policy(corp_policy, completion_ctx)
     if company_status in ("suspended", "closed"):
         completion_eval["failed_rules"] = [*completion_eval.get("failed_rules", []), "company_inactive_during_ride"]
+        completion_eval["pass"] = False
+    if policy_changed_since_booking:
+        completion_eval["failed_rules"] = [*completion_eval.get("failed_rules", []), "policy_changed_since_booking"]
         completion_eval["pass"] = False
     if not completion_eval["pass"] or flag_violation:
         await db_supabase.insert_one(

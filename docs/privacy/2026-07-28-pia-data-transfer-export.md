@@ -129,7 +129,20 @@ Not applicable in the third-party sense — this module moves data **within** Sp
 
 ## Section 7: Breach Response
 
-This module does not currently have a bespoke breach playbook; it falls under Spinr's general breach protocol (`CLAUDE.md`'s Compliance section: P0 incident classification, 24h scope assessment, 72h OPC notification if "real risk of significant harm"). Given this module moves batched, unredacted, high-sensitivity PII (government ID numbers + precise location history for up to 100 people per export), a leaked or mishandled export bundle would very plausibly meet PIPEDA's "real risk of significant harm" threshold — worth explicitly naming this module in `docs/runbooks/data-breach.md` (noted there as "to be created" in CLAUDE.md) once that runbook exists, so an incident responder doesn't have to rediscover this data flow's shape under time pressure.
+**Update 2026-07-28 (post-PIA follow-up, R-E):** `docs/runbooks/data-breach.md` now exists
+(CLAUDE.md's "to be created" note is stale on this point) and has been updated with a
+dedicated §1a-i entry naming this module's specific data flow (full unredacted PII, up
+to 100 entities, GPS precision, government ID numbers) as a designated high-sensitivity
+flow, including containment commands (revoke `data_transfer_export_jobs.expires_at`,
+disable the route, scope-query by `created_at` window). R-E is resolved.
+
+Original assessment (retained for record): this module did not have a bespoke breach
+playbook at PIA time; it fell under Spinr's general breach protocol (`CLAUDE.md`'s
+Compliance section: P0 incident classification, 24h scope assessment, 72h OPC
+notification if "real risk of significant harm"). Given this module moves batched,
+unredacted, high-sensitivity PII (government ID numbers + precise location history for
+up to 100 people per export), a leaked or mishandled export bundle would very plausibly
+meet PIPEDA's "real risk of significant harm" threshold.
 
 ## Section 8: Recommendations
 
@@ -145,11 +158,10 @@ Add a required `reason: str` field (short, e.g. 10-200 chars) to the export requ
 **[MEDIUM] R-D — Shorten the initial 7-day signed URL TTL, or make it configurable per-sensitivity**
 The 7-day initial signed URL (vs. 1-hour on regeneration) is a wider window than necessary given the download endpoint already supports on-demand regeneration. Shortening the initial TTL to something closer to 24-48 hours reduces the window an intercepted/logged URL would remain valid, at negligible UX cost since re-generation already exists as a fallback. Owner: Data Transfer module maintainer. Success criterion: initial TTL reduced and documented; existing regeneration flow unaffected.
 
-**[MEDIUM] R-E — Add this module explicitly to the (not-yet-created) `docs/runbooks/data-breach.md`**
-When that runbook is authored, name this module's specific data flow (full unredacted PII, up to 100 entities, GPS precision, government ID numbers) as a designated high-sensitivity flow so an incident responder has this PIA's Section 3 inventory pre-linked rather than having to reconstruct it during an active incident. Owner: whoever authors the breach runbook (tracked as an existing open item in CLAUDE.md, not new).
+**[MEDIUM] R-E — RESOLVED 2026-07-28.** `docs/runbooks/data-breach.md` was created since this PIA was authored (CLAUDE.md's reference to it as "to be created" is stale — see B11 follow-up). The module's specific data flow (full unredacted PII, up to 100 entities, GPS precision, government ID numbers) is now named as a designated high-sensitivity flow in the runbook's §1a-i, with containment commands, so an incident responder has this PIA's inventory pre-linked rather than having to reconstruct it during an active incident. See Section 7 above for detail.
 
-**[LOW] R-F — Consider whether `notification_preferences` needs to be in a "full-fidelity, unredacted" bundle at all**
-Lowest-sensitivity field in the inventory (Section 3) — likely fine as-is, but worth a five-minute confirmation with whoever owns the target-environment reconstruction use case that this field is actually needed, versus being included by inertia. Owner: Data Transfer module maintainer.
+**[LOW] R-F — RESOLVED-AS-IS 2026-07-28.** Confirmed `notification_preferences` — reasoning below — should stay in the bundle.
+`notification_preferences` (table `notification_preferences`, columns per `backend/migrations/48_notifications_tables.sql` + `224_notification_preferences_earnings_summary.sql`) holds only boolean opt-in/opt-out toggles scoped to the user (`push_enabled`, `ride_updates`, `earnings_summary`, etc.) — no free-text, no location, no government ID, no contact info. It is the lowest-sensitivity field in the Section 3 inventory, as originally noted. The module's stated purpose (`entity_export_service.py` docstring: "gathers data for an *admin* moving a record between Spinr's own environments") is to reconstruct a working account in the target environment — a rider/driver migrated between environments without their notification toggles would silently revert to defaults (e.g. re-enabled push for someone who'd opted out), which is itself a small but real UX regression on re-import, not merely a redundant field. Removing it would not meaningfully reduce the module's risk profile (R-001/R-002 are driven by GPS + government ID + document bytes, not this field) while removing genuine fidelity value for the export's actual purpose. Determination: **keep** `notification_preferences` in the bundle as-is; no code change made.
 
 **[LOW] R-G — Formal legal review of the "implied consent" basis for this secondary use**
 Section 5's Consent assessment above is this PIA author's reasoning, not a legal opinion. Recommend a short confirmation from whoever handles privacy/legal review at Spinr that treating cross-environment admin data movement as within the scope of original account consent is the correct PIPEDA position, rather than requiring a distinct disclosure. Owner: Spinr's privacy/legal function (not specified in this repo).

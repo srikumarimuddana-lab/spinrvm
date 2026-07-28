@@ -875,6 +875,23 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     export request, stored on `data_transfer_export_jobs`.
   - [MEDIUM] R-D: shorten the initial 7-day signed URL TTL (regeneration
     already exists as a fallback).
+  - ~~[MEDIUM] R-E: name this module in `docs/runbooks/data-breach.md`.~~ DONE
+    2026-07-28 — the runbook already exists (CLAUDE.md's "to be created" note
+    was stale; confirmed and corrected 2026-07-28). Added a dedicated §1a-i
+    entry naming this module's data flow (full unredacted PII, up to 100
+    entities, GPS precision, government IDs) as a designated high-sensitivity
+    flow, with containment commands. See PIA doc §7/§8 for detail.
+  - ~~[LOW] R-F: confirm `notification_preferences` needs to be in the export
+    bundle at all.~~ RESOLVED-AS-IS 2026-07-28 — confirmed and kept. It's
+    boolean opt-in/opt-out toggles only (no PII), and the module's stated
+    purpose (reconstructing a working account in the target environment)
+    genuinely needs it — dropping it would silently revert a migrated
+    user's notification settings to defaults on re-import. No code change.
+    Reasoning documented in the PIA doc §8.
+  - [LOW] R-G: formal legal review of the implied-consent basis for this
+    secondary use — **needs a human privacy/legal sign-off, not resolvable
+    by an engineering task.** Still open; do not mark done without an actual
+    reviewer name + date in the PIA's Section 9 sign-off table.
   - When AI-3's shared dual-approval mechanism is built (see B10), wire this
     route through it too rather than a one-off gate.
 - **Files:** `backend/routes/admin/data_transfer_export.py`,

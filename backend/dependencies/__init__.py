@@ -659,5 +659,21 @@ def require_module(module: str):
     return _check
 
 
+async def require_super_admin(current_user: dict = Depends(get_admin_user)) -> dict:
+    """FastAPI dependency enforcing role == super_admin, for routers whose
+    entire surface should be off-limits to any module-flag grant — not just
+    "the flag currently isn't in AVAILABLE_MODULES" (fragile: a future
+    unrelated feature could add the same flag name and silently reopen
+    access), but an explicit, code-level requirement.
+
+    Usage at include_router time::
+
+        admin_router.include_router(some_router, dependencies=[Depends(require_super_admin)])
+    """
+    if current_user.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="This module requires super_admin")
+    return current_user
+
+
 # Alias for backward compatibility
 get_current_admin = get_admin_user

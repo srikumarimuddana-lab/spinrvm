@@ -3481,3 +3481,22 @@ export async function generateSgiForm(
     }
     return res.blob();
 }
+
+export interface DataTransferJob {
+    id: string;
+    requested_by_admin_id?: string;
+    entity_type: string;
+    entity_ids: string[];
+    entity_count: number;
+    doc_type_filter?: string[] | null;
+    format: string;
+    status: "pending" | "completed" | "failed";
+    error_message?: string | null;
+    created_at: string;
+    completed_at?: string | null;
+    expires_at?: string | null;
+}
+export const listDataTransferJobs = (limit = 50) =>
+    request<{ jobs: DataTransferJob[] }>(`/api/admin/data-transfer/jobs?limit=${limit}`);
+export const regenerateDataTransferJobDownload = (jobId: string) =>
+    request<{ download_url: string }>(`/api/admin/data-transfer/jobs/${jobId}/download`);

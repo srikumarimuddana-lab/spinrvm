@@ -91,6 +91,11 @@ def test_search_driver_full_name_prefers_name_column(admin_client):
     assert row["vehicle_plate"] == "ABC123"
     assert "license_plate" not in row
     assert "email" not in row
+    # Regression: `id` must be the driver's `users.id` (here "u1"), not
+    # `drivers.id` ("d1") — every other consumer (export, SGI forms)
+    # expects entity_id to be users.id; returning drivers.id here made
+    # export 404 on drivers selected via this search mode.
+    assert row["id"] == "u1"
 
 
 def test_search_rider_full_name_falls_back_to_first_last(admin_client):

@@ -260,6 +260,7 @@ def _make_auth_response(
     refresh_expires_at: datetime,
     csrf_token: Optional[str] = None,
     admin_ttl_minutes: int = 15,
+    meta_event_id: Optional[str] = None,
 ) -> AuthResponse:
     # P3: Set HTTP-only cookies instead of returning tokens in response
     try:
@@ -282,7 +283,54 @@ def _make_auth_response(
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         csrf_token=csrf_token,
+        meta_event_id=meta_event_id,
     )
+
+
+def _fire_signup_conversion(
+    user: Dict[str, Any],
+    *,
+    client_app: str,
+    client_ip: Optional[str],
+    user_agent: Optional[str],
+) -> Optional[str]:
+    """Fire the server-side CompleteRegistration and return its event_id.
+
+    Backgrounded off the auth path: Meta's endpoint is not on any Spinr SLA
+    and signup must never wait on it, or fail because of it. The returned id
+    is handed to the client in the same auth response so its SDK event carries
+    the identical event_id and Meta de-duplicates the pair.
+
+    Returns None if anything at all goes wrong — the client then simply fires
+    no app event, which costs a de-duplication opportunity but never a signup.
+    """
+    try:
+        from ..services import meta_conversions_service as _meta
+        from ..utils.background import spawn as _spawn
+    except ImportError:
+        try:
+            from services import meta_conversions_service as _meta  # type: ignore
+            from utils.background import spawn as _spawn  # type: ignore
+        except ImportError:
+            logger.error("meta: conversions service unavailable — skipping CompleteRegistration", exc_info=True)
+            return None
+
+    try:
+        event_id = _meta.new_event_id()
+        sender = _meta.send_driver_registration if client_app == "driver" else _meta.send_rider_registration
+        _spawn(
+            sender(
+                user,
+                event_id=event_id,
+                registration_method="phone",
+                client_ip=client_ip,
+                client_user_agent=user_agent,
+            )
+        )
+        return event_id
+    except Exception:
+        logger.error("meta: failed to queue CompleteRegistration for new signup", exc_info=True)
+        return None
 
 
 @api_router.post("/send-otp")
@@ -1044,6 +1092,17 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                     "audit_log write failed for otp_verify_success (new user)",
                     exc_info=True,
                 )
+            # Meta CompleteRegistration. This branch is the only place a rider
+            # account is actually created, so it is the true "registration
+            # succeeded" moment — not the OTP screen mounting, not the Verify
+            # tap, and not profile-setup (which a user can abandon and return
+            # to, and which would fire again on every edit).
+            _meta_event_id = _fire_signup_conversion(
+                new_user,
+                client_app=(body.client_app or "rider"),
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
             return _make_auth_response(
                 response,
                 token,
@@ -1054,6 +1113,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 refresh_expires_at=refresh_expires_at,
                 csrf_token=csrf,
                 admin_ttl_minutes=15,
+                meta_event_id=_meta_event_id,
             )
     except (HTTPException, SpinrException):
         # Already a well-formed HTTP/Spinr error (e.g. the 503 raised when

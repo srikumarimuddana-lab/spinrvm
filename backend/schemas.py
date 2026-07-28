@@ -138,6 +138,28 @@ class AppSettings(BaseModel):
     # to pull driver training status into the admin dashboard.
     lms_api_base_url: str = ""
     lms_api_key: str = ""
+    # ── Meta (Facebook) Conversions API ──────────────────────────────────
+    # Server-side conversion tracking. Lives here rather than in .env for the
+    # same reason the Stripe/Twilio credentials do: the access token expires
+    # and gets rotated in Events Manager, and rotating it must not require a
+    # backend redeploy.
+    #
+    # Each mobile app has its own Meta App and therefore its own app dataset,
+    # which is what keeps the rider funnel and the driver funnel from being
+    # reported as one blended audience. Do NOT point either of these at the
+    # web pixel (793865613741737) — that dataset is for the website, and app
+    # events sent to it are rejected/misattributed.
+    #
+    # Empty string = tracking disabled. That is the correct, safe default and
+    # the state every call site must tolerate: with no token configured the
+    # senders log at debug and return, and no Spinr flow changes behaviour.
+    meta_rider_dataset_id: str = ""
+    meta_driver_dataset_id: str = ""
+    meta_capi_access_token: str = ""
+    # Non-empty routes ALL events to the Events Manager "Test Events" tab
+    # instead of live reporting. Set it to verify the integration, then clear
+    # it — leaving it populated means live conversions silently never count.
+    meta_test_event_code: str = ""
     driver_matching_algorithm: str = "nearest"
     min_driver_rating: float = 4.0
     search_radius_km: float = 10.0

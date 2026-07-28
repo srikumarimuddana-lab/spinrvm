@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 try:
@@ -40,6 +40,7 @@ except ImportError:
     from services.data_transfer import bundle_zip_builder, entity_export_service, tabular_writer
     from supabase_client import supabase
     from utils.audit_logger import log_admin_action
+    from utils.rate_limiter import data_transfer_export_limit
 
 logger = logging.getLogger(__name__)
 

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 try:
     from ...dependencies import get_admin_user
     from ...services.data_transfer import entity_import_service as import_svc
+    from ...services.data_transfer import observability
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     from dependencies import get_admin_user
@@ -89,8 +90,20 @@ async def commit_bundle_import(
         counts = await import_svc.commit_plan(plan)
     except Exception as e:
         logger.error("data-transfer bundle import commit failed", exc_info=True)
+        observability.record_import_result("failed")
+        observability.capture_failure(
+            "Data Transfer import commit failed",
+            "data_transfer_import_failed",
+            {
+                "admin_id": admin.get("id"),
+                "batch": batch,
+                "entity_count": len(plan.entities),
+                "error": str(e),
+            },
+        )
         raise HTTPException(status_code=502, detail="Import commit failed; some rows may have been created") from e
 
+    observability.record_import_result("completed")
     await log_admin_action(
         admin,
         "data_transfer_import",

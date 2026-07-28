@@ -809,6 +809,66 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   compliance included) requires a second admin's approval before the file
   is generated.
 
+### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
+- [ ] **Status:** not started — the module's P0 gaps (access-control, missing
+  PIA) were fixed 2026-07-28 (PRs #2685, #2687); these are the PIA's own
+  follow-up recommendations, not yet actioned.
+- **Why:** the Data Transfer export route (`routes/admin/data_transfer_export.py`)
+  moves full-fidelity, unredacted PII (government ID numbers, exact GPS ride
+  history, identity documents) for up to 100 entities per request with no
+  dual-approval gate — the same class of gap as AI-3 (`docs/threat-model/admin-panel.md`)
+  and B10 above, extended a second time. Full assessment:
+  `docs/privacy/2026-07-28-pia-data-transfer-export.md`; audit trail:
+  `reports/audits/2026-07-28-data-transfer-corporate-lifecycle-audit-v1.md`.
+- **Action (from the PIA's ranked recommendations):**
+  - [HIGH] R-A: split a narrower module flag (e.g. `data_transfer_pii_export`)
+    for export/import/search/SGI-forms instead of the broader `bulk_operations`
+    flag, so the grant is deliberate and auditable.
+  - [HIGH] R-B: add optional per-export scope flags (`include_ride_gps`,
+    `include_document_bytes`) defaulting to current full-fidelity behavior,
+    so lower-sensitivity exports can opt out of the highest-sensitivity fields.
+  - [MEDIUM] R-C: require a short business-justification string on every
+    export request, stored on `data_transfer_export_jobs`.
+  - [MEDIUM] R-D: shorten the initial 7-day signed URL TTL (regeneration
+    already exists as a fallback).
+  - When AI-3's shared dual-approval mechanism is built (see B10), wire this
+    route through it too rather than a one-off gate.
+- **Files:** `backend/routes/admin/data_transfer_export.py`,
+  `backend/routes/admin/data_transfer_jobs.py`, `backend/migrations/`
+  (new `reason` column for R-C), `docs/threat-model/admin-panel.md`
+  (AI-3 row updated to reference this scope).
+- **Acceptance:** not gating — acceptance is AI-3's own, same as B10, plus
+  each PIA recommendation's own stated success criterion (see the PIA doc
+  §8 for R-A through R-G).
+
+### B12. Corporate billing: race-test coverage gaps and no compensating-transaction runbook
+- [ ] **Status:** not started — the P0 gap (no regression test for the
+  migration-258 allowance-cap race) was fixed 2026-07-28 (PR #2686); these
+  are the remaining P1 items from the same audit.
+- **Why:** `reports/audits/2026-07-28-data-transfer-corporate-lifecycle-audit-v1.md`
+  found: (1) no compensating-transaction runbook exists for a bad
+  `corporate_wallet_apply_delta`/`corporate_allowance_apply_delta`
+  application — the documented rollback ("drop the function") doesn't undo
+  money already moved; (2) four corporate route files remain below the 90%
+  money-path coverage floor: `routes/corporate_rider.py` (65%),
+  `routes/corporate_company_bookings.py` (57%),
+  `routes/corporate_accounts.py` (79%), `routes/corporate_company.py` (79%).
+- **Action:** write a concrete compensating-transaction runbook (mirrors the
+  CLAUDE.md rule that money deltas need more than `git revert`); raise the
+  four listed files' coverage, prioritizing branches that touch
+  allowance/wallet reads. Also verify KYB document Storage bucket RLS/access
+  scoping (not confirmed in the audit) and track the v2-deferred corporate
+  scope (cost centers, approval workflows, SSO/HRIS — currently only
+  discoverable via `docs/superpowers/specs/2026-04-15-corporate-accounts-b2b-design.md`)
+  here so it isn't lost.
+- **Files:** `backend/services/corporate_wallet_service.py`,
+  `backend/services/corporate_allowance_service.py`,
+  `backend/routes/corporate_rider.py`, `backend/routes/corporate_company_bookings.py`,
+  `backend/routes/corporate_accounts.py`, `backend/routes/corporate_company.py`,
+  new runbook under `docs/runbooks/`.
+- **Acceptance:** runbook exists and is concrete/testable (not just "revert
+  the commit"); all four listed files reach ≥90% coverage.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -966,3 +1026,6 @@ how much they de-risk a public launch._
 | TOTP secrets / backup-code hashes stripped from staff list/get | `664d195` |
 | Production boot without `SENTRY_DSN` logs unmissable ERROR | `server.py` |
 | All 6 sprint P0s + P1/P2 audit findings | `.claude/context/sprint-current.md` |
+| Data Transfer job-history endpoints (bulk_operations flag → super_admin, closed cross-admin PII exposure) | `88d9c51` (PR #2685) |
+| Corporate allowance-cap race regression test (no test existed for the migration-258 double-spend fix) | `4257690` (PR #2686) |
+| PIA for Data Transfer export path (none existed for this PII-moving flow) | `48d2d0f` (PR #2687) |

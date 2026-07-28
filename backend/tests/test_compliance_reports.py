@@ -157,6 +157,11 @@ class TestGstPstRows:
 
 class TestInsurancePeriodRows:
     def test_joins_driver_name(self):
+        """Regression: the drivers table's real column is `name`
+        (verified against real staging schema — `full_name` does not
+        exist and made this endpoint 500 on every call with a non-empty
+        result), not first_name/last_name concatenation alone."""
+
         async def get_rows_side(table, filters=None, **kw):
             if table == "driver_insurance_periods":
                 return [
@@ -170,7 +175,7 @@ class TestInsurancePeriodRows:
                     }
                 ]
             if table == "drivers":
-                return [{"id": "d1", "full_name": "Jane Doe"}]
+                return [{"id": "d1", "name": "Jane Doe", "first_name": "Jane", "last_name": "Doe"}]
             return []
 
         with _patch_get_rows(get_rows_side):
@@ -187,6 +192,28 @@ class TestInsurancePeriodRows:
                 "ride_id": "r1",
             }
         ]
+
+    def test_falls_back_to_first_last_name_when_name_is_null(self):
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_insurance_periods":
+                return [
+                    {
+                        "id": "p1",
+                        "driver_id": "d1",
+                        "period": 1,
+                        "started_at": "2026-07-01T09:00:00Z",
+                        "ended_at": "2026-07-01T10:00:00Z",
+                        "ride_id": None,
+                    }
+                ]
+            if table == "drivers":
+                return [{"id": "d1", "name": None, "first_name": "Jane", "last_name": "Doe"}]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            rows, _truncated = asyncio.run(compliance._insurance_period_rows(_START, _END, None))
+
+        assert rows[0]["driver_name"] == "Jane Doe"
 
     def test_driver_id_filter_is_forwarded(self):
         captured_filters = {}

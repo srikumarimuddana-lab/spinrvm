@@ -315,9 +315,11 @@ async def _insurance_period_rows(
     for i in range(0, len(driver_ids), 200):
         batch = driver_ids[i : i + 200]
         driver_rows = await db_supabase.get_rows(
-            "drivers", {"id": {"$in": batch}}, columns="id,full_name", limit=len(batch)
+            "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
         )
-        driver_names.update({d["id"]: d.get("full_name") or d["id"] for d in driver_rows})
+        for d in driver_rows:
+            concatenated = f"{d.get('first_name', '')} {d.get('last_name', '')}".strip()
+            driver_names[d["id"]] = d.get("name") or concatenated or d["id"]
 
     rows = [
         {

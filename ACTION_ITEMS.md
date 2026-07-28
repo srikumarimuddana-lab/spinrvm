@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` — added B-AI1 + AI1–AI13 from the AI/MCP guardrail audit). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -1095,7 +1095,94 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
 
+### B-AI1. Corporate rider booking via AI chat bypasses corporate billing
+- [ ] **Status:** open — found by the 2026-07-28 AI guardrail audit (branch
+  `claude/rider-ai-location-selection-yn0mem`). The in-chat booking card
+  always books with `corporateAccountId=undefined`:
+  `rider-app/components/BookingProposalCard.tsx:155-159` calls
+  `createRide(paymentMethod, undefined, ...)` →
+  `rider-app/store/rideStore.ts` sends `corporate_account_id: null,
+  work_profile: null`, so corporate policy checks
+  (`backend/routes/rides/booking.py:717-721`) never run and the ride bills
+  the rider personally. Only **wallet**-payment proposals book inline (card
+  proposals deep-link to `/ride-options`, where Bill-to-Business works), so
+  the exposure is corporate riders who say "pay with wallet" in chat.
+- **Files:** `rider-app/components/BookingProposalCard.tsx`,
+  `rider-app/store/rideStore.ts`, `backend/ai/tools_booking.py`
+  (`propose_ride_booking` `payment_method` enum is `card|wallet` only).
+- **Approach (needs its own Change Impact analysis — money surface):** either
+  route riders with an active corporate membership to `/ride-options` from
+  the AI card unconditionally, or plumb a Bill-to-Business choice through the
+  proposal. Do NOT silently pick a payer.
+- **Acceptance:** a corporate rider booking via AI chat gets the same payer
+  selection (and policy enforcement) as the standard flow; regression test
+  against `mock_supabase_client` fixtures.
+
 ## P3 — Post-launch backlog (tracked, not gating)
+
+### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
+
+_Implemented from the same audit (do not redo): tapped-suggestion coordinate
+plumbing (rider + admin console), never-re-ask-twice + no-internal-jargon +
+driver-persona-secrecy prompt rules, per-tool timeouts for the Maps fan-out
+tools, `/mcp` read-only enforcement + per-user daily cap, truncation-preserves-
+guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
+
+- [ ] **AI1. `/ai/chat` rate limit is per-IP, not per-user** —
+  `backend/routes/ai.py:130` uses `ai_chat_limit` keyed on client IP
+  (`utils/rate_limiter.py:111-118`); the per-user daily cap fails OPEN on
+  Redis errors (`backend/ai/orchestrator.py:82-84`). One user on many IPs, or
+  a Redis blip, removes the LLM-cost ceiling (kill switch remains the hard
+  stop). Consider a user-keyed limiter + fail-closed above a generous floor.
+- [ ] **AI2. Assistant output is persisted un-scrubbed** — only the user
+  message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
+  streamed and stored raw in `ai_messages`, asymmetric with
+  `conversations.py`'s stated contract and Sentry's strict scrubbing.
+- [ ] **AI3. No cap on parallel tool calls per iteration** —
+  `orchestrator.py` gathers all requested calls unbounded (6 iterations ×
+  N calls, each able to hit Google Maps). Cap per-iteration fan-out (e.g. 5).
+- [ ] **AI4. `scheduled_time` reaches the proposal unvalidated** —
+  `tools_booking.py` accepts any ≤80-char string; a hallucinated/past ISO
+  time renders on the card and only fails at Confirm. Validate ISO-8601 +
+  ≥5-min lead at proposal time.
+- [ ] **AI5. `find_place` offers out-of-service-area street addresses** —
+  the area filter is skipped for street-address-shaped queries
+  (`tools_booking.py:538-539`), so a rider can pick a location the booking
+  step later refuses. Filter (or visibly mark) out-of-area candidates for
+  street queries too.
+- [ ] **AI6. No handling for pasted Google Maps URLs / raw coordinates** —
+  bare `lat,lng` is scrubbed to `[COORDS]` before the model sees it
+  (`pii.py:33`) with no prompt rule for the token; short links carry no
+  coordinates and get text-searched as URL strings.
+- [ ] **AI7. Multilingual gap** — no language rule in prompts; Maps calls
+  hard-code `language: "en"`; FAQ keyword matching is English-only.
+- [ ] **AI8. Stale action cards never expire client-side** — every past
+  quote/suggestion/map-pin card stays tappable
+  (`rider-app/app/ai-assistant.tsx`); backend self-contained messages
+  mitigate, but a stale-yet-consistent quote re-books at a possibly different
+  price. Consider disabling cards older than the latest assistant turn.
+- [ ] **AI9. Admin AI console quote-card tap still prose-only** — same
+  defect class fixed for suggestions;
+  `admin-dashboard/.../ai-console/page.tsx:125-131` drops `[lat,lng]` and
+  vehicle id. Move `buildQuoteBookingMessage` into
+  `shared/utils/aiLocationMessages.ts` (re-export shim in
+  `rider-app/components/bookingProposal.ts`) and use it in the console.
+- [ ] **AI10. No conversation-level concurrency lock server-side** — two
+  clients on one `conversation_id` interleave `append_message` writes and
+  race history snapshots (client is single-flight only).
+- [ ] **AI11. Cancel-ride escalation UX** — the assistant correctly refuses
+  to cancel rides, but there is no `cancel`/`ride_issue` escalation category
+  and no deep link to the ride screen — riders get a support ticket for a
+  self-serve action.
+- [ ] **AI12. Admin console endpoint has no rate limiter and a stale
+  docstring** — `routes/admin/ai_console.py` claims turns count against the
+  daily cap; the orchestrator deliberately exempts them, and the endpoint has
+  no `@ai_chat_limit` equivalent (super-admin-only + audited, so low risk).
+- [ ] **AI13. No output-side leakage filter** — prompt rules (added
+  2026-07-28) are the only defense against the model printing tool names /
+  internal jargon; nothing greps the reply stream. A lightweight post-filter
+  for snake_case tool names in assistant text would make the secrecy rule
+  structural.
 
 - [ ] **D1. PostGIS surge query** — `surge_engine.py` caps at 500 drivers with Python
   point-in-polygon; move the count server-side when driver count approaches the cap.

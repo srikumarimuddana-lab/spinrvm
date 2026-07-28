@@ -35,6 +35,17 @@ _LIST_COLUMNS = (
 )
 
 
+def _require_super_admin(admin: dict) -> None:
+    """403 unless super_admin. This module is only "bulk_operations"-gated
+    at the router level (any admin with that flag, not just super_admins —
+    see routes/admin/__init__.py), but these three endpoints expose
+    cross-admin export metadata and, for the download endpoint, a live
+    signed URL into another admin's PII export bundle. That needs a
+    stricter check than the module flag alone."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Data Transfer job history requires super_admin")
+
+
 @router.get("/data-transfer/jobs")
 @data_transfer_jobs_limit
 async def list_data_transfer_jobs(
@@ -42,10 +53,13 @@ async def list_data_transfer_jobs(
     limit: int = Query(50, ge=1, le=200),
     admin: dict = Depends(get_admin_user),
 ):
-    """Most recent export batches across all admins (this module is
-    super_admin-gated already, so cross-admin visibility here is oversight,
-    not a privilege escalation). Excludes soft-deleted rows (the purge loop
-    marks `deleted_at` after removing the Storage object)."""
+    """Most recent export batches across all admins. Restricted to
+    super_admin: this module's router-level gate is the "bulk_operations"
+    flag, which is broader than super_admin, and cross-admin export history
+    (who exported which entities/PII fields) shouldn't be visible to every
+    admin who merely has bulk-import access. Excludes soft-deleted rows (the
+    purge loop marks `deleted_at` after removing the Storage object)."""
+    _require_super_admin(admin)
     rows = await db_supabase.get_rows(
         "data_transfer_export_jobs",
         {"deleted_at": None},
@@ -70,7 +84,10 @@ async def get_data_transfer_job(
 ):
     """Single-job status lookup — used by the Export tab to poll a job it
     just kicked off (the export route is backgrounded and returns only a
-    job_id; the caller needs somewhere to check pending -> completed/failed)."""
+    job_id; the caller needs somewhere to check pending -> completed/failed).
+    Restricted to super_admin for the same cross-admin-visibility reason as
+    the list endpoint above — see _require_super_admin."""
+    _require_super_admin(admin)
     rows = await db_supabase.get_rows("data_transfer_export_jobs", {"id": job_id}, limit=1, columns=_LIST_COLUMNS)
     if not rows:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -89,7 +106,11 @@ async def regenerate_job_download_link(
     """Mint a fresh signed URL for a completed job's file. The original
     signed URL returned at export time is never stored (short-lived by
     design); this regenerates one from the tracked storage_path as long as
-    the job hasn't been purged yet."""
+    the job hasn't been purged yet. Restricted to super_admin: this is the
+    most sensitive of the three job endpoints — it hands back a live,
+    time-limited download link into another admin's PII export bundle, not
+    just metadata about it."""
+    _require_super_admin(admin)
     rows = await db_supabase.get_rows(
         "data_transfer_export_jobs", {"id": job_id}, limit=1, columns="id,status,storage_path,deleted_at"
     )

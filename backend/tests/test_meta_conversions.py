@@ -313,6 +313,7 @@ class TestPurchaseEvents:
         sent = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_first_ride", AsyncMock(return_value=True)),
             patch.object(meta_service, "send_events", sent),
         ):
@@ -332,6 +333,7 @@ class TestPurchaseEvents:
         sent = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_first_ride", AsyncMock(return_value=False)),
             patch.object(meta_service, "send_events", sent),
         ):
@@ -345,6 +347,7 @@ class TestPurchaseEvents:
         sent = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_first_ride", AsyncMock(return_value=False)),
             patch.object(meta_service, "send_events", sent),
         ):
@@ -359,6 +362,7 @@ class TestPurchaseEvents:
         sent = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_first_ride", AsyncMock(return_value=False)),
             patch.object(meta_service, "send_events", sent),
         ):
@@ -372,6 +376,7 @@ class TestPurchaseEvents:
         sent = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_first_ride", AsyncMock(return_value=True)),
             patch.object(meta_service, "send_events", sent),
         ):
@@ -388,6 +393,7 @@ class TestPurchaseEvents:
         sent = AsyncMock(return_value=False)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config(token=""))),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_first_ride", claim),
             patch.object(meta_service, "send_events", sent),
         ):
@@ -466,6 +472,7 @@ class TestBackendEventIdempotency:
         mark = AsyncMock()
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_backend_event", AsyncMock(return_value="evt-9")),
             patch.object(meta_service, "_mark_backend_event", mark),
             patch.object(meta_service, "send_meta_event", send),
@@ -486,6 +493,7 @@ class TestBackendEventIdempotency:
         send = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_backend_event", AsyncMock(return_value="evt-1")),
             patch.object(meta_service, "_mark_backend_event", AsyncMock()),
             patch.object(meta_service, "send_meta_event", send),
@@ -503,6 +511,7 @@ class TestBackendEventIdempotency:
         claim = AsyncMock(return_value="evt")
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config(token=""))),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "_claim_backend_event", claim),
         ):
             await meta_service.send_driver_approved({"id": "d1"}, {"id": "u1"})
@@ -518,6 +527,7 @@ class TestRegistrationEvents:
         send = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "send_meta_event", send),
         ):
             await meta_service.send_rider_registration(
@@ -534,6 +544,7 @@ class TestRegistrationEvents:
         send = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "send_meta_event", send),
         ):
             await meta_service.send_driver_registration({"id": "u2", "phone": "+13065551234"}, event_id="shared-id-2")
@@ -548,7 +559,130 @@ class TestRegistrationEvents:
         send = AsyncMock(return_value=True)
         with (
             patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
             patch.object(meta_service, "send_meta_event", send),
         ):
             await meta_service.send_rider_registration({"id": "u1"}, event_id="the-shared-id")
         assert send.call_args.kwargs["event_id"] == "the-shared-id"
+
+
+# ── 6. Consent gating (PIPEDA) and cross-path idempotency ───────────────────
+
+
+class TestConsentGating:
+    @pytest.mark.anyio
+    async def test_no_consent_sends_the_event_with_no_identity_at_all(self, meta_service):
+        """The conversion still counts, but carries nothing identifying.
+
+        Not just the hashed contact details — client IP and user agent are
+        personal information too and must not be exported for a purpose the
+        user never accepted.
+        """
+        sent = AsyncMock(return_value=True)
+        with (
+            patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=False)),
+            patch.object(meta_service, "_claim_first_ride", AsyncMock(return_value=False)),
+            patch.object(meta_service, "send_events", sent),
+        ):
+            await meta_service.send_ride_purchase(
+                {"id": "r1"}, {"id": "u1", "email": "r@example.com", "phone": "+13065551234"}, "10.00"
+            )
+        event = sent.call_args.kwargs["events"][0]
+        assert event["user_data"] == {}
+        # The conversion itself is not suppressed — campaign counts still work.
+        assert event["custom_data"]["value"] == 10.0
+
+    @pytest.mark.anyio
+    async def test_consent_attaches_full_advanced_matching(self, meta_service):
+        sent = AsyncMock(return_value=True)
+        with (
+            patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
+            patch.object(meta_service, "_claim_first_ride", AsyncMock(return_value=False)),
+            patch.object(meta_service, "send_events", sent),
+        ):
+            await meta_service.send_ride_purchase(
+                {"id": "r1"}, {"id": "u1", "email": "r@example.com", "phone": "+13065551234"}, "10.00"
+            )
+        user_data = sent.call_args.kwargs["events"][0]["user_data"]
+        assert user_data["em"] and user_data["ph"] and user_data["external_id"]
+
+    @pytest.mark.anyio
+    async def test_consent_fails_closed_on_missing_row(self, meta_service):
+        """Silence is never consent — the stance migration 190 already takes."""
+        with patch.object(meta_service.db_supabase, "find_one", AsyncMock(return_value=None)):
+            assert await meta_service.has_ad_attribution_consent("u1") is False
+
+    @pytest.mark.anyio
+    async def test_consent_fails_closed_on_db_error(self, meta_service):
+        with patch.object(meta_service.db_supabase, "find_one", AsyncMock(side_effect=RuntimeError("db"))):
+            assert await meta_service.has_ad_attribution_consent("u1") is False
+
+    @pytest.mark.anyio
+    async def test_consent_true_only_when_explicitly_opted_in(self, meta_service):
+        with patch.object(
+            meta_service.db_supabase, "find_one", AsyncMock(return_value={"ad_attribution_opt_in": True})
+        ):
+            assert await meta_service.has_ad_attribution_consent("u1") is True
+        with patch.object(
+            meta_service.db_supabase, "find_one", AsyncMock(return_value={"ad_attribution_opt_in": False})
+        ):
+            assert await meta_service.has_ad_attribution_consent("u1") is False
+
+
+class TestCrossPathIdempotency:
+    def test_purchase_event_id_is_derived_from_the_ride(self, meta_service):
+        """Money can settle via process_payment, the pre-auth capture sweep,
+        the retry loop, or guest auto-settle — and a ride can be reached by
+        more than one. A deterministic id makes Meta collapse the duplicate
+        instead of double-counting the revenue."""
+        a = meta_service.stable_event_id("Purchase", "ride-1")
+        b = meta_service.stable_event_id("Purchase", "ride-1")
+        assert a == b
+        assert a != meta_service.stable_event_id("Purchase", "ride-2")
+
+    def test_purchase_and_firstride_ids_never_collide(self, meta_service):
+        assert meta_service.stable_event_id("Purchase", "x") != meta_service.stable_event_id("FirstRide", "x")
+
+    @pytest.mark.anyio
+    async def test_two_settlement_paths_produce_the_same_purchase_id(self, meta_service):
+        sent = AsyncMock(return_value=True)
+        ids = []
+        for _ in range(2):
+            with (
+                patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+                patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
+                patch.object(meta_service, "_claim_first_ride", AsyncMock(return_value=False)),
+                patch.object(meta_service, "send_events", sent),
+            ):
+                await meta_service.send_ride_purchase({"id": "ride-42"}, {"id": "u1"}, "12.00")
+            ids.append(sent.call_args.kwargs["events"][0]["event_id"])
+        assert ids[0] == ids[1], "same ride must yield one de-duplicated conversion"
+
+
+class TestDedupKeyPrivacy:
+    def test_dedup_key_does_not_embed_a_raw_driver_id(self, meta_service):
+        """The key is persisted indefinitely, so a raw UUID would survive the
+        driver's PIPEDA deletion and stay linkable to a retained identifier."""
+        driver_id = "3f2a7c11-0000-4000-8000-000000000001"
+        hashed = meta_service._hash_subject(driver_id)
+        assert driver_id not in hashed
+        assert hashed == hashlib.sha256(driver_id.encode()).hexdigest()
+
+    @pytest.mark.anyio
+    async def test_driver_approved_dedup_key_is_hashed_but_still_idempotent(self, meta_service):
+        claim = AsyncMock(return_value="evt-1")
+        with (
+            patch.object(meta_service, "get_config", AsyncMock(return_value=_config())),
+            patch.object(meta_service, "has_ad_attribution_consent", AsyncMock(return_value=True)),
+            patch.object(meta_service, "_claim_backend_event", claim),
+            patch.object(meta_service, "_mark_backend_event", AsyncMock()),
+            patch.object(meta_service, "send_meta_event", AsyncMock(return_value=True)),
+        ):
+            await meta_service.send_driver_approved({"id": "driver-9", "user_id": "u1"}, {"id": "u1"})
+        dedup_key = claim.call_args[0][0]
+        assert "driver-9" not in dedup_key
+        assert dedup_key.startswith("DriverApproved:")
+        # Same driver → same key, so idempotency is preserved by the hash.
+        assert dedup_key == f"DriverApproved:{meta_service._hash_subject('driver-9')}"

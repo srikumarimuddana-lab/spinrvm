@@ -683,34 +683,15 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
 async def _fire_guest_purchase_conversion(ride: dict, ride_id: str, charged_amount) -> None:
     """Queue Meta Purchase for a guest corporate ride. Never raises.
 
-    Runs inside an already-backgrounded settlement, so the send is awaited
-    here rather than spawned again — but every failure is still contained so a
-    Meta problem cannot mark a successful settlement as crashed and hand the
-    ride back to the retry sweep.
+    Delegates to the shared entry point used by every server-driven settlement
+    path, so rider lookup and error containment stay in one place.
     """
     try:
-        from .meta_conversions_service import send_ride_purchase
+        from .meta_conversions_service import send_ride_purchase_for_ride
     except ImportError:
-        try:
-            from services.meta_conversions_service import send_ride_purchase  # type: ignore
-        except ImportError:
-            logger.error("meta: conversions service unavailable — skipping guest Purchase", exc_info=True)
-            return
-
-    rider_id = ride.get("rider_id")
-    user: dict = {"id": rider_id}
+        from services.meta_conversions_service import send_ride_purchase_for_ride  # type: ignore
     try:
-        # The guest's hashed phone/email are what make this conversion
-        # matchable at all, so a lookup failure is worth a log line — but the
-        # event still goes out with external_id alone rather than not at all.
-        fetched = await db_supabase.get_user_by_id(rider_id) if rider_id else None
-        if fetched:
-            user = fetched
-    except Exception:
-        logger.error("meta: could not load rider for guest Purchase on ride %s", ride_id, exc_info=True)
-
-    try:
-        await send_ride_purchase(ride, user, charged_amount)
+        await send_ride_purchase_for_ride(ride, ride.get("rider_id"), charged_amount)
     except Exception:
         logger.error("meta: guest Purchase send failed for ride %s", ride_id, exc_info=True)
 

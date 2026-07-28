@@ -35,6 +35,7 @@ requiring App Tracking Transparency consent on iOS or changing the apps'
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -67,8 +68,30 @@ EVENT_DRIVER_ACTIVATED = "DriverActivated"
 
 
 def new_event_id() -> str:
-    """Mint an event_id. Shared verbatim with the client for de-duplication."""
+    """Mint a random event_id. Shared verbatim with the client for de-dup."""
     return str(uuid.uuid4())
+
+
+# Stable namespace for deterministic event ids. Never change it: doing so would
+# re-issue new ids for rides already reported and let Meta count them twice.
+_EVENT_NS = uuid.UUID("6f9a1c2e-4b7d-5a83-9e10-2c7d8f4b6a15")
+
+
+def stable_event_id(*parts: Any) -> str:
+    """A deterministic event_id derived from the subject.
+
+    This is what makes Purchase safe to fire from every money-moving path
+    without coordinating them. Money can settle via process_payment, the
+    pre-auth capture sweep, the payment-retry loop, or guest-corporate
+    auto-settle, and a ride can legitimately be reached by more than one of
+    them (e.g. retry reconciling a ride the capture sweep already settled).
+
+    Because Meta de-duplicates on (event_name, event_id), deriving the id from
+    the ride id means every one of those paths computes the SAME id for the
+    same ride — so a second emission collapses into the first instead of
+    double-counting revenue. No DB round-trip and no cross-path locking needed.
+    """
+    return str(uuid.uuid5(_EVENT_NS, ":".join(str(p) for p in parts)))
 
 
 def _now_ts() -> int:
@@ -79,7 +102,7 @@ def _tracking_enabled(config: Any, dataset_id: str) -> bool:
     """Whether a send can actually reach Meta right now.
 
     Checked BEFORE any once-per-subject claim is taken. Order matters: the
-    claims here (users.first_ride_completed_at, meta_capi_events.dedup_key)
+    claims here (users.first_ride_completed_at, meta_capi_deliveries.dedup_key)
     are permanent and single-use, so claiming while tracking is disabled would
     consume them against a send that never happened. Every rider who took
     their first ride before the Meta credentials were pasted into app_settings
@@ -90,6 +113,62 @@ def _tracking_enabled(config: Any, dataset_id: str) -> bool:
     So: no token configured ⇒ nothing is claimed and nothing is spent.
     """
     return bool(dataset_id and getattr(config, "access_token", ""))
+
+
+async def has_ad_attribution_consent(user_id: Optional[str]) -> bool:
+    """Whether this user has opted in to advertising-attribution sharing.
+
+    PIPEDA: sending hashed identity to Meta for ad attribution is a distinct
+    purpose from operating the ride. It is not covered by the transactional
+    relationship and it is not covered by the CASL marketing channels in
+    migration 190, so it carries its own recorded opt-in.
+
+    Fails CLOSED. No row, no opt-in, or a DB error all return False and the
+    event is sent without identity (or not at all). Silence is never consent —
+    the same stance migration 190 takes — so enabling the access token cannot
+    retroactively export the identity of an existing user who never accepted
+    this purpose.
+    """
+    if not user_id:
+        return False
+    try:
+        row = await db_supabase.find_one("marketing_preferences", {"user_id": user_id})
+    except Exception:
+        logger.error("meta_conversions: consent lookup failed — treating as no consent", exc_info=True)
+        return False
+    return bool((row or {}).get("ad_attribution_opt_in"))
+
+
+def _identity(consented: bool, **fields: Any) -> Dict[str, Any]:
+    """Build Meta's user_data, honouring ad-attribution consent.
+
+    Consented → full Advanced Matching (hashed email / phone / external_id,
+    plus client IP and user agent where the caller has them).
+
+    Not consented → an EMPTY user_data. The conversion itself still goes to
+    Meta so campaign counts and optimisation keep working, but it carries no
+    identity whatsoever: no hashed contact details, and no client IP or user
+    agent either — both are personal information under PIPEDA and neither may
+    be exported for an advertising purpose the user has not accepted.
+
+    Match quality is deliberately traded away here. An unattributable
+    conversion is the correct outcome for a user who never opted in.
+    """
+    if not consented:
+        return {}
+    return build_user_data(**fields)
+
+
+def _hash_subject(subject_id: str) -> str:
+    """Hash a subject id for use inside a dedup_key.
+
+    The key is persisted indefinitely for idempotency, so it must not carry a
+    raw driver/user UUID: that would survive the subject's PIPEDA deletion and
+    leave marketing metadata linkable to a retained identifier, for data with
+    no Transportation Act retention purpose. Hashing keeps idempotency exact
+    (same input → same key) while making the stored row non-linkable.
+    """
+    return hashlib.sha256(str(subject_id).encode("utf-8")).hexdigest()
 
 
 def _money(value: Any) -> float:
@@ -130,7 +209,7 @@ async def _claim_backend_event(
     event_id = new_event_id()
     try:
         await db_supabase.insert_one(
-            "meta_capi_events",
+            "meta_capi_deliveries",
             {
                 "dedup_key": dedup_key,
                 "event_id": event_id,
@@ -154,7 +233,7 @@ async def _claim_backend_event(
             return None
 
     try:
-        rows = await db_supabase.get_rows("meta_capi_events", {"dedup_key": dedup_key}, limit=1)
+        rows = await db_supabase.get_rows("meta_capi_deliveries", {"dedup_key": dedup_key}, limit=1)
     except Exception:
         logger.error(
             "meta_conversions: claim conflict on %s but re-read failed — skipping send",
@@ -187,7 +266,7 @@ async def _mark_backend_event(dedup_key: str, *, sent: bool, error: str = "") ->
     elif error:
         update["last_error"] = error[:500]
     try:
-        await db_supabase.update_one("meta_capi_events", {"dedup_key": dedup_key}, update)
+        await db_supabase.update_one("meta_capi_deliveries", {"dedup_key": dedup_key}, update)
     except Exception:
         logger.error("meta_conversions: failed to record outcome for %s", dedup_key, exc_info=True)
 
@@ -210,13 +289,17 @@ async def send_rider_registration(
     """
     config = await get_config()
     dataset_id = config.dataset_for("rider")
+    if not _tracking_enabled(config, dataset_id):
+        return
+    consented = await has_ad_attribution_consent(user.get("id"))
 
     await send_meta_event(
         dataset_id=dataset_id,
         event_name=EVENT_COMPLETE_REGISTRATION,
         event_id=event_id,
         event_time=_now_ts(),
-        user_data=build_user_data(
+        user_data=_identity(
+            consented,
             email=user.get("email"),
             phone=user.get("phone"),
             user_id=user.get("id"),
@@ -264,7 +347,8 @@ async def send_ride_purchase(
     value = _money(charged_amount)
     promo_code = (ride.get("promo_code") or "").strip()
 
-    user_data = build_user_data(
+    user_data = _identity(
+        await has_ad_attribution_consent(rider_id),
         email=user.get("email"),
         phone=user.get("phone"),
         user_id=rider_id,
@@ -286,7 +370,7 @@ async def send_ride_purchase(
         {
             "event_name": EVENT_PURCHASE,
             "event_time": event_time,
-            "event_id": new_event_id(),
+            "event_id": stable_event_id(EVENT_PURCHASE, ride.get("id")),
             "action_source": "app",
             "user_data": user_data,
             "custom_data": custom_data,
@@ -298,7 +382,7 @@ async def send_ride_purchase(
             {
                 "event_name": EVENT_FIRST_RIDE,
                 "event_time": event_time,
-                "event_id": new_event_id(),
+                "event_id": stable_event_id(EVENT_FIRST_RIDE, rider_id),
                 "action_source": "app",
                 "user_data": user_data,
                 "custom_data": {
@@ -371,13 +455,17 @@ async def send_driver_registration(
     """
     config = await get_config()
     dataset_id = config.dataset_for("driver")
+    if not _tracking_enabled(config, dataset_id):
+        return
+    consented = await has_ad_attribution_consent(user.get("id"))
 
     await send_meta_event(
         dataset_id=dataset_id,
         event_name=EVENT_COMPLETE_REGISTRATION,
         event_id=event_id,
         event_time=_now_ts(),
-        user_data=build_user_data(
+        user_data=_identity(
+            consented,
             email=user.get("email"),
             phone=user.get("phone"),
             user_id=user.get("id"),
@@ -414,7 +502,7 @@ async def send_driver_approved(driver: Dict[str, Any], user: Dict[str, Any]) -> 
         logger.debug("meta_conversions: tracking disabled — not claiming DriverApproved")
         return
 
-    dedup_key = f"{EVENT_DRIVER_APPROVED}:{driver_id}"
+    dedup_key = f"{EVENT_DRIVER_APPROVED}:{_hash_subject(driver_id)}"
     event_id = await _claim_backend_event(dedup_key, EVENT_DRIVER_APPROVED, dataset_id)
     if not event_id:
         return
@@ -424,7 +512,8 @@ async def send_driver_approved(driver: Dict[str, Any], user: Dict[str, Any]) -> 
         event_name=EVENT_DRIVER_APPROVED,
         event_id=event_id,
         event_time=_now_ts(),
-        user_data=build_user_data(
+        user_data=_identity(
+            await has_ad_attribution_consent(user.get("id") or driver.get("user_id")),
             email=user.get("email") or driver.get("email"),
             phone=user.get("phone") or driver.get("phone"),
             user_id=user.get("id") or driver.get("user_id"),
@@ -459,7 +548,7 @@ async def send_driver_activated(
         logger.debug("meta_conversions: tracking disabled — not claiming DriverActivated")
         return
 
-    dedup_key = f"{EVENT_DRIVER_ACTIVATED}:{driver_id}"
+    dedup_key = f"{EVENT_DRIVER_ACTIVATED}:{_hash_subject(driver_id)}"
     event_id = await _claim_backend_event(dedup_key, EVENT_DRIVER_ACTIVATED, dataset_id)
     if not event_id:
         return
@@ -476,7 +565,8 @@ async def send_driver_activated(
         event_name=EVENT_DRIVER_ACTIVATED,
         event_id=event_id,
         event_time=_now_ts(),
-        user_data=build_user_data(
+        user_data=_identity(
+            await has_ad_attribution_consent(user.get("id") or driver.get("user_id")),
             email=user.get("email") or driver.get("email"),
             phone=user.get("phone") or driver.get("phone"),
             user_id=user.get("id") or driver.get("user_id"),
@@ -491,3 +581,38 @@ async def send_driver_activated(
         test_event_code=config.test_event_code,
     )
     await _mark_backend_event(dedup_key, sent=sent)
+
+
+async def send_ride_purchase_for_ride(
+    ride: Dict[str, Any],
+    rider_id: Optional[str],
+    charged_amount: Any,
+) -> None:
+    """Purchase/FirstRide for a settlement path that has no `user` dict.
+
+    The single entry point for every server-driven settlement that does NOT go
+    through rides/payments.py::process_payment — the pre-auth capture path, the
+    payment-retry sweep, and the guest-corporate auto-settle. Each of those
+    moves real money without a device involved, so each needs its own hook or
+    those rides silently produce no conversion.
+
+    Loads the rider for Advanced Matching, and never raises: a settlement that
+    already succeeded must not be reported as failed because Meta was
+    unreachable.
+    """
+    if not ride:
+        return
+    rider_id = rider_id or ride.get("rider_id")
+    user: Dict[str, Any] = {"id": rider_id}
+    try:
+        fetched = await db_supabase.get_user_by_id(rider_id) if rider_id else None
+        if fetched:
+            user = fetched
+    except Exception:
+        # Send anyway with whatever identity we have — a lower match quality
+        # beats a missing conversion.
+        logger.error("meta_conversions: rider lookup failed for ride %s", ride.get("id"), exc_info=True)
+    try:
+        await send_ride_purchase(ride, user, charged_amount)
+    except Exception:
+        logger.error("meta_conversions: Purchase send failed for ride %s", ride.get("id"), exc_info=True)

@@ -99,6 +99,18 @@ async def _capture_one(ride: dict) -> None:
             await send_ride_receipt(ride, rider_id, tip)
         except Exception as exc:
             logger.error("[preauth-capture] receipt send failed for ride %s: %s", ride_id, exc)
+        # Meta Purchase/FirstRide. This path settles a card ride WITHOUT going
+        # through rides/payments.py::process_payment, so without this hook an
+        # auto-captured hold — a common completion path — would move money and
+        # emit no conversion at all. Guarded on already_paid so an idempotent
+        # replay does not emit a second one; FirstRide stays once-per-user via
+        # its own atomic claim regardless of which path gets there first.
+        if not result.already_paid:
+            try:
+                from ..services.meta_conversions_service import send_ride_purchase_for_ride
+            except ImportError:
+                from services.meta_conversions_service import send_ride_purchase_for_ride  # type: ignore
+            await send_ride_purchase_for_ride(ride, rider_id, result.charged_amount)
         logger.info("[preauth-capture] auto-captured hold for ride %s ($%s)", ride_id, total_charge)
     else:
         # Capture declined / hold unusable → settle_card has set payment_status

@@ -110,6 +110,70 @@ def test_fill_failure_returns_502(admin_client):
     capture.assert_called_once()
 
 
+class TestRegulatorySegregationGuard:
+    """Alberta-expansion safety guard: an SGI (Saskatchewan) form must never
+    be generated for a driver regulated by a different authority. See
+    ACTION_ITEMS.md B13 for the NULL-passes grandfather reasoning."""
+
+    def test_out_of_province_driver_rejected(self, admin_client):
+        ab_driver = {**_DRIVER_ROW, "regulatory_authority": "AMVIC", "regulatory_region": "AB"}
+        with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[ab_driver])):
+            resp = admin_client.post(
+                "/api/admin/data-transfer/sgi-forms/generate",
+                json={"form_type": "driver_details", "driver_ids": ["user-1"]},
+            )
+        assert resp.status_code == 422
+        assert "AMVIC" in resp.json()["detail"]
+
+    def test_mixed_batch_rejected_even_if_some_are_sgi(self, admin_client):
+        sk_driver = {**_DRIVER_ROW, "user_id": "user-1", "regulatory_authority": "SGI"}
+        ab_driver = {**_DRIVER_ROW, "user_id": "user-2", "regulatory_authority": "AMVIC"}
+        with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[sk_driver, ab_driver])):
+            resp = admin_client.post(
+                "/api/admin/data-transfer/sgi-forms/generate",
+                json={"form_type": "driver_details", "driver_ids": ["user-1", "user-2"]},
+            )
+        assert resp.status_code == 422
+
+    def test_sgi_driver_explicitly_tagged_passes(self, admin_client):
+        sk_driver = {**_DRIVER_ROW, "regulatory_authority": "SGI", "regulatory_region": "SK"}
+        with (
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[sk_driver])),
+            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch(
+                "backend.services.data_transfer.sgi_field_maps.driver_to_driver_details_row",
+                return_value={"field": "value"},
+            ),
+            patch("backend.services.data_transfer.sgi_form_filler.fill_driver_details_form", return_value=b"%PDF-1.4"),
+            patch("backend.routes.admin.sgi_forms.log_admin_action", AsyncMock(return_value="aud-1")),
+        ):
+            resp = admin_client.post(
+                "/api/admin/data-transfer/sgi-forms/generate",
+                json={"form_type": "driver_details", "driver_ids": ["user-1"]},
+            )
+        assert resp.status_code == 200
+
+    def test_null_regulatory_authority_grandfathered_through(self, admin_client):
+        """Deliberate allowance, not an oversight — 22 real production
+        drivers predate this field's backfill (ACTION_ITEMS.md B13)."""
+        legacy_driver = {**_DRIVER_ROW, "regulatory_authority": None, "regulatory_region": None}
+        with (
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[legacy_driver])),
+            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch(
+                "backend.services.data_transfer.sgi_field_maps.driver_to_driver_details_row",
+                return_value={"field": "value"},
+            ),
+            patch("backend.services.data_transfer.sgi_form_filler.fill_driver_details_form", return_value=b"%PDF-1.4"),
+            patch("backend.routes.admin.sgi_forms.log_admin_action", AsyncMock(return_value="aud-1")),
+        ):
+            resp = admin_client.post(
+                "/api/admin/data-transfer/sgi-forms/generate",
+                json={"form_type": "driver_details", "driver_ids": ["user-1"]},
+            )
+        assert resp.status_code == 200
+
+
 def test_vehicle_details_form_type(admin_client):
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(return_value=[_DRIVER_ROW])),

@@ -22,10 +22,18 @@ import type { EntitySelectionState } from "./useEntitySelection";
 
 const PAGE_SIZE = 50;
 
+// Status vocabularies differ between drivers and users (drivers has 5 real
+// values in production; users is effectively just "active" today) -- offer
+// the union so the filter works regardless of which entity_type is active,
+// rather than trying to keep two separate option lists in sync with the
+// currently-selected entity type.
+const STATUS_OPTIONS = ["active", "pending", "needs_review", "suspended", "banned"];
+
 export function EntitySearchTable({ selection }: { selection: EntitySelectionState }) {
     const { toast } = useToast();
     const [q, setQ] = useState("");
     const [entityType, setEntityType] = useState<"all" | "driver" | "rider">("all");
+    const [status, setStatus] = useState<string>("all");
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [page, setPage] = useState(1);
@@ -36,6 +44,7 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
     const currentParams: DataTransferSearchParams = {
         q: q.trim() || undefined,
         entityType: entityType === "all" ? undefined : entityType,
+        status: status === "all" ? undefined : status,
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
         page,
@@ -93,6 +102,19 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
                         <SelectItem value="rider">Riders</SelectItem>
                     </SelectContent>
                 </Select>
+                <Select value={status} onValueChange={setStatus}>
+                    <SelectTrigger className="w-[160px]">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">All statuses</SelectItem>
+                        {STATUS_OPTIONS.map((s) => (
+                            <SelectItem key={s} value={s}>
+                                {s.replace(/_/g, " ")}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
                 <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-[160px]" />
                 <span className="text-sm text-muted-foreground self-center">to</span>
                 <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-[160px]" />
@@ -136,13 +158,14 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
                         <TableHead>Email</TableHead>
                         <TableHead>Phone</TableHead>
                         <TableHead>Type</TableHead>
+                        <TableHead>Status</TableHead>
                         <TableHead>Created</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
                     {rows.length === 0 && !loading && (
                         <TableRow>
-                            <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                            <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                                 No results. Try adjusting your search.
                             </TableCell>
                         </TableRow>
@@ -161,6 +184,7 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
                             <TableCell>{row.email ?? "—"}</TableCell>
                             <TableCell>{row.phone ?? "—"}</TableCell>
                             <TableCell>{row.role ?? (row.vehicle_plate ? "driver" : "—")}</TableCell>
+                            <TableCell>{row.status?.replace(/_/g, " ") ?? "—"}</TableCell>
                             <TableCell>{row.created_at ? new Date(row.created_at).toLocaleDateString() : "—"}</TableCell>
                         </TableRow>
                     ))}

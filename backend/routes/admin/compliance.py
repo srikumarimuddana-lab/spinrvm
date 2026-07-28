@@ -194,10 +194,22 @@ def _render_tabular_report(
     rows: list[dict],
     subtitle: str,
     format: str,
+    pdf_landscape: bool = False,
+    pdf_col_widths: list[float] | None = None,
 ) -> Response:
     """Shared branded-report rendering for any (fieldnames, rows) tabular
     report — used by both the GST/PST remittance and insurance-period audit
-    endpoints so format handling (pdf/csv/xlsx/docx) lives in one place."""
+    endpoints so format handling (pdf/csv/xlsx/docx) lives in one place.
+
+    pdf_landscape/pdf_col_widths: reports with several columns or long
+    cell values (UUIDs, ISO timestamps) need landscape orientation and
+    wider ratios for those columns — passed per-report since each report's
+    column shape differs. Regression: an earlier fixed-width single-line
+    pdf.cell() renderer clipped/overlapped text into an unreadable table
+    the moment real data (full UUIDs, microsecond timestamps) was used —
+    confirmed against a real downloaded report from the live admin portal.
+    Now uses fpdf2's native Table API (report_branding.render_pdf_table),
+    which wraps text and syncs row heights instead of clipping."""
     if format == "csv":
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames)
@@ -232,17 +244,8 @@ def _render_tabular_report(
         )
 
     # default: pdf
-    pdf = report_branding.new_branded_pdf(title, subtitle)
-    pdf.set_font(report_branding.BRAND_FONT, "B", 9)
-    col_w = min(45, 190 // max(len(fieldnames), 1))
-    for name in fieldnames:
-        pdf.cell(col_w, 8, report_branding.pdf_safe(name.replace("_", " ").title()), border=1)
-    pdf.ln()
-    pdf.set_font(report_branding.BRAND_FONT, "", 9)
-    for row in rows:
-        for name in fieldnames:
-            pdf.cell(col_w, 7, report_branding.pdf_safe(str(row.get(name, ""))), border=1)
-        pdf.ln()
+    pdf = report_branding.new_branded_pdf(title, subtitle, landscape=pdf_landscape)
+    report_branding.render_pdf_table(pdf, fieldnames, rows, col_widths=pdf_col_widths)
     return Response(
         content=bytes(pdf.output()),
         media_type="application/pdf",
@@ -412,4 +415,11 @@ async def get_insurance_period_audit(
         rows=rows,
         subtitle=subtitle,
         format=format,
+        # 6 columns with long UUID/ISO-timestamp/period-label content need
+        # landscape + wider ratios for driver_id/period/timestamps/ride_id
+        # than the shorter driver_name column — portrait + equal widths is
+        # what produced the overlapping, unreadable table (see docstring
+        # on _render_tabular_report).
+        pdf_landscape=True,
+        pdf_col_widths=[2.2, 1.3, 2.5, 1.8, 1.8, 2.2],
     )

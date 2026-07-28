@@ -3412,15 +3412,30 @@ export interface DataTransferExportQueuedResult {
     status: "pending";
     requested_count: number;
 }
+export interface DataTransferExportScopeOptions {
+    docTypes?: string[];
+    // PIA recommendation R-B (ACTION_ITEMS.md B11) — default true (current
+    // full-fidelity behavior) on both; the backend's ExportRequest defaults
+    // match, so omitting these entirely is still safe/backward-compatible.
+    includeRideGps?: boolean;
+    includeDocumentBytes?: boolean;
+}
 export const exportDataTransferEntities = (
     entities: DataTransferExportEntityRef[],
     format: DataTransferExportFormat,
     reason: string,
-    docTypes?: string[],
+    options?: DataTransferExportScopeOptions,
 ) =>
     request<DataTransferExportQueuedResult>("/api/admin/data-transfer/export", {
         method: "POST",
-        body: JSON.stringify({ entities, format, doc_types: docTypes ?? null, reason }),
+        body: JSON.stringify({
+            entities,
+            format,
+            doc_types: options?.docTypes ?? null,
+            reason,
+            include_ride_gps: options?.includeRideGps ?? true,
+            include_document_bytes: options?.includeDocumentBytes ?? true,
+        }),
     });
 
 export interface DataTransferImportReportItem {

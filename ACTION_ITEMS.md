@@ -810,10 +810,13 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   is generated.
 
 ### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
-- [ ] **Status:** in progress (2026-07-28) — R-A, R-C, R-D DONE; R-B/R-E/R-F/R-G
-  still open. The module's P0 gaps (access-control, missing PIA) were fixed
-  2026-07-28 (PRs #2685, #2687); this item tracks the PIA's own follow-up
-  recommendations.
+- [ ] **Status:** in progress (2026-07-28) — R-A, R-B, R-C, R-D (all 4 code
+  items) DONE. Only R-E/R-F/R-G remain — all three are small, non-code
+  (a runbook cross-reference once that runbook exists, a five-minute
+  confirmation, a legal review ask) — plus the still-open AI-3 dual-approval
+  wiring (shared with B10, not specific to this item). The module's P0 gaps
+  (access-control, missing PIA) were fixed 2026-07-28 (PRs #2685, #2687);
+  this item tracks the PIA's own follow-up recommendations.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -822,6 +825,11 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     dependency on all 5 routers instead of splitting a new module flag (the
     new-flag option would have kept the same fragile shape). See
     `docs/change-log/2026-07-28-data-transfer-router-super-admin-gate.md`.
+  - **R-B DONE:** added `include_ride_gps`/`include_document_bytes` optional
+    flags (both default `True`, unchanged behavior) — ride/document rows
+    stay present either way, only GPS coordinates or document byte payloads
+    are dropped when opted out. Admin-dashboard: two new checkboxes on the
+    Export tab. See `docs/change-log/2026-07-28-data-transfer-export-scope-flags.md`.
   - **R-C DONE:** added a required `reason` field (10-200 chars) to the
     export request, migration 264 (nullable column, application-layer
     "required"), surfaced in the Jobs & History tab's new Reason column and
@@ -833,9 +841,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     computed and immediately discarded, dead code). Removed the dead
     `create_signed_url` call instead of shortening a TTL nothing was exposed
     to. See `docs/change-log/2026-07-28-data-transfer-export-drop-unused-signed-url.md`.
-  - All three PIA corrections/updates are reflected in
+  - All four PIA corrections/updates are reflected in
     `docs/privacy/2026-07-28-pia-data-transfer-export.md` itself (R-001/R-A,
-    R-C, and R-D sections updated in place, not just here).
+    R-B, R-C, and R-D sections updated in place, not just here).
 - **Why:** the Data Transfer export route (`routes/admin/data_transfer_export.py`)
   moves full-fidelity, unredacted PII (government ID numbers, exact GPS ride
   history, identity documents) for up to 100 entities per request with no
@@ -845,9 +853,7 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   `reports/audits/2026-07-28-data-transfer-corporate-lifecycle-audit-v1.md`.
 - **Action (from the PIA's ranked recommendations):**
   - [HIGH] ~~R-A~~ DONE — see above.
-  - [HIGH] R-B: add optional per-export scope flags (`include_ride_gps`,
-    `include_document_bytes`) defaulting to current full-fidelity behavior,
-    so lower-sensitivity exports can opt out of the highest-sensitivity fields.
+  - [HIGH] ~~R-B~~ DONE — see above.
   - [MEDIUM] ~~R-C~~ DONE — see above.
   - [MEDIUM] ~~R-D~~ DONE — see above.
   - [MEDIUM] R-E: name this module in `docs/runbooks/data-breach.md` once

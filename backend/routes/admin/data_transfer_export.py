@@ -82,6 +82,13 @@ class ExportRequest(BaseModel):
     # every export request, stored on the job row for accountability — see
     # migration 264. Bounds match the PIA's own stated range (10-200 chars).
     reason: str = Field(..., min_length=10, max_length=200)
+    # PIA recommendation R-B: optional data-minimization scope flags. Default
+    # True (current full-fidelity behavior) for backward compatibility — a
+    # lower-sensitivity export can opt OUT of the two highest-sensitivity
+    # field groups (exact GPS, raw document bytes) rather than needing a
+    # separate low-fidelity export path.
+    include_ride_gps: bool = True
+    include_document_bytes: bool = True
 
 
 def _entity_type_summary(entities: list[ExportEntityRef]) -> str:
@@ -133,6 +140,8 @@ async def _run_export_job(
     doc_types: Optional[list[str]],
     fmt: str,
     reason: str,
+    include_ride_gps: bool,
+    include_document_bytes: bool,
 ) -> None:
     """Background task: gather, build, upload, and update the job row.
     Any failure here is recorded on the job row (status=failed,
@@ -144,7 +153,9 @@ async def _run_export_job(
     builder, ext, content_type = _FORMAT_BUILDERS[fmt]
     t0 = time.monotonic()
     try:
-        bundles = await entity_export_service.gather_entity_bundles(pairs, doc_types)
+        bundles = await entity_export_service.gather_entity_bundles(
+            pairs, doc_types, include_ride_gps, include_document_bytes
+        )
         if not bundles:
             raise RuntimeError("None of the requested entities could be found")
         file_bytes = builder(bundles)
@@ -187,7 +198,14 @@ async def _run_export_job(
         "data_transfer_export",
         "data_transfer_export_jobs",
         job_id,
-        {"entity_count": len(bundles), "requested": len(pairs), "doc_types": doc_types, "reason": reason},
+        {
+            "entity_count": len(bundles),
+            "requested": len(pairs),
+            "doc_types": doc_types,
+            "reason": reason,
+            "include_ride_gps": include_ride_gps,
+            "include_document_bytes": include_document_bytes,
+        },
     )
 
 
@@ -236,7 +254,17 @@ async def export_entities(
         logger.error("data-transfer export: failed to record job %s", job_id, exc_info=True)
         raise HTTPException(status_code=503, detail="Could not record export job") from None
 
-    background_tasks.add_task(_run_export_job, job_id, admin, pairs, body.doc_types, body.format, body.reason)
+    background_tasks.add_task(
+        _run_export_job,
+        job_id,
+        admin,
+        pairs,
+        body.doc_types,
+        body.format,
+        body.reason,
+        body.include_ride_gps,
+        body.include_document_bytes,
+    )
 
     return {
         "job_id": job_id,

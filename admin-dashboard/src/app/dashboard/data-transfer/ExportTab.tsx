@@ -87,6 +87,8 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
     const [format, setFormat] = useState<DataTransferExportFormat>("zip");
     const [docTypes, setDocTypes] = useState<Set<string>>(new Set(DOC_TYPE_OPTIONS));
     const [reason, setReason] = useState("");
+    const [includeRideGps, setIncludeRideGps] = useState(true);
+    const [includeDocumentBytes, setIncludeDocumentBytes] = useState(true);
     const [loading, setLoading] = useState(false);
 
     const reasonValid = reason.trim().length >= REASON_MIN_LENGTH && reason.length <= REASON_MAX_LENGTH;
@@ -118,7 +120,11 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             }
             const docTypeFilter =
                 format === "zip" && docTypes.size < DOC_TYPE_OPTIONS.length ? Array.from(docTypes) : undefined;
-            const queued = await exportDataTransferEntities(refs, format, reason.trim(), docTypeFilter);
+            const queued = await exportDataTransferEntities(refs, format, reason.trim(), {
+                docTypes: docTypeFilter,
+                includeRideGps,
+                includeDocumentBytes,
+            });
             toast({
                 title: "Export queued",
                 description: `Preparing ${queued.requested_count} record(s)… this may take a moment for large batches.`,
@@ -197,6 +203,32 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
                 <div className="text-xs text-muted-foreground">
                     {reason.length}/{REASON_MAX_LENGTH} — a short business justification, kept with the export
                     job for accountability. Minimum {REASON_MIN_LENGTH} characters.
+                </div>
+            </div>
+
+            <div className="space-y-2">
+                <span className="text-sm font-medium">Data to include</span>
+                <div className="flex flex-col gap-2">
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={includeRideGps}
+                            onChange={(e) => setIncludeRideGps(e.target.checked)}
+                        />
+                        Exact pickup/dropoff GPS coordinates
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={includeDocumentBytes}
+                            onChange={(e) => setIncludeDocumentBytes(e.target.checked)}
+                        />
+                        Document file contents (not just metadata)
+                    </label>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                    Unchecking either reduces sensitivity for lower-risk exports (e.g. seeding a UI-only
+                    staging environment) — record counts stay the same, only these fields are dropped.
                 </div>
             </div>
 

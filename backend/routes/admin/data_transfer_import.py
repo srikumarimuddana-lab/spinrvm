@@ -19,6 +19,7 @@ try:
 except ImportError:
     from dependencies import get_admin_user
     from services.data_transfer import entity_import_service as import_svc
+    from services.data_transfer import observability
     from utils.audit_logger import log_admin_action
 
 logger = logging.getLogger(__name__)

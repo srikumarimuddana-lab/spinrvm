@@ -77,6 +77,11 @@ class ExportRequest(BaseModel):
     entities: list[ExportEntityRef]
     doc_types: Optional[list[str]] = None
     format: str = Field("zip", pattern="^(zip|csv|json|excel)$")
+    # PIA recommendation R-C (docs/privacy/2026-07-28-pia-data-transfer-export.md,
+    # ACTION_ITEMS.md B11): a short business-justification string, required on
+    # every export request, stored on the job row for accountability — see
+    # migration 264. Bounds match the PIA's own stated range (10-200 chars).
+    reason: str = Field(..., min_length=10, max_length=200)
 
 
 def _entity_type_summary(entities: list[ExportEntityRef]) -> str:
@@ -127,6 +132,7 @@ async def _run_export_job(
     pairs: list[tuple[str, str]],
     doc_types: Optional[list[str]],
     fmt: str,
+    reason: str,
 ) -> None:
     """Background task: gather, build, upload, and update the job row.
     Any failure here is recorded on the job row (status=failed,
@@ -181,7 +187,7 @@ async def _run_export_job(
         "data_transfer_export",
         "data_transfer_export_jobs",
         job_id,
-        {"entity_count": len(bundles), "requested": len(pairs), "doc_types": doc_types},
+        {"entity_count": len(bundles), "requested": len(pairs), "doc_types": doc_types, "reason": reason},
     )
 
 
@@ -220,6 +226,7 @@ async def export_entities(
         "entity_ids": [e.entity_id for e in body.entities],
         "doc_type_filter": body.doc_types,
         "format": body.format,
+        "reason": body.reason,
         "status": "pending",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -229,7 +236,7 @@ async def export_entities(
         logger.error("data-transfer export: failed to record job %s", job_id, exc_info=True)
         raise HTTPException(status_code=503, detail="Could not record export job") from None
 
-    background_tasks.add_task(_run_export_job, job_id, admin, pairs, body.doc_types, body.format)
+    background_tasks.add_task(_run_export_job, job_id, admin, pairs, body.doc_types, body.format, body.reason)
 
     return {
         "job_id": job_id,

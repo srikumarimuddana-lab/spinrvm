@@ -3415,11 +3415,12 @@ export interface DataTransferExportQueuedResult {
 export const exportDataTransferEntities = (
     entities: DataTransferExportEntityRef[],
     format: DataTransferExportFormat,
+    reason: string,
     docTypes?: string[],
 ) =>
     request<DataTransferExportQueuedResult>("/api/admin/data-transfer/export", {
         method: "POST",
-        body: JSON.stringify({ entities, format, doc_types: docTypes ?? null }),
+        body: JSON.stringify({ entities, format, doc_types: docTypes ?? null, reason }),
     });
 
 export interface DataTransferImportReportItem {
@@ -3546,6 +3547,7 @@ export interface DataTransferJob {
     entity_count: number;
     doc_type_filter?: string[] | null;
     format: string;
+    reason?: string | null;
     status: "pending" | "completed" | "failed";
     error_message?: string | null;
     created_at: string;

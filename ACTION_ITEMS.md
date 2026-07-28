@@ -810,7 +810,7 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   is generated.
 
 ### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
-- [ ] **Status:** in progress (2026-07-28) — R-A and R-D DONE, R-B/R-C/R-E/R-F/R-G
+- [ ] **Status:** in progress (2026-07-28) — R-A, R-C, R-D DONE; R-B/R-E/R-F/R-G
   still open. The module's P0 gaps (access-control, missing PIA) were fixed
   2026-07-28 (PRs #2685, #2687); this item tracks the PIA's own follow-up
   recommendations.
@@ -822,13 +822,20 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     dependency on all 5 routers instead of splitting a new module flag (the
     new-flag option would have kept the same fragile shape). See
     `docs/change-log/2026-07-28-data-transfer-router-super-admin-gate.md`.
+  - **R-C DONE:** added a required `reason` field (10-200 chars) to the
+    export request, migration 264 (nullable column, application-layer
+    "required"), surfaced in the Jobs & History tab's new Reason column and
+    in the audit-log metadata. Admin-dashboard: `ExportTab.tsx` (new
+    textarea + client-side validation), `JobsTab.tsx` (new column). See
+    `docs/change-log/2026-07-28-data-transfer-export-reason-field.md`.
   - **R-D DONE:** also had a wrong premise — no signed URL was ever exposed
     at export time (fully backgrounded route; the "7-day signed URL" was
     computed and immediately discarded, dead code). Removed the dead
     `create_signed_url` call instead of shortening a TTL nothing was exposed
     to. See `docs/change-log/2026-07-28-data-transfer-export-drop-unused-signed-url.md`.
-  - Both PIA corrections are reflected in `docs/privacy/2026-07-28-pia-data-transfer-export.md`
-    itself (R-001/R-A and R-D sections updated in place, not just here).
+  - All three PIA corrections/updates are reflected in
+    `docs/privacy/2026-07-28-pia-data-transfer-export.md` itself (R-001/R-A,
+    R-C, and R-D sections updated in place, not just here).
 - **Why:** the Data Transfer export route (`routes/admin/data_transfer_export.py`)
   moves full-fidelity, unredacted PII (government ID numbers, exact GPS ride
   history, identity documents) for up to 100 entities per request with no
@@ -841,8 +848,7 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   - [HIGH] R-B: add optional per-export scope flags (`include_ride_gps`,
     `include_document_bytes`) defaulting to current full-fidelity behavior,
     so lower-sensitivity exports can opt out of the highest-sensitivity fields.
-  - [MEDIUM] R-C: require a short business-justification string on every
-    export request, stored on `data_transfer_export_jobs`.
+  - [MEDIUM] ~~R-C~~ DONE — see above.
   - [MEDIUM] ~~R-D~~ DONE — see above.
   - [MEDIUM] R-E: name this module in `docs/runbooks/data-breach.md` once
     that runbook exists.

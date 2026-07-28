@@ -29,7 +29,7 @@ router = APIRouter()
 EXPORT_STORAGE_BUCKET = "data-transfer-exports"
 _LIST_COLUMNS = (
     "id,requested_by_admin_id,entity_type,entity_ids,doc_type_filter,"
-    "format,status,error_message,created_at,completed_at,expires_at"
+    "format,reason,status,error_message,created_at,completed_at,expires_at"
 )
 
 

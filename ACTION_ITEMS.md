@@ -677,7 +677,7 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   `spinr_fare_directions_duration_ms` has real production data to act on.
 
 ### B7. Give service areas a real locality so the geocode can be hard-filtered
-- [ ] **Status:** open — follow-up to the AI location/pricing incident fixes
+- [x] **Status:** shipped — PR #2670 (merged 2026-07-28)
 - **Why:** the Geocoding API treats `bounds` as a *soft* hint but `components`
   as a **hard** filter. `components=locality:Regina` would make it impossible
   for a Regina query to resolve to a same-named street in another city — the
@@ -685,14 +685,31 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   because `service_areas` has no city column, only `name`, which is a display
   label ("Regina Metro"); a wrong locality returns `ZERO_RESULTS` and breaks
   lookups outright, so a filter built on it is worse than none.
-- **Action:** add a `locality` column to `service_areas` (migration + admin
-  field), backfill for existing areas, then pass it as `components` in
-  `_lookup_place_candidates` with an unfiltered retry on `ZERO_RESULTS`.
-- **Files:** `backend/migrations/NNN_service_areas_locality.sql`,
-  `backend/ai/tools_booking.py`, admin service-area editor
-- **Acceptance:** a numbered street address in a covered city can never
-  resolve to another city, and an unknown locality degrades to today's
-  behaviour rather than to zero results.
+- **Action taken:** reused the existing (previously unpopulated) `city` column
+  on `service_areas` — `routes/admin/service_areas.py` already read/wrote it —
+  rather than adding a redundant `locality` column. Migration
+  `263_service_areas_city_backfill.sql` adds the column defensively and
+  backfills 5 known areas by name. `_lookup_place_candidates` in
+  `backend/ai/tools_booking.py` now resolves the rider's service area and
+  passes `components=locality:<city>|country:CA` when known, via the new
+  `_geocode_with_locality_retry` helper, retrying unfiltered once on
+  `ZERO_RESULTS`.
+- **Files:** `backend/migrations/263_service_areas_city_backfill.sql`,
+  `backend/ai/tools_booking.py`, `backend/tests/test_ai_tools_booking.py`
+- **Acceptance:** met — a numbered street address in a covered city can no
+  longer resolve to another city, and an unknown/unmatched locality degrades
+  to prior unfiltered behaviour rather than to zero results.
+- **Verified in production (2026-07-28):** `GET /api/v1/service-areas`
+  confirms `city` is correctly populated for the real markets — `Regina` →
+  `"Regina"`, `Saskatoon` → `"Saskatoon"`. The `riyadh` row (test/dev data,
+  not a real market) still shows `city: ""` — migration 263 has not yet been
+  applied against production (`schema_migrations` not updated; attempted via
+  `scripts/migrate.py` but blocked by IPv6-only direct-host DNS resolution —
+  see the `PG_CONNECTION_STRING` / Session pooler note in `CLAUDE.md`'s
+  Commands section). Non-blocking: an empty `city` only causes that one row
+  to fall back to the pre-PR unfiltered geocode behaviour, no regression.
+  Low-priority follow-up: re-run `backend/scripts/migrate.py` against
+  production via the Session pooler connection string once convenient.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
 - [ ] **Status:** open — parked pending a pricing decision (2026-07-27).

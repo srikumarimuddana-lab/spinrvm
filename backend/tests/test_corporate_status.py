@@ -253,3 +253,57 @@ def test_suspend_never_triggers_wallet_winddown(test_client, admin_override):
         )
     assert resp.status_code == 200, resp.text
     mock_winddown.assert_not_awaited()
+
+
+def test_reactivation_flags_auto_topup_still_disabled_for_review(test_client, admin_override):
+    """Corporate module lifecycle audit Finding 4: change_company_status only
+    ever DISABLES auto-topup on suspend/close — there's no automatic restore
+    on reactivation (deliberately, since auto-restoring a billing toggle
+    without knowing prior intent is a real behavior change). Surface it in
+    the audit log instead so an admin notices and re-enables manually if
+    appropriate."""
+    with (
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("suspended")),
+        ),
+        patch(
+            "db_supabase.update_corporate_account_status",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "auto_topup_enabled": False}),
+        ),
+        patch("routes.corporate_accounts.log_admin_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/status",
+            json={"status": "active"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert mock_audit.await_args.kwargs["details"]["auto_topup_needs_review"] is True
+
+
+def test_reactivation_no_flag_when_auto_topup_already_on(test_client, admin_override):
+    with (
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("suspended")),
+        ),
+        patch(
+            "db_supabase.update_corporate_account_status",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "auto_topup_enabled": True}),
+        ),
+        patch("routes.corporate_accounts.log_admin_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/status",
+            json={"status": "active"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert mock_audit.await_args.kwargs["details"]["auto_topup_needs_review"] is False

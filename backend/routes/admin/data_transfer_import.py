@@ -11,18 +11,20 @@ instead of only ever skipping them).
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 try:
     from ...dependencies import get_admin_user
     from ...services.data_transfer import entity_import_service as import_svc
     from ...services.data_transfer import observability
     from ...utils.audit_logger import log_admin_action
+    from ...utils.rate_limiter import data_transfer_import_commit_limit, data_transfer_import_validate_limit
 except ImportError:
     from dependencies import get_admin_user
     from services.data_transfer import entity_import_service as import_svc
     from services.data_transfer import observability
     from utils.audit_logger import log_admin_action
+    from utils.rate_limiter import data_transfer_import_commit_limit, data_transfer_import_validate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,9 @@ def _report(plan: import_svc.ImportPlan) -> dict:
 
 
 @router.post("/data-transfer/import/validate")
+@data_transfer_import_validate_limit
 async def validate_bundle_import(
+    request: Request,
     bundle_zip: UploadFile = File(...),
     admin: dict = Depends(get_admin_user),
 ):
@@ -71,7 +75,9 @@ async def validate_bundle_import(
 
 
 @router.post("/data-transfer/import/commit")
+@data_transfer_import_commit_limit
 async def commit_bundle_import(
+    request: Request,
     bundle_zip: UploadFile = File(...),
     batch: Optional[str] = Form(None),
     update_existing: bool = Form(False),

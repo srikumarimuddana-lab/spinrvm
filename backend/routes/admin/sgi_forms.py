@@ -34,6 +34,9 @@ router = APIRouter()
 
 class SgiFormRequest(BaseModel):
     form_type: str = Field(..., pattern="^(driver_details|vehicle_details)$")
+    # `users.id` — the canonical entity_id used across the whole Data
+    # Transfer module (search, export, SGI forms). NOT `drivers.id`; see the
+    # driver lookup below, which resolves via `drivers.user_id`.
     driver_ids: list[str]
     action: str = Field("add", pattern="^(add|remove|change)$")
 
@@ -55,7 +58,15 @@ async def generate_sgi_form(
             detail=f"{len(body.driver_ids)} drivers requested; the {body.form_type} form has {max_rows} rows",
         )
 
-    driver_rows = await db_supabase.get_rows("drivers", {"id": {"$in": body.driver_ids}})
+    # Regression: this previously looked up `drivers.id`, but every other
+    # part of the Data Transfer module (search's driver-scoped variant vs.
+    # its default/mixed variant, and entity_export_service.gather_entity_bundle,
+    # which is explicitly documented as taking `users.id`) disagreed on
+    # which ID `driver_ids` actually meant -- selecting a driver from one
+    # search mode made export work and SGI forms silently return nothing;
+    # selecting from the other mode did the reverse. Standardized on
+    # `users.id` everywhere; resolve the driver row via the FK instead of PK.
+    driver_rows = await db_supabase.get_rows("drivers", {"user_id": {"$in": body.driver_ids}})
     if not driver_rows:
         raise HTTPException(status_code=404, detail="None of the requested drivers could be found")
 

@@ -70,6 +70,7 @@ Sprint-scoped and domain-deep context is loaded on demand, not baked into this f
 - `@.claude/context/sprint-current.md` — active sprint goal, in-flight tickets, blockers
 - `@.claude/context/domain-dispatch.md` — dispatch algorithm, driver matching, offer timeout
 - `@.claude/context/domain-payments.md` — fare calc, surge, Stripe flows, corporate billing
+- `@.claude/context/domain-corporate.md` — corporate account/membership/policy lifecycle, cascade-effect checklist, flag conventions
 - `@.claude/context/domain-safety.md` — SOS, insurance periods, emergency flows
 - `@.claude/context/regulatory-sk.md` — Saskatchewan Transportation Act obligations
 
@@ -96,7 +97,13 @@ ruff format .                      # format
 
 ```bash
 cd backend
-python migrate.py --env production   # ordered SQL runner over backend/migrations/
+python scripts/migrate.py            # ordered SQL runner over backend/migrations/; no --env flag —
+                                      # environment is selected by whichever SUPABASE_URL /
+                                      # SUPABASE_SERVICE_ROLE_KEY (or PG_CONNECTION_STRING /
+                                      # DATABASE_URL) are set when it runs. Add --dry-run to preview.
+                                      # The direct db.<ref>.supabase.co host is IPv6-only; on
+                                      # IPv4-only networks set PG_CONNECTION_STRING to the Session
+                                      # pooler connection string instead (takes precedence).
 ```
 
 ## Architecture
@@ -227,7 +234,7 @@ Rules:
 
 ## Database & Migration Conventions
 
-Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
+Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/migrate.py`.
 
 Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number — check the current highest with `ls backend/migrations | sort -V | tail -1` before picking the next one. Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. Duplicate numeric prefixes exist from history and are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.
 
@@ -286,6 +293,7 @@ Test tiers:
 Coverage minimums (per domain):
 - `routes/payments.py`, `services/fare_service.py`, `utils/crypto.py`: ≥ 90%
 - `routes/rides.py`, `services/dispatch_service.py`: ≥ 80%
+- `routes/corporate_*.py`, `services/corporate_*.py`: **target ≥ 80%** (same tier as rides/dispatch — moves real money via `corporate_wallet_apply_delta`). As of 2026-07-28 the module averages ~52% aggregate (new code from the corporate lifecycle audit is 79–90%; pre-existing files like `corporate_accounts.py` at 39% and `corporate_signup.py`/`corporate_rider.py`/`corporate_company_kyb.py` at 32–33% are the gap). Not yet enforced by a `--cov-fail-under` gate on this module specifically — closing it is tracked as its own backlog item, not blocking new corporate PRs in the meantime.
 - Admin routes, utilities: ≥ 70%
 
 What must have a test:

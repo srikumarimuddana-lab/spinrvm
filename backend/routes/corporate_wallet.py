@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from decimal import Decimal
 from typing import Optional
@@ -21,6 +22,7 @@ try:
     from ..dependencies import get_admin_user  # type: ignore
     from ..services.corporate_wallet_service import apply_adjustment  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
+    from ..utils.audit_logger import log_admin_action  # type: ignore
     from ..utils.money import dollars_to_cents  # type: ignore
     from ..validators import validate_id  # type: ignore
 except ImportError:
@@ -33,8 +35,11 @@ except ImportError:
     from dependencies import get_admin_user  # type: ignore
     from services.corporate_wallet_service import apply_adjustment  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.audit_logger import log_admin_action  # type: ignore
     from utils.money import dollars_to_cents  # type: ignore
     from validators import validate_id  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Wallet"])
@@ -141,6 +146,31 @@ async def manual_topup(
     # Sync Stripe SDK: threadpool so the round-trip doesn't block the event
     # loop (idempotency key above makes retries safe).
     intent = await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**intent_kwargs))
+
+    # Corporate module lifecycle audit Finding 9: this endpoint moves real
+    # money (creates a Stripe PaymentIntent) but never wrote to the admin
+    # audit trail — only the wallet ledger (which does record actor+notes,
+    # but lives in a different table than every other admin action in this
+    # module). Log here too so "what did admin X do" queries stay unified.
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="corporate_wallet_manual_topup",
+            resource="corporate_wallet",
+            resource_id=str(wallet["id"]),
+            details={
+                "company_id": normalized_id,
+                "amount": str(body.amount),
+                "payment_intent_id": intent.id,
+            },
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_wallet_manual_topup wallet=%s",
+            wallet["id"],
+            exc_info=True,
+        )
+
     return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}
 
 
@@ -161,6 +191,27 @@ async def manual_adjust(
         actor_user_id=current_admin["id"],
         floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
     )
+
+    # See manual_topup above — Finding 9: same audit-trail gap.
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="corporate_wallet_manual_adjust",
+            resource="corporate_wallet",
+            resource_id=str(wallet["id"]),
+            details={
+                "company_id": normalized_id,
+                "amount": str(body.amount),
+                "notes": body.notes,
+            },
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_wallet_manual_adjust wallet=%s",
+            wallet["id"],
+            exc_info=True,
+        )
+
     return result
 
 
@@ -201,4 +252,23 @@ async def update_wallet_config(
                 detail="auto_topup_threshold and auto_topup_amount must be set before enabling",
             )
     updated = await update_corporate_wallet_config(wallet_id=wallet["id"], patch=patch)
+
+    # See manual_topup above — Finding 9: same audit-trail gap. This one
+    # controls whether the company can be auto-charged going forward, which
+    # makes it as security-relevant as the other admin actions in this file.
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="corporate_wallet_config_updated",
+            resource="corporate_wallet",
+            resource_id=str(wallet["id"]),
+            details={"company_id": normalized_id, "patch": patch},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_wallet_config_updated wallet=%s",
+            wallet["id"],
+            exc_info=True,
+        )
+
     return updated or {**wallet, **patch}

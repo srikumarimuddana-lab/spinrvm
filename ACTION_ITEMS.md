@@ -234,13 +234,40 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   already better- or worse-covered than assumed).
 - **Approach — Track 1 (money/safety/compliance-adjacent, recommend first):**
   measure current coverage for, in priority order:
-  1. `backend/services/corporate_wallet_service.py`,
-     `corporate_membership_service.py`, `corporate_policy_service.py` —
-     the corporate billing layer (money-adjacent, and likely to be touched
-     by the corporate-module work the user is starting in a separate
-     session next — coordinate so this doesn't collide with in-flight
-     corporate feature work; check with the user before starting if a
-     corporate-module session is already active).
+  1. Corporate billing layer — **measured 2026-07-28** (post PRs #2615,
+     #2696): module aggregate ~52% against a proposed 80% target (see
+     `CLAUDE.md`'s coverage-minimums table and `.claude/context/domain-corporate.md`).
+     New code from the lifecycle-audit fixes is well-covered (79–90%); the
+     gap is concentrated in pre-existing files, priority order for a future
+     session:
+     - `routes/corporate_accounts.py` — **done, 82%** (was 39% as measured
+       against a narrow corporate-only test subset in the original scoping
+       pass; re-measured against the full corporate-admin-route test set —
+       `test_admin_business_logic.py`, `test_admin_rbac.py`,
+       `test_corporate_admin_routes.py`, `test_corporate_b2b_schema.py`,
+       `test_corporate_db_helpers.py`, `test_corporate_e2e_foundation.py`,
+       `test_corporate_e2e_wallet.py`, `test_corporate_kyb.py`,
+       `test_corporate_status.py`, `test_corporate_stripe_customer.py`,
+       `test_corporate_wallet_bootstrap.py`, `test_corporate_wallet_freeze.py`,
+       `test_db.py`, `test_deprecated_route_admin_exempt.py`,
+       `test_error_response_sanitisation.py`, `test_features.py`,
+       `test_p3_admin_jwt_modules.py`, `test_stripe_event_loop_offload.py`
+       — the real baseline was 77%, not 39%. +9 tests
+       (`test_corporate_admin_routes.py`) closed the highest-value remaining
+       gaps: validator no-ops, the `is_active` list filter, the
+       `X-Total-Count` exception fallback, the previously entirely-untested
+       `kyb_upload_url` endpoint, and two `kyb_document_confirm` error
+       branches. Meets the 80% target. Remaining 18% is `change_company_status`'s
+       deepest nested exception branches and `kyb_review`'s email-failure
+       paths — lower priority, not pursued further in this pass. See
+       `docs/change-log/2026-07-28-corporate-accounts-coverage-80.md`.
+     - `services/corporate_wallet_service.py` — 41%, `services/corporate_allowance_service.py` — 39% (money math)
+     - `routes/corporate_company_bookings.py` — 38%
+     - `routes/corporate_rider.py`, `routes/corporate_signup.py`,
+       `routes/corporate_company_kyb.py` — 32-33% (rider-facing/onboarding,
+       lower risk than the above, do last)
+     - `services/corporate_membership_service.py` — 27%, `services/corporate_policy_service.py` — 68% (already close)
+     No work started on closing this gap yet — scoping/measurement only.
   2. `backend/utils/insurance_periods.py`, safety check-in / SOS-related
      routes (see `.claude/context/domain-safety.md`) — regulatory +
      rider/driver safety consequence if untested code has a latent bug.
@@ -677,7 +704,7 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   `spinr_fare_directions_duration_ms` has real production data to act on.
 
 ### B7. Give service areas a real locality so the geocode can be hard-filtered
-- [ ] **Status:** open — follow-up to the AI location/pricing incident fixes
+- [x] **Status:** shipped — PR #2670 (merged 2026-07-28)
 - **Why:** the Geocoding API treats `bounds` as a *soft* hint but `components`
   as a **hard** filter. `components=locality:Regina` would make it impossible
   for a Regina query to resolve to a same-named street in another city — the
@@ -685,14 +712,31 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   because `service_areas` has no city column, only `name`, which is a display
   label ("Regina Metro"); a wrong locality returns `ZERO_RESULTS` and breaks
   lookups outright, so a filter built on it is worse than none.
-- **Action:** add a `locality` column to `service_areas` (migration + admin
-  field), backfill for existing areas, then pass it as `components` in
-  `_lookup_place_candidates` with an unfiltered retry on `ZERO_RESULTS`.
-- **Files:** `backend/migrations/NNN_service_areas_locality.sql`,
-  `backend/ai/tools_booking.py`, admin service-area editor
-- **Acceptance:** a numbered street address in a covered city can never
-  resolve to another city, and an unknown locality degrades to today's
-  behaviour rather than to zero results.
+- **Action taken:** reused the existing (previously unpopulated) `city` column
+  on `service_areas` — `routes/admin/service_areas.py` already read/wrote it —
+  rather than adding a redundant `locality` column. Migration
+  `263_service_areas_city_backfill.sql` adds the column defensively and
+  backfills 5 known areas by name. `_lookup_place_candidates` in
+  `backend/ai/tools_booking.py` now resolves the rider's service area and
+  passes `components=locality:<city>|country:CA` when known, via the new
+  `_geocode_with_locality_retry` helper, retrying unfiltered once on
+  `ZERO_RESULTS`.
+- **Files:** `backend/migrations/263_service_areas_city_backfill.sql`,
+  `backend/ai/tools_booking.py`, `backend/tests/test_ai_tools_booking.py`
+- **Acceptance:** met — a numbered street address in a covered city can no
+  longer resolve to another city, and an unknown/unmatched locality degrades
+  to prior unfiltered behaviour rather than to zero results.
+- **Verified in production (2026-07-28):** `GET /api/v1/service-areas`
+  confirms `city` is correctly populated for the real markets — `Regina` →
+  `"Regina"`, `Saskatoon` → `"Saskatoon"`. The `riyadh` row (test/dev data,
+  not a real market) still shows `city: ""` — migration 263 has not yet been
+  applied against production (`schema_migrations` not updated; attempted via
+  `scripts/migrate.py` but blocked by IPv6-only direct-host DNS resolution —
+  see the `PG_CONNECTION_STRING` / Session pooler note in `CLAUDE.md`'s
+  Commands section). Non-blocking: an empty `city` only causes that one row
+  to fall back to the pre-PR unfiltered geocode behaviour, no regression.
+  Low-priority follow-up: re-run `backend/scripts/migrate.py` against
+  production via the Session pooler connection string once convenient.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
 - [ ] **Status:** open — parked pending a pricing decision (2026-07-27).

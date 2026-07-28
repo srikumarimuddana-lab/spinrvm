@@ -10,7 +10,7 @@
 --   * INSERT allowed (service role only).
 --   * UPDATE and DELETE blocked unconditionally.
 --
--- Rollback plan:
+-- Rollback:
 --   DROP TABLE IF EXISTS compliance_export_events;
 --
 -- Forward-compatible: new table, no changes to existing tables.

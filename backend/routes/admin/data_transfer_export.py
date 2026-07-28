@@ -28,7 +28,6 @@ from pydantic import BaseModel, Field
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
-    from ...documents import _extract_signed_url
     from ...services.data_transfer import bundle_zip_builder, entity_export_service, observability, tabular_writer
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
@@ -36,7 +35,6 @@ try:
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
-    from documents import _extract_signed_url
     from services.data_transfer import bundle_zip_builder, entity_export_service, observability, tabular_writer
     from supabase_client import supabase
     from utils.audit_logger import log_admin_action
@@ -54,7 +52,12 @@ router = APIRouter()
 MAX_ENTITIES_PER_EXPORT = 100
 
 EXPORT_STORAGE_BUCKET = "data-transfer-exports"
-_EXPORT_LINK_TTL_SECONDS = 7 * 24 * 3600
+# How long a completed export bundle stays in Storage before the purge loop
+# (utils/data_export_purge.py) deletes it — NOT a signed-URL TTL; no signed
+# URL is minted at export time (see _upload_bundle's docstring). Download
+# links are always minted fresh, 1-hour-lived, on demand via
+# GET /data-transfer/jobs/{job_id}/download.
+_EXPORT_RETENTION_SECONDS = 7 * 24 * 3600
 
 # format -> (builder(bundles) -> bytes, file extension, content-type)
 _FORMAT_BUILDERS: dict[str, tuple[Any, str, str]] = {
@@ -81,10 +84,17 @@ def _entity_type_summary(entities: list[ExportEntityRef]) -> str:
     return types.pop() if len(types) == 1 else "mixed"
 
 
-async def _upload_bundle(admin_id: str, file_bytes: bytes, ext: str, content_type: str) -> tuple[str, str]:
+async def _upload_bundle(admin_id: str, file_bytes: bytes, ext: str, content_type: str) -> str:
     """Upload the export file to the private data-transfer-exports bucket and
-    return (signed_url, storage_path). Mirrors _upload_export_zip in
-    routes/drivers/tax_exports.py."""
+    return storage_path. Mirrors _upload_export_zip in
+    routes/drivers/tax_exports.py.
+
+    Does NOT mint a signed URL here — this route is fully backgrounded (see
+    export_entities' 202 response), so there is no request left to hand a URL
+    back to by the time the upload completes. The Jobs & History tab
+    (data_transfer_jobs.py) always mints a fresh one on demand from
+    storage_path when the admin asks for it, so generating one eagerly here
+    was pure waste (computed, then immediately discarded)."""
     import asyncio  # noqa: PLC0415
 
     if not supabase:
@@ -108,11 +118,7 @@ async def _upload_bundle(admin_id: str, file_bytes: bytes, ext: str, content_typ
             file_options={"content-type": content_type, "upsert": "true"},
         ),
     )
-    res = await loop.run_in_executor(
-        None,
-        lambda: supabase.storage.from_(EXPORT_STORAGE_BUCKET).create_signed_url(storage_path, _EXPORT_LINK_TTL_SECONDS),
-    )
-    return _extract_signed_url(res), storage_path
+    return storage_path
 
 
 async def _run_export_job(
@@ -136,7 +142,7 @@ async def _run_export_job(
         if not bundles:
             raise RuntimeError("None of the requested entities could be found")
         file_bytes = builder(bundles)
-        signed_url, storage_path = await _upload_bundle(admin.get("id", "unknown"), file_bytes, ext, content_type)
+        storage_path = await _upload_bundle(admin.get("id", "unknown"), file_bytes, ext, content_type)
     except Exception as e:
         duration_ms = (time.monotonic() - t0) * 1000.0
         logger.error("data-transfer export: job %s failed", job_id, exc_info=True)
@@ -158,7 +164,7 @@ async def _run_export_job(
         return
 
     observability.record_export_result("completed", fmt, (time.monotonic() - t0) * 1000.0)
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_EXPORT_LINK_TTL_SECONDS)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_EXPORT_RETENTION_SECONDS)
     await db_supabase.update_one(
         "data_transfer_export_jobs",
         {"id": job_id},
@@ -177,11 +183,6 @@ async def _run_export_job(
         job_id,
         {"entity_count": len(bundles), "requested": len(pairs), "doc_types": doc_types},
     )
-    # signed_url is intentionally not persisted — it's long-lived (7 days)
-    # but the Jobs tab always mints a fresh one on demand from storage_path
-    # (see data_transfer_jobs.py) rather than trusting a stored URL to still
-    # be valid.
-    _ = signed_url
 
 
 @router.post("/data-transfer/export", status_code=202)

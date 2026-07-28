@@ -100,6 +100,23 @@ def test_rider_prompt_requires_fresh_closest_search_without_disclosing_tools():
     assert "Never print identifiers" in prompt
 
 
+def test_rider_prompt_trusts_tapped_suggestion_coordinates():
+    """A tapped location-suggestion card sends "Use <address> [lat,lng] as my
+    pickup/dropoff". Without an explicit trust rule, rule 6's "never
+    coordinates you saw in an older bracketed message" wording makes the model
+    re-run find_place on the address text, which re-trips the
+    imprecise_address gate — the infinite "check the exact street address"
+    loop. The prompt must (a) trust the tapped candidate verbatim and (b)
+    never re-ask the same address question twice."""
+    prompt = build_system_prompt({}, "rider")
+    assert "taps one of your location suggestions" in prompt
+    assert "never re-run find_place on that address" in prompt
+    assert "rider-chosen candidate" in prompt
+    assert "Never ask the rider to fix the same address twice" in prompt
+    # The recency constraint must still cover the new case (it follows it).
+    assert prompt.index("taps one of your location suggestions") < prompt.index("Bracketed coordinates count")
+
+
 def _patch_last_ride(rows=None):
     return patch.object(tools_booking.db_supabase, "get_rows", AsyncMock(return_value=rows or []))
 

@@ -263,9 +263,12 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
        `docs/change-log/2026-07-28-corporate-accounts-coverage-80.md`.
      - `services/corporate_wallet_service.py` — 41%, `services/corporate_allowance_service.py` — 39% (money math)
      - `routes/corporate_company_bookings.py` — 38%
-     - `routes/corporate_rider.py`, `routes/corporate_signup.py`,
-       `routes/corporate_company_kyb.py` — 32-33% (rider-facing/onboarding,
-       lower risk than the above, do last)
+     - `routes/corporate_signup.py` — **89%** (was 32-33%; closed
+       2026-07-28, see `docs/change-log/2026-07-28-corporate-signup-coverage-80.md`).
+       Remaining 7 uncovered lines are the dual-import `ImportError` fallback
+       block (untestable per the dual-import convention, not a real gap).
+     - `routes/corporate_rider.py`, `routes/corporate_company_kyb.py` — 32-33%
+       (rider-facing/onboarding, lower risk than the above, do last)
      - `services/corporate_membership_service.py` — 27%, `services/corporate_policy_service.py` — 68% (already close)
      No work started on closing this gap yet — scoping/measurement only.
   2. `backend/utils/insurance_periods.py`, safety check-in / SOS-related

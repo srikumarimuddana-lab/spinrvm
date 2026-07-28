@@ -82,7 +82,7 @@
 |---|---|---|---|
 | AI-1 | Support-tier admin sees payment card PAN | No PAN stored (Stripe Elements); display last4 only | LOW |
 | AI-2 | "View as rider" shows data the rider doesn't see | Must reflect rider's own view exactly | **VERIFY** during admin audit |
-| AI-3 | Admin exports all users → offline PII leak | Approval workflow for exports > 1,000 rows | **OPEN** — not yet implemented |
+| AI-3 | Admin exports all users → offline PII leak | Approval workflow for exports > 1,000 rows | **OPEN** — not yet implemented. Scope includes `routes/admin/compliance.py`'s `gst-pst-remittance` and `insurance-period-audit` endpoints (up to `_ROW_LIMIT = 10000` rows each, no approval gate today) — see `reports/audits/2026-07-28-compliance-reporting-module-lifecycle-audit-v1.md` G2. Wire both endpoints through AI-3's dual-approval mechanism when it ships, rather than building a compliance-specific one-off. |
 | AI-4 | Admin dashboard logs include rider PII | Same redactor rules as backend | MEDIUM until implemented |
 | AI-5 | Admin panel indexed by search engines (open to internet) | IP allow-list + robots.txt + no-index headers | MEDIUM — verify during admin audit |
 

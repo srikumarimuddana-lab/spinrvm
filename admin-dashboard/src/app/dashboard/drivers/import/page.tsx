@@ -248,6 +248,20 @@ export default function BulkImportPage() {
                 </p>
             </div>
 
+            {/* No longer linked from the sidebar (moved to Data Transfer, which
+                also carries documents/history/SGI forms) — kept reachable by
+                direct URL since this CSV format and the Data Transfer ZIP
+                bundle format aren't the same thing, and deleting a working,
+                tested import path outright is a bigger call than this nav
+                consolidation needs to make. */}
+            <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                Looking for the full Data Transfer module (export, ZIP-bundle import, SGI compliance forms)?{" "}
+                <a href="/dashboard/data-transfer" className="font-medium underline">
+                    Go to Data Transfer
+                </a>
+                .
+            </div>
+
             <Card>
                 <CardHeader>
                     <CardTitle>1. Prepare your CSV</CardTitle>

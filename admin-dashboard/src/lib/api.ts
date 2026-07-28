@@ -3398,3 +3398,25 @@ export const searchDataTransferEntities = (params: DataTransferSearchParams) => 
     qs.set("page_size", String(params.pageSize ?? 50));
     return request<DataTransferSearchResult>(`/api/admin/data-transfer/search?${qs.toString()}`);
 };
+
+export type DataTransferExportFormat = "zip" | "csv" | "json" | "excel";
+export interface DataTransferExportEntityRef {
+    entity_type: "driver" | "rider";
+    entity_id: string;
+}
+export interface DataTransferExportResult {
+    job_id: string;
+    entity_count: number;
+    requested_count: number;
+    download_url: string;
+    expires_at: string;
+}
+export const exportDataTransferEntities = (
+    entities: DataTransferExportEntityRef[],
+    format: DataTransferExportFormat,
+    docTypes?: string[],
+) =>
+    request<DataTransferExportResult>("/api/admin/data-transfer/export", {
+        method: "POST",
+        body: JSON.stringify({ entities, format, doc_types: docTypes ?? null }),
+    });

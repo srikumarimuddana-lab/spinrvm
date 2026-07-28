@@ -20,14 +20,14 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...documents import _extract_signed_url
-    from ...services.data_transfer import bundle_zip_builder, entity_export_service
+    from ...services.data_transfer import bundle_zip_builder, entity_export_service, tabular_writer
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from documents import _extract_signed_url
-    from services.data_transfer import bundle_zip_builder, entity_export_service
+    from services.data_transfer import bundle_zip_builder, entity_export_service, tabular_writer
     from supabase_client import supabase
     from utils.audit_logger import log_admin_action
 
@@ -42,6 +42,14 @@ MAX_ENTITIES_PER_EXPORT = 100
 EXPORT_STORAGE_BUCKET = "data-transfer-exports"
 _EXPORT_LINK_TTL_SECONDS = 7 * 24 * 3600
 
+# format -> (builder(bundles) -> bytes, file extension, content-type)
+_FORMAT_BUILDERS: dict[str, tuple[Any, str, str]] = {
+    "zip": (bundle_zip_builder.build_export_zip, "zip", "application/zip"),
+    "csv": (tabular_writer.write_csv, "csv", "text/csv"),
+    "json": (tabular_writer.write_json, "json", "application/json"),
+    "excel": (tabular_writer.write_excel, "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+}
+
 
 class ExportEntityRef(BaseModel):
     entity_type: str = Field(..., pattern="^(driver|rider)$")
@@ -51,6 +59,7 @@ class ExportEntityRef(BaseModel):
 class ExportRequest(BaseModel):
     entities: list[ExportEntityRef]
     doc_types: Optional[list[str]] = None
+    format: str = Field("zip", pattern="^(zip|csv|json|excel)$")
 
 
 def _entity_type_summary(entities: list[ExportEntityRef]) -> str:
@@ -58,16 +67,16 @@ def _entity_type_summary(entities: list[ExportEntityRef]) -> str:
     return types.pop() if len(types) == 1 else "mixed"
 
 
-async def _upload_bundle(admin_id: str, zip_bytes: bytes) -> tuple[str, str]:
-    """Upload the ZIP to the private data-transfer-exports bucket and return
-    (signed_url, storage_path). Mirrors _upload_export_zip in
+async def _upload_bundle(admin_id: str, file_bytes: bytes, ext: str, content_type: str) -> tuple[str, str]:
+    """Upload the export file to the private data-transfer-exports bucket and
+    return (signed_url, storage_path). Mirrors _upload_export_zip in
     routes/drivers/tax_exports.py."""
     import asyncio  # noqa: PLC0415
 
     if not supabase:
         raise HTTPException(status_code=503, detail="Storage client not configured")
 
-    storage_path = f"exports/{admin_id}/{uuid.uuid4()}.zip"
+    storage_path = f"exports/{admin_id}/{uuid.uuid4()}.{ext}"
     loop = asyncio.get_running_loop()
 
     def _ensure_bucket() -> None:
@@ -81,8 +90,8 @@ async def _upload_bundle(admin_id: str, zip_bytes: bytes) -> tuple[str, str]:
         None,
         lambda: supabase.storage.from_(EXPORT_STORAGE_BUCKET).upload(
             path=storage_path,
-            file=zip_bytes,
-            file_options={"content-type": "application/zip", "upsert": "true"},
+            file=file_bytes,
+            file_options={"content-type": content_type, "upsert": "true"},
         ),
     )
     res = await loop.run_in_executor(
@@ -109,6 +118,8 @@ async def export_entities(
             detail=f"{len(body.entities)} entities requested; the limit is {MAX_ENTITIES_PER_EXPORT} per export",
         )
 
+    builder, ext, content_type = _FORMAT_BUILDERS[body.format]
+
     pairs = [(e.entity_type, e.entity_id) for e in body.entities]
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
@@ -118,7 +129,7 @@ async def export_entities(
         "entity_type": _entity_type_summary(body.entities),
         "entity_ids": [e.entity_id for e in body.entities],
         "doc_type_filter": body.doc_types,
-        "format": "zip",
+        "format": body.format,
         "status": "pending",
         "created_at": now.isoformat(),
     }
@@ -132,8 +143,8 @@ async def export_entities(
         bundles = await entity_export_service.gather_entity_bundles(pairs, body.doc_types)
         if not bundles:
             raise HTTPException(status_code=404, detail="None of the requested entities could be found")
-        zip_bytes = bundle_zip_builder.build_export_zip(bundles)
-        signed_url, storage_path = await _upload_bundle(admin.get("id", "unknown"), zip_bytes)
+        file_bytes = builder(bundles)
+        signed_url, storage_path = await _upload_bundle(admin.get("id", "unknown"), file_bytes, ext, content_type)
     except HTTPException:
         raise
     except Exception as e:

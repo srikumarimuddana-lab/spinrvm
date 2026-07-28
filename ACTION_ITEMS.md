@@ -240,10 +240,27 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
      New code from the lifecycle-audit fixes is well-covered (79–90%); the
      gap is concentrated in pre-existing files, priority order for a future
      session:
-     - `routes/corporate_accounts.py` — **39%**, highest priority: this is
-       the file every lifecycle-audit fix (gaps #1-3, Findings 1/4/6/7) is
-       wired into, so ~60% of the surrounding code in the same handler has
-       zero test coverage.
+     - `routes/corporate_accounts.py` — **done, 82%** (was 39% as measured
+       against a narrow corporate-only test subset in the original scoping
+       pass; re-measured against the full corporate-admin-route test set —
+       `test_admin_business_logic.py`, `test_admin_rbac.py`,
+       `test_corporate_admin_routes.py`, `test_corporate_b2b_schema.py`,
+       `test_corporate_db_helpers.py`, `test_corporate_e2e_foundation.py`,
+       `test_corporate_e2e_wallet.py`, `test_corporate_kyb.py`,
+       `test_corporate_status.py`, `test_corporate_stripe_customer.py`,
+       `test_corporate_wallet_bootstrap.py`, `test_corporate_wallet_freeze.py`,
+       `test_db.py`, `test_deprecated_route_admin_exempt.py`,
+       `test_error_response_sanitisation.py`, `test_features.py`,
+       `test_p3_admin_jwt_modules.py`, `test_stripe_event_loop_offload.py`
+       — the real baseline was 77%, not 39%. +9 tests
+       (`test_corporate_admin_routes.py`) closed the highest-value remaining
+       gaps: validator no-ops, the `is_active` list filter, the
+       `X-Total-Count` exception fallback, the previously entirely-untested
+       `kyb_upload_url` endpoint, and two `kyb_document_confirm` error
+       branches. Meets the 80% target. Remaining 18% is `change_company_status`'s
+       deepest nested exception branches and `kyb_review`'s email-failure
+       paths — lower priority, not pursued further in this pass. See
+       `docs/change-log/2026-07-28-corporate-accounts-coverage-80.md`.
      - `services/corporate_wallet_service.py` — 41%, `services/corporate_allowance_service.py` — 39% (money math)
      - `routes/corporate_company_bookings.py` — 38%
      - `routes/corporate_rider.py`, `routes/corporate_signup.py`,

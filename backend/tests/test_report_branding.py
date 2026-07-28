@@ -35,10 +35,15 @@ class TestReportFormatRegistry:
 
 
 class TestLogoFallback:
-    def test_has_logo_asset_false_without_real_file(self):
-        # No real logo file is checked into the repo yet (backend/static/
-        # branding/ only has the README placeholder) — the fallback must
-        # report False, not crash looking for a missing file.
+    def test_has_logo_asset_true_with_real_file(self):
+        # The real Spinr logo (bullseye mark + wordmark) is checked in at
+        # backend/static/branding/spinr_logo.png.
+        assert report_branding.has_logo_asset() is True
+
+    def test_has_logo_asset_false_for_missing_path(self, monkeypatch):
+        # Fallback behavior must still hold for a genuinely missing file —
+        # report False, not crash looking for it.
+        monkeypatch.setattr(report_branding, "LOGO_PATH", report_branding.LOGO_PATH.parent / "nonexistent.png")
         assert report_branding.has_logo_asset() is False
 
 
@@ -101,21 +106,80 @@ class TestBrandedPdf:
         # Must not raise when no province letterhead is supplied.
         report_branding.render_branded_pdf_footer(pdf, None)
 
+    def test_fill_color_reset_to_white_after_header_band(self):
+        # Regression: new_branded_pdf() sets fill_color to brand red to draw
+        # the header band rectangle, then never reset it — every cell drawn
+        # afterward (e.g. via render_pdf_table's Table API) inherited that
+        # red as its background, including data rows that should stay
+        # white. Caught visually: a real downloaded report showed every
+        # table row solid red instead of just the header row.
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf("Test Report")
+        assert pdf.fill_color.colors255 == (255.0, 255.0, 255.0)
+
+    def test_landscape_orientation(self):
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf("Test Report", landscape=True)
+        assert pdf.w > pdf.h  # landscape: wider than tall
+
+    def test_portrait_is_default(self):
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf("Test Report")
+        assert pdf.h > pdf.w  # portrait: taller than wide
+
+
+class TestRenderPdfTable:
+    def test_wraps_long_cell_content_without_error(self):
+        # Regression: the original fixed-width single-line pdf.cell()
+        # renderer clipped/overlapped text into an unreadable table the
+        # moment real data (full UUIDs, microsecond ISO timestamps, long
+        # period labels) was used — confirmed against a real downloaded
+        # report from the live admin portal. render_pdf_table uses fpdf2's
+        # native Table API, which wraps instead of clipping.
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf("Driver Insurance-Period Audit", landscape=True)
+        fieldnames = ["driver_id", "driver_name", "period", "started_at", "ended_at", "ride_id"]
+        rows = [
+            {
+                "driver_id": "0035af1d-6834-4891-9ac5-7fb93cd7e6bb",
+                "driver_name": "Kiran Muddana",
+                "period": "3 — Passenger aboard (primary commercial, full)",
+                "started_at": "2026-07-28T00:06:13.630970+00:00",
+                "ended_at": "2026-07-28T00:06:55.628251+00:00",
+                "ride_id": "7b74d9cb-fb55-4dfd-97b1-379cdd27957b",
+            }
+        ]
+        report_branding.render_pdf_table(pdf, fieldnames, rows, col_widths=[2.2, 1.3, 2.5, 1.8, 1.8, 2.2])
+        out = bytes(pdf.output())
+        assert out.startswith(b"%PDF")
+
+    def test_empty_rows_render_header_only(self):
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf("Empty Report")
+        report_branding.render_pdf_table(pdf, ["a", "b"], [])
+        out = bytes(pdf.output())
+        assert out.startswith(b"%PDF")
+
 
 class TestBrandedExcel:
     def test_new_branded_workbook_and_table(self):
         pytest.importorskip("openpyxl")
+        # The real logo asset is checked in (backend/static/branding/
+        # spinr_logo.png), so has_logo_asset() is True here — title/subtitle
+        # land in column C, leaving A/B for the logo image anchor.
         wb, ws = report_branding.new_branded_workbook("GST/PST Remittance Summary", "July 2026")
-        assert ws["A1"].value == "GST/PST Remittance Summary"
-        assert ws["A2"].value == "July 2026"
+        assert ws["C1"].value == "GST/PST Remittance Summary"
+        assert ws["C2"].value == "July 2026"
 
         report_branding.write_branded_table(
             ws, ["month", "gst", "pst"], [{"month": "2026-07", "gst": "123.45", "pst": "148.14"}]
         )
-        assert ws["A4"].value == "month"
-        assert ws["B4"].value == "gst"
-        assert ws["A5"].value == "2026-07"
-        assert ws["B5"].value == "123.45"
+        # Header cells are title-cased ("month" -> "Month") to match the
+        # PDF/Word header treatment; row data is untouched.
+        assert ws["A6"].value == "Month"
+        assert ws["B6"].value == "Gst"
+        assert ws["A7"].value == "2026-07"
+        assert ws["B7"].value == "123.45"
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -125,20 +189,28 @@ class TestBrandedExcel:
         pytest.importorskip("openpyxl")
         _, ws = report_branding.new_branded_workbook("Report")
         report_branding.write_branded_table(ws, ["value"], [{"value": "=SUM(A1)"}])
-        assert ws["A5"].value == "'=SUM(A1)"
+        assert ws["A7"].value == "'=SUM(A1)"
 
 
 class TestBrandedWord:
     def test_new_branded_document_and_table(self):
         pytest.importorskip("docx")
+        # With the real logo asset present, paragraph 0 is the logo image
+        # (empty text) and the heading is paragraph 1.
         doc = report_branding.new_branded_document("GST/PST Remittance Summary", "July 2026")
-        assert doc.paragraphs[0].text == "GST/PST Remittance Summary"
+        assert doc.paragraphs[0].text == ""
+        assert doc.paragraphs[1].text == "GST/PST Remittance Summary"
+        assert doc.paragraphs[2].text == "July 2026"
+        # The accent rule is a paragraph border, not a table — doc.tables
+        # must be empty until the caller adds its own data table.
+        assert len(doc.tables) == 0
 
         report_branding.add_branded_table(
             doc, ["month", "gst", "pst"], [{"month": "2026-07", "gst": "123.45", "pst": "148.14"}]
         )
         table = doc.tables[0]
-        assert table.rows[0].cells[0].text == "month"
+        # Header cells are title-cased to match the PDF/Excel treatment.
+        assert table.rows[0].cells[0].text == "Month"
         assert table.rows[1].cells[0].text == "2026-07"
 
         buf = io.BytesIO()

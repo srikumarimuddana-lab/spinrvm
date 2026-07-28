@@ -30,18 +30,22 @@ router = APIRouter()
 MAX_PAGE_SIZE = 200
 
 
-def _text_filter(q: str) -> dict:
-    """Build an $or clause matching q against full_name/email/phone,
-    case-insensitive substring — the same ILIKE shape driver_import_service
-    and other admin search endpoints already rely on via $regex/$options."""
+def _text_filter(q: str, *, table: str = "users") -> dict:
+    """Build an $or clause matching q against name columns + email + phone,
+    case-insensitive substring.  Column names vary by table: ``drivers`` has
+    ``name``; ``users`` has ``first_name`` / ``last_name``."""
     clause = {"$regex": q, "$options": "i"}
-    return {"$or": [{"full_name": clause}, {"email": clause}, {"phone": clause}]}
+    if table == "drivers":
+        name_clauses = [{"name": clause}]
+    else:
+        name_clauses = [{"first_name": clause}, {"last_name": clause}]
+    return {"$or": [*name_clauses, {"email": clause}, {"phone": clause}]}
 
 
-def _build_filters(q: Optional[str], date_from: Optional[str], date_to: Optional[str]) -> dict:
+def _build_filters(q: Optional[str], date_from: Optional[str], date_to: Optional[str], *, table: str = "users") -> dict:
     filters: dict = {}
     if q:
-        filters.update(_text_filter(q))
+        filters.update(_text_filter(q, table=table))
     if date_from or date_to:
         range_filter: dict = {}
         if date_from:
@@ -67,14 +71,12 @@ async def search_entities(
     """Search users (optionally scoped to drivers or riders) by fuzzy text +
     date range. Returns the current page plus a total_count for "select all
     matching filter" in the UI."""
-    filters = _build_filters(q, date_from, date_to)
     offset = (page - 1) * page_size
 
     if entity_type == "driver":
-        # Drivers are a separate table keyed by user_id; search on the
-        # drivers table's own name/email/phone columns (denormalized onto
-        # drivers for exactly this kind of admin lookup — see drivers_router).
-        table, table_filters = "drivers", filters
+        table = "drivers"
+        filters = _build_filters(q, date_from, date_to, table=table)
+        table_filters = filters
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -82,10 +84,12 @@ async def search_entities(
             desc=True,
             limit=page_size,
             offset=offset,
-            columns="id,user_id,full_name,email,phone,created_at,vehicle_plate",
+            columns="id,user_id,name,first_name,last_name,email,phone,created_at,vehicle_plate",
         )
     elif entity_type == "rider":
-        table, table_filters = "users", {**filters, "role": "rider"}
+        table = "users"
+        filters = _build_filters(q, date_from, date_to, table=table)
+        table_filters = {**filters, "role": "rider"}
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -93,10 +97,12 @@ async def search_entities(
             desc=True,
             limit=page_size,
             offset=offset,
-            columns="id,full_name,email,phone,created_at,role",
+            columns="id,first_name,last_name,email,phone,created_at,role",
         )
     else:
-        table, table_filters = "users", filters
+        table = "users"
+        filters = _build_filters(q, date_from, date_to, table=table)
+        table_filters = filters
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -104,7 +110,14 @@ async def search_entities(
             desc=True,
             limit=page_size,
             offset=offset,
-            columns="id,full_name,email,phone,created_at,role",
+            columns="id,first_name,last_name,email,phone,created_at,role",
+        )
+
+    for row in rows or []:
+        row["full_name"] = (
+            row.pop("name", None)
+            or f"{row.pop('first_name', '') or ''} {row.pop('last_name', '') or ''}".strip()
+            or None
         )
 
     # count_documents uses PostgREST's count="exact" head-count, not a full

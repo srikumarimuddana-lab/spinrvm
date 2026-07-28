@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 try:
@@ -32,6 +32,7 @@ try:
     from ...services.data_transfer import bundle_zip_builder, entity_export_service, tabular_writer
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
+    from ...utils.rate_limiter import data_transfer_export_limit
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
@@ -39,6 +40,7 @@ except ImportError:
     from services.data_transfer import bundle_zip_builder, entity_export_service, tabular_writer
     from supabase_client import supabase
     from utils.audit_logger import log_admin_action
+    from utils.rate_limiter import data_transfer_export_limit
 
 logger = logging.getLogger(__name__)
 
@@ -166,15 +168,23 @@ async def _run_export_job(
 
 
 @router.post("/data-transfer/export", status_code=202)
+@data_transfer_export_limit
 async def export_entities(
     body: ExportRequest,
     background_tasks: BackgroundTasks,
+    request: Request = None,
     admin: dict = Depends(get_admin_user),
 ):
     """Validate the request, record a pending job, and hand the actual
     gather/build/upload work to a background task. Returns immediately with
     the job_id — check its status via the Jobs & History tab or
-    GET /data-transfer/jobs/{job_id}."""
+    GET /data-transfer/jobs/{job_id}.
+
+    Rate-limited (@data_transfer_export_limit, 10/hour) — each call exports
+    full-fidelity, unredacted PII for up to 100 other users at once; see
+    utils/rate_limiter.py for the threat model this guards against. SlowAPI
+    needs a parameter named ``request`` typed as starlette Request; do not
+    remove it (same requirement as dsar_export_limit in tax_exports.py)."""
     if not body.entities:
         raise HTTPException(status_code=400, detail="No entities selected")
     if len(body.entities) > MAX_ENTITIES_PER_EXPORT:

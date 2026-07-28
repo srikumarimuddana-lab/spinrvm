@@ -392,76 +392,148 @@ describe('recoverTripLocation (P3.2 — location_health nudge)', () => {
   });
 });
 
-describe('geofence re-arm debounce + single-flight (NSRangeException fix)', () => {
+describe('geofence re-arm gating (NSRangeException fix)', () => {
   const mockStartGeofencing = Location.startGeofencingAsync as jest.Mock;
   const mockStopGeofencing = Location.stopGeofencingAsync as jest.Mock;
   const mockHasStartedGeofencing = (Location as any).hasStartedGeofencingAsync as jest.Mock;
+  const CENTRE_KEY = 'spinr_bg_geofence_centre';
+  // ~1km east of the armed centre — well past the 150m recentre threshold.
+  const FAR_LNG = -106.585;
+
+  let centreStore: string | null;
 
   beforeEach(() => {
-    mockStartGeofencing.mockClear();
-    mockStopGeofencing.mockClear();
-    mockHasStartedGeofencing.mockClear();
+    [mockStartGeofencing, mockStopGeofencing, mockHasStartedGeofencing].forEach((m) => m.mockClear());
+    mockStartGeofencing.mockImplementation(() => Promise.resolve());
+    mockStopGeofencing.mockImplementation(() => Promise.resolve());
     mockHasStartedGeofencing.mockResolvedValue(false);
+    (TaskManager.isTaskRegisteredAsync as jest.Mock).mockClear();
     mockBgPermission = 'granted';
     _resetGeofenceDebounce();
+
+    // The displacement gate reads/writes the armed centre through SecureStore,
+    // so it must be stateful here rather than a fixed stub.
+    centreStore = null;
+    (SecureStore.getItemAsync as jest.Mock).mockImplementation((k: string) =>
+      Promise.resolve(k === CENTRE_KEY ? centreStore : null));
+    (SecureStore.setItemAsync as jest.Mock).mockImplementation((k: string, v: string) => {
+      if (k === CENTRE_KEY) centreStore = v;
+      return Promise.resolve();
+    });
+    (SecureStore.deleteItemAsync as jest.Mock).mockImplementation((k: string) => {
+      if (k === CENTRE_KEY) centreStore = null;
+      return Promise.resolve();
+    });
   });
 
-  it('arms the geofence via hasStartedGeofencingAsync (not isTaskRegisteredAsync)', async () => {
+  it('arms via hasStartedGeofencingAsync, never isTaskRegisteredAsync', async () => {
     await startGeofenceRecovery(52.1, -106.6);
     expect(mockHasStartedGeofencing).toHaveBeenCalledWith('spinr-geofence-recovery');
     expect(TaskManager.isTaskRegisteredAsync).not.toHaveBeenCalled();
     expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
   });
 
-  it('stops existing monitoring before re-arming when hasStartedGeofencingAsync is true', async () => {
-    mockHasStartedGeofencing.mockResolvedValue(true);
+  it('always stops before re-arming so regions cannot accumulate', async () => {
     await startGeofenceRecovery(52.1, -106.6);
     expect(mockStopGeofencing).toHaveBeenCalledWith('spinr-geofence-recovery');
     expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
   });
 
-  it('debounces rapid re-arms within the threshold', async () => {
-    // First arm succeeds
+  it('persists the armed centre so the gate survives a headless wake', async () => {
     await startGeofenceRecovery(52.1, -106.6);
-    expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(centreStore!)).toEqual({ lat: 52.1, lng: -106.6 });
+  });
 
-    // Immediate second arm is debounced
+  it('skips the re-arm while armed and the driver has not moved far', async () => {
+    await startGeofenceRecovery(52.1, -106.6);
+    mockHasStartedGeofencing.mockResolvedValue(true);
     mockStartGeofencing.mockClear();
-    const result = await startGeofenceRecovery(52.2, -106.7);
-    expect(result).toBe(true); // returns true (debounced, not an error)
+
+    const result = await startGeofenceRecovery(52.1001, -106.6001); // ~14m
+    expect(result).toBe(true);
     expect(mockStartGeofencing).not.toHaveBeenCalled();
   });
 
-  it('single-flights concurrent calls — only one startGeofencingAsync runs', async () => {
-    // Simulate a slow startGeofencingAsync
-    let resolveArm: () => void;
-    const armPromise = new Promise<void>((resolve) => { resolveArm = resolve; });
-    mockStartGeofencing.mockImplementationOnce(() => armPromise);
+  it('recentres once the driver has moved past the displacement threshold', async () => {
+    await startGeofenceRecovery(52.1, -106.6);
+    mockHasStartedGeofencing.mockResolvedValue(true);
+    mockStartGeofencing.mockClear();
 
-    // Reset the debounce by reaching into the module. Since we can't, we'll
-    // test that two concurrent calls to the same function produce one result.
-    // The debounce from the previous test makes this a no-op for the second
-    // call anyway — which is the desired behavior.
-    const p1 = startGeofenceRecovery(52.1, -106.6);
-    const p2 = startGeofenceRecovery(52.2, -106.7);
-
-    resolveArm!();
-    const [r1, r2] = await Promise.all([p1, p2]);
-    expect(r1).toBe(true);
-    expect(r2).toBe(true);
+    const result = await startGeofenceRecovery(52.1, FAR_LNG);
+    expect(result).toBe(true);
+    expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
   });
 
-  it('stopGeofenceRecovery uses hasStartedGeofencingAsync', async () => {
+  it('re-arms when monitoring stopped, even if the driver has not moved', async () => {
+    // Regression: gating on elapsed time alone left the driver with no
+    // recovery geofence whenever iOS dropped region monitoring.
+    await startGeofenceRecovery(52.1, -106.6);
+    mockStartGeofencing.mockClear();
+    mockHasStartedGeofencing.mockResolvedValue(false);
+
+    const result = await startGeofenceRecovery(52.1, -106.6);
+    expect(result).toBe(true);
+    expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-arms after go-offline then go-online at the same spot', async () => {
+    // Regression: stopGeofenceRecovery left gate state stale, so a driver
+    // toggling offline and back on went online with no geofence armed while
+    // startGeofenceRecovery still reported success.
     mockHasStartedGeofencing.mockResolvedValue(true);
+    await startGeofenceRecovery(52.1, -106.6);
+    expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
+
     await stopGeofenceRecovery();
-    expect(mockHasStartedGeofencing).toHaveBeenCalledWith('spinr-geofence-recovery');
+    expect(centreStore).toBeNull();
+
+    mockStartGeofencing.mockClear();
+    const result = await startGeofenceRecovery(52.1, -106.6);
+    expect(result).toBe(true);
+    expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-arms rather than assuming armed when the liveness probe throws', async () => {
+    await startGeofenceRecovery(52.1, -106.6);
+    mockStartGeofencing.mockClear();
+    mockHasStartedGeofencing.mockRejectedValue(new Error('CLError'));
+
+    const result = await startGeofenceRecovery(52.1, -106.6);
+    expect(result).toBe(true);
+    expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
+  });
+
+  it('single-flights genuinely concurrent calls into one arm', async () => {
+    let resolveArm: (() => void) | null = null;
+    mockStartGeofencing.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveArm = resolve; }),
+    );
+
+    const p1 = startGeofenceRecovery(52.1, -106.6);
+    const p2 = startGeofenceRecovery(52.1, -106.6);
+    // Let both calls reach the lock before the first arm settles.
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    mockHasStartedGeofencing.mockResolvedValue(true);
+    (resolveArm as unknown as () => void)();
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
+    expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
+  });
+
+  it('stopGeofenceRecovery stops unconditionally and clears the centre', async () => {
+    await startGeofenceRecovery(52.1, -106.6);
+    mockStopGeofencing.mockClear();
+
+    await stopGeofenceRecovery();
     expect(mockStopGeofencing).toHaveBeenCalledWith('spinr-geofence-recovery');
+    expect(centreStore).toBeNull();
     expect(TaskManager.isTaskRegisteredAsync).not.toHaveBeenCalled();
   });
 
-  it('stopGeofenceRecovery is a no-op when not monitoring', async () => {
-    mockHasStartedGeofencing.mockResolvedValue(false);
-    await stopGeofenceRecovery();
-    expect(mockStopGeofencing).not.toHaveBeenCalled();
+  it('stopGeofenceRecovery never throws when nothing is monitored', async () => {
+    mockStopGeofencing.mockRejectedValueOnce(new Error('not monitoring'));
+    await expect(stopGeofenceRecovery()).resolves.toBeUndefined();
   });
 });

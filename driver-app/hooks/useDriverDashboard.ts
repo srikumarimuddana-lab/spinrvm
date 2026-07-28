@@ -1144,18 +1144,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         handleWSMessageRef.current(data);
       } catch (e) {
-        captureException(
-          e instanceof Error ? e : new Error(String(e)),
-          { domain: 'dispatch', ws_event: 'onmessage' },
-        );
+        // Not sent to Sentry: this catch spans every downstream message
+        // handler, and the server pings every 10s, so a regression in any
+        // handler would emit hundreds of events per driver per hour. A
+        // warning keeps it visible without turning a handler bug into a
+        // quota incident.
+        console.warn('[WS] message handler failed:', e);
       }
     };
 
-    ws.onerror = (wsError) => {
-      captureException(
-        wsError instanceof Error ? wsError : new Error('WebSocket error'),
-        { domain: 'dispatch', ws_event: 'onerror' },
-      );
+    ws.onerror = () => {
+      // CLAUDE.md: "Degraded-but-recovered → warning log + metric (never
+      // Sentry — noise)". A failed connect attempt is followed by an
+      // automatic reconnect, and RN's error event carries no usable detail
+      // (it is never an Error instance), so a capture here would be ~10
+      // identical, information-free events per outage. Sentry reporting
+      // lives on the reconnect-exhausted path below, which is user-visible.
+      console.warn('[WS] socket error; reconnect will follow');
     };
 
     ws.onclose = (event) => {

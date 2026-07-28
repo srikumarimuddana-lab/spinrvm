@@ -30,22 +30,51 @@ router = APIRouter()
 MAX_PAGE_SIZE = 200
 
 
-def _text_filter(q: str, *, table: str = "users") -> dict:
-    """Build an $or clause matching q against name columns + email + phone,
-    case-insensitive substring.  Column names vary by table: ``drivers`` has
-    ``name``; ``users`` has ``first_name`` / ``last_name``."""
+def _text_filter(q: str, table: str) -> dict:
+    """Build an $or clause matching q against the real name/contact columns
+    for `table`, case-insensitive substring — the same ILIKE shape
+    driver_import_service and other admin search endpoints already rely on
+    via $regex/$options.
+
+    Regression (found via real staging schema, not assumed): this endpoint
+    previously filtered/selected on columns that don't exist —
+    - `full_name` doesn't exist on either table (`users` has first_name/
+      last_name only; `drivers` has first_name/last_name plus a separate
+      `name` column).
+    - `drivers` has NO `email` column at all (email lives on `users`,
+      joined via `drivers.user_id`) — so a driver-scoped search including
+      `email` in the filter/select 500s too, independent of the full_name
+      bug.
+    - `drivers`' plate column is `license_plate`, not `vehicle_plate`.
+    Every one of these made a real Postgres "column does not exist" error,
+    surfaced to the admin as a generic 503 "Database operation failed" —
+    only caught once a real admin exercised this route, since every test
+    here mocks `db_supabase.get_rows` and never touches the real schema.
+    Table-parameterized now so drivers (no email) and users (has email)
+    never share a filter clause referencing a column the other lacks."""
     clause = {"$regex": q, "$options": "i"}
     if table == "drivers":
-        name_clauses = [{"name": clause}]
-    else:
-        name_clauses = [{"first_name": clause}, {"last_name": clause}]
-    return {"$or": [*name_clauses, {"email": clause}, {"phone": clause}]}
+        return {"$or": [{"first_name": clause}, {"last_name": clause}, {"name": clause}, {"phone": clause}]}
+    return {"$or": [{"first_name": clause}, {"last_name": clause}, {"email": clause}, {"phone": clause}]}
 
 
-def _build_filters(q: Optional[str], date_from: Optional[str], date_to: Optional[str], *, table: str = "users") -> dict:
+def _with_full_name(rows: list[dict]) -> list[dict]:
+    """Synthesize `full_name` for the UI (EntitySearchTable.tsx reads
+    `row.full_name`) since neither source table has that column. Prefers
+    `drivers.name` when present (a real, populated column there — see the
+    compliance module's insurance-period-audit fix); falls back to
+    first_name + last_name for everyone else."""
+    out = []
+    for row in rows:
+        concatenated = f"{row.get('first_name') or ''} {row.get('last_name') or ''}".strip()
+        out.append({**row, "full_name": row.get("name") or concatenated or None})
+    return out
+
+
+def _build_filters(q: Optional[str], date_from: Optional[str], date_to: Optional[str], table: str = "users") -> dict:
     filters: dict = {}
     if q:
-        filters.update(_text_filter(q, table=table))
+        filters.update(_text_filter(q, table))
     if date_from or date_to:
         range_filter: dict = {}
         if date_from:
@@ -74,9 +103,13 @@ async def search_entities(
     offset = (page - 1) * page_size
 
     if entity_type == "driver":
+        # Drivers are a separate table keyed by user_id; search on the
+        # drivers table's own name/phone columns (denormalized onto drivers
+        # for exactly this kind of admin lookup — see drivers_router).
+        # Drivers has no `email` column (email lives on `users`, joined via
+        # user_id) — _build_filters(table="drivers") excludes it.
         table = "drivers"
-        filters = _build_filters(q, date_from, date_to, table=table)
-        table_filters = filters
+        table_filters = _build_filters(q, date_from, date_to, table=table)
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -84,12 +117,19 @@ async def search_entities(
             desc=True,
             limit=page_size,
             offset=offset,
-            columns="id,user_id,name,first_name,last_name,email,phone,created_at,vehicle_plate",
+            columns="id,user_id,name,first_name,last_name,phone,created_at,license_plate",
         )
+        rows = _with_full_name(rows or [])
+        # UI (EntitySearchTable.tsx) reads `vehicle_plate` — the real
+        # column is `license_plate`; rename in the response rather than
+        # coupling the frontend's field name to the DB's.
+        rows = [
+            {**{k: v for k, v in r.items() if k != "license_plate"}, "vehicle_plate": r.get("license_plate")}
+            for r in rows
+        ]
     elif entity_type == "rider":
         table = "users"
-        filters = _build_filters(q, date_from, date_to, table=table)
-        table_filters = {**filters, "role": "rider"}
+        table_filters = {**_build_filters(q, date_from, date_to, table=table), "role": "rider"}
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -99,10 +139,10 @@ async def search_entities(
             offset=offset,
             columns="id,first_name,last_name,email,phone,created_at,role",
         )
+        rows = _with_full_name(rows or [])
     else:
         table = "users"
-        filters = _build_filters(q, date_from, date_to, table=table)
-        table_filters = filters
+        table_filters = _build_filters(q, date_from, date_to, table=table)
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -112,13 +152,7 @@ async def search_entities(
             offset=offset,
             columns="id,first_name,last_name,email,phone,created_at,role",
         )
-
-    for row in rows or []:
-        row["full_name"] = (
-            row.pop("name", None)
-            or f"{row.pop('first_name', '') or ''} {row.pop('last_name', '') or ''}".strip()
-            or None
-        )
+        rows = _with_full_name(rows or [])
 
     # count_documents uses PostgREST's count="exact" head-count, not a full
     # row fetch — critical for "select all N matching filter" on a table with

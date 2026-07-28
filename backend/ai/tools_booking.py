@@ -50,6 +50,13 @@ try:
 except ImportError:
     import db_supabase
     from settings_loader import get_app_settings
+    from utils.google_places_new import (  # type: ignore
+        PLACES_NEW_TEXT_SEARCH_FIELD_MASK,
+        PLACES_NEW_TEXT_SEARCH_URL,
+        build_text_search_payload,
+        legacy_place_results_from_text_search,
+        places_new_headers,
+    )
     from utils.maps_budget import check_budget, record_call
 
 logger = logging.getLogger(__name__)

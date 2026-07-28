@@ -254,6 +254,16 @@ ride_rating_limit = default_limiter.limit("5/hour")
 # Storage, and sends an email. Tight cap prevents storage fill / SES exhaustion.
 dsar_export_limit = default_limiter.limit("3/hour")
 
+# Admin Data Transfer export — full-fidelity, unredacted, up to 100
+# entities/call (profile + documents + ride history + insurance periods
+# each). Unlike dsar_export_limit (a driver exporting only their own data),
+# this exports OTHER users' PII at an admin's discretion — a compromised or
+# malicious admin session could otherwise issue export after export to
+# exfiltrate data quickly. Backgrounded (see data_transfer_export.py), so
+# this isn't guarding request-thread exhaustion, it's bounding total
+# export volume per admin-facing client over time (cf. dsar_export_limit).
+data_transfer_export_limit = default_limiter.limit("10/hour")
+
 # Tax-document email (T4A PDF / earnings CSV) — each call reads up to 10k rides,
 # renders/builds a document, and sends an email to the driver. Cap prevents
 # inbox-bombing + SES quota / sender-reputation abuse (cf. dsar_export_limit).

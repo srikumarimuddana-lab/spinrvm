@@ -27,6 +27,10 @@ def _patches(reset_return):
             AsyncMock(return_value={"company_id": "c1", "status": "active"}),
         ),
         patch(
+            "backend.utils.allowance_reset.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "status": "active"}),
+        ),
+        patch(
             "backend.utils.allowance_reset.get_corporate_wallet_by_company",
             AsyncMock(return_value={"id": "w1"}),
         ),
@@ -38,8 +42,8 @@ def _patches(reset_return):
 def test_reset_runs_once_when_cas_won():
     from backend.utils import allowance_reset as ar
 
-    p_list, p_member, p_wallet, p_reset, p_apply = _patches(reset_return={"id": "a1"})
-    with p_list, p_member, p_wallet, p_reset as reset, p_apply as apply_reset:
+    p_list, p_member, p_company, p_wallet, p_reset, p_apply = _patches(reset_return={"id": "a1"})
+    with p_list, p_member, p_company, p_wallet, p_reset as reset, p_apply as apply_reset:
         processed = asyncio.run(ar.run_allowance_reset_tick())
 
     assert processed == 1
@@ -51,8 +55,8 @@ def test_reset_runs_once_when_cas_won():
 def test_reset_skipped_when_cas_lost():
     from backend.utils import allowance_reset as ar
 
-    p_list, p_member, p_wallet, p_reset, p_apply = _patches(reset_return=None)
-    with p_list, p_member, p_wallet, p_reset, p_apply as apply_reset:
+    p_list, p_member, p_company, p_wallet, p_reset, p_apply = _patches(reset_return=None)
+    with p_list, p_member, p_company, p_wallet, p_reset, p_apply as apply_reset:
         processed = asyncio.run(ar.run_allowance_reset_tick())
 
     assert processed == 0

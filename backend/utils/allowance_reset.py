@@ -77,6 +77,14 @@ async def run_allowance_reset_tick(now: Optional[date] = None) -> int:
             member = await get_corporate_member_by_id(r["member_id"])
             if not member:
                 continue
+            if member.get("status") != "active":
+                # A removed/suspended member's allowance must not keep
+                # replenishing indefinitely — this loop previously only
+                # checked that the member row existed, not that it was
+                # still active, so a removed employee's budget kept
+                # resetting to full every period forever. See corporate
+                # module review gap #3.
+                continue
             wallet = await get_corporate_wallet_by_company(member["company_id"])
             if not wallet:
                 continue

@@ -25,7 +25,7 @@ async def test_reset_runs_for_stale_allowances():
         ),
         patch(
             "utils.allowance_reset.get_corporate_member_by_id",
-            AsyncMock(return_value={"id": "m1", "company_id": "c1"}),
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active"}),
         ),
         patch(
             "utils.allowance_reset.get_corporate_wallet_by_company",
@@ -69,7 +69,7 @@ async def test_reset_skips_rollover_flag():
         ),
         patch(
             "utils.allowance_reset.get_corporate_member_by_id",
-            AsyncMock(return_value={"id": "m2", "company_id": "c2"}),
+            AsyncMock(return_value={"id": "m2", "company_id": "c2", "status": "active"}),
         ),
         patch(
             "utils.allowance_reset.get_corporate_wallet_by_company",
@@ -89,3 +89,45 @@ async def test_reset_skips_rollover_flag():
         await run_allowance_reset_tick(now=date(2026, 4, 1))
     m_reset.assert_not_awaited()
     m_period.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reset_skips_removed_member():
+    """Gap #3: a removed member's allowance must not keep replenishing —
+    the loop previously only checked the member row existed, not that it
+    was still 'active', so a removed employee's budget reset to full every
+    period indefinitely."""
+    due = {
+        "id": "a3",
+        "member_id": "m3",
+        "type": "fixed_recurring",
+        "status": "active",
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "rollover": False,
+        "used": -100,
+    }
+    with (
+        patch(
+            "utils.allowance_reset.list_allowances_due_for_reset",
+            AsyncMock(return_value=[due]),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m3", "company_id": "c3", "status": "removed"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_wallet_by_company",
+            AsyncMock(),
+        ) as m_wallet,
+        patch("utils.allowance_reset.apply_reset", AsyncMock()) as m_reset,
+        patch("utils.allowance_reset.reset_allowance_period", AsyncMock()) as m_period,
+    ):
+        from utils.allowance_reset import run_allowance_reset_tick
+
+        processed = await run_allowance_reset_tick(now=date(2026, 4, 1))
+
+    assert processed == 0
+    m_wallet.assert_not_awaited()
+    m_reset.assert_not_awaited()
+    m_period.assert_not_awaited()

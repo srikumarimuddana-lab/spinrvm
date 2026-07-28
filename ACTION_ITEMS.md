@@ -623,25 +623,48 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   Directions calls (verified, not a real gap).
 
 ### B6. Measure Directions latency and re-tune the fare-estimate wait
-- [ ] **Status:** open — follow-up to the AI location/pricing incident fixes
-  (branch `claude/app-location-pricing-bugs-gxgk3z`)
-- **Why:** the billed distance basis must not depend on scheduler timing, so
-  `estimates._PRICING_ROUTE_WAIT_S` is derived as `DIRECTIONS_TIMEOUT_S + 0.5`.
-  That makes the Directions HTTP timeout the sole lever on worst-case estimate
-  latency, and CLAUDE.md pins fare estimate P95 at **300 ms**. The timeout was
-  set to 1.5 s (wait 2.0 s) on judgement, not data — nobody has measured the
-  real Directions latency distribution, so we don't know how much of the
-  road-route benefit a tighter timeout would give up.
-- **Action:** record a `spinr_fare_directions_duration_ms` histogram, then pick
-  the timeout from the observed p99 rather than by feel. If the p99 sits well
-  under 1.5 s, tighten both constants; if Directions is routinely slower than
-  the SLA allows, the honest fix is pre-warming/caching routes for common
-  origin-destination pairs, not a longer wait.
-- **Files:** `backend/routes/rides/_shared.py`, `backend/routes/rides/estimates.py`,
-  `backend/utils/metrics.py`
-- **Acceptance:** the timeout is justified by a recorded latency distribution,
-  and `test_pricing_wait_stays_within_the_estimate_latency_budget` reflects the
-  chosen ceiling.
+- [ ] **Status:** in progress (2026-07-28) — the measurement half is done;
+  the re-tuning half is genuinely blocked on live traffic this dev session
+  cannot produce, not on more code work.
+  - **Done:** `estimates.py`'s `_route_fetch()` now times every real
+    Directions call and records it to `spinr_fare_directions_duration_ms`
+    (new histogram, `utils/metrics.py`'s existing `observe`/`_metric_observe`
+    plumbing — no new metrics infrastructure needed). Recorded in a `finally`
+    block so a slow **or failed** call still shows up — a request that hits
+    `DIRECTIONS_TIMEOUT_S` and gets cut off is exactly the signal this metric
+    exists to surface, and a silently-dropped failure would hide the worst
+    tail instead of measuring it. This follows the exact convention
+    `utils/metrics.py`'s own `time_ms()` context manager documents ("Records
+    even when the block raises — a slow failure is still latency the SLA
+    dashboards must see").
+  - **Not done, and can't be from this session**: picking the timeout from
+    the observed p99. That requires real production request volume against
+    the live Google Directions API — this dev session has neither live
+    traffic nor Maps API access to generate a genuine distribution; a
+    synthetic/mocked one would defeat the entire point of B6 (replacing
+    judgement with data). `DIRECTIONS_TIMEOUT_S` / `_PRICING_ROUTE_WAIT_S`
+    are therefore **unchanged** — still 1.5 s / 2.0 s, still by judgement,
+    now with the instrumentation in place to replace that judgement once
+    `spinr_fare_directions_duration_ms` has accumulated real traffic.
+    `test_pricing_wait_stays_within_the_estimate_latency_budget` needed no
+    change since the ceiling itself didn't move.
+  - **Next step for whoever picks this back up**: let the metric collect for
+    a representative window in production, pull the p99 from
+    `/metrics` (or wherever it's scraped to), then decide per the original
+    Action text — tighten both constants if the p99 sits well under 1.5 s,
+    or move to pre-warming/caching common origin-destination pairs if
+    Directions is routinely slower than the SLA allows.
+- **Files:** `backend/routes/rides/estimates.py` (instrumentation),
+  `backend/tests/test_ride_estimate_branches.py` (2 new tests: metric
+  recorded on success, metric recorded even when the Directions call fails).
+  `backend/routes/rides/_shared.py` / `backend/utils/metrics.py` needed no
+  changes — the histogram plumbing already existed and `_shared.py`'s
+  `DIRECTIONS_TIMEOUT_S` wasn't touched (no data to justify moving it yet).
+- **Acceptance:** partially met — the latency distribution is now being
+  recorded (the prerequisite the original acceptance text assumed already
+  existed); the timeout itself is not yet re-justified by real data, and
+  can't be inside a single dev session. Re-open once
+  `spinr_fare_directions_duration_ms` has real production data to act on.
 
 ### B7. Give service areas a real locality so the geocode can be hard-filtered
 - [ ] **Status:** open — follow-up to the AI location/pricing incident fixes

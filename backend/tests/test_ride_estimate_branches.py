@@ -337,6 +337,94 @@ async def test_final_polyline_await_timeout_is_non_fatal():
     assert result["route_polyline"] is None
 
 
+# ── B6: Directions latency measurement ──────────────────────────────────────
+
+
+async def test_directions_latency_is_recorded_on_success():
+    """B6: spinr_fare_directions_duration_ms must observe every real
+    Directions call so the timeout constants (DIRECTIONS_TIMEOUT_S /
+    _PRICING_ROUTE_WAIT_S) can eventually be re-tuned from data instead of
+    judgement."""
+    observed = []
+
+    def _capture(name, value, *_args, **_kwargs):
+        if name == "spinr_fare_directions_duration_ms":
+            observed.append(value)
+
+    with (
+        patch("backend.routes.rides.estimates._deps.validate_ride_location"),
+        patch("backend.routes.rides.estimates._deps.get_fares_for_location", AsyncMock(return_value=_FARES)),
+        patch("backend.routes.rides.estimates._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.estimates._get_active_service_area_for_point", AsyncMock(return_value=None)),
+        patch(
+            "backend.routes.rides.estimates._deps.calculate_airport_fee",
+            AsyncMock(return_value={"airport_fee": 0.0}),
+        ),
+        patch(
+            "backend.routes.rides.estimates._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides.estimates._deps.sign_estimate_token", return_value="tok"),
+        patch(
+            "backend.routes.rides.estimates._deps.get_app_settings",
+            AsyncMock(return_value={"google_maps_api_key": "key-123", "fare_distance_basis": "road"}),
+        ),
+        patch("backend.routes.rides.estimates._deps._metric_inc"),
+        patch("backend.routes.rides.estimates._deps._metric_observe", side_effect=_capture),
+        patch(
+            "backend.routes.rides.estimates._fetch_directions_route",
+            AsyncMock(return_value={"polyline": [[52.1, -106.6]], "distance_km": 5.0, "duration_s": 600}),
+        ),
+    ):
+        mock_db.get_rows = AsyncMock(return_value=[])
+        await compute_ride_estimates(_body(), _RIDER_ID, include_polyline=True)
+
+    assert len(observed) == 1
+    assert observed[0] >= 0.0
+
+
+async def test_directions_latency_is_recorded_even_on_failure():
+    """A slow/failed Directions call is still latency the SLA dashboards
+    must see (same fail-open-but-observe convention as utils/metrics.time_ms) —
+    must not be skipped just because the route fetch itself fails-open to
+    haversine."""
+    observed = []
+
+    def _capture(name, value, *_args, **_kwargs):
+        if name == "spinr_fare_directions_duration_ms":
+            observed.append(value)
+
+    with (
+        patch("backend.routes.rides.estimates._deps.validate_ride_location"),
+        patch("backend.routes.rides.estimates._deps.get_fares_for_location", AsyncMock(return_value=_FARES)),
+        patch("backend.routes.rides.estimates._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.estimates._get_active_service_area_for_point", AsyncMock(return_value=None)),
+        patch(
+            "backend.routes.rides.estimates._deps.calculate_airport_fee",
+            AsyncMock(return_value={"airport_fee": 0.0}),
+        ),
+        patch(
+            "backend.routes.rides.estimates._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides.estimates._deps.sign_estimate_token", return_value="tok"),
+        patch(
+            "backend.routes.rides.estimates._deps.get_app_settings",
+            AsyncMock(return_value={"google_maps_api_key": "key-123", "fare_distance_basis": "road"}),
+        ),
+        patch("backend.routes.rides.estimates._deps._metric_inc"),
+        patch("backend.routes.rides.estimates._deps._metric_observe", side_effect=_capture),
+        patch(
+            "backend.routes.rides.estimates._fetch_directions_route",
+            AsyncMock(side_effect=RuntimeError("maps down")),
+        ),
+    ):
+        mock_db.get_rows = AsyncMock(return_value=[])
+        await compute_ride_estimates(_body(), _RIDER_ID, include_polyline=True)
+
+    assert len(observed) == 1
+
+
 # ── _track_price_search ──────────────────────────────────────────────────────
 
 

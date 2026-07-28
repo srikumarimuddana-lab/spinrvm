@@ -108,6 +108,10 @@ async def search_entities(
     # deliberately a free-text exact match rather than a shared enum that
     # would either over- or under-constrain one of the two tables.
     status: Optional[str] = Query(None, description="Exact match on status (e.g. active, suspended, banned)"),
+    # `service_area_id` only exists on `drivers` (not `users`) — see the
+    # blast-radius check in data_transfer_search.py's driver branch below;
+    # applied there only, same pattern as the rider branch's `role` merge.
+    service_area_id: Optional[str] = Query(None, description="Exact match on drivers.service_area_id"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
     admin: dict = Depends(get_admin_user),
@@ -125,6 +129,8 @@ async def search_entities(
         # user_id) — _build_filters(table="drivers") excludes it.
         table = "drivers"
         table_filters = _build_filters(q, date_from, date_to, status, table=table)
+        if service_area_id:
+            table_filters["service_area_id"] = service_area_id
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -132,7 +138,7 @@ async def search_entities(
             desc=True,
             limit=page_size,
             offset=offset,
-            columns="id,user_id,name,first_name,last_name,phone,created_at,license_plate,status",
+            columns="id,user_id,name,first_name,last_name,phone,created_at,license_plate,status,service_area_id",
         )
         rows = _with_full_name(rows or [])
         # UI (EntitySearchTable.tsx) reads `vehicle_plate` — the real

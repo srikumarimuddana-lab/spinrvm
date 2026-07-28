@@ -774,6 +774,31 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   about the geocode (met for `/addresses` and `/favorites`; `CreateRideRequest`
   still open — see deferred above).
 
+### B10. Compliance-module exports have no dual-approval gate (extends open AI-3)
+- [ ] **Status:** not started — tracked, not fixed. Documentation-only pass
+  done this session to fold the new surface into the existing open finding
+  rather than let it go unscoped.
+- **Why:** `docs/threat-model/admin-panel.md`'s AI-3 ("Admin exports all
+  users → offline PII leak") has been an OPEN P1 finding since the threat
+  model was written — no dual-approval workflow exists for large exports
+  anywhere in the admin panel. The Compliance & Tax Reporting module
+  (`routes/admin/compliance.py`, shipped PR #2650) added two more export
+  endpoints — `gst-pst-remittance` and `insurance-period-audit` — that
+  return up to `_ROW_LIMIT = 10000` rows each with no gate, silently
+  extending the same open risk. Flagged as gap G2 in
+  `reports/audits/2026-07-28-compliance-reporting-module-lifecycle-audit-v1.md`.
+- **Action:** when AI-3's shared dual-approval mechanism is built, wire
+  both compliance endpoints through it. Do not build a compliance-specific
+  one-off gate — that would fragment the control across the admin panel
+  instead of fixing it once.
+- **Files:** `backend/routes/admin/compliance.py` (endpoints to wire once
+  AI-3 ships), `docs/threat-model/admin-panel.md` (AI-3 row updated to
+  reference this scope).
+- **Acceptance:** not gating this item — acceptance is AI-3's own, once
+  implemented: any export > 1,000 rows (across the whole admin panel,
+  compliance included) requires a second admin's approval before the file
+  is generated.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

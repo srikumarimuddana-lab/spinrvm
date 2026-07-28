@@ -71,6 +71,11 @@ _CREDENTIAL_FIELDS = frozenset(
         # Driver LMS integration shared secret (x-api-key header) — the base
         # URL stays visible; only the key is the secret.
         "lms_api_key",
+        # Meta Conversions API access token. The dataset ids are identifiers
+        # left visible (same treatment as twilio_account_sid) — they're useless
+        # without the token, and operators need to read them back to confirm
+        # the rider/driver datasets aren't swapped. Only the token is masked.
+        "meta_capi_access_token",
     }
 )
 
@@ -80,7 +85,24 @@ _CREDENTIAL_FIELDS = frozenset(
 # only) and gain direct access to the LMS's driver PII — plus backend SSRF.
 # Changing either half of the pair therefore requires the same privilege as
 # the credential-reveal flow.
-_SUPER_ADMIN_ONLY_FIELDS = frozenset({"lms_api_base_url", "lms_api_key"})
+#
+# The Meta dataset ids + access token are the same shape of risk as the LMS
+# pair: they are a DESTINATION for user data. A settings-module admin who could
+# change them could point the conversions sender at a Meta dataset they
+# control, after which the backend exports hashed rider/driver identities (plus
+# client IP and user agent) to that destination. Changing the destination or
+# the token therefore requires the same privilege as revealing a credential.
+# meta_test_event_code is deliberately NOT here — it only routes events to the
+# Test Events tab and leaks nothing.
+_SUPER_ADMIN_ONLY_FIELDS = frozenset(
+    {
+        "lms_api_base_url",
+        "lms_api_key",
+        "meta_rider_dataset_id",
+        "meta_driver_dataset_id",
+        "meta_capi_access_token",
+    }
+)
 
 
 def _mask_credentials(settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -227,6 +249,15 @@ class SettingsUpdateRequest(BaseModel):
     # Changing either field is super_admin-only (_SUPER_ADMIN_ONLY_FIELDS).
     lms_api_base_url: Optional[str] = Field(default=None, max_length=300)
     lms_api_key: Optional[str] = None
+    # Meta (Facebook) Conversions API — utils/meta_capi.py. Dataset ids are
+    # plain identifiers; the access token is a credential (masked on GET, in
+    # _CREDENTIAL_FIELDS). meta_test_event_code routes events to the Events
+    # Manager "Test Events" tab — it must be cleared for live conversions to
+    # count, so it is deliberately editable here rather than env-only.
+    meta_rider_dataset_id: Optional[str] = Field(default=None, max_length=64)
+    meta_driver_dataset_id: Optional[str] = Field(default=None, max_length=64)
+    meta_capi_access_token: Optional[str] = None
+    meta_test_event_code: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("lms_api_base_url")
     @classmethod

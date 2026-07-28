@@ -329,6 +329,27 @@ async def prepare_completion_location(
     )
 
 
+def _fire_driver_activated(driver: dict, user: dict, ride: dict) -> None:
+    """Queue the Meta DriverActivated send. Never raises into completion.
+
+    Ride completion frees the driver, closes their insurance period, and
+    triggers settlement — none of which may be disturbed by a marketing
+    telemetry problem, so the send is spawned and every error is contained.
+    """
+    try:
+        from ...services import meta_conversions_service as _meta
+    except ImportError:
+        try:
+            from services import meta_conversions_service as _meta  # type: ignore
+        except ImportError:
+            logger.error("meta: conversions service unavailable — skipping DriverActivated", exc_info=True)
+            return
+    try:
+        spawn(_meta.send_driver_activated(driver, user, ride))
+    except Exception:
+        logger.error("meta: failed to queue DriverActivated for driver %s", driver.get("id"), exc_info=True)
+
+
 @router.post("/rides/{ride_id}/complete")
 async def complete_ride(
     ride_id: str,
@@ -806,10 +827,22 @@ async def complete_ride(
     # ride has just transitioned to `completed`, and the driver's row already
     # has is_online=True (a driver cannot be on an active trip while offline).
     # See update_driver_status docstring for the is_online/is_available invariant.
+    # Read BEFORE the increment below: this is the driver's completed-trip
+    # count prior to this ride, so 0 means the ride just finishing is their
+    # first. Reading it after would always be >= 1 and never fire.
+    _rides_before = int(driver.get("total_rides") or 0)
     await db_supabase.set_driver_available(driver["id"], available=True, total_rides_inc=1)
     # M-5: SGI insurance period audit — ride completed, driver returns to
     # period 1 (still online, no ride). No ride_id on period 1.
     await _deps.record_period_transition(driver["id"], 1)
+
+    # Meta DriverActivated — the driver's first completed trip. The count check
+    # is only a cheap filter to avoid a DB round-trip on every subsequent ride;
+    # correctness comes from the UNIQUE dedup_key inside the service, which is
+    # what actually makes this fire once per driver even if total_rides is
+    # reset, back-filled, or raced by two replicas.
+    if _rides_before == 0:
+        _fire_driver_activated(driver, current_user, ride)
 
     # Daily Spinr Pass allowance: if this completion used the driver's last ride
     # for the day, flip them offline now (DB-level, so dispatch stops offering)

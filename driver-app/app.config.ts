@@ -323,6 +323,27 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Apple-granted entitlement plus scene-delegate wiring not present here.
         // See docs/carplay-android-auto.md.
         '@logrocket/react-native',
+        // Meta (Facebook) app events. Same posture as the rider app: Advanced
+        // Matching is sent SERVER-side via the Conversions API, so no IDFA is
+        // collected, no advertiser tracking happens on-device, and
+        // NSPrivacyTracking above stays false with no ATT prompt.
+        //
+        // NOTE: this app has its own Meta App ID and its own app dataset. The
+        // separate dataset is the primary guard that keeps driver applications
+        // from being reported as rider acquisitions — do not point both apps
+        // at one App ID. See META_EVENTS.md.
+        [
+            'react-native-fbsdk-next',
+            {
+                appID: process.env.EXPO_PUBLIC_FB_APP_ID,
+                clientToken: process.env.EXPO_PUBLIC_FB_CLIENT_TOKEN,
+                displayName: APP_NAME,
+                scheme: `fb${process.env.EXPO_PUBLIC_FB_APP_ID ?? ''}`,
+                advertiserIDCollectionEnabled: false,
+                autoLogAppEventsEnabled: true,
+                isAutoInitEnabled: true,
+            },
+        ],
         // Sentry native crash capture + automatic sourcemap upload at EAS build
         // time. organization/project/url come from build env; the auth token is
         // read from SENTRY_AUTH_TOKEN by sentry-cli (never commit it). Runtime JS
@@ -346,5 +367,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,
+        // Driver app's OWN Meta app id — distinct from the rider app's.
+        fbAppId: process.env.EXPO_PUBLIC_FB_APP_ID,
+        fbClientToken: process.env.EXPO_PUBLIC_FB_CLIENT_TOKEN,
     }
 });

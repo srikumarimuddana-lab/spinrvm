@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { setInMemoryToken, getApiErrorMessage } from '@shared/api/client';
+import { logCompleteRegistration } from '@shared/analytics/meta';
 import { showToast } from '../hooks/useToast';
 import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -134,6 +135,10 @@ export default function OtpScreen() {
       const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
         phone: phoneNumber,
         code: code,
+        // Routes this signup to the DRIVER dataset. Both apps share this
+        // endpoint and the backend defaults to 'rider', so without this every
+        // driver signup would be reported as a rider acquisition.
+        client_app: 'driver',
       });
       if (!response.data) throw new Error('Empty response from auth server');
       const otpData = response.data as any;
@@ -150,6 +155,14 @@ export default function OtpScreen() {
           },
         } as any);
         return;
+      }
+
+      // Meta CompleteRegistration (content_category: driver_application) —
+      // only on a genuine new account. The event_id was minted by the backend,
+      // which sends its own copy with the same id so Meta collapses the pair
+      // into one conversion instead of counting two.
+      if (otpData.is_new_user) {
+        logCompleteRegistration({ eventId: otpData.meta_event_id, surface: 'driver' });
       }
 
       const { token, refresh_token, expires_in, user: userData } = otpData;

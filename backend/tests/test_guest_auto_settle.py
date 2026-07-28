@@ -44,7 +44,20 @@ def _patches(*, ride, claim_results=None, settle=None):
         _PS + "db_supabase.get_ride": AsyncMock(return_value=ride),
         _PS + "db_supabase.update_one": claim,
         _PS + "settle_corporate": settle
-        or AsyncMock(return_value=__import__("types").SimpleNamespace(success=True, error=None, status_code=200)),
+        # Mirror the real PaymentResult dataclass, not just the fields the
+        # assertions read. auto_settle_guest_corporate now also inspects
+        # already_paid/charged_amount to decide whether to emit a Meta
+        # Purchase conversion, and a stub thinner than the real return type
+        # fails as an AttributeError that looks like a production bug.
+        or AsyncMock(
+            return_value=__import__("types").SimpleNamespace(
+                success=True,
+                error=None,
+                status_code=200,
+                already_paid=False,
+                charged_amount="0.00",
+            )
+        ),
     }
 
 

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from pydantic.functional_serializers import PlainSerializer
@@ -55,6 +55,13 @@ class VerifyOTPRequest(BaseModel):
         description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
     )
     code: str = Field(..., min_length=4, max_length=4, pattern=r"^\d{4}$")
+    # Which app the signup came from. Both apps authenticate through this one
+    # endpoint, so without a hint every driver-app signup would also be
+    # reported to Meta as a rider acquisition. Optional and defaulting to
+    # "rider" so existing clients (and any build shipped before this field
+    # existed) keep working unchanged — it only affects conversion reporting,
+    # never auth behaviour or the role assigned to the new row.
+    client_app: Optional[Literal["rider", "driver"]] = "rider"
 
 
 class CreateProfileRequest(BaseModel):
@@ -114,6 +121,13 @@ class AuthResponse(BaseModel):
     refresh_expires_at: Optional[datetime] = None
     # CSRF double-submit token — echo back as X-CSRF-Token on state-changing requests
     csrf_token: Optional[str] = None
+    # Meta conversion de-duplication id, present only on a genuine signup
+    # (is_new_user=True) and only when Meta tracking is configured. The client
+    # fires its CompleteRegistration app event with this exact value so Meta
+    # collapses the app copy and the server copy into one conversion instead
+    # of counting two. Not a secret and not an auth credential — it is a
+    # random UUID with no meaning outside Events Manager.
+    meta_event_id: Optional[str] = None
 
 
 class AppSettings(BaseModel):
@@ -138,6 +152,28 @@ class AppSettings(BaseModel):
     # to pull driver training status into the admin dashboard.
     lms_api_base_url: str = ""
     lms_api_key: str = ""
+    # ── Meta (Facebook) Conversions API ──────────────────────────────────
+    # Server-side conversion tracking. Lives here rather than in .env for the
+    # same reason the Stripe/Twilio credentials do: the access token expires
+    # and gets rotated in Events Manager, and rotating it must not require a
+    # backend redeploy.
+    #
+    # Each mobile app has its own Meta App and therefore its own app dataset,
+    # which is what keeps the rider funnel and the driver funnel from being
+    # reported as one blended audience. Do NOT point either of these at the
+    # web pixel (793865613741737) — that dataset is for the website, and app
+    # events sent to it are rejected/misattributed.
+    #
+    # Empty string = tracking disabled. That is the correct, safe default and
+    # the state every call site must tolerate: with no token configured the
+    # senders log at debug and return, and no Spinr flow changes behaviour.
+    meta_rider_dataset_id: str = ""
+    meta_driver_dataset_id: str = ""
+    meta_capi_access_token: str = ""
+    # Non-empty routes ALL events to the Events Manager "Test Events" tab
+    # instead of live reporting. Set it to verify the integration, then clear
+    # it — leaving it populated means live conversions silently never count.
+    meta_test_event_code: str = ""
     driver_matching_algorithm: str = "nearest"
     min_driver_rating: float = 4.0
     search_radius_km: float = 10.0

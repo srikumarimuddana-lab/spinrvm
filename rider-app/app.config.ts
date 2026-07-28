@@ -221,6 +221,33 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // See plugin file comments for the full diagnosis.
         './plugins/withKspVersion',
         '@logrocket/react-native',
+        // Meta (Facebook) app events — install/activation attribution and the
+        // client half of CompleteRegistration. See shared/analytics/meta.ts
+        // and META_EVENTS.md.
+        //
+        // Advanced Matching is sent SERVER-side via the Conversions API, not
+        // from the device, so this integration collects no IDFA and does no
+        // advertiser tracking. That is why NSPrivacyTracking stays false above
+        // and there is no ATT prompt: both remain truthful. Enabling
+        // autoLogAppEvents here is what makes the App Promotion campaign able
+        // to attribute installs at all.
+        //
+        // Turning on advertiser tracking later is a STORE-SUBMISSION change,
+        // not a code change — it needs NSPrivacyTracking: true,
+        // NSUserTrackingUsageDescription, an ATT prompt, and re-answering the
+        // App Store Connect privacy questionnaire.
+        [
+            'react-native-fbsdk-next',
+            {
+                appID: process.env.EXPO_PUBLIC_FB_APP_ID,
+                clientToken: process.env.EXPO_PUBLIC_FB_CLIENT_TOKEN,
+                displayName: APP_NAME,
+                scheme: `fb${process.env.EXPO_PUBLIC_FB_APP_ID ?? ''}`,
+                advertiserIDCollectionEnabled: false,
+                autoLogAppEventsEnabled: true,
+                isAutoInitEnabled: true,
+            },
+        ],
         // Sentry native crash capture + automatic sourcemap upload at EAS build
         // time. organization/project/url come from build env; the auth token is
         // read from SENTRY_AUTH_TOKEN by sentry-cli (never commit it). Runtime JS
@@ -255,6 +282,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,
-        googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
+        googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
+        // Meta app id + client token. Both are client-side identifiers that
+        // ship inside the binary regardless and cannot read or write data on
+        // their own. The CAPI access token — which can — lives only in the
+        // backend's app_settings row and never reaches app code.
+        fbAppId: process.env.EXPO_PUBLIC_FB_APP_ID,
+        fbClientToken: process.env.EXPO_PUBLIC_FB_CLIENT_TOKEN
     }
 });

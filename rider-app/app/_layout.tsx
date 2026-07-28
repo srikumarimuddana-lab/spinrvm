@@ -58,6 +58,7 @@ try {
   ObserveMetrics = null;
 }
 import Analytics from '@shared/analytics';
+import { initMetaSdk } from '@shared/analytics/meta';
 import {
   initFirebaseServices,
   requestNotificationPermission,
@@ -131,6 +132,17 @@ initErrorReporting({
   dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
   surface: 'rider-app',
 });
+
+// Meta app events. Module scope, like error reporting above, so the SDK's
+// automatic install/activation event fires on the very first launch — that
+// event is what App Promotion campaigns attribute installs against.
+// No-ops when the Meta app id is unset or the native module isn't in the
+// build. Collects no IDFA and does no advertiser tracking: Advanced Matching
+// is server-side (see shared/analytics/meta.ts).
+initMetaSdk(
+  Constants.expoConfig?.extra?.fbAppId,
+  Constants.expoConfig?.extra?.fbClientToken,
+);
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const canUseNotifications = !isExpoGo && Platform.OS !== 'web';

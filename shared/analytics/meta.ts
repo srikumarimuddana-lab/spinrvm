@@ -106,12 +106,19 @@ export function logCompleteRegistration(params: {
   if (!eventId) return;
   if (!FBSDK?.AppEventsLogger || !initialized) return;
 
+  // The SDK's STANDARD completed-registration event
+  // (`fb_mobile_complete_registration`), never the literal string
+  // 'CompleteRegistration'. logEvent treats an arbitrary literal as a CUSTOM
+  // app event, which would not resolve to the same standard event as the
+  // backend's CAPI `CompleteRegistration` — breaking both registration
+  // optimisation and the cross-source de-duplication this event exists for.
+  const eventName: string = FBSDK.AppEventsLogger.AppEvents?.CompletedRegistration ?? 'fb_mobile_complete_registration';
+
   try {
-    FBSDK.AppEventsLogger.logEvent('CompleteRegistration', {
-      // Meta's de-duplication key for app events. Verify the exact parameter
-      // name in Events Manager → Test Events before going live: if the two
-      // copies show as two conversions rather than one, this key is what to
-      // check first.
+    FBSDK.AppEventsLogger.logEvent(eventName, {
+      // Meta's de-duplication key for app events. Verify in Events Manager →
+      // Test Events before going live: if the two copies show as two
+      // conversions rather than one, this key is what to check first.
       event_id: eventId,
       // Mirrors the server-side custom_data so reporting reads the same on
       // both copies.

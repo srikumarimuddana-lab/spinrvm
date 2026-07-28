@@ -3456,3 +3456,28 @@ export const adminCommitDataTransferImport = (file: File, batch?: string) => {
         body: fd,
     });
 };
+
+export type SgiFormType = "driver_details" | "vehicle_details";
+// PDF binary response — can't use the generic request<T>() helper (it always
+// calls res.json()). Mirrors fetchKybDocumentBlob's manual fetch + auth
+// header pattern, adding the CSRF header this call needs since it's a POST.
+export async function generateSgiForm(
+    formType: SgiFormType,
+    driverIds: string[],
+    action: "add" | "remove" | "change" = "add",
+): Promise<Blob> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/generate", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ form_type: formType, driver_ids: driverIds, action }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not generate form (${res.status})`);
+    }
+    return res.blob();
+}

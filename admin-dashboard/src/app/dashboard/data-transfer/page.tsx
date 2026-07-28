@@ -7,6 +7,7 @@ import { EntitySearchTable } from "@/components/data-transfer/EntitySearchTable"
 import { useEntitySelection } from "@/components/data-transfer/useEntitySelection";
 import { ExportTab } from "./ExportTab";
 import { ImportTab } from "./ImportTab";
+import { SgiFormsTab } from "./SgiFormsTab";
 
 /**
  * Data Transfer module — consolidates the former Bulk Import (drivers) and
@@ -93,9 +94,13 @@ export default function DataTransferPage() {
                     <Card>
                         <CardHeader>
                             <CardTitle>SGI Compliance Forms</CardTitle>
-                            <CardDescription>Coming soon.</CardDescription>
+                            <CardDescription>
+                                Fill the real SGI D00032/D00033 forms for the drivers selected in Search &amp; Select.
+                            </CardDescription>
                         </CardHeader>
-                        <CardContent />
+                        <CardContent>
+                            <SgiFormsTab selection={selection} />
+                        </CardContent>
                     </Card>
                 </TabsContent>
             </Tabs>

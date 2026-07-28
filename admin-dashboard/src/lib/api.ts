@@ -3483,6 +3483,58 @@ export async function generateSgiForm(
     return res.blob();
 }
 
+// ─── Compliance & Tax Reporting ────────────────────────────────────────
+
+export type ComplianceReportFormat = "pdf" | "csv" | "xlsx" | "docx";
+
+const COMPLIANCE_FILE_EXTENSIONS: Record<ComplianceReportFormat, string> = {
+    pdf: "pdf",
+    csv: "csv",
+    xlsx: "xlsx",
+    docx: "docx",
+};
+
+/** Shared GET-and-download for the Compliance & Tax Reporting endpoints —
+ *  both return a branded PDF/CSV/Excel/Word file, not JSON, so they use a
+ *  raw authed fetch like generateSgiForm rather than request<T>. */
+async function downloadComplianceReport(path: string, fallbackFilename: string): Promise<Blob> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = {};
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    const res = await fetch(path, { headers });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not generate report (${res.status})`);
+    }
+    return res.blob();
+}
+
+export async function downloadGstPstRemittance(
+    dateRange: string,
+    format: ComplianceReportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ date_range: dateRange, format });
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/gst-pst-remittance?${sp.toString()}`,
+        "gst_pst_remittance",
+    );
+    return { blob, filename: `gst_pst_remittance.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+export async function downloadInsurancePeriodAudit(
+    dateRange: string,
+    format: ComplianceReportFormat,
+    driverId?: string,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ date_range: dateRange, format });
+    if (driverId) sp.set("driver_id", driverId);
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/insurance-period-audit?${sp.toString()}`,
+        "insurance_period_audit",
+    );
+    return { blob, filename: `insurance_period_audit.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
 export interface DataTransferJob {
     id: string;
     requested_by_admin_id?: string;

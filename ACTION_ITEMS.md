@@ -128,38 +128,25 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     missed branches in the already-tested `_preauthorize_ride_card` /
     `_attach_preauthorized_hold` pre-auth helpers (fare-only retry
     requires-SCA, fare-only retry ops-failure degrade, PI-reuse-lookup
-    failure fail-open), **now 84.54%** (PR #2559) after 10 more tests
+    failure fail-open), **now 84.54%** after adding 10 more tests
     (`tests/test_create_ride_remaining_branches.py`) covering `create_ride`'s
-    remaining guard clauses (service_areas fetch failure, insufficient
-    wallet balance, corporate policy check, work_profile corporate block,
-    SCA first-leg early return, idempotency-key replay, calculate_all_fees
-    failure). Meets the 80% target.
-  - `routes/rides/queries.py`: was 69.2%, **now 92.20%** (PR #2544) — see
-    the PR for detail; meets the 80% target.
-  - `routes/rides/estimates.py`: was 71.0%, **now 93.99%** (PR #2552) after
-    adding 12 tests (`tests/test_ride_estimate_branches.py`) covering
-    `compute_ride_estimates`'s geofence guards (pickup/dropoff/stop
-    `OUTSIDE_SERVICE_AREA`), malformed driver-row skip reasons, the
-    vehicle-cascade upgrade fallback, `calculate_all_fees` failure → 503,
-    the Directions route fetch/await fail-open paths, and
-    `_track_price_search`. Meets the 80% target.
-  - `routes/rides/cancellation.py`: was 71.0%, **now 95.06%** after adding
-    13 tests (new `tests/test_ride_cancellation_branches.py`) covering
-    `cancel_ride_rider`'s request-body JSON-parse-failure fallback to the
-    query `reason`, the atomic-claim-lost 409 (driver started the trip in
-    the race window), the pre-auth-release fail-open (both the
-    Stripe-call-fails and the succeeds-and-marks-`auth_status=released`
-    branches), a partial wallet-fee collection (charges less than the full
-    fee, logs the shortfall), the outer fee-computation exception fail-open
-    (settings/area/fee-calc failure must still release + notify the
-    driver), the attribution-column write's PGRST204 retry-minimal
-    fallback, the post-write verification re-read's own exception path
-    (still correctly raises the "did not persist" 500), and the batch
-    pending-`ride_offers` cleanup loop (cancel + release + notify each
-    offered driver, plus its own fail-open); and `cancel_scheduled_ride`'s
-    attribution-column fallback, the pre-dispatch-claim-lost-to-a-race
-    fall-through to the full `cancel_ride_rider` path, and the
-    claim-lost-and-now-terminal → 400 branch. Meets the 80% target.
+    remaining guard clauses: the `service_areas` fetch failure → 503,
+    insufficient wallet balance → 400, the pre-dispatch corporate policy
+    check (both the 403-with-reasons failure and the passing path's
+    `corporate_member_id` resolution), the `work_profile` corporate
+    pre-dispatch block (no active membership / policy violation / allowance
+    too low to cover the 1.5× buffer — all → 400 with a `reason` code), the
+    SCA two-step first-leg early return (hands back `client_secret` without
+    ever inserting a ride — the state machine must stay clean until the
+    client re-books with the confirmed hold), the DB-level idempotency-key
+    replay early return, and `calculate_all_fees` failing mid-booking → 503.
+    Meets the 80% target.
+  - `routes/rides/queries.py`: was 69.2%, **now 92.20%** (PR #2544) — meets
+    the 80% target.
+  - `routes/rides/estimates.py`: was 71.0%, **now 93.99%** (PR #2552) — meets
+    the 80% target.
+  - `routes/rides/cancellation.py`: was 71.0%, **now 95.06%** (PR #2555) —
+    meets the 80% target.
 - **Why:** CLAUDE.md mandates ≥90% for `routes/payments.py` + `services/fare_service.py`
   and ≥80% for `routes/rides.py` (now the `routes/rides/` package) +
   `services/dispatch_service.py`; the global floor in `backend/pytest.ini` is

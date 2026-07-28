@@ -83,6 +83,25 @@ class TestAddresses:
             r = client.delete("/api/v1/addresses/missing")
         assert r.status_code == 404
 
+    def test_create_address_rejects_mismatched_coordinate(self, client):
+        # B9: a confident geocode mismatch must block the save with 400,
+        # not be persisted verbatim (Glide Crescent incident).
+        db = _mock_db()
+        with (
+            patch("routes.addresses.db_supabase", db),
+            patch(
+                "routes.addresses.verify_address_matches_coordinate",
+                AsyncMock(return_value=(False, "'456 Office Blvd' geocodes 12.3 km from the supplied location")),
+            ),
+        ):
+            r = client.post(
+                "/api/v1/addresses",
+                json={"name": "Work", "address": "456 Office Blvd", "lat": 52.2, "lng": -106.1, "icon": "work"},
+            )
+        assert r.status_code == 400
+        assert "don't match" in r.json()["detail"]
+        db.insert_one.assert_not_called()
+
 
 # ──────────────────────────────── favorites ──────────────────────────────────
 
@@ -164,6 +183,51 @@ class TestFavorites:
         with patch("routes.favorites.db", fdb):
             r = client.delete("/api/v1/favorites/fav_1")
         assert r.status_code == 404
+
+    def test_save_favorite_rejects_mismatched_dropoff(self, client):
+        # B9: same confident-mismatch guard as POST /addresses, applied to
+        # both pickup and dropoff — also closes the save_favorite_from_ride
+        # "poisoned ride laundered into a permanent favorite" gap since that
+        # route delegates to this same handler.
+        fdb = _mock_fav_db(get_rows=AsyncMock(return_value=[]))
+
+        async def fake_verify(address, lat, lng):
+            if address == SAVE_PAYLOAD["dropoff_address"]:
+                return False, f"'{address}' geocodes 8.0 km from the supplied location"
+            return True, None
+
+        with (
+            patch("routes.favorites.db", fdb),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(side_effect=fake_verify)),
+        ):
+            r = client.post("/api/v1/favorites", json=SAVE_PAYLOAD)
+        assert r.status_code == 400
+        assert "Dropoff" in r.json()["detail"]
+        fdb.insert_one.assert_not_called()
+
+    def test_save_favorite_dedupe_checks_both_axes(self, client):
+        # B9 regression: the old dedupe compared latitude only, so a route
+        # sharing pickup/dropoff latitude but with a completely different
+        # longitude (opposite side of the city) was wrongly treated as a
+        # duplicate. Same latitudes as FAV_ROW, very different longitudes.
+        same_lat_different_lng = {
+            "name": "Different Route",
+            "pickup_address": "999 Other St",
+            "pickup_lat": 52.1,
+            "pickup_lng": -105.0,
+            "dropoff_address": "Some Other Place",
+            "dropoff_lat": 52.17,
+            "dropoff_lng": -105.5,
+        }
+        fdb = _mock_fav_db(get_rows=AsyncMock(return_value=[FAV_ROW]))
+        with (
+            patch("routes.favorites.db", fdb),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+        ):
+            r = client.post("/api/v1/favorites", json=same_lat_different_lng)
+        assert r.status_code == 200
+        assert r.json()["id"] != "fav_1"
+        fdb.insert_one.assert_called_once()
 
 
 # ──────────────────────────────── safety ─────────────────────────────────────

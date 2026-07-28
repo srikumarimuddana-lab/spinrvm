@@ -24,9 +24,12 @@ from typing import Any, Optional
 
 try:
     from ... import db_supabase
+    from ...routes.drivers._shared import _vault_encrypt
     from . import bundle_document_uploader
 except ImportError:
     import db_supabase
+
+    from . import bundle_document_uploader
 
 
 IMPORT_SOURCE = "data_transfer_bundle_import"
@@ -215,6 +218,18 @@ async def commit_plan(plan: ImportPlan) -> dict[str, int]:
                 "old_driver_id": entity.entity_id,
                 "source": IMPORT_SOURCE,
             }
+            # The bundle carries license_number as plaintext (decrypted at
+            # export time — see entity_export_service.gather_entity_bundle).
+            # Re-encrypt it against THIS environment's own vault before
+            # writing; a vault.secrets UUID minted in the source project is
+            # meaningless here. Fail-closed by design (_vault_encrypt raises
+            # 503 rather than storing plaintext PII) — an import that can't
+            # encrypt the licence number should fail loudly, not silently
+            # write it unprotected.
+            if driver_record.get("license_number"):
+                driver_record["license_number"] = await _vault_encrypt(
+                    str(driver_record["license_number"]), "license_number"
+                )
             await db_supabase.insert_one("drivers", driver_record)
             created_drivers += 1
 

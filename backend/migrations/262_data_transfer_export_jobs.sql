@@ -6,8 +6,8 @@
 -- (migration 200), which tracks single-user PIPEDA self-export ZIPs — this
 -- table tracks admin-to-admin, multi-entity, full-fidelity bundles instead.
 --
--- Rollback (NOT a plain git revert — the export route and purge loop both
--- reference this table once wired in migration 262+ / Phase 1.2-1.3):
+-- Rollback: NOT a plain git revert — the export route and purge loop both
+-- reference this table once wired in Phase 1.2-1.3. Sequence:
 --   1. Remove the insert_one("data_transfer_export_jobs", ...) call in
 --      routes/admin/data_transfer_export.py and the purge sweep added to
 --      utils/data_export_purge.py.
@@ -52,11 +52,21 @@ COMMENT ON TABLE data_transfer_export_jobs IS
     'expired ZIPs from the data-transfer-exports Storage bucket and the Jobs '
     'tab can render history. Backend/service-role only.';
 
--- Same rationale as data_export_objects (migration 200): this table only
--- ever holds entity_ids/doc-type filters, not the underlying PII itself, but
--- it references user data and is backend/service-role-only — no client
--- query exists. RLS enabled with NO public policies: anon/authenticated keys
--- get nothing; service role bypasses RLS by design.
+-- This table references user data and is backend/service-role-only — no
+-- client (anon/authenticated) query exists or should ever be added, since
+-- entity_ids/doc_type_filter describe which users' data left the system.
+-- Explicit per-action service_role policies (not FOR ALL) per the RLS
+-- convention in backend/migrations/CLAUDE.md; anon/authenticated get no
+-- policy at all, so they're denied by RLS's default-deny.
 ALTER TABLE data_transfer_export_jobs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY data_transfer_export_jobs_service_select
+    ON data_transfer_export_jobs FOR SELECT TO service_role USING (true);
+CREATE POLICY data_transfer_export_jobs_service_insert
+    ON data_transfer_export_jobs FOR INSERT TO service_role WITH CHECK (true);
+CREATE POLICY data_transfer_export_jobs_service_update
+    ON data_transfer_export_jobs FOR UPDATE TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY data_transfer_export_jobs_service_delete
+    ON data_transfer_export_jobs FOR DELETE TO service_role USING (true);
 
 COMMIT;

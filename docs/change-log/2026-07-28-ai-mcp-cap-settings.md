@@ -21,7 +21,7 @@ The cap commit added the read without the settings plumbing; Spinr settings are 
 
 ## 3. Fix / remediation
 
-Full plumbing following the 145/208/211 pattern: `AppSettings.ai_mcp_daily_tool_cap: int = 0` (0 = unset → fall back), `SettingsUpdateRequest` field (`ge=0, le=5000`), migration `264_settings_add_ai_mcp_cap.sql` (additive `ADD COLUMN IF NOT EXISTS ... DEFAULT 0`), and an admin Settings field next to the MCP switch ("0 = use the chat daily-message cap").
+Full plumbing following the 145/208/211 pattern (numbered 267 after a rebase onto newer `main`, which had taken 264–266): `AppSettings.ai_mcp_daily_tool_cap: int = 0` (0 = unset → fall back), `SettingsUpdateRequest` field (`ge=0, le=5000`), migration `267_settings_add_ai_mcp_cap.sql` (additive `ADD COLUMN IF NOT EXISTS ... DEFAULT 0`), and an admin Settings field next to the MCP switch ("0 = use the chat daily-message cap").
 
 ## 4. Risk & impact on existing functionality
 
@@ -39,7 +39,7 @@ Internal-admin only: one new numeric field in Settings → AI section.
 |---|---|---|
 | `backend/schemas.py` | `ai_mcp_daily_tool_cap: int = 0` | Typed default |
 | `backend/routes/admin/settings.py` | PATCH field `ge=0, le=5000` | Admin can set it |
-| `backend/migrations/264_settings_add_ai_mcp_cap.sql` | Additive column, default 0 | Persistence |
+| `backend/migrations/267_settings_add_ai_mcp_cap.sql` | Additive column, default 0 | Persistence |
 | `admin-dashboard/src/app/dashboard/settings/page.tsx` | Numeric input beside MCP switch | UI |
 | `backend/tests/test_ai_admin_settings.py` | Round-trip + bounds test | Regression pin |
 

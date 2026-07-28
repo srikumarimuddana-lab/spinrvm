@@ -25,7 +25,6 @@ import { Platform, NativeModules } from 'react-native';
 import * as Device from 'expo-device';
 import * as Application from 'expo-application';
 import api from '@shared/api/client';
-import { captureException } from '@shared/services/errorReporting';
 
 export type IntegrityResult = {
   attested: boolean;
@@ -144,11 +143,15 @@ export async function attestDeviceIntegrity(): Promise<IntegrityResult> {
       riskTier: response.data.risk_tier as IntegrityResult['riskTier'],
     };
   } catch (error) {
+    // Deliberately fail-open — the driver stays online — which makes this a
+    // recovered degradation, not a user-visible error, so it does not go to
+    // Sentry (CLAUDE.md observability rules). A backend outage would otherwise
+    // emit one event per driver per go-online. The `attestation_unavailable`
+    // reason is returned to the caller and is the signal to act on.
+    //
+    // Standing gap: there is no client-side metric sink in driver-app, so this
+    // fail-open is currently only observable via the returned reason.
     console.warn('[DeviceIntegrity] Attestation failed, allowing with flag:', error);
-    captureException(
-      error instanceof Error ? error : new Error(String(error)),
-      { domain: 'safety', surface: 'driver-app', attestation: 'failed_with_allow' },
-    );
     return { attested: true, reason: 'attestation_unavailable' };
   }
 }

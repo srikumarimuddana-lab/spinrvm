@@ -143,6 +143,14 @@ export async function attestDeviceIntegrity(): Promise<IntegrityResult> {
       riskTier: response.data.risk_tier as IntegrityResult['riskTier'],
     };
   } catch (error) {
+    // Deliberately fail-open — the driver stays online — which makes this a
+    // recovered degradation, not a user-visible error, so it does not go to
+    // Sentry (CLAUDE.md observability rules). A backend outage would otherwise
+    // emit one event per driver per go-online. The `attestation_unavailable`
+    // reason is returned to the caller and is the signal to act on.
+    //
+    // Standing gap: there is no client-side metric sink in driver-app, so this
+    // fail-open is currently only observable via the returned reason.
     console.warn('[DeviceIntegrity] Attestation failed, allowing with flag:', error);
     return { attested: true, reason: 'attestation_unavailable' };
   }

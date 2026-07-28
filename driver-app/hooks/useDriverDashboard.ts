@@ -39,6 +39,7 @@ import {
   type TripLocationBatchAck,
   type TripLocationBatchRequest,
 } from '../utils/tripLocationRecorder';
+import { captureException } from '@shared/services/errorReporting';
 
 const { height } = Dimensions.get('window');
 // Each tier doubles; last-tier jitter must be large enough to disperse a
@@ -1142,10 +1143,24 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
         }
         handleWSMessageRef.current(data);
-      } catch { }
+      } catch (e) {
+        // Not sent to Sentry: this catch spans every downstream message
+        // handler, and the server pings every 10s, so a regression in any
+        // handler would emit hundreds of events per driver per hour. A
+        // warning keeps it visible without turning a handler bug into a
+        // quota incident.
+        console.warn('[WS] message handler failed:', e);
+      }
     };
 
-    ws.onerror = (_error) => {
+    ws.onerror = () => {
+      // CLAUDE.md: "Degraded-but-recovered → warning log + metric (never
+      // Sentry — noise)". A failed connect attempt is followed by an
+      // automatic reconnect, and RN's error event carries no usable detail
+      // (it is never an Error instance), so a capture here would be ~10
+      // identical, information-free events per outage. Sentry reporting
+      // lives on the reconnect-exhausted path below, which is user-visible.
+      console.warn('[WS] socket error; reconnect will follow');
     };
 
     ws.onclose = (event) => {
@@ -1162,6 +1177,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
           setConnectionState('disconnected');
           setWsError('Unable to connect to server. Pull down to retry or toggle offline/online.');
+          captureException(
+            new Error(`WebSocket reconnect exhausted after ${MAX_RECONNECT_ATTEMPTS} attempts`),
+            { domain: 'dispatch', ws_event: 'reconnect_exhausted', close_code: String(event.code) },
+          );
           return;
         }
         setConnectionState('reconnecting');

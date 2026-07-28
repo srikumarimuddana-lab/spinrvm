@@ -1,45 +1,29 @@
-import { NativeModules } from 'react-native';
+import { captureException } from '@shared/services/errorReporting';
 
 /**
- * Report a non-fatal error to Firebase Crashlytics.
- * Call this in catch blocks that recover gracefully so the error is
- * visible in the Crashlytics dashboard without crashing the app.
+ * Report a non-fatal error to crash analytics.
  *
- * In Expo Go the @react-native-firebase native module isn't linked, so
- * we detect that and no-op instead of throwing at module load. Same gating
- * pattern as shared/services/firebase.ts — checking NativeModules before
- * require() avoids the synchronous NativeEventEmitter crash triggered by
- * side effects in the firebase/crashlytics module scope.
+ * Thin delegate to the shared errorReporting facade, which routes to Sentry
+ * when a DSN is configured and falls back to Firebase Crashlytics otherwise.
+ * Keeping the driver app's own Crashlytics write here as well would double-
+ * record every non-fatal on the (likely) no-DSN path: both gate on
+ * `NativeModules.RNFBAppModule`, and the modular `getCrashlytics()` handle and
+ * the facade's namespaced one address the same native singleton.
+ *
+ * This wrapper is kept rather than inlined so the ~14 existing call sites stay
+ * unchanged and the Expo-Go/native gating lives in exactly one place.
  */
-const hasFirebaseNative = !!NativeModules.RNFBAppModule;
-// Whole module namespace (not `.default`) so the v22+ modular named exports
-// (getCrashlytics, setAttribute, recordError) are available — the namespaced
-// crashlytics() API is deprecated and logs a warning on every call.
-let crashlyticsApi: typeof import('@react-native-firebase/crashlytics') | null = null;
-if (hasFirebaseNative) {
-  try {
-    crashlyticsApi = require('@react-native-firebase/crashlytics');
-  } catch (e) {
-    console.log('[Crashlytics] module load error:', e);
-  }
-}
-
 export function recordNonFatal(
   error: unknown,
   context?: Record<string, string>
 ): void {
-  if (!crashlyticsApi) return;
-  try {
-    const crashlytics = crashlyticsApi.getCrashlytics();
-    const err = error instanceof Error ? error : new Error(String(error));
-    if (context) {
-      for (const [key, value] of Object.entries(context)) {
-        crashlyticsApi.setAttribute(crashlytics, key, value);
-      }
-    }
-    crashlyticsApi.recordError(crashlytics, err);
-  } catch {
-    // Never let Crashlytics reporting itself throw — it would shadow the
-    // original error and confuse callers.
-  }
+  // Default the CLAUDE.md-mandated tags. Callers predating the Sentry routing
+  // pass domain-less context (`{ store, action }`, `{ module, reason }`); without
+  // a default those events would land in Sentry untagged and be unfilterable.
+  // An explicit domain from the caller always wins. `env` is set by Sentry init.
+  // captureException swallows its own failures by contract, so no try/catch here.
+  captureException(
+    error instanceof Error ? error : new Error(String(error)),
+    { domain: 'drivers', surface: 'driver-app', ...context },
+  );
 }

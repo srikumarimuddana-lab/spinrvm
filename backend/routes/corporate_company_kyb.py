@@ -193,13 +193,16 @@ async def kyb_submit(
             raise HTTPException(status_code=503, detail="Could not reopen verification. Please try again.")
         resubmitted = True
 
-    await log_admin_action(
-        {"id": guard["user"]["id"], "role": "user"},
-        action="corporate_kyb_submitted",
-        resource="corporate_accounts",
-        resource_id=company_id,
-        details={"resubmitted_after_rejection": resubmitted},
-    )
+    try:
+        await log_admin_action(
+            {"id": guard["user"]["id"], "role": "user"},
+            action="corporate_kyb_submitted",
+            resource="corporate_accounts",
+            resource_id=company_id,
+            details={"resubmitted_after_rejection": resubmitted},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_kyb_submitted %s", company_id, exc_info=True)
 
     return {
         "success": True,

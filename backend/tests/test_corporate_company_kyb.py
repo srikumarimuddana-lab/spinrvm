@@ -231,6 +231,27 @@ def test_submit_happy_path_persists_document(test_client, rider_override):
     m_status.assert_not_awaited()  # initial submit doesn't touch status
 
 
+def test_submit_audit_log_failure_does_not_fail_request(test_client, rider_override):
+    # Issue #2740: an audit-log write failure must not turn an otherwise-
+    # successful KYB submission into a client-visible error — the document
+    # was already persisted and the status already flipped by this point.
+    updated = _company(kyb_document_url="kyb/c1/doc.pdf", kyb_submitted_at="2026-07-10T00:00:00Z")
+    with (
+        _admin_guard(),
+        patch("routes.corporate_company_kyb.get_corporate_account_by_id", AsyncMock(return_value=_company())),
+        patch("routes.corporate_company_kyb.kyb_object_exists", AsyncMock(return_value=True)),
+        patch("routes.corporate_company_kyb.set_kyb_document", AsyncMock(return_value=updated)),
+        patch("routes.corporate_company_kyb.update_corporate_account_status", AsyncMock()) as m_status,
+        patch("routes.corporate_company_kyb.log_admin_action", AsyncMock(side_effect=RuntimeError("db down"))),
+    ):
+        resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc.pdf"})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["state"] == "under_review"
+    assert data["resubmitted"] is False
+    m_status.assert_not_awaited()
+
+
 def test_submit_after_rejection_reenters_queue(test_client, rider_override):
     # New tested transition: suspended(kyb_last_decision=rejected) →
     # pending_verification on resubmit.

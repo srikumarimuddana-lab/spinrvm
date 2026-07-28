@@ -203,6 +203,70 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   follow-up PR; can be closed opportunistically alongside a future change
   to the file.
 
+### A1b. Backend test-coverage floor for the rest of the codebase (scoped, not started)
+- [ ] **Status:** open — scoping only, no work started. Raised 2026-07-27 when
+  the user asked why A1 only touched money/dispatch paths rather than the
+  whole backend. Answer: A1's mandate (CLAUDE.md) is explicitly ≥90% for
+  payments/fare and ≥80% for rides/dispatch — not a whole-codebase target.
+  The global CI floor (`backend/pytest.ini`) is only 60%, and everything
+  outside A1's file list currently sits there or below. This item scopes
+  what a deliberate *next* push would look like, split into two tracks so
+  a future session can pick either without re-deriving priority order.
+- **Why:** the same logic that justified A1 (higher-risk code deserves a
+  higher bar) applies to other domains this session never touched —
+  corporate billing, safety/SOS, auth/RLS, and admin actions all have
+  real-world consequences (money, safety, compliance) if a regression ships
+  untested. Full-backend uniform 80% is not the recommendation — see
+  Approach below for why targeted beats uniform.
+- **Files:** none yet — this is a scoping entry. When picked up, follow the
+  same pattern as A1: one file/PR at a time, ≤3 files per subtask, measure
+  real `coverage.xml` numbers before writing tests (files are frequently
+  already better- or worse-covered than assumed).
+- **Approach — Track 1 (money/safety/compliance-adjacent, recommend first):**
+  measure current coverage for, in priority order:
+  1. `backend/services/corporate_wallet_service.py`,
+     `corporate_membership_service.py`, `corporate_policy_service.py` —
+     the corporate billing layer (money-adjacent, and likely to be touched
+     by the corporate-module work the user is starting in a separate
+     session next — coordinate so this doesn't collide with in-flight
+     corporate feature work; check with the user before starting if a
+     corporate-module session is already active).
+  2. `backend/utils/insurance_periods.py`, safety check-in / SOS-related
+     routes (see `.claude/context/domain-safety.md`) — regulatory +
+     rider/driver safety consequence if untested code has a latent bug.
+  3. Auth/RLS-adjacent code: JWT handling, OTP verification
+     (`backend/utils/crypto.py` is already tracked at ≥90% target per
+     CLAUDE.md but should be re-verified), refresh-token rotation
+     (`backend/utils/refresh_tokens.py`).
+  4. `backend/routes/admin/` (15+ admin-only endpoints) — admin actions are
+     audited but not necessarily tested; a broken admin endpoint can corrupt
+     production data at scale (e.g. bulk driver approval, wallet
+     adjustments).
+- **Approach — Track 2 (breadth, lower urgency):** everything else currently
+  below the 60% CI floor or in the 60-80% band with no explicit target —
+  utils/services not touched by Track 1. Lower priority; only worth
+  picking up once Track 1 is done or if a specific file becomes a live
+  incident source.
+- **Explicitly NOT recommended:** raising the CI floor to 80% uniformly
+  across the whole backend in one move. Many low-risk files (CSV export
+  helpers, LMS integration, one-off admin scripts) would cost
+  disproportionate effort for coverage that doesn't reduce real risk —
+  same diminishing-returns logic that stopped A1's `matching.py` pass at
+  79.4% rather than chasing the last 0.6%.
+- **Also explicitly out of scope for this item:** frontend test coverage
+  (rider-app/driver-app/admin-dashboard — React Native / Next.js, not
+  measured or covered by anything in A1/A1b) and a correctness audit of
+  fare/pricing *values* (e.g. whether Economy vs. XL vehicle-type pricing
+  in `fare_configs` is intentional — that data lives in the live DB via the
+  admin dashboard's Service Areas → Vehicle Pricing editor, not in this
+  repo, and needs a live DB read to answer, not a coverage pass). Both are
+  real, separate asks the user raised in the same session as A1b's
+  scoping — track them as their own items if/when the user wants them
+  picked up, don't fold them into A1b.
+- **Acceptance:** not yet defined — pick a track and file list with the
+  user before starting; don't assume "cover everything to 80%" is the
+  goal without confirming, per the "explicitly NOT recommended" note above.
+
 ### A2. Post-deploy smoke test in CI
 - [ ] **Status:** open
 - **Why:** deploys to Fly/Railway succeed or fail silently; a bad deploy is currently

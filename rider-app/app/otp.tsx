@@ -17,6 +17,7 @@ import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import Analytics from '@shared/analytics';
+import { logCompleteRegistration } from '@shared/analytics/meta';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -107,6 +108,10 @@ export default function OtpScreen() {
       const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
         phone: phoneNumber,
         code,
+        // Tells the backend which funnel this signup belongs to, so a rider
+        // signup is reported to the rider dataset. Both apps share this
+        // endpoint; without the hint the backend defaults to 'rider'.
+        client_app: 'rider',
       });
       if (!response.data) throw new Error('Empty response from auth server');
       const data = response.data as any;
@@ -131,6 +136,16 @@ export default function OtpScreen() {
         await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);
       }
       Analytics.otpVerified();
+
+      // Meta CompleteRegistration — only on a genuine new account, and only
+      // here, at the success callback where the account actually exists. The
+      // event_id was minted by the backend, which sends its own copy of this
+      // event with the same id; Meta collapses the pair into one conversion.
+      // Absent when the signup is a returning login or when Meta tracking is
+      // not configured, in which case logCompleteRegistration no-ops.
+      if (data.is_new_user) {
+        logCompleteRegistration({ eventId: data.meta_event_id, surface: 'rider' });
+      }
 
       if (userData) {
         useAuthStore.setState({ user: userData, isInitialized: true, isLoading: false });

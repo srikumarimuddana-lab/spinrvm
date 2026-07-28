@@ -268,7 +268,18 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
        already covered every branch once measured in isolation (`pytest tests/ -k allowance`);
        the previously-tracked 39% figure was stale/measured differently, no new tests were
        needed; see `docs/change-log/2026-07-28-corporate-allowance-service-coverage-80.md`)
-     - `routes/corporate_company_bookings.py` — 38%
+     - `routes/corporate_company_bookings.py` — was 38%, now **87%** (test-only
+       PR `claude/corporate-company-bookings-coverage`, 2026-07-28): added
+       `backend/tests/test_corporate_company_bookings_coverage.py` (31 tests
+       incl. the pre-existing `test_corporate_sections.py`) covering
+       `create_booking`, `list_bookings` (tenancy scoping, filters, N+1-free
+       batch joins), `cancel_booking` (authz + tenancy + missing-guest paths),
+       `booking_fare_estimate`, `_require_company_active`, and the
+       `_booking_row` OTP-redaction projection. Remaining 13% is dual-import
+       `except ImportError` fallback lines (structurally only one branch runs
+       per process) and section-CRUD duplicate/404 paths already exercised by
+       `test_corporate_sections.py` — diminishing returns, see
+       `docs/change-log/2026-07-28-corporate-company-bookings-coverage-80.md`.
      - `routes/corporate_signup.py` — **89%** (was 32-33%; closed
        2026-07-28, see `docs/change-log/2026-07-28-corporate-signup-coverage-80.md`).
        Remaining 7 uncovered lines are the dual-import `ImportError` fallback

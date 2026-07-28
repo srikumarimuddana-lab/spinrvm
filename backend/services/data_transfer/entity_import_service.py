@@ -60,12 +60,22 @@ class ImportPlan:
     entities: list[BundleEntity] = field(default_factory=list)
     # entity_id -> "new" | "existing_match" | "conflict"
     resolutions: dict[str, str] = field(default_factory=dict)
+    # entity_id -> the matched row from _find_existing_match (drivers row for
+    # driver entities, users row for rider entities) — only set when
+    # resolutions[entity_id] == "existing_match". Used by commit_plan's
+    # update path to know which row to update instead of re-deriving the
+    # match query a second time.
+    existing_rows: dict[str, dict[str, Any]] = field(default_factory=dict)
     warnings: list[ImportReportItem] = field(default_factory=list)
     errors: list[ImportReportItem] = field(default_factory=list)
 
     @property
     def to_create(self) -> list[BundleEntity]:
         return [e for e in self.entities if self.resolutions.get(e.entity_id) == "new"]
+
+    @property
+    def to_update(self) -> list[BundleEntity]:
+        return [e for e in self.entities if self.resolutions.get(e.entity_id) == "existing_match"]
 
     @property
     def can_commit(self) -> bool:
@@ -160,9 +170,12 @@ async def build_plan(entities: list[BundleEntity]) -> ImportPlan:
         existing = await _find_existing_match(entity)
         if existing:
             plan.resolutions[entity.entity_id] = "existing_match"
+            plan.existing_rows[entity.entity_id] = existing
             plan.warnings.append(
                 ImportReportItem(
-                    entity.entity_id, "resume", "Already imported from this bundle source — will be skipped"
+                    entity.entity_id,
+                    "resume",
+                    "Already imported from this bundle source — will be skipped unless update_existing is set",
                 )
             )
             continue
@@ -185,7 +198,23 @@ async def build_plan(entities: list[BundleEntity]) -> ImportPlan:
     return plan
 
 
-async def commit_plan(plan: ImportPlan) -> dict[str, int]:
+_UPDATE_EXCLUDED_USER_FIELDS = ("id", "created_at", "updated_at", "phone")
+_UPDATE_EXCLUDED_DRIVER_FIELDS = ("id", "created_at", "updated_at", "user_id", "legacy_import_metadata")
+
+
+async def _encrypt_license_number(driver_record: dict[str, Any]) -> None:
+    # The bundle carries license_number as plaintext (decrypted at export
+    # time — see entity_export_service.gather_entity_bundle). Re-encrypt it
+    # against THIS environment's own vault before writing; a vault.secrets
+    # UUID minted in the source project is meaningless here. Fail-closed by
+    # design (_vault_encrypt raises 503 rather than storing plaintext PII) —
+    # an import that can't encrypt the licence number should fail loudly,
+    # not silently write it unprotected.
+    if driver_record.get("license_number"):
+        driver_record["license_number"] = await _vault_encrypt(str(driver_record["license_number"]), "license_number")
+
+
+async def commit_plan(plan: ImportPlan, update_existing: bool = False) -> dict[str, int]:
     """Insert the 'new' entities' user + driver profile rows, then replay
     their documents and insurance-period audit trail under the freshly
     created driver_id. A document-upload or insurance-period-replay failure
@@ -193,12 +222,24 @@ async def commit_plan(plan: ImportPlan) -> dict[str, int]:
     it does not roll back that entity's already-created profile, since a
     driver record with a metadata gap is recoverable via manual re-upload,
     while rolling back a profile the operator is actively relying on is not
-    an improvement."""
+    an improvement.
+
+    When ``update_existing`` is True, entities resolved as "existing_match"
+    (already imported from this same bundle source, per
+    ``legacy_import_metadata``) are updated in place instead of skipped:
+    profile fields are overwritten from the bundle's current values (id,
+    timestamps, and phone — the match key — are never touched), and
+    documents/insurance-periods are replayed only for entries not already
+    present on the target row (see bundle_document_uploader's dedup checks)
+    so a repeat "update" import doesn't pile up duplicate rows. Default is
+    False (skip) — unchanged behavior for any existing caller."""
     if not plan.can_commit:
         raise ValueError("commit_plan called on a plan with unresolved errors")
 
     created_users = 0
     created_drivers = 0
+    updated_users = 0
+    updated_drivers = 0
     documents_replayed = 0
     insurance_periods_replayed = 0
     for entity in plan.to_create:
@@ -219,18 +260,7 @@ async def commit_plan(plan: ImportPlan) -> dict[str, int]:
                 "old_driver_id": entity.entity_id,
                 "source": IMPORT_SOURCE,
             }
-            # The bundle carries license_number as plaintext (decrypted at
-            # export time — see entity_export_service.gather_entity_bundle).
-            # Re-encrypt it against THIS environment's own vault before
-            # writing; a vault.secrets UUID minted in the source project is
-            # meaningless here. Fail-closed by design (_vault_encrypt raises
-            # 503 rather than storing plaintext PII) — an import that can't
-            # encrypt the licence number should fail loudly, not silently
-            # write it unprotected.
-            if driver_record.get("license_number"):
-                driver_record["license_number"] = await _vault_encrypt(
-                    str(driver_record["license_number"]), "license_number"
-                )
+            await _encrypt_license_number(driver_record)
             await db_supabase.insert_one("drivers", driver_record)
             created_drivers += 1
 
@@ -241,9 +271,48 @@ async def commit_plan(plan: ImportPlan) -> dict[str, int]:
                 new_driver_id, entity.driver_insurance_periods
             )
 
+    if update_existing:
+        for entity in plan.to_update:
+            existing = plan.existing_rows.get(entity.entity_id)
+            if not existing:
+                continue
+
+            if entity.entity_type == "driver":
+                driver_id = existing["id"]
+                user_id = existing.get("user_id")
+                if user_id and entity.user:
+                    user_updates = {k: v for k, v in entity.user.items() if k not in _UPDATE_EXCLUDED_USER_FIELDS}
+                    if user_updates:
+                        await db_supabase.update_one("users", {"id": user_id}, user_updates)
+                        updated_users += 1
+                if entity.driver_profile:
+                    driver_updates = {
+                        k: v for k, v in entity.driver_profile.items() if k not in _UPDATE_EXCLUDED_DRIVER_FIELDS
+                    }
+                    await _encrypt_license_number(driver_updates)
+                    if driver_updates:
+                        await db_supabase.update_one("drivers", {"id": driver_id}, driver_updates)
+                        updated_drivers += 1
+
+                documents_replayed += await bundle_document_uploader.replay_new_documents(
+                    driver_id, entity.documents, entity.document_files
+                )
+                insurance_periods_replayed += await bundle_document_uploader.replay_new_insurance_periods(
+                    driver_id, entity.driver_insurance_periods
+                )
+            else:
+                user_id = existing.get("id")
+                if user_id and entity.user:
+                    user_updates = {k: v for k, v in entity.user.items() if k not in _UPDATE_EXCLUDED_USER_FIELDS}
+                    if user_updates:
+                        await db_supabase.update_one("users", {"id": user_id}, user_updates)
+                        updated_users += 1
+
     return {
         "created_users": created_users,
         "created_drivers": created_drivers,
+        "updated_users": updated_users,
+        "updated_drivers": updated_drivers,
         "documents_replayed": documents_replayed,
         "insurance_periods_replayed": insurance_periods_replayed,
     }

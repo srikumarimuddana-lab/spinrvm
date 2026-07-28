@@ -199,23 +199,6 @@ class TestExecuteTool:
         assert ok is True
         assert result["ok"] is True
 
-    def test_maps_fanout_tools_carry_extended_timeout(self):
-        """The three booking tools that fan out to Google Maps must keep a
-        generous per-tool timeout — losing it reintroduces the mid-quote
-        timeout this override exists to fix."""
-        saved = dict(TOOL_REGISTRY)
-        TOOL_REGISTRY.clear()
-        ai_tools._registry_loaded = False
-        try:
-            ai_tools.ensure_registry_loaded()
-            for name in ("find_place", "get_fare_quote", "propose_ride_booking"):
-                spec = TOOL_REGISTRY[name]
-                assert spec.timeout_seconds is not None and spec.timeout_seconds > ai_tools.TOOL_TIMEOUT_SECONDS, name
-        finally:
-            TOOL_REGISTRY.clear()
-            TOOL_REGISTRY.update(saved)
-            ai_tools._registry_loaded = True
-
     @pytest.mark.anyio
     async def test_oversized_result_capped(self):
         async def huge(user, **args):

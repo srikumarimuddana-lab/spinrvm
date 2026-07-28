@@ -57,6 +57,22 @@ async def list_data_transfer_jobs(
     return {"jobs": jobs}
 
 
+@router.get("/data-transfer/jobs/{job_id}")
+async def get_data_transfer_job(
+    job_id: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """Single-job status lookup — used by the Export tab to poll a job it
+    just kicked off (the export route is backgrounded and returns only a
+    job_id; the caller needs somewhere to check pending -> completed/failed)."""
+    rows = await db_supabase.get_rows("data_transfer_export_jobs", {"id": job_id}, limit=1, columns=_LIST_COLUMNS)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = rows[0]
+    entity_ids = job.get("entity_ids") or []
+    return {**job, "entity_count": len(entity_ids)}
+
+
 @router.get("/data-transfer/jobs/{job_id}/download")
 async def regenerate_job_download_link(
     job_id: str,

@@ -85,7 +85,12 @@ async function pollJobUntilDone(jobId: string): Promise<{ status: "completed" | 
 export function ExportTab({ selection }: { selection: EntitySelectionState }) {
     const { toast } = useToast();
     const [format, setFormat] = useState<DataTransferExportFormat>("zip");
-    const [docTypes, setDocTypes] = useState<Set<string>>(new Set(DOC_TYPE_OPTIONS));
+    // Background Check is the default-checked document type; everything else
+    // starts unchecked. An admin exporting a full profile for another
+    // environment usually wants a specific, deliberate document set rather
+    // than everything by default -- Background Check is the one most
+    // consistently needed for a regulator/insurer-facing transfer.
+    const [docTypes, setDocTypes] = useState<Set<string>>(new Set(["background_check"]));
     const [reason, setReason] = useState("");
     const [includeRideGps, setIncludeRideGps] = useState(true);
     const [includeDocumentBytes, setIncludeDocumentBytes] = useState(true);

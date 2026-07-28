@@ -3373,6 +3373,7 @@ export interface DataTransferEntityRow {
     created_at?: string;
     role?: string;
     vehicle_plate?: string;
+    status?: string;
 }
 export interface DataTransferSearchResult {
     rows: DataTransferEntityRow[];
@@ -3385,6 +3386,10 @@ export interface DataTransferSearchParams {
     entityType?: "driver" | "rider";
     dateFrom?: string;
     dateTo?: string;
+    // Exact match on drivers.status/users.status -- free-text, not a shared
+    // enum, since the two tables' status vocabularies aren't identical (see
+    // backend/routes/admin/data_transfer_search.py's status param comment).
+    status?: string;
     page?: number;
     pageSize?: number;
 }
@@ -3394,6 +3399,7 @@ export const searchDataTransferEntities = (params: DataTransferSearchParams) => 
     if (params.entityType) qs.set("entity_type", params.entityType);
     if (params.dateFrom) qs.set("date_from", params.dateFrom);
     if (params.dateTo) qs.set("date_to", params.dateTo);
+    if (params.status) qs.set("status", params.status);
     qs.set("page", String(params.page ?? 1));
     qs.set("page_size", String(params.pageSize ?? 50));
     return request<DataTransferSearchResult>(`/api/admin/data-transfer/search?${qs.toString()}`);

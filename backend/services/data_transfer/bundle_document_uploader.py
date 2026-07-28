@@ -138,3 +138,44 @@ async def replay_insurance_periods(new_driver_id: str, periods: list[dict[str, A
                 "data-transfer import: failed to replay insurance period for driver_id=%s", new_driver_id, exc_info=True
             )
     return replayed
+
+
+async def replay_new_documents(
+    driver_id: str, documents: list[dict[str, Any]], document_files: dict[str, bytes]
+) -> int:
+    """Update-on-reimport variant of replay_documents: skips any bundle
+    document whose (document_type, side) already has a row on driver_id, so
+    re-importing the same bundle in update mode doesn't pile up duplicate
+    driver_documents rows every run. Does not update/replace an existing
+    document's content — a changed document must be re-uploaded through the
+    normal driver document flow, not through this bulk-replay path."""
+    existing = await db_supabase.get_rows("driver_documents", {"driver_id": driver_id})
+    existing_keys = {(row.get("document_type"), row.get("side")) for row in existing or []}
+
+    new_documents = [doc for doc in documents if (doc.get("document_type"), doc.get("side")) not in existing_keys]
+    skipped = len(documents) - len(new_documents)
+    if skipped:
+        logger.info(
+            "data-transfer import update: skipped %d already-present document(s) for driver_id=%s", skipped, driver_id
+        )
+    return await replay_documents(driver_id, new_documents, document_files)
+
+
+async def replay_new_insurance_periods(driver_id: str, periods: list[dict[str, Any]]) -> int:
+    """Update-on-reimport variant of replay_insurance_periods: skips any
+    bundle period whose (period, started_at) already has a row on
+    driver_id. Still append-only (never updates/deletes an existing row,
+    per the regulatory audit convention) — this only prevents re-inserting
+    the exact same period on a repeat "update" import."""
+    existing = await db_supabase.get_rows("driver_insurance_periods", {"driver_id": driver_id})
+    existing_keys = {(row.get("period"), row.get("started_at")) for row in existing or []}
+
+    new_periods = [p for p in periods if (p.get("period"), p.get("started_at")) not in existing_keys]
+    skipped = len(periods) - len(new_periods)
+    if skipped:
+        logger.info(
+            "data-transfer import update: skipped %d already-present insurance period(s) for driver_id=%s",
+            skipped,
+            driver_id,
+        )
+    return await replay_insurance_periods(driver_id, new_periods)

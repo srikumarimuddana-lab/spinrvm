@@ -3,7 +3,9 @@
 Two endpoints mirror the existing driver/rider bulk-import contract
 (``driver_import.py``): ``/validate`` parses + dry-runs, no writes;
 ``/commit`` re-parses + re-validates the same ZIP and, only if clean,
-creates the new rows.
+creates the new rows (and, with ``update_existing=true``, syncs profile
+fields + replays new documents/insurance-periods on already-imported rows
+instead of only ever skipping them).
 """
 
 import logging
@@ -72,11 +74,17 @@ async def validate_bundle_import(
 async def commit_bundle_import(
     bundle_zip: UploadFile = File(...),
     batch: Optional[str] = Form(None),
+    update_existing: bool = Form(False),
     admin: dict = Depends(get_admin_user),
 ):
     """Re-validate the same ZIP and, only if clean, create the new user +
-    driver profile rows. Document re-upload and insurance-period replay are
-    wired in a follow-up subtask (bundle_document_uploader)."""
+    driver profile rows. Entities already imported from this bundle source
+    (resolution "existing_match") are skipped by default; set
+    update_existing=true to instead sync their profile fields and replay
+    any documents/insurance-periods not already present (see
+    entity_import_service.commit_plan's update path) — the operator's way
+    to pull a refreshed export from the source environment into an
+    already-onboarded record instead of only ever creating net-new ones."""
     raw = await _read_zip_bytes(bundle_zip)
     try:
         entities = import_svc.parse_bundle_zip(raw)
@@ -88,7 +96,7 @@ async def commit_bundle_import(
         return {**_report(plan), "committed": False}
 
     try:
-        counts = await import_svc.commit_plan(plan)
+        counts = await import_svc.commit_plan(plan, update_existing=update_existing)
     except Exception as e:
         logger.error("data-transfer bundle import commit failed", exc_info=True)
         observability.record_import_result("failed")
@@ -110,6 +118,6 @@ async def commit_bundle_import(
         "data_transfer_import",
         "users",
         batch or "",
-        counts,
+        {**counts, "update_existing": update_existing},
     )
     return {**_report(plan), "committed": True, **counts}

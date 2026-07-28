@@ -6,6 +6,7 @@ monkeypatched, mirroring test_driver_import_service.py's pattern.
 import io
 import json
 import zipfile
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -193,6 +194,8 @@ async def test_commit_plan_creates_rows_reencrypts_license_and_replays_documents
     assert counts == {
         "created_users": 1,
         "created_drivers": 1,
+        "updated_users": 0,
+        "updated_drivers": 0,
         "documents_replayed": 1,
         "insurance_periods_replayed": 1,
     }
@@ -204,3 +207,101 @@ async def test_commit_plan_creates_rows_reencrypts_license_and_replays_documents
     # the same freshly-generated driver_id must be used for both replay calls
     assert replay_calls["documents"][0] == inserted["drivers"][0]["id"]
     assert replay_calls["insurance_periods"][0] == inserted["drivers"][0]["id"]
+
+
+@pytest.mark.anyio
+async def test_build_plan_stores_existing_row_for_matched_entity(monkeypatch):
+    _install_fake_db(
+        monkeypatch,
+        legacy_matches={
+            "3065551234": [
+                {
+                    "id": "drv-existing",
+                    "user_id": "user-existing",
+                    "legacy_import_metadata": {"old_driver_id": "d1", "source": svc.IMPORT_SOURCE},
+                }
+            ]
+        },
+    )
+    entities = svc.parse_bundle_zip(_make_zip({"driver_d1": _raw_driver()}))
+    plan = await svc.build_plan(entities)
+
+    assert plan.existing_rows["d1"]["id"] == "drv-existing"
+    assert len(plan.to_update) == 1
+
+
+@pytest.mark.anyio
+async def test_commit_plan_skips_existing_match_when_update_existing_false(monkeypatch):
+    updated = []
+    monkeypatch.setattr(svc.db_supabase, "update_one", AsyncMock(side_effect=lambda *a: updated.append(a)))
+
+    entities = svc.parse_bundle_zip(_make_zip({"driver_d1": _raw_driver()}))
+    plan = svc.ImportPlan(
+        entities=entities,
+        resolutions={"d1": "existing_match"},
+        existing_rows={"d1": {"id": "drv-existing", "user_id": "user-existing"}},
+    )
+
+    counts = await svc.commit_plan(plan, update_existing=False)
+
+    assert counts["updated_users"] == 0
+    assert counts["updated_drivers"] == 0
+    assert updated == []
+
+
+@pytest.mark.anyio
+async def test_commit_plan_updates_existing_driver_and_replays_only_new_items(monkeypatch):
+    updates = {"users": [], "drivers": []}
+
+    async def fake_update_one(table, filters, values):
+        updates[table].append((filters, values))
+        return values
+
+    async def fake_vault_encrypt(value, hint=""):
+        return f"REENCRYPTED[{value}]"
+
+    replay_calls = {}
+
+    async def fake_replay_new_documents(driver_id, documents, document_files):
+        replay_calls["documents"] = (driver_id, documents)
+        return len(documents)
+
+    async def fake_replay_new_insurance_periods(driver_id, periods):
+        replay_calls["insurance_periods"] = (driver_id, periods)
+        return len(periods)
+
+    monkeypatch.setattr(svc.db_supabase, "update_one", fake_update_one)
+    monkeypatch.setattr(svc, "_vault_encrypt", fake_vault_encrypt)
+    monkeypatch.setattr(svc.bundle_document_uploader, "replay_new_documents", fake_replay_new_documents)
+    monkeypatch.setattr(svc.bundle_document_uploader, "replay_new_insurance_periods", fake_replay_new_insurance_periods)
+
+    entities = svc.parse_bundle_zip(_make_zip({"driver_d1": _raw_driver()}))
+    plan = svc.ImportPlan(
+        entities=entities,
+        resolutions={"d1": "existing_match"},
+        existing_rows={"d1": {"id": "drv-existing", "user_id": "user-existing"}},
+    )
+
+    counts = await svc.commit_plan(plan, update_existing=True)
+
+    assert counts["updated_users"] == 1
+    assert counts["updated_drivers"] == 1
+    assert counts["created_users"] == 0
+    assert counts["created_drivers"] == 0
+
+    user_filters, user_values = updates["users"][0]
+    assert user_filters == {"id": "user-existing"}
+    assert "phone" not in user_values  # the match key must never be overwritten
+    assert "id" not in user_values
+
+    driver_filters, driver_values = updates["drivers"][0]
+    assert driver_filters == {"id": "drv-existing"}
+    # license_number must be re-encrypted against THIS environment's vault,
+    # never written as the bundle's plaintext, on the update path too
+    assert driver_values["license_number"] == "REENCRYPTED[PLAINTEXT-123]"
+    assert "id" not in driver_values
+    assert "user_id" not in driver_values
+    assert "legacy_import_metadata" not in driver_values
+
+    assert replay_calls["documents"][0] == "drv-existing"
+    assert replay_calls["insurance_periods"][0] == "drv-existing"

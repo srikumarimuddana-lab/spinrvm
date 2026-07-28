@@ -18,7 +18,7 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...routes.drivers._shared import _decrypt_driver_pii
-    from ...services.data_transfer import sgi_field_maps, sgi_form_filler
+    from ...services.data_transfer import observability, sgi_field_maps, sgi_form_filler
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
@@ -64,15 +64,31 @@ async def generate_sgi_form(
     # needs the real licence number on the form, not the encrypted token.
     driver_rows = [await _decrypt_driver_pii(d) for d in driver_rows]
 
-    if body.form_type == "driver_details":
-        row_dicts = [sgi_field_maps.driver_to_driver_details_row(d, action=body.action) for d in driver_rows]
-        pdf_bytes = sgi_form_filler.fill_driver_details_form(row_dicts)
-        filename = "SGI_D00032_Driver_Details.pdf"
-    else:
-        row_dicts = [sgi_field_maps.driver_to_vehicle_details_row(d, action=body.action) for d in driver_rows]
-        pdf_bytes = sgi_form_filler.fill_vehicle_details_form(row_dicts)
-        filename = "SGI_D00033_Vehicle_Details.pdf"
+    try:
+        if body.form_type == "driver_details":
+            row_dicts = [sgi_field_maps.driver_to_driver_details_row(d, action=body.action) for d in driver_rows]
+            pdf_bytes = sgi_form_filler.fill_driver_details_form(row_dicts)
+            filename = "SGI_D00032_Driver_Details.pdf"
+        else:
+            row_dicts = [sgi_field_maps.driver_to_vehicle_details_row(d, action=body.action) for d in driver_rows]
+            pdf_bytes = sgi_form_filler.fill_vehicle_details_form(row_dicts)
+            filename = "SGI_D00033_Vehicle_Details.pdf"
+    except Exception as e:
+        logger.error("data-transfer sgi-forms: fill failed for form_type=%s", body.form_type, exc_info=True)
+        observability.record_sgi_form_result(body.form_type, "failed")
+        observability.capture_failure(
+            "SGI form generation failed",
+            "data_transfer_sgi_form_failed",
+            {
+                "admin_id": admin.get("id"),
+                "form_type": body.form_type,
+                "driver_count": len(driver_rows),
+                "error": str(e),
+            },
+        )
+        raise HTTPException(status_code=502, detail="Could not generate the SGI form") from e
 
+    observability.record_sgi_form_result(body.form_type, "completed")
     await log_admin_action(
         admin,
         "sgi_form_generated",

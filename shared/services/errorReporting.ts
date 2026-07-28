@@ -23,6 +23,16 @@ import { Platform, NativeModules } from 'react-native';
 // Expo Go/web/test or when the app never provides a DSN.
 let _sentry: any = null;
 
+// Matches numbers that look like GPS coordinates: ±dd.dddd+ or ±ddd.dddd+
+// (4+ decimal places distinguishes real coordinates from display values like
+// prices or distances). Captures the sign so negative longitudes are handled.
+const COORD_PATTERN = /-?\d{1,3}\.\d{4,}/g;
+
+/** @internal Exported for testing only. */
+export function _scrubCoords(text: string): string {
+  return text.replace(COORD_PATTERN, '[REDACTED_COORD]');
+}
+
 export interface ErrorReportingConfig {
   dsn?: string;
   /** CLAUDE.md Sentry tag: rider-app | driver-app */
@@ -48,10 +58,16 @@ export function initErrorReporting(config: ErrorReportingConfig): void {
       attachViewHierarchy: false,
       tracesSampleRate: 0.2,
       initialScope: { tags: { surface: config.surface } },
-      // Console breadcrumbs routinely carry GPS coordinates and ride
-      // payloads from debug logging — drop the whole category.
+      // Console breadcrumbs are kept for crash diagnosis (they carry the
+      // [BgLocation], [Geofence], [WS] trail leading to a crash). GPS
+      // coordinates that may leak through debug logging are scrubbed to
+      // stay PIPEDA-compliant — any number that looks like a lat/lng
+      // (±dd.dddd+ or ±ddd.dddd+) is replaced with [REDACTED_COORD].
       beforeBreadcrumb(breadcrumb: any) {
-        return breadcrumb?.category === 'console' ? null : breadcrumb;
+        if (breadcrumb?.category === 'console' && breadcrumb.message) {
+          breadcrumb.message = _scrubCoords(breadcrumb.message);
+        }
+        return breadcrumb;
       },
       // Defence in depth: events may only carry the user id.
       beforeSend(event: any) {

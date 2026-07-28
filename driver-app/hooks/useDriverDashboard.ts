@@ -39,6 +39,7 @@ import {
   type TripLocationBatchAck,
   type TripLocationBatchRequest,
 } from '../utils/tripLocationRecorder';
+import { captureException } from '@shared/services/errorReporting';
 
 const { height } = Dimensions.get('window');
 // Each tier doubles; last-tier jitter must be large enough to disperse a
@@ -1142,10 +1143,19 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
         }
         handleWSMessageRef.current(data);
-      } catch { }
+      } catch (e) {
+        captureException(
+          e instanceof Error ? e : new Error(String(e)),
+          { domain: 'dispatch', ws_event: 'onmessage' },
+        );
+      }
     };
 
-    ws.onerror = (_error) => {
+    ws.onerror = (wsError) => {
+      captureException(
+        wsError instanceof Error ? wsError : new Error('WebSocket error'),
+        { domain: 'dispatch', ws_event: 'onerror' },
+      );
     };
 
     ws.onclose = (event) => {
@@ -1162,6 +1172,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
           setConnectionState('disconnected');
           setWsError('Unable to connect to server. Pull down to retry or toggle offline/online.');
+          captureException(
+            new Error(`WebSocket reconnect exhausted after ${MAX_RECONNECT_ATTEMPTS} attempts`),
+            { domain: 'dispatch', ws_event: 'reconnect_exhausted', close_code: String(event.code) },
+          );
           return;
         }
         setConnectionState('reconnecting');

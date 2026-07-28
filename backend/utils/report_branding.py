@@ -179,6 +179,62 @@ def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: 
             ws.cell(row=r, column=col, value=_sanitize_csv_cell(row.get(name)))
 
 
+def new_branded_document(title: str, subtitle: str = ""):
+    """Return a python-docx Document with a Spinr-branded title block
+    already written: a heading in the brand color, an optional grey
+    subtitle line, then a blank paragraph spacer. Caller appends its own
+    content (paragraphs, tables) after this returns.
+
+    Only for report_type entries registered as "branded" — fixed_format
+    reports never go through python-docx branding.
+    """
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+
+    brand_color = RGBColor(*BRAND_RGB)
+
+    doc = Document()
+    heading = doc.add_heading(title, level=1)
+    for run in heading.runs:
+        run.font.color.rgb = brand_color
+        run.font.name = BRAND_FONT
+
+    if subtitle:
+        sub = doc.add_paragraph(subtitle)
+        sub.runs[0].font.size = Pt(10)
+        sub.runs[0].font.color.rgb = RGBColor(0x8C, 0x8C, 0x8C)
+
+    doc.add_paragraph("")
+    return doc
+
+
+def add_branded_table(doc, fieldnames: list[str], rows: list[dict]) -> None:
+    """Append a table to a python-docx Document: header row (brand-color
+    shaded cells, bold white text) followed by one row per dict in `rows`.
+    Cell values are not CSV-sanitized (Word has no formula-injection risk
+    the way CSV/Excel do when opened by a spreadsheet app)."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from docx.shared import RGBColor
+
+    table = doc.add_table(rows=1, cols=len(fieldnames))
+    table.style = "Table Grid"
+    header_cells = table.rows[0].cells
+    for col, name in enumerate(fieldnames):
+        header_cells[col].text = name
+        run = header_cells[col].paragraphs[0].runs[0]
+        run.font.bold = True
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), BRAND_HEX)
+        header_cells[col]._tc.get_or_add_tcPr().append(shading)
+
+    for row in rows:
+        cells = table.add_row().cells
+        for col, name in enumerate(fieldnames):
+            cells[col].text = str(row.get(name, "") if row.get(name) is not None else "")
+
+
 def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> None:
     """Draw a small grey footer with province/regulator letterhead info
     (from the `provinces` table, e.g. {"name": "Saskatchewan",

@@ -1,4 +1,4 @@
--- 264_settings_add_ai_mcp_cap.sql
+-- 267_settings_add_ai_mcp_cap.sql
 --
 -- Adds the settings column for the /mcp per-user daily tool-call cap
 -- (backend/ai/mcp_server.py::_over_mcp_daily_cap), the counterpart to the

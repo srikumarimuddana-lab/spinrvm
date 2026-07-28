@@ -63,6 +63,11 @@ try:
 except ImportError:
     from services.corporate_suspension_service import cancel_pre_pickup_rides_for_company  # type: ignore[no-redef]
 
+try:
+    from ..services.corporate_wallet_winddown_service import refund_wallet_balance_on_close
+except ImportError:
+    from services.corporate_wallet_winddown_service import refund_wallet_balance_on_close  # type: ignore[no-redef]
+
 logger = logging.getLogger(__name__)
 
 # Alias for backward compatibility
@@ -746,6 +751,35 @@ async def change_company_status(
                     exc_info=True,
                 )
 
+    # Wallet wind-down: 'closed' is terminal (see the 409 check above — a
+    # closed account can never reopen), so any balance left in the master
+    # wallet has no other path back to the company. 'suspended' is
+    # reversible and deliberately untouched here — only auto-topup is
+    # disabled for it, above.
+    winddown_result = None
+    if transition.status == CompanyStatus.CLOSED:
+        settings = await get_app_settings()
+        if settings.get("corporate_close_refunds_wallet_balance", False):
+            try:
+                winddown_result = await refund_wallet_balance_on_close(
+                    company_id=normalized_id,
+                    stripe_customer_id=row.get("stripe_customer_id"),
+                    actor_user_id=str(current_admin.get("id") or ""),
+                )
+                if winddown_result.get("stripe_error") or winddown_result.get("unrefundable_amount", "0.00") != "0.00":
+                    logger.error(
+                        "Corporate wallet close wind-down incomplete for company %s: %s",
+                        normalized_id,
+                        winddown_result,
+                    )
+            except Exception:
+                logger.error(
+                    "Corporate wallet close wind-down failed for company %s",
+                    normalized_id,
+                    exc_info=True,
+                )
+                winddown_result = {"skipped_reason": "unhandled_exception"}
+
     try:
         await log_admin_action(
             admin=current_admin,
@@ -757,6 +791,7 @@ async def change_company_status(
                 "new_status": transition.status.value,
                 "reason": transition.reason if hasattr(transition, "reason") else None,
                 "pre_pickup_rides_cancelled": cancelled_rides,
+                "wallet_winddown": winddown_result,
             },
         )
     except Exception as _ae:

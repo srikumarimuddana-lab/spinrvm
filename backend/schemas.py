@@ -156,6 +156,13 @@ class AppSettings(BaseModel):
     # true because the un-flagged behavior (do nothing) was a bug, not the
     # intended design; flip to false only to roll back without a redeploy.
     corporate_suspend_cancels_pre_pickup_rides: bool = True
+    # When true, closing a corporate account (terminal — cannot reopen)
+    # refunds any remaining master-wallet balance to the company's Stripe
+    # payment method(s), best-effort against original top-up PaymentIntents.
+    # Defaults to false: this moves real money via Stripe and must be
+    # verified in staging before being switched on for live closures — see
+    # services/corporate_wallet_winddown_service.py.
+    corporate_close_refunds_wallet_balance: bool = False
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no

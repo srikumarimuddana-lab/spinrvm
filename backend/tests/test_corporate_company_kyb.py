@@ -81,6 +81,15 @@ def test_get_kyb_state_rejected_includes_note_never_path(test_client, rider_over
     assert "secret.pdf" not in resp.text  # storage key never leaks
 
 
+def test_get_kyb_state_404_on_missing_company(test_client, rider_override):
+    with (
+        _admin_guard(),
+        patch("routes.corporate_company_kyb.get_corporate_account_by_id", AsyncMock(return_value=None)),
+    ):
+        resp = test_client.get("/company/c1/kyb")
+    assert resp.status_code == 404
+
+
 def test_get_kyb_state_requires_admin_role(test_client, rider_override):
     with patch(
         "dependencies.company_guard.list_active_memberships_for_user",
@@ -111,6 +120,42 @@ def test_upload_url_staff_suspended_409(test_client, rider_override):
     assert resp.status_code == 409
 
 
+def test_upload_url_happy_path_returns_signed_url(test_client, rider_override):
+    signed = {"signed_url": "https://storage.test/signed?sig=x", "path": "kyb/c1/doc.pdf"}
+    with (
+        _admin_guard(),
+        patch("routes.corporate_company_kyb.get_corporate_account_by_id", AsyncMock(return_value=_company())),
+        patch("routes.corporate_company_kyb.create_kyb_upload_url", AsyncMock(return_value=signed)) as m_sign,
+    ):
+        resp = test_client.post("/company/c1/kyb/upload-url", json={"content_type": "application/pdf"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == signed
+    m_sign.assert_awaited_once_with(company_id="c1", content_type="application/pdf")
+
+
+def test_upload_url_already_verified_409(test_client, rider_override):
+    with (
+        _admin_guard(),
+        patch(
+            "routes.corporate_company_kyb.get_corporate_account_by_id",
+            AsyncMock(return_value=_company(status="active")),
+        ),
+    ):
+        resp = test_client.post("/company/c1/kyb/upload-url", json={"content_type": "application/pdf"})
+    assert resp.status_code == 409
+    assert "already complete" in resp.json()["detail"].lower()
+
+
+def test_upload_url_signing_failure_returns_503(test_client, rider_override):
+    with (
+        _admin_guard(),
+        patch("routes.corporate_company_kyb.get_corporate_account_by_id", AsyncMock(return_value=_company())),
+        patch("routes.corporate_company_kyb.create_kyb_upload_url", AsyncMock(side_effect=Exception("boom"))),
+    ):
+        resp = test_client.post("/company/c1/kyb/upload-url", json={"content_type": "application/pdf"})
+    assert resp.status_code == 503
+
+
 # ── POST /kyb/submit ─────────────────────────────────────────────────────────
 
 
@@ -130,6 +175,41 @@ def test_submit_requires_uploaded_object(test_client, rider_override):
         resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc.pdf"})
     assert resp.status_code == 400
     assert "upload" in resp.json()["detail"].lower()
+
+
+def test_submit_object_exists_check_failure_returns_503(test_client, rider_override):
+    with (
+        _admin_guard(),
+        patch("routes.corporate_company_kyb.get_corporate_account_by_id", AsyncMock(return_value=_company())),
+        patch("routes.corporate_company_kyb.kyb_object_exists", AsyncMock(side_effect=Exception("storage down"))),
+    ):
+        resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc.pdf"})
+    assert resp.status_code == 503
+
+
+def test_submit_set_kyb_document_no_row_returns_503(test_client, rider_override):
+    with (
+        _admin_guard(),
+        patch("routes.corporate_company_kyb.get_corporate_account_by_id", AsyncMock(return_value=_company())),
+        patch("routes.corporate_company_kyb.kyb_object_exists", AsyncMock(return_value=True)),
+        patch("routes.corporate_company_kyb.set_kyb_document", AsyncMock(return_value=None)),
+    ):
+        resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc.pdf"})
+    assert resp.status_code == 503
+
+
+def test_submit_status_flip_failure_returns_503(test_client, rider_override):
+    rejected = _company(status="suspended", kyb_last_decision="rejected")
+    updated = _company(kyb_document_url="kyb/c1/doc2.pdf")
+    with (
+        _admin_guard(),
+        patch("routes.corporate_company_kyb.get_corporate_account_by_id", AsyncMock(return_value=rejected)),
+        patch("routes.corporate_company_kyb.kyb_object_exists", AsyncMock(return_value=True)),
+        patch("routes.corporate_company_kyb.set_kyb_document", AsyncMock(return_value=updated)),
+        patch("routes.corporate_company_kyb.update_corporate_account_status", AsyncMock(return_value=None)),
+    ):
+        resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc2.pdf"})
+    assert resp.status_code == 503
 
 
 def test_submit_happy_path_persists_document(test_client, rider_override):

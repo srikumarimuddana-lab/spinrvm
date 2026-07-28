@@ -39,6 +39,33 @@ destroys your ability to assess scope and meet regulatory obligations.
 | Names / email | High | Anonymise on deletion |
 | OTP / session tokens | Critical — enables impersonation | Invalidate immediately |
 
+### 1a-i. Designated high-sensitivity flow: Data Transfer admin export module
+
+`backend/routes/admin/data_transfer_export.py` (service: `backend/services/data_transfer/entity_export_service.py`)
+moves **full-fidelity, unredacted** PII for up to 100 entities per request in a single
+ZIP: decrypted government ID / driver license numbers, exact GPS ride history
+(not geohashed), and driver identity document bytes. Unlike rider/driver-facing
+flows, this data is *unredacted by design* (admin-to-admin environment migration —
+see `docs/privacy/2026-07-28-pia-data-transfer-export.md`), so if this module is
+implicated in a breach (leaked signed URL, over-broad `bulk_operations` grant,
+compromised admin account) treat it as meeting PIPEDA's "real risk of significant
+harm" threshold by default rather than re-deriving that judgment mid-incident.
+
+```bash
+# Contain: revoke all outstanding signed export URLs and block new ones
+UPDATE data_transfer_export_jobs SET expires_at = now() WHERE expires_at > now();
+# Add DISABLE_DATA_TRANSFER_EXPORT=true and redeploy (or pull the admin
+# module flag granting bulk_operations/data_transfer_pii_export from the
+# affected admin account(s) — see §2 "Isolate compromised admin accounts").
+
+# Scope: identify every job whose bundle may have been exposed
+SELECT id, requested_by, entity_ids, created_at, expires_at
+FROM data_transfer_export_jobs
+WHERE created_at BETWEEN '<window_start>' AND '<window_end>';
+```
+
+Full sensitivity inventory (per-field breakdown, risk ratings): PIA §3–4.
+
 ### 1b. Estimate affected user count
 
 ```sql

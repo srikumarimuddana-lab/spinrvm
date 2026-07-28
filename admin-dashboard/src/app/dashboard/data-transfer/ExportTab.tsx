@@ -26,6 +26,13 @@ import { inferEntityType, type EntitySelectionState } from "@/components/data-tr
 // hitting the 422 the server would otherwise return.
 const MAX_ENTITIES_PER_EXPORT = 100;
 
+// Mirrors ExportRequest.reason's Field(min_length=10, max_length=200) on the
+// backend (PIA recommendation R-C, ACTION_ITEMS.md B11) — validated
+// client-side too so the Export button's disabled state gives immediate
+// feedback instead of a round-trip 422.
+const REASON_MIN_LENGTH = 10;
+const REASON_MAX_LENGTH = 200;
+
 const DOC_TYPE_OPTIONS = [
     "drivers_license",
     "insurance",
@@ -79,7 +86,12 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
     const { toast } = useToast();
     const [format, setFormat] = useState<DataTransferExportFormat>("zip");
     const [docTypes, setDocTypes] = useState<Set<string>>(new Set(DOC_TYPE_OPTIONS));
+    const [reason, setReason] = useState("");
+    const [includeRideGps, setIncludeRideGps] = useState(true);
+    const [includeDocumentBytes, setIncludeDocumentBytes] = useState(true);
     const [loading, setLoading] = useState(false);
+
+    const reasonValid = reason.trim().length >= REASON_MIN_LENGTH && reason.length <= REASON_MAX_LENGTH;
 
     const toggleDocType = (docType: string) => {
         setDocTypes((prev) => {
@@ -108,7 +120,11 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             }
             const docTypeFilter =
                 format === "zip" && docTypes.size < DOC_TYPE_OPTIONS.length ? Array.from(docTypes) : undefined;
-            const queued = await exportDataTransferEntities(refs, format, docTypeFilter);
+            const queued = await exportDataTransferEntities(refs, format, reason.trim(), {
+                docTypes: docTypeFilter,
+                includeRideGps,
+                includeDocumentBytes,
+            });
             toast({
                 title: "Export queued",
                 description: `Preparing ${queued.requested_count} record(s)… this may take a moment for large batches.`,
@@ -171,6 +187,51 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
                 </div>
             )}
 
+            <div className="space-y-2">
+                <label htmlFor="export-reason" className="text-sm font-medium">
+                    Reason for this export <span className="text-muted-foreground">(required)</span>
+                </label>
+                <textarea
+                    id="export-reason"
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    rows={2}
+                    maxLength={REASON_MAX_LENGTH}
+                    placeholder="e.g. seeding staging with 20 realistic driver profiles"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                />
+                <div className="text-xs text-muted-foreground">
+                    {reason.length}/{REASON_MAX_LENGTH} — a short business justification, kept with the export
+                    job for accountability. Minimum {REASON_MIN_LENGTH} characters.
+                </div>
+            </div>
+
+            <div className="space-y-2">
+                <span className="text-sm font-medium">Data to include</span>
+                <div className="flex flex-col gap-2">
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={includeRideGps}
+                            onChange={(e) => setIncludeRideGps(e.target.checked)}
+                        />
+                        Exact pickup/dropoff GPS coordinates
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={includeDocumentBytes}
+                            onChange={(e) => setIncludeDocumentBytes(e.target.checked)}
+                        />
+                        Document file contents (not just metadata)
+                    </label>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                    Unchecking either reduces sensitivity for lower-risk exports (e.g. seeding a UI-only
+                    staging environment) — record counts stay the same, only these fields are dropped.
+                </div>
+            </div>
+
             <div className="text-sm text-muted-foreground">
                 {selection.selectAllMatching
                     ? "All records matching your Search & Select filter will be exported."
@@ -179,7 +240,7 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
                       : "No records selected — go to Search & Select first."}
             </div>
 
-            <Button onClick={onExport} disabled={!hasSelection || loading}>
+            <Button onClick={onExport} disabled={!hasSelection || !reasonValid || loading}>
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 Export
             </Button>

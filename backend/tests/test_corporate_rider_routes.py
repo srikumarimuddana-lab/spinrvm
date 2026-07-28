@@ -246,6 +246,16 @@ def test_join_domain_success(test_client, rider_override):
     m_join.assert_awaited_once_with(company_id="c1", user_id=_FAKE_USER["id"], email="alice@acme.com")
 
 
+def test_balance_403_when_not_a_member(test_client, rider_override):
+    with patch(
+        "routes.corporate_rider.list_active_memberships_for_user",
+        AsyncMock(return_value=[{"id": "m1", "company_id": "other-co", "role": "member"}]),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/balance")
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "not a company member"
+
+
 def test_balance_unlimited_allowance_has_no_remaining(test_client, rider_override):
     with (
         patch(
@@ -254,7 +264,7 @@ def test_balance_unlimited_allowance_has_no_remaining(test_client, rider_overrid
         ),
         patch(
             "routes.corporate_rider.get_member_allowance",
-            AsyncMock(return_value={"id": "a1", "type": "unlimited", "amount": None, "used": 0}),
+            AsyncMock(return_value={"id": "a1", "type": "unlimited"}),
         ),
         patch(
             "routes.corporate_rider.get_corporate_account_by_id",
@@ -266,19 +276,36 @@ def test_balance_unlimited_allowance_has_no_remaining(test_client, rider_overrid
     assert resp.json()["remaining"] is None
 
 
-def test_balance_non_member_is_403(test_client, rider_override):
-    with patch("routes.corporate_rider.list_active_memberships_for_user", AsyncMock(return_value=[])):
-        resp = test_client.get("/rider/work-profile/c1/balance")
-    assert resp.status_code == 403
-
-
-def test_my_rides_empty_when_no_payment_source_rows(test_client, rider_override):
+def test_balance_missing_amount_has_no_remaining(test_client, rider_override):
     with (
         patch(
             "routes.corporate_rider.list_active_memberships_for_user",
             AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
         ),
-        patch("routes.corporate_rider.get_rows", AsyncMock(return_value=[])),
+        patch(
+            "routes.corporate_rider.get_member_allowance",
+            AsyncMock(return_value={"id": "a1", "type": "fixed_recurring", "amount": None}),
+        ),
+        patch(
+            "routes.corporate_rider.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "name": "Acme"}),
+        ),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/balance")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["remaining"] is None
+
+
+def test_my_rides_returns_empty_when_no_payment_sources(test_client, rider_override):
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch(
+            "routes.corporate_rider.get_rows",
+            AsyncMock(return_value=[]),
+        ),
     ):
         resp = test_client.get("/rider/work-profile/c1/rides")
     assert resp.status_code == 200, resp.text
@@ -312,6 +339,41 @@ def test_my_rides_joins_rides_and_applies_to_date_ceiling(test_client, rider_ove
     assert len(body) == 1
     assert body[0]["id"] == "r1"
     assert body[0]["payment_source"]["ride_id"] == "r1"
+
+
+def test_my_rides_joins_rides_and_applies_to_date_filter(test_client, rider_override):
+    rps_rows = [
+        {"ride_id": "r1", "created_at": "2026-04-01T00:00:00"},
+        {"ride_id": "r2", "created_at": "2026-04-10T00:00:00"},
+    ]
+    rides_rows = [
+        {"id": "r1", "status": "completed"},
+        {"id": "r2", "status": "completed"},
+    ]
+
+    async def fake_get_rows(table, filters, limit=100):
+        if table == "ride_payment_sources":
+            return rps_rows
+        if table == "rides":
+            return rides_rows
+        return []
+
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch(
+            "routes.corporate_rider.get_rows",
+            AsyncMock(side_effect=fake_get_rows),
+        ),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/rides?from_=2026-03-01T00:00:00&to=2026-04-05T00:00:00")
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["id"] == "r1"
+    assert rows[0]["payment_source"]["ride_id"] == "r1"
 
 
 def test_submit_request_auto_approved_applies_grant(test_client, rider_override):
@@ -399,7 +461,85 @@ async def test_submit_request_over_auto_cap_goes_pending():
     assert m_insert.call_args.kwargs["status"] == "pending"
 
 
-def test_my_requests_returns_member_scoped_list(test_client, rider_override):
+def test_allowance_request_auto_approves_within_cap(test_client, rider_override):
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch(
+            "routes.corporate_rider.list_pending_allowance_requests_for_member",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "routes.corporate_rider.get_member_allowance",
+            AsyncMock(
+                return_value={
+                    "id": "a1",
+                    "auto_approve_topup_amount": 200,
+                    "auto_approve_monthly_count": 2,
+                    "auto_approved_this_period": 0,
+                }
+            ),
+        ),
+        patch(
+            "routes.corporate_rider.insert_allowance_request",
+            AsyncMock(return_value={"id": "r1", "status": "auto_approved"}),
+        ),
+        patch(
+            "routes.corporate_rider.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_rider.apply_grant",
+            AsyncMock(return_value={"ok": True}),
+        ) as apply_grant_mock,
+    ):
+        resp = test_client.post(
+            "/rider/work-profile/c1/allowance-requests",
+            json={"amount": 100, "reason": "client dinner"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "auto_approved"
+    apply_grant_mock.assert_awaited_once()
+
+
+def test_allowance_request_falls_back_to_pending_over_cap(test_client, rider_override):
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch(
+            "routes.corporate_rider.list_pending_allowance_requests_for_member",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "routes.corporate_rider.get_member_allowance",
+            AsyncMock(
+                return_value={
+                    "id": "a1",
+                    "auto_approve_topup_amount": 50,
+                    "auto_approve_monthly_count": 2,
+                    "auto_approved_this_period": 0,
+                }
+            ),
+        ),
+        patch(
+            "routes.corporate_rider.insert_allowance_request",
+            AsyncMock(return_value={"id": "r1", "status": "pending"}),
+        ) as insert_mock,
+    ):
+        resp = test_client.post(
+            "/rider/work-profile/c1/allowance-requests",
+            json={"amount": 100, "reason": "client dinner"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "pending"
+    insert_mock.assert_awaited_once_with(member_id="m1", amount=100, reason="client dinner", status="pending")
+
+
+def test_my_requests_returns_list_scoped_to_membership(test_client, rider_override):
     with (
         patch(
             "routes.corporate_rider.list_active_memberships_for_user",
@@ -407,13 +547,13 @@ def test_my_requests_returns_member_scoped_list(test_client, rider_override):
         ),
         patch(
             "routes.corporate_rider.list_company_allowance_requests",
-            AsyncMock(return_value=[{"id": "req1", "status": "pending"}]),
-        ) as m_list,
+            AsyncMock(return_value=[{"id": "r1", "status": "pending"}]),
+        ) as list_mock,
     ):
         resp = test_client.get("/rider/work-profile/c1/allowance-requests")
     assert resp.status_code == 200, resp.text
-    assert resp.json() == [{"id": "req1", "status": "pending"}]
-    m_list.assert_awaited_once_with("c1", statuses=None, member_id="m1")
+    assert resp.json() == [{"id": "r1", "status": "pending"}]
+    list_mock.assert_awaited_once_with("c1", statuses=None, member_id="m1")
 
 
 def test_work_profile_exposes_company_status(test_client, rider_override):

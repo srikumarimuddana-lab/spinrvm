@@ -56,6 +56,21 @@ class TestCoordinates:
         text = "Book the Economy from 4325 Wakeling St [50.42140,-104.66410] to 4500 Gordon Rd [50.40790,-104.65010], total $5.27."
         assert scrub_pii(text, keep_trip_pins=True) == text
 
+    def test_tapped_suggestion_message_keeps_coordinates(self):
+        # The location-suggestion tap message ("Use <address> [lat,lng] as my
+        # dropoff.") must keep its bracketed pair — losing it forces the model
+        # to re-geocode the address text, which re-trips the imprecise_address
+        # gate (the "check the exact street address" loop). The postal code is
+        # still scrubbed; that is accepted — the coordinates, not the label,
+        # are what the model books on.
+        scrubbed = scrub_pii(
+            "Use 655 Albert St, Regina, SK S4T 1A1 [50.44079,-104.61802] as my dropoff.",
+            keep_trip_pins=True,
+        )
+        assert "[50.44079,-104.61802]" in scrubbed
+        assert "[POSTAL]" in scrubbed
+        assert "655 Albert St" in scrubbed
+
     def test_bracketed_exemption_is_narrow(self):
         # Free-text coordinates still scrub even when a bracketed pair is in
         # the same message; brackets without a coordinate pair get no pass.

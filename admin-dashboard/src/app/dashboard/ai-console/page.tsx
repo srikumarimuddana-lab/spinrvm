@@ -33,6 +33,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
 import { Bot, Car, LifeBuoy, MapPin, MessageSquarePlus, Send, ShieldAlert, Tag, User as UserIcon } from "lucide-react";
 import type { AiAction } from "@spinr/shared/types/ai";
+import { buildLocationChoiceMessage } from "@spinr/shared/utils/aiLocationMessages";
 
 interface ChatBubble {
     id: string;
@@ -203,17 +204,15 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                     Choose {action.location_role === "pickup" ? "a pickup" : action.location_role === "dropoff" ? "a dropoff" : "a location"}
                 </div>
                 {action.candidates.slice(0, 3).map((c, i) => {
-                    const label = c.address || c.name;
-                    const suffix =
-                        action.location_role === "pickup"
-                            ? " as my pickup"
-                            : action.location_role === "dropoff"
-                              ? " as my dropoff"
-                              : "";
+                    // Self-contained message carrying the tapped candidate's
+                    // [lat,lng] (mirrors the rider app) — a prose-only tap
+                    // forces the model to re-geocode and loop on imprecise
+                    // street addresses.
+                    const message = buildLocationChoiceMessage(c, action.location_role);
                     return (
                         <button
                             key={`${c.lat}:${c.lng}:${i}`}
-                            onClick={() => label && onQuickSend(`Use ${label}${suffix}.`)}
+                            onClick={() => message && onQuickSend(message)}
                             className="w-full rounded-md bg-background px-2 py-1.5 text-left hover:bg-accent"
                         >
                             <span className="font-medium">{c.name || c.address}</span>

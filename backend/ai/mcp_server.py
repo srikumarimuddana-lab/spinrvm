@@ -11,6 +11,9 @@ Defence in depth:
 - app_settings.ai_mcp_enabled (default False) is checked per request → 503
 - admin tokens are rejected (this surface is for rider/driver accounts)
 - booking tools are invisible here (mcp_exposed=False on their specs)
+- per-user daily tool-call cap (ai_mcp_daily_tool_cap, falling back to
+  ai_daily_message_cap) — the chat path is capped in the orchestrator, this
+  surface caps itself
 
 The streamable-HTTP session manager must be running before requests are
 served; core/lifespan.py calls start_mcp()/stop_mcp() around the app's
@@ -19,6 +22,7 @@ lifetime. SDK surface here matches mcp>=1.9; verify on upgrade.
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
@@ -34,9 +38,11 @@ except ImportError:
 try:
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     from dependencies import get_current_user
     from settings_loader import get_app_settings
+    from utils.redis_client import redis_expire, redis_incr
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +63,24 @@ async def _send_json(send, status: int, payload: Dict[str, Any]) -> None:
 
 def _audience_for(user: Dict[str, Any]) -> str:
     return "driver" if user.get("is_driver") else "rider"
+
+
+async def _over_mcp_daily_cap(user_id: str, cap: int) -> bool:
+    """Per-user daily cap on /mcp tool calls via Redis INCR. The chat path is
+    capped in the orchestrator, but /mcp called execute_tool directly with no
+    ceiling — an unattended agent client could hammer Maps-fee-free reads (or
+    any future exposed tool) all day. Fails OPEN with a loud log, mirroring
+    the chat-cap policy: ai_mcp_enabled stays the hard stop when Redis is
+    down."""
+    key = f"ai:mcp:daily:{user_id}:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+    try:
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, 86400)
+        return count > cap
+    except Exception:
+        logger.error("mcp daily-cap check failed — failing open", exc_info=True, extra={"user_id": user_id})
+        return False
 
 
 class MCPAuthMiddleware:
@@ -143,7 +167,12 @@ def build_mcp_asgi_app() -> Optional[MCPAuthMiddleware]:
             if spec is None or not spec.mcp_exposed:
                 payload: Dict[str, Any] = {"error": f"unknown tool: {name}"}
             else:
-                payload, _ok = await execute_tool(name, arguments or {}, user=user, audience=_audience_for(user))
+                settings = await get_app_settings()
+                cap = int(settings.get("ai_mcp_daily_tool_cap") or settings.get("ai_daily_message_cap") or 50)
+                if await _over_mcp_daily_cap(user["id"], cap):
+                    payload = {"error": "daily limit reached — try again tomorrow"}
+                else:
+                    payload, _ok = await execute_tool(name, arguments or {}, user=user, audience=_audience_for(user))
             return [mcp_types.TextContent(type="text", text=json.dumps(payload, default=str))]
 
         manager = StreamableHTTPSessionManager(app=server, stateless=True)

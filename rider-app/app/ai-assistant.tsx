@@ -34,6 +34,7 @@ import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/ai';
+import { buildLocationChoiceMessage } from '@shared/utils/aiLocationMessages';
 import { useAuthStore } from '@shared/store/authStore';
 import BookingProposalCard from '../components/BookingProposalCard';
 import { buildQuoteBookingMessage } from '../components/bookingProposal';
@@ -374,11 +375,14 @@ export default function AiAssistantScreen() {
           colors={colors}
           styles={styles}
           onSelect={(candidate) => {
-            const label = candidate.address || candidate.name;
-            if (!label) return;
             const role = item.action?.type === 'location_suggestions' ? item.action.location_role : null;
-            const suffix = role === 'pickup' ? ' as my pickup' : role === 'dropoff' ? ' as my dropoff' : '';
-            handleSend(`Use ${label}${suffix}.`);
+            // Self-contained message carrying the tapped candidate's exact
+            // [lat,lng] — the assistant's next turn sees only message text,
+            // and a prose-only tap forced it to re-geocode the address,
+            // which looped forever on imprecise street addresses.
+            const message = buildLocationChoiceMessage(candidate, role);
+            if (!message) return;
+            handleSend(message);
           }}
         />
       );

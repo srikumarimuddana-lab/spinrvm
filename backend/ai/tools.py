@@ -22,7 +22,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 try:
     from .. import db_supabase
@@ -101,6 +101,11 @@ class ToolSpec:
     # An id-style arg that is neither classified nor banned fails registration.
     owned_id_args: Dict[str, str] = field(default_factory=dict)
     public_id_args: frozenset = field(default_factory=frozenset)
+    # Per-tool handler timeout. None -> the global TOOL_TIMEOUT_SECONDS. Only
+    # the Maps fan-out tools (find_place, get_fare_quote, propose_ride_booking)
+    # need more: their worst case chains concurrent 4 s geocode pairs plus a
+    # 2 s Directions wait, which the 5 s default cut off mid-quote.
+    timeout_seconds: Optional[float] = None
 
 
 TOOL_REGISTRY: Dict[str, ToolSpec] = {}
@@ -210,15 +215,26 @@ def validate_args(schema: Dict[str, Any], args: Dict[str, Any]) -> List[str]:
     return errors
 
 
+# Keys that carry the model-facing guardrail instructions and refusal
+# sentinels ("Do NOT quote on it", needs_correction=...). Truncation must
+# never destroy these: a huge quote result that loses its note while its
+# _client_action card survives would show the rider a card the model was
+# explicitly told not to act on.
+_GUARDRAIL_KEYS = ("note", "needs_confirmation", "needs_correction", "imprecise_address", "error")
+
+
 def _cap_result(result: Dict[str, Any]) -> Dict[str, Any]:
     """Cap the MODEL-facing portion of a result. ``_client_action`` is popped
     by the orchestrator before the result enters the model context, so it
     neither counts against the budget nor gets destroyed by truncation —
-    a rich quote card must survive even when the textual result is huge."""
+    a rich quote card must survive even when the textual result is huge.
+    Guardrail keys (notes, refusal sentinels) are re-attached after
+    truncation for the same reason."""
     client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
     serialized = json.dumps(result, default=str)
     if len(serialized) > TOOL_RESULT_MAX_CHARS:
-        result = {"_truncated": True, "preview": serialized[:TOOL_RESULT_MAX_CHARS]}
+        preserved = {k: result[k] for k in _GUARDRAIL_KEYS if isinstance(result, dict) and k in result}
+        result = {"_truncated": True, "preview": serialized[:TOOL_RESULT_MAX_CHARS], **preserved}
     if client_action is not None:
         result["_client_action"] = client_action
     return result
@@ -370,8 +386,9 @@ async def _execute_tool_inner(
     # it stays server-decided either way.
     handler_user = {**user, "ai_audience": audience}
 
+    handler_timeout = spec.timeout_seconds if spec.timeout_seconds is not None else TOOL_TIMEOUT_SECONDS
     try:
-        result = await asyncio.wait_for(spec.handler(handler_user, **call_args), timeout=TOOL_TIMEOUT_SECONDS)
+        result = await asyncio.wait_for(spec.handler(handler_user, **call_args), timeout=handler_timeout)
     except asyncio.TimeoutError:
         logger.error("ai tool timed out", extra={"tool": name, "user_id": user.get("id")})
         return {"error": "the lookup took too long — try again"}, False

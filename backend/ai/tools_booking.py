@@ -1349,6 +1349,9 @@ register(
         },
         handler=find_place,
         mcp_exposed=False,
+        # Street-address branch: up to two sequential 4 s geocodes plus area
+        # resolution — the 5 s global default cut it off mid-lookup.
+        timeout_seconds=15.0,
     )
 )
 
@@ -1442,6 +1445,11 @@ register(
         },
         handler=get_fare_quote,
         mcp_exposed=False,
+        # Worst case: pickup/dropoff verification each chain two 4 s geocodes
+        # (concurrently), then the estimate engine waits 2 s for the road
+        # route, plus promo/DB reads — the 5 s global default timed out
+        # exactly when a full quote fan-out succeeded slowly.
+        timeout_seconds=15.0,
     )
 )
 
@@ -1502,5 +1510,8 @@ register(
         # vehicle_type_id references a public vehicle-type catalog row, not
         # user-owned data — no ownership check needed.
         public_id_args=frozenset({"vehicle_type_id"}),
+        # Same Maps fan-out as get_fare_quote (pickup reconcile + dropoff
+        # pair verification run before the card is built).
+        timeout_seconds=15.0,
     )
 )

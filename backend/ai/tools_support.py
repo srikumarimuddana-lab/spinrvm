@@ -429,5 +429,9 @@ register(
         },
         handler=escalate_to_support,
         audiences=_BOTH,
+        # Write-capable (can open a real support ticket with the chat
+        # transcript when ai_escalation_creates_ticket is on) — the /mcp
+        # surface is a READ-ONLY contract, so this stays chat-only.
+        mcp_exposed=False,
     )
 )

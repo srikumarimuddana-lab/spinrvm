@@ -170,6 +170,36 @@ class TestExecuteTool:
         assert "too long" in result["error"]
 
     @pytest.mark.anyio
+    async def test_per_tool_timeout_override_shrinks(self):
+        """A spec-level timeout wins over the global default (tight side)."""
+
+        async def slow(user, **args):
+            await asyncio.sleep(1)
+            return {}
+
+        register(_spec(handler=slow, timeout_seconds=0.01))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is False
+        assert "too long" in result["error"]
+
+    @pytest.mark.anyio
+    async def test_per_tool_timeout_override_extends(self, monkeypatch):
+        """A spec-level timeout also wins on the generous side — the Maps
+        fan-out tools (find_place / get_fare_quote / propose_ride_booking)
+        legitimately exceed the 5 s global default at their worst case, and
+        used to die mid-quote with 'the lookup took too long'."""
+        monkeypatch.setattr(ai_tools, "TOOL_TIMEOUT_SECONDS", 0.01)
+
+        async def slowish(user, **args):
+            await asyncio.sleep(0.05)
+            return {"ok": True}
+
+        register(_spec(handler=slowish, timeout_seconds=2.0))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result["ok"] is True
+
+    @pytest.mark.anyio
     async def test_oversized_result_capped(self):
         async def huge(user, **args):
             return {"rows": ["x" * 100] * 200}
@@ -194,3 +224,26 @@ class TestExecuteTool:
         assert ok is True
         assert result["_truncated"] is True
         assert result["_client_action"] == action
+
+    @pytest.mark.anyio
+    async def test_guardrail_keys_survive_truncation(self):
+        """A multi-vehicle quote can blow the 4000-char cap; before this
+        guard, truncation deleted the 'Do NOT quote on it' note and the
+        needs_correction sentinel while the client card survived — the model
+        lost exactly the instruction that made the oversized result safe."""
+
+        async def huge_with_note(user, **args):
+            return {
+                "rows": ["x" * 100] * 200,
+                "note": "Warning: do NOT quote on it.",
+                "needs_correction": "dropoff_label_mismatch",
+                "imprecise_address": True,
+            }
+
+        register(_spec(handler=huge_with_note))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result["_truncated"] is True
+        assert result["note"] == "Warning: do NOT quote on it."
+        assert result["needs_correction"] == "dropoff_label_mismatch"
+        assert result["imprecise_address"] is True

@@ -130,6 +130,41 @@ class TestExposureRules:
         # the read-only surface is present
         assert {"get_active_ride", "get_wallet_balance", "search_faqs"} <= exposed
 
+    def test_no_write_capable_tool_mcp_exposed(self):
+        """/mcp is documented as READ-ONLY. escalate_to_support can open a
+        real Zoho ticket (with the chat transcript attached) when
+        ai_escalation_creates_ticket is on — it defaulted to mcp_exposed=True
+        and quietly contradicted that contract."""
+        ensure_registry_loaded()
+        exposed = {n for n, s in TOOL_REGISTRY.items() if s.mcp_exposed}
+        assert "escalate_to_support" not in exposed
+        assert "request_map_pin" not in exposed
+
+
+class TestMcpDailyCap:
+    @pytest.mark.anyio
+    async def test_cap_blocks_after_limit(self):
+        counts = {}
+
+        async def fake_incr(key):
+            counts[key] = counts.get(key, 0) + 1
+            return counts[key]
+
+        with (
+            patch.object(mcp_server, "redis_incr", fake_incr),
+            patch.object(mcp_server, "redis_expire", AsyncMock()),
+        ):
+            assert await mcp_server._over_mcp_daily_cap("u1", 2) is False
+            assert await mcp_server._over_mcp_daily_cap("u1", 2) is False
+            assert await mcp_server._over_mcp_daily_cap("u1", 2) is True
+            # independent per user
+            assert await mcp_server._over_mcp_daily_cap("u2", 2) is False
+
+    @pytest.mark.anyio
+    async def test_cap_fails_open_on_redis_error(self):
+        with patch.object(mcp_server, "redis_incr", AsyncMock(side_effect=RuntimeError("redis down"))):
+            assert await mcp_server._over_mcp_daily_cap("u1", 2) is False
+
     @pytest.mark.anyio
     async def test_lifecycle_noops_without_manager(self):
         with patch.dict(mcp_server._state, {"manager": None, "run_ctx": None}):

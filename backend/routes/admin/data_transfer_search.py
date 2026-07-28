@@ -12,14 +12,16 @@ visible page.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...utils.rate_limiter import data_transfer_search_limit
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
+    from utils.rate_limiter import data_transfer_search_limit
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,9 @@ def _build_filters(q: Optional[str], date_from: Optional[str], date_to: Optional
 
 
 @router.get("/data-transfer/search")
+@data_transfer_search_limit
 async def search_entities(
+    request: Request,
     q: Optional[str] = Query(None, description="Fuzzy match against name/email/phone"),
     entity_type: Optional[str] = Query(None, pattern="^(driver|rider)$"),
     date_from: Optional[str] = Query(None, description="ISO date, filters on created_at >="),

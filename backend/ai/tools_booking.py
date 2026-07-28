@@ -246,6 +246,23 @@ def _suggestions_action(query: str, candidates: list, location_role: Optional[st
     }
 
 
+async def _geocode_with_locality_retry(params: Dict[str, Any], city: Optional[str]) -> Dict[str, Any]:
+    """Geocode with a hard `components=locality:<city>` filter when a city is
+    known, retrying once without it on ZERO_RESULTS — a mismatched or
+    unusually-formatted locality name must degrade to the unfiltered lookup,
+    not break the query outright (B7)."""
+    if city:
+        scoped_params = dict(params)
+        scoped_params["components"] = f"locality:{city}|country:CA"
+        data = await _maps_get(_GEOCODE_URL, scoped_params)
+        await record_call("geocode")
+        if data.get("status") != "ZERO_RESULTS":
+            return data
+    data = await _maps_get(_GEOCODE_URL, params)
+    await record_call("geocode")
+    return data
+
+
 async def _lookup_place_candidates(
     *,
     api_key: str,
@@ -276,13 +293,6 @@ async def _lookup_place_candidates(
                 await record_call("text_search_new")
                 results = legacy_place_results_from_text_search(data)
             else:
-                # NOTE: `components=locality:<city>` would be a HARD filter here
-                # (unlike `bounds`, which the Geocoding API may ignore) and is
-                # the strongest available fix for cross-city mis-resolution.
-                # Not wired up: `service_areas` has no city column, only `name`,
-                # which is a display label ("Regina Metro") — a wrong locality
-                # yields ZERO_RESULTS and breaks lookups outright, so a filter
-                # built on it is worse than none. Tracked in ACTION_ITEMS B7.
                 # (No "Places API (New)" equivalent applies here — pure
                 # forward-geocoding has no New-API surface; B5 only covers the
                 # named-place ["places"] branch above.)
@@ -304,11 +314,23 @@ async def _lookup_place_candidates(
                     dlat = _PLACE_RADIUS_METERS / 111_000
                     dlng = dlat / max(math.cos(math.radians(near_lat)), 0.2)
                     params["bounds"] = f"{near_lat - dlat},{near_lng - dlng}|{near_lat + dlat},{near_lng + dlng}"
-                data = await _maps_get(_GEOCODE_URL, params)
+
+                # `components=locality:<city>` is, unlike `bounds`, a HARD
+                # filter the Geocoding API cannot ignore — the strongest
+                # available fix for cross-city mis-resolution (B7). Only
+                # added when the rider's location resolves to a known
+                # service area with a populated `city`; an unknown/NULL city
+                # degrades to today's unfiltered behavior rather than risk a
+                # wrong locality producing ZERO_RESULTS outright.
+                city = None
+                if near_lat is not None and near_lng is not None:
+                    area = await _resolve_area(near_lat, near_lng)
+                    city = (area or {}).get("city") or None
+
+                data = await _geocode_with_locality_retry(params, city)
                 if data.get("status") not in ("OK", "ZERO_RESULTS"):
                     logger.error("ai find_place maps API error: %s", data.get("status"))
                     return {"error": "place lookup failed — try again or pick the location in the app"}
-                await record_call("geocode")
                 results = data.get("results") or []
         except Exception:
             logger.error("ai find_place maps request failed", exc_info=True)

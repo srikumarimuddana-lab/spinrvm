@@ -290,3 +290,119 @@ def test_kyb_view_accepts_raw_storage_key(test_client, admin_override):
     assert resp.status_code == 200, resp.text
     assert resp.content == b"%PDF-1.4"
     fake_storage.storage.from_.return_value.download.assert_called_once_with("kyb/c1/doc.pdf")
+
+
+def test_create_accepts_blank_business_number_and_tax_region(test_client, admin_override):
+    """Coverage: the field_validators return None on a falsy input rather
+    than trying to validate/normalize an empty string."""
+    created = corporate_account_row("pending_verification", id="c1", name="Acme Corp")
+    mock_insert = AsyncMock(return_value=created)
+    with patch("routes.corporate_accounts.insert_corporate_account", mock_insert):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts",
+            json={"name": "Acme Corp", "business_number": "", "tax_region": ""},
+        )
+    assert resp.status_code == 201, resp.text
+    sent = mock_insert.call_args[0][0]
+    assert sent.get("business_number") is None
+    assert sent.get("tax_region") is None
+
+
+def test_update_accepts_blank_business_number_and_tax_region(test_client, admin_override):
+    existing = corporate_account_row("active", id="c1", name="Acme Corp")
+    updated = {**existing, "business_number": None, "tax_region": None}
+    with (
+        patch("routes.corporate_accounts.get_corporate_account_by_id", AsyncMock(return_value=existing)),
+        patch("routes.corporate_accounts.db_update_corporate_account", AsyncMock(return_value=updated)) as mock_update,
+    ):
+        resp = test_client.put(
+            "/api/admin/corporate-accounts/c1",
+            json={"business_number": "", "tax_region": ""},
+        )
+    assert resp.status_code == 200, resp.text
+    sent = mock_update.call_args[0][1]
+    assert sent.get("business_number") is None
+    assert sent.get("tax_region") is None
+
+
+def test_list_filters_by_is_active(test_client, admin_override):
+    rows = [
+        corporate_account_row("active", id="c1", is_active=True),
+        corporate_account_row("suspended", id="c2", is_active=False),
+    ]
+    with (
+        patch("db_supabase.list_corporate_accounts_filtered", AsyncMock(return_value=rows)),
+        patch("db_supabase.count_documents", AsyncMock(return_value=2)),
+    ):
+        resp = test_client.get("/api/admin/corporate-accounts?is_active=false")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["id"] == "c2"
+
+
+def test_list_total_count_failure_does_not_break_response(test_client, admin_override):
+    """count_documents failing to compute X-Total-Count must not fail the
+    whole list response — it's a header, not the payload."""
+    rows = [corporate_account_row("active", id="c1")]
+    with (
+        patch("db_supabase.list_corporate_accounts_filtered", AsyncMock(return_value=rows)),
+        patch("db_supabase.count_documents", AsyncMock(side_effect=RuntimeError("db down"))),
+    ):
+        resp = test_client.get("/api/admin/corporate-accounts")
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()) == 1
+
+
+def test_kyb_upload_url_returns_signed_url(test_client, admin_override):
+    with patch(
+        "db_supabase.create_kyb_upload_url",
+        AsyncMock(return_value={"upload_url": "https://storage.example/signed", "path": "kyb/c1/doc.pdf"}),
+    ) as mock_create:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-upload-url",
+            json={"content_type": "application/pdf"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["upload_url"] == "https://storage.example/signed"
+    mock_create.assert_awaited_once_with(company_id="c1", content_type="application/pdf")
+
+
+def test_kyb_upload_url_rejects_unsupported_content_type(test_client, admin_override):
+    resp = test_client.post(
+        "/api/admin/corporate-accounts/c1/kyb-upload-url",
+        json={"content_type": "application/zip"},
+    )
+    assert resp.status_code == 400
+
+
+def test_kyb_document_confirm_account_not_found(test_client, admin_override):
+    with (
+        patch("db_supabase.kyb_object_exists", AsyncMock(return_value=True)),
+        patch("db_supabase.set_kyb_document", AsyncMock(return_value=None)),
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-document",
+            json={"path": "kyb/c1/doc.pdf"},
+        )
+    assert resp.status_code == 404
+
+
+def test_kyb_document_confirm_audit_log_failure_does_not_fail_request(test_client, admin_override):
+    """Audit-log write is best-effort here too — a logging failure must not
+    turn an otherwise-successful document confirmation into an error."""
+    updated = corporate_account_row("pending_verification", id="c1")
+    updated["kyb_submitted_at"] = "2026-07-10T00:00:00Z"
+    with (
+        patch("db_supabase.kyb_object_exists", AsyncMock(return_value=True)),
+        patch("db_supabase.set_kyb_document", AsyncMock(return_value=updated)),
+        patch(
+            "routes.corporate_accounts.log_admin_action",
+            AsyncMock(side_effect=RuntimeError("audit db down")),
+        ),
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-document",
+            json={"path": "kyb/c1/doc.pdf"},
+        )
+    assert resp.status_code == 200, resp.text

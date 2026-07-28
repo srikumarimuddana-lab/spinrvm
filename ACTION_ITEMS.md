@@ -32,12 +32,12 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     to reflect that. Per-file coverage in that package was **highly uneven**:
     `lost_found.py` 25% (now **100%** — see below, meets target),
     `receipts.py` 58.3% (now **100%** — see below, meets target),
-    `matching.py` 64.7% (now **72.48%** — see below, still below target),
+    `matching.py` 64.7% (now **76.05%** — see below, still below target),
     `lifecycle.py` 65.1% (now **87.88%** — meets target), `booking.py` 65.7%
     (now **77.84%** — see below, still below target), `queries.py` 69.2%
     (now **92.20%** — meets target, PR #2544), `estimates.py` 71.0% (now
     **93.99%** — meets target, PR #2552), `cancellation.py` 71.0% (now
-    **95.06%** — see below, meets target), `rides/payments.py` 79.5%.
+    **95.06%** — meets target, PR #2555), `rides/payments.py` 79.5%.
   - `routes/rides/lost_found.py`: was 25%, **now 100%** after adding 10 tests
     (`tests/test_lost_found.py`) covering the 404/403/400 guard clauses,
     category-validation fallback, the driver-notification success path (push
@@ -56,8 +56,8 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     a Supabase query-builder chain) and a small WS/push branch in
     `rider_start_ride` — left uncovered, lower priority than the other
     `routes/rides/` files below.
-  - `routes/rides/matching.py`: was 64.7%, **now 72.48%** after adding 25
-    tests (`tests/test_offer_timeout.py`, `tests/test_p0_ship_blockers.py`)
+  - `routes/rides/matching.py`: was 64.7%, then 72.48% (25 tests,
+    `tests/test_offer_timeout.py` + `tests/test_p0_ship_blockers.py`,
     covering the file's smaller, self-contained functions:
     `create_demo_drivers` (deprecated no-op), `_dispatch_retry`'s
     attempt-cap/ride-left-searching guards and error-backoff reschedule,
@@ -67,13 +67,32 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     early-returns and settings-fetch-failure fallback plus its outer
     exception handler, and `ride_search_timeout`'s pre-auth-release
     success/failure branches, the attribution-column-fallback retry, the
-    guest-booking SMS branch, and its outer exception handler. **Still below
-    the 80% target** — the file's biggest remaining gap by far is
-    `_match_driver_to_ride_attempt` (lines 151-933, ~780 lines — the core
-    dispatch/ranking algorithm itself), which this pass deliberately did not
-    attempt given its size; it needs its own dedicated subtask(s), likely
-    split further by the algorithm's internal phases (candidate fetch,
-    ranking, offer batching, claim) rather than attempted as one PR.
+    guest-booking SMS branch, and its outer exception handler), **now
+    76.05%** after adding 8 more tests
+    (`tests/test_dispatch_match_attempt_branches.py`) covering
+    `_match_driver_to_ride_attempt`'s (lines 151-933, ~780 lines) most
+    self-contained guard clauses and fail-open/fail-closed exception paths:
+    the stale-ride-status skip (dispatch already progressed past
+    `searching`), the subscription filter's fail-**closed** exception
+    (empties the pool — a subscription-gated area must never leak an offer
+    to a non-subscriber on a DB hiccup), the daily-quota filter's fail-**open**
+    exception (must NOT drop the pool — a transient quota-lookup error can't
+    strand every ride), the cascade pool's own subscription sub-filter
+    (drops non-subscribed cascade/upgrade-type drivers, and its own
+    fail-closed exception), the cascade lookup's outer exception (non-fatal —
+    falls through to the no-eligible-drivers retry), the
+    `ride_offers`-insert failure (releases the claimed driver back to
+    available *before* re-raising, so a transient insert failure can't
+    strand a driver as claimed-but-never-offered), the final
+    no-eligible-drivers-after-all-filters retry, and the
+    no-drivers-could-be-claimed early return (claim lost to a race).
+    **Still below the 80% target** — the remaining gap is almost entirely
+    the ETA-ranking/batch-claim-loop internals, the parallel
+    rider/incentive/service-area-polygon enrichment, and the per-driver
+    notify loop (roughly lines 650-930): all algorithm-heavy, multi-branch
+    sections that need their own dedicated follow-up subtask(s), ideally
+    split further by phase (ranking, enrichment, notify) rather than
+    attempted as one more PR.
   - `routes/rides/receipts.py`: was 58.3%, **now 100%** after adding 15 tests
     (`tests/test_coverage_rides.py`) covering both endpoints end-to-end:
     `get_ride_receipt`'s no-driver-shows-"Unknown Driver" branch, the
@@ -142,14 +161,16 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   `backend/tests/test_coverage_rides.py` (lifecycle + receipts + queries
   functions), `backend/tests/test_rider_stats_empty.py` (queries.py),
   `backend/tests/test_offer_timeout.py` + `backend/tests/test_p0_ship_blockers.py`
-  (matching.py's smaller functions), `backend/tests/test_ride_insert_and_dispatch_prep.py`
+  (matching.py's smaller functions), `backend/tests/test_dispatch_match_attempt_branches.py`
+  (`_match_driver_to_ride_attempt`'s guard/fail-open branches),
+  `backend/tests/test_ride_insert_and_dispatch_prep.py`
   + `backend/tests/test_ride_preauth_booking.py` (booking.py's helpers),
   `backend/tests/test_ride_estimate_branches.py` (estimates.py),
   `backend/tests/test_ride_cancellation_branches.py` (cancellation.py).
   Next: the remaining `create_ride` branches (to close out `booking.py`),
-  then `_match_driver_to_ride_attempt` (the big one — needs its own
-  dedicated subtask given its ~780-line size). All other `routes/rides/`
-  package files now meet target.
+  then a further `_match_driver_to_ride_attempt` follow-up targeting its
+  ETA-ranking/enrichment/notify-loop internals (~lines 650-930) to close out
+  `matching.py`.
 - **Approach:** measure current per-file coverage (`pytest --cov --cov-report=term-missing`),
   write tests for the uncovered branches (fare tiers, surge, corporate, promo, refund,
   webhook types, ride-state transitions), then enforce with
@@ -160,8 +181,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   `routes/rides/*` / dispatch below 80%. Payments, fare, dispatch,
   `lost_found.py`, `lifecycle.py`, `receipts.py`, `queries.py`,
   `estimates.py`, and `cancellation.py` now meet target. `matching.py`
-  (72.48%) and `booking.py` (77.84%) improved but still below target — both
-  need a follow-up targeting their remaining core-algorithm gap.
+  (72.48% → 76.05%) and `booking.py` (77.84%) improved but still below
+  target — both need a follow-up targeting their remaining core-algorithm
+  gap.
 
 ### A2. Post-deploy smoke test in CI
 - [ ] **Status:** open

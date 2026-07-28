@@ -31,6 +31,18 @@ BRAND_FONT = "Helvetica"  # fpdf2 core font name; closest match to product UI fo
 _ASSET_DIR = Path(__file__).resolve().parents[1] / "static" / "branding"
 LOGO_PATH = _ASSET_DIR / "spinr_logo.png"
 
+# Mirrors services/data_transfer/tabular_writer.py's _sanitize_csv_cell
+# (OWASP CSV-injection guard). Duplicated rather than imported: importing
+# tabular_writer pulls in services/__init__.py's full service-layer import
+# chain (dispatch, settings, supabase client, ...) just for a 5-line helper.
+_CSV_INJECTION_LEADS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _sanitize_csv_cell(value):
+    if isinstance(value, str) and value.startswith(_CSV_INJECTION_LEADS):
+        return "'" + value
+    return value
+
 
 def has_logo_asset() -> bool:
     """True once the real logo file has been dropped into static/branding/.
@@ -119,6 +131,52 @@ def new_branded_pdf(title: str, subtitle: str = ""):
     pdf.set_y(36)
     pdf.set_text_color(0, 0, 0)
     return pdf
+
+
+def new_branded_workbook(title: str, subtitle: str = ""):
+    """Return (Workbook, Worksheet) with a Spinr-branded title block already
+    written: row 1 = title (brand color, bold), row 2 = subtitle (grey,
+    optional), row 3 = blank spacer. Caller starts writing its header row at
+    row 4.
+
+    Only for report_type entries registered as "branded" — fixed_format
+    reports never go through openpyxl branding; they fill the regulator's
+    own template.
+    """
+    from openpyxl import Workbook  # noqa: PLC0415 — optional dep, only needed for this format
+    from openpyxl.styles import Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "report"
+
+    brand_hex = BRAND_HEX
+    ws["A1"] = title
+    ws["A1"].font = Font(name=BRAND_FONT, bold=True, size=14, color=brand_hex)
+    if subtitle:
+        ws["A2"] = subtitle
+        ws["A2"].font = Font(name=BRAND_FONT, size=10, color="8C8C8C")
+    return wb, ws
+
+
+def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: int = 4) -> None:
+    """Write a header row (brand-color fill, white bold text) at `start_row`
+    followed by one row per dict in `rows`, using the same CSV-injection-safe
+    cell sanitization as services/data_transfer/tabular_writer.py so a value
+    round-tripped through either export path renders identically in Excel."""
+    from openpyxl.styles import Font, PatternFill
+
+    header_fill = PatternFill(start_color=BRAND_HEX, end_color=BRAND_HEX, fill_type="solid")
+    header_font = Font(name=BRAND_FONT, bold=True, color="FFFFFF")
+
+    for col, name in enumerate(fieldnames, start=1):
+        cell = ws.cell(row=start_row, column=col, value=name)
+        cell.fill = header_fill
+        cell.font = header_font
+
+    for r, row in enumerate(rows, start=start_row + 1):
+        for col, name in enumerate(fieldnames, start=1):
+            ws.cell(row=r, column=col, value=_sanitize_csv_cell(row.get(name)))
 
 
 def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> None:

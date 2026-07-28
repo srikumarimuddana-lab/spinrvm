@@ -37,7 +37,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from documents import _extract_signed_url
-    from services.data_transfer import bundle_zip_builder, entity_export_service, tabular_writer
+    from services.data_transfer import bundle_zip_builder, entity_export_service, observability, tabular_writer
     from supabase_client import supabase
     from utils.audit_logger import log_admin_action
     from utils.rate_limiter import data_transfer_export_limit

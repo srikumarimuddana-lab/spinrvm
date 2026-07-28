@@ -4,6 +4,29 @@ const APP_NAME = 'Spinr Driver';
 const BUNDLE_ID = 'com.spinr.driver'; // driver-only ID — rider app uses com.spinr.user (no clash)
 const SCHEME = 'spinr-driver';
 
+// Meta app-events credentials. Both must be present for the SDK plugin to be
+// registered at all — see the FB_PLUGIN comment in `plugins` below.
+const FB_APP_ID = process.env.EXPO_PUBLIC_FB_APP_ID;
+const FB_CLIENT_TOKEN = process.env.EXPO_PUBLIC_FB_CLIENT_TOKEN;
+
+const FB_PLUGIN: NonNullable<ExpoConfig['plugins']> =
+    FB_APP_ID && FB_CLIENT_TOKEN
+        ? [
+              [
+                  'react-native-fbsdk-next',
+                  {
+                      appID: FB_APP_ID,
+                      clientToken: FB_CLIENT_TOKEN,
+                      displayName: APP_NAME,
+                      scheme: `fb${FB_APP_ID}`,
+                      advertiserIDCollectionEnabled: false,
+                      autoLogAppEventsEnabled: true,
+                      isAutoInitEnabled: true,
+                  },
+              ],
+          ]
+        : [];
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
     name: APP_NAME,
@@ -332,18 +355,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // separate dataset is the primary guard that keeps driver applications
         // from being reported as rider acquisitions — do not point both apps
         // at one App ID. See META_EVENTS.md.
-        [
-            'react-native-fbsdk-next',
-            {
-                appID: process.env.EXPO_PUBLIC_FB_APP_ID,
-                clientToken: process.env.EXPO_PUBLIC_FB_CLIENT_TOKEN,
-                displayName: APP_NAME,
-                scheme: `fb${process.env.EXPO_PUBLIC_FB_APP_ID ?? ''}`,
-                advertiserIDCollectionEnabled: false,
-                autoLogAppEventsEnabled: true,
-                isAutoInitEnabled: true,
-            },
-        ],
+        //
+        // Registered ONLY when both credentials are present. The plugin hard-
+        // throws on a missing appID (withFacebook.js: `throw new Error('missing
+        // appID in the plugin properties')`), which fails `expo config` — and
+        // EAS then reports it as a confusing "Unexpected token ':'" because it
+        // tries to JSON.parse the error text. Spreading the entry conditionally
+        // keeps a build without the env vars working exactly as before: no
+        // native Facebook config, and shared/analytics/meta.ts no-ops at
+        // runtime. It also avoids registering a bare "fb" URL scheme, which is
+        // what `fb${undefined ?? ''}` would have produced.
+        ...FB_PLUGIN,
         // Sentry native crash capture + automatic sourcemap upload at EAS build
         // time. organization/project/url come from build env; the auth token is
         // read from SENTRY_AUTH_TOKEN by sentry-cli (never commit it). Runtime JS

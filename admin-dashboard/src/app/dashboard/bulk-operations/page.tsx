@@ -676,8 +676,25 @@ export default function BulkOperationsPage() {
                 </Card>
             )}
 
-            {/* ── Rider Bulk Import ──────────────────── */}
-            <RiderImportSection />
+            {/* Rider bulk import has moved to the Data Transfer module (Import
+                tab), which also carries documents, ride history, and the
+                insurance-period audit trail — not just profile CSV rows.
+                RiderImportSection is kept below (unused) rather than deleted
+                in case a rollback needs it back quickly. */}
+            <Card>
+                <CardHeader>
+                    <CardTitle>Rider Bulk Import has moved</CardTitle>
+                    <CardDescription>
+                        Rider import now lives in the Data Transfer module, alongside driver import, export, and SGI
+                        compliance forms.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <Button asChild>
+                        <a href="/dashboard/data-transfer">Go to Data Transfer</a>
+                    </Button>
+                </CardContent>
+            </Card>
         </div>
     );
 }

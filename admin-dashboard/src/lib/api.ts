@@ -3362,3 +3362,122 @@ export const aiSuggestDeskReply = (id: string, instruction?: string) =>
                 : {}),
         },
     );
+
+/* ── Data Transfer module (backend/routes/admin/data_transfer_*.py) ─────── */
+export interface DataTransferEntityRow {
+    id: string;
+    user_id?: string;
+    full_name?: string;
+    email?: string;
+    phone?: string;
+    created_at?: string;
+    role?: string;
+    vehicle_plate?: string;
+}
+export interface DataTransferSearchResult {
+    rows: DataTransferEntityRow[];
+    total_count: number;
+    page: number;
+    page_size: number;
+}
+export interface DataTransferSearchParams {
+    q?: string;
+    entityType?: "driver" | "rider";
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    pageSize?: number;
+}
+export const searchDataTransferEntities = (params: DataTransferSearchParams) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.entityType) qs.set("entity_type", params.entityType);
+    if (params.dateFrom) qs.set("date_from", params.dateFrom);
+    if (params.dateTo) qs.set("date_to", params.dateTo);
+    qs.set("page", String(params.page ?? 1));
+    qs.set("page_size", String(params.pageSize ?? 50));
+    return request<DataTransferSearchResult>(`/api/admin/data-transfer/search?${qs.toString()}`);
+};
+
+export type DataTransferExportFormat = "zip" | "csv" | "json" | "excel";
+export interface DataTransferExportEntityRef {
+    entity_type: "driver" | "rider";
+    entity_id: string;
+}
+export interface DataTransferExportResult {
+    job_id: string;
+    entity_count: number;
+    requested_count: number;
+    download_url: string;
+    expires_at: string;
+}
+export const exportDataTransferEntities = (
+    entities: DataTransferExportEntityRef[],
+    format: DataTransferExportFormat,
+    docTypes?: string[],
+) =>
+    request<DataTransferExportResult>("/api/admin/data-transfer/export", {
+        method: "POST",
+        body: JSON.stringify({ entities, format, doc_types: docTypes ?? null }),
+    });
+
+export interface DataTransferImportReportItem {
+    entity_id: string;
+    field: string;
+    message: string;
+}
+export interface DataTransferImportReport {
+    can_commit: boolean;
+    counts: { entities: number; new: number; existing_match: number; conflict: number };
+    warnings: DataTransferImportReportItem[];
+    errors: DataTransferImportReportItem[];
+}
+export interface DataTransferImportCommitResult extends DataTransferImportReport {
+    committed: boolean;
+    created_users?: number;
+    created_drivers?: number;
+    documents_replayed?: number;
+    insurance_periods_replayed?: number;
+}
+export const adminValidateDataTransferImport = (file: File) => {
+    const fd = new FormData();
+    fd.append("bundle_zip", file);
+    return request<DataTransferImportReport>("/api/admin/data-transfer/import/validate", {
+        method: "POST",
+        body: fd,
+    });
+};
+export const adminCommitDataTransferImport = (file: File, batch?: string) => {
+    const fd = new FormData();
+    fd.append("bundle_zip", file);
+    if (batch) fd.append("batch", batch);
+    return request<DataTransferImportCommitResult>("/api/admin/data-transfer/import/commit", {
+        method: "POST",
+        body: fd,
+    });
+};
+
+export type SgiFormType = "driver_details" | "vehicle_details";
+// PDF binary response — can't use the generic request<T>() helper (it always
+// calls res.json()). Mirrors fetchKybDocumentBlob's manual fetch + auth
+// header pattern, adding the CSRF header this call needs since it's a POST.
+export async function generateSgiForm(
+    formType: SgiFormType,
+    driverIds: string[],
+    action: "add" | "remove" | "change" = "add",
+): Promise<Blob> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/generate", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ form_type: formType, driver_ids: driverIds, action }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not generate form (${res.status})`);
+    }
+    return res.blob();
+}

@@ -383,7 +383,7 @@ Breach protocol:
 - Any suspected PII exposure (wrong user saw another user's data, leaked logs, RLS bypass) is a P0 incident
 - Within 24h: scope assessment, log capture, preserve evidence
 - Within 72h: Privacy Commissioner notification if the breach poses "real risk of significant harm"
-- See `docs/runbooks/data-breach.md` (to be created) for the full procedure
+- See `docs/runbooks/data-breach.md` for the full procedure
 
 ## Required Environment Variables
 

@@ -5,6 +5,7 @@ import spinrConfig from '@shared/config/spinr.config';
 import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
 import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
 import { checkLocationIntegrity } from './locationIntegrity';
+import { recordNonFatal } from './crashlytics';
 
 // Use the same backend-URL resolver as the shared API client — it carries the
 // production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
@@ -26,6 +27,28 @@ const GEOFENCE_ID = 'spinr-recovery';
 // Persisted across app death so the headless geofence-recovery task knows
 // whether to re-arm at trip cadence (a ride is active) or idle cadence.
 const TRIP_ACTIVE_KEY = 'spinr_bg_trip_active';
+
+// ── Geofence re-arm debounce ────────────────────────────────────────────
+// The geofence exit handler re-arms itself (stop + start) on every exit. Without
+// a guard, a moving driver re-arms continuously and each startGeofencingAsync
+// triggers didDetermineState: callbacks that flood EXTaskService's pending-event
+// array. Combined with concurrent mutations from CoreLocation's callback queue,
+// this causes the NSRangeException crash (index beyond bounds).
+//
+// Defence: single-flight promise lock (same pattern as tripLocationRecorder's
+// flushPromise) + a minimum-time debounce. The debounce threshold is stored in
+// module scope — it survives within a process lifetime, which covers the
+// foreground session. Headless wakes start a fresh process each time, so the
+// debounce only prevents rapid back-to-back re-arms within one wake cycle.
+const GEOFENCE_REARM_MIN_INTERVAL_MS = 10_000; // 10 seconds between re-arms
+let _geofenceRearmPromise: Promise<boolean> | null = null;
+let _lastGeofenceRearmAt = 0;
+
+/** @internal Test-only — reset debounce state between test cases. */
+export function _resetGeofenceDebounce(): void {
+  _geofenceRearmPromise = null;
+  _lastGeofenceRearmAt = 0;
+}
 
 type LocationTaskData = {
   locations: Location.LocationObject[];
@@ -90,6 +113,7 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
 export async function handleBackgroundLocationTask({ data, error }: { data?: LocationTaskData; error?: { message?: string } | null }): Promise<void> {
   if (error) {
     console.error('[BgLocation] Task error:', error.message);
+    recordNonFatal(new Error(`BgLocation task error: ${error.message}`), { domain: 'drivers', surface: 'driver-app' });
     return;
   }
   for (const location of data?.locations ?? []) {
@@ -105,9 +129,10 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
       // Durable persistence is deliberately before auth/network work. The
       // recorder keeps every accepted native sample across process restarts.
       await tripLocationRecorder.recordNativeFix(location, 'background');
-    } catch {
+    } catch (e) {
       // No raw coordinates in logs; a later native callback can still queue.
       console.warn('[BgLocation] Failed to persist a native location sample');
+      recordNonFatal(e, { domain: 'drivers', surface: 'driver-app' });
     }
   }
 
@@ -132,9 +157,10 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
       if (!response.ok) throw new Error(`location-batch ${response.status}`);
       return response.json();
     }, { force: true });
-  } catch {
+  } catch (e) {
     // Points stay in SQLite until the server returns a durable acknowledgement.
     console.warn('[BgLocation] Durable upload deferred');
+    recordNonFatal(e, { domain: 'drivers', surface: 'driver-app' });
   }
 }
 
@@ -284,6 +310,7 @@ export async function setBackgroundTripActive(active: boolean): Promise<void> {
 TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
   if (error) {
     console.error('[Geofence] Task error:', error.message);
+    recordNonFatal(new Error(`Geofence task error: ${error.message}`), { domain: 'drivers', surface: 'driver-app' });
     return;
   }
   const payload = data as
@@ -306,6 +333,9 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
     // 2. Refresh the geofence around the current location so subsequent
     //    movement keeps triggering re-arms. Without this, the driver
     //    exits the original geofence once and we never get another wake.
+    //    refreshGeofence inherits the debounce + single-flight guards from
+    //    startGeofenceRecovery, preventing the feedback loop that caused
+    //    the NSRangeException crash.
     const loc = await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
     }).catch(() => null);
@@ -314,28 +344,43 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
     }
   } catch (e) {
     console.warn('[Geofence] Exit handler failed:', e);
+    recordNonFatal(e, { domain: 'drivers', surface: 'driver-app' });
   }
 });
 
-export async function startGeofenceRecovery(lat: number, lng: number): Promise<boolean> {
-  // Geofencing needs "always" location — same prerequisite as the main
-  // background task, so by the time we get here startBackgroundLocation has
-  // already prompted for it. Re-check defensively in case the user revoked.
+/**
+ * Internal geofence re-arm — serialised and debounced.
+ *
+ * Single-flight: concurrent calls return the same promise (same pattern as
+ * tripLocationRecorder.flushPending). This prevents the headless exit handler
+ * and the foreground go-online path from driving stop/start concurrently into
+ * CLLocationManager, which can corrupt EXGeofencingTaskConsumer's internal
+ * region tracking.
+ *
+ * Debounced: skips if the last successful arm was < GEOFENCE_REARM_MIN_INTERVAL_MS
+ * ago. Without this, a moving driver re-arms on every exit and each
+ * startGeofencingAsync fires another didDetermineState: callback, feeding the
+ * race that causes NSRangeException in EXTaskService.
+ */
+async function _startGeofenceRecoveryInner(lat: number, lng: number): Promise<boolean> {
   const { status } = await Location.getBackgroundPermissionsAsync();
   if (status !== 'granted') {
     console.warn('[Geofence] Background permission not granted; skipping recovery');
     return false;
   }
 
-  // stopGeofencingAsync throws if the task isn't currently registered, so
-  // gate on isTaskRegisteredAsync to avoid a noisy log on first start.
+  // Use hasStartedGeofencingAsync — the correct liveness probe for whether
+  // CLLocationManager is actually monitoring regions. isTaskRegisteredAsync
+  // checks JS task registration only, which persists even after iOS kills
+  // the monitoring (e.g. memory pressure). Using the wrong probe meant
+  // stopGeofencingAsync was sometimes skipped, letting regions accumulate.
   try {
-    const isRunning = await TaskManager.isTaskRegisteredAsync(GEOFENCE_TASK);
-    if (isRunning) {
+    const isMonitoring = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
+    if (isMonitoring) {
       await Location.stopGeofencingAsync(GEOFENCE_TASK);
     }
   } catch {
-    // Swallow — best-effort cleanup before re-arming.
+    // Best-effort cleanup before re-arming.
   }
 
   await Location.startGeofencingAsync(GEOFENCE_TASK, [
@@ -344,27 +389,49 @@ export async function startGeofenceRecovery(lat: number, lng: number): Promise<b
       latitude: lat,
       longitude: lng,
       radius: GEOFENCE_RADIUS_M,
-      // Only wake on exit — enter would fire on every re-arm and burn
-      // battery for no benefit.
       notifyOnEnter: false,
       notifyOnExit: true,
     },
   ]);
-  // PIPEDA: never log raw lat/lng. Note radius only — the boundary is
-  // the only useful diagnostic anyway.
+  _lastGeofenceRearmAt = Date.now();
+  // PIPEDA: never log raw lat/lng.
   console.log(`[Geofence] Armed (r=${GEOFENCE_RADIUS_M}m)`);
   return true;
 }
 
+export async function startGeofenceRecovery(lat: number, lng: number): Promise<boolean> {
+  // Debounce: skip if we re-armed very recently. Prevents the feedback loop
+  // where exit → re-arm → didDetermineState → exit → re-arm floods the
+  // native task queue.
+  const elapsed = Date.now() - _lastGeofenceRearmAt;
+  if (elapsed < GEOFENCE_REARM_MIN_INTERVAL_MS) {
+    console.log(`[Geofence] Debounced (${elapsed}ms < ${GEOFENCE_REARM_MIN_INTERVAL_MS}ms)`);
+    return true;
+  }
+
+  // Single-flight: if a re-arm is already in progress, piggyback on it.
+  if (_geofenceRearmPromise) return _geofenceRearmPromise;
+
+  _geofenceRearmPromise = _startGeofenceRecoveryInner(lat, lng).finally(() => {
+    _geofenceRearmPromise = null;
+  });
+  return _geofenceRearmPromise;
+}
+
 export async function stopGeofenceRecovery(): Promise<void> {
-  const isRunning = await TaskManager.isTaskRegisteredAsync(GEOFENCE_TASK);
-  if (!isRunning) return;
-  await Location.stopGeofencingAsync(GEOFENCE_TASK);
-  console.log('[Geofence] Disarmed');
+  try {
+    const isMonitoring = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
+    if (!isMonitoring) return;
+    await Location.stopGeofencingAsync(GEOFENCE_TASK);
+    console.log('[Geofence] Disarmed');
+  } catch {
+    // Best-effort — the geofence may already have been stopped by iOS.
+  }
 }
 
 export async function refreshGeofence(lat: number, lng: number): Promise<void> {
   // Wrapper for clarity at the call site — under the hood it's the same
-  // as startGeofenceRecovery (which already stops + re-arms).
+  // as startGeofenceRecovery (which already stops + re-arms), and inherits
+  // the debounce + single-flight guards.
   await startGeofenceRecovery(lat, lng);
 }

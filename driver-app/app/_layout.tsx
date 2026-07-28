@@ -22,6 +22,7 @@ import { toastConfig } from '../components/toastConfig';
 // only starts ~400ms in) is cut off and the driver barely sees the branding.
 const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { initMetaSdk } from '@shared/analytics/meta';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
@@ -90,6 +91,14 @@ initErrorReporting({
   dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
   surface: 'driver-app',
 });
+
+// Meta app events — see rider-app/_layout.tsx for the full rationale. Uses
+// this app's OWN Meta app id, which is what keeps driver-funnel reporting
+// separate from rider-funnel reporting.
+initMetaSdk(
+  Constants.expoConfig?.extra?.fbAppId,
+  Constants.expoConfig?.extra?.fbClientToken,
+);
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
 // and its import throws on web where notifications don't exist. Lazy-require

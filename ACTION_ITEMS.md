@@ -341,35 +341,50 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 - **Acceptance:** no analytics interface accepts raw coordinates; test added.
 
 ### B2. Disputes store full legal names + RLS too broad + rounding
-- [x] **Status:** done (2026-07-27) — investigated all 3 sub-issues; only one
-  needed a code change:
-  1. **RLS too broad — fixed.** `backend/migrations/262_disputes_rls_lockdown.sql`
-     replaces the `FOR ALL TO authenticated` policy from `10_disputes_table.sql`
-     with enumerated SELECT/UPDATE for admins, plus a `BEFORE DELETE` trigger
-     blocking deletion even for `service_role` (pattern: `audit_logs`,
-     migration 51). Confirmed via grep that no live code path deletes
-     disputes — the one `delete_many("disputes", ...)` call
-     (`routes/admin/support.py`) is dead code, never imported/mounted by
-     `server.py` or `features.py`.
+- [x] **Status:** done (2026-07-28) — investigated all 3 sub-issues. All 3
+  turned out to already be fixed by prior migrations before this session
+  started; only a narrow defense-in-depth gap remained. **Correction partway
+  through**: an initial draft of the RLS fix assumed migration 10's
+  `FOR ALL TO authenticated` policy was still live and tried to replace it —
+  a `spinr-migration-reviewer` subagent review caught that this was stale
+  (migration 142 already superseded it) before merge; see the migration's
+  own header for the full correction narrative.
+  1. **RLS too broad — already fixed by migration 142, months before this
+     session.** `142_fix_rls_financial_tables.sql` dropped migration 10's
+     `FOR ALL TO authenticated` policy and replaced it with SELECT-only
+     policies (`"Admin read disputes"` role-checked, `"Rider read own
+     disputes"` own-row), revoking all INSERT/UPDATE/DELETE/TRUNCATE grants
+     from `authenticated`. The one gap it left: `service_role` still
+     bypasses RLS by design (correct — backend needs INSERT/UPDATE) and
+     nothing blocked a `service_role` DELETE. `backend/migrations/262_disputes_rls_lockdown.sql`
+     closes exactly that gap with a `BEFORE DELETE` trigger blocking
+     deletion for every role including `service_role` (pattern: `audit_logs`,
+     migration 51) — it does not touch 142's RLS policies/grants at all.
+     Confirmed via grep that no live code path deletes disputes — the one
+     `delete_many("disputes", ...)` call (`routes/admin/support.py`) is dead
+     code, never imported/mounted by `server.py` or `features.py`.
   2. **Refund-cent rounding — already fixed, no action needed.**
      `admin_resolve_dispute` (`routes/disputes.py:219`) uses
      `dollars_to_cents()`, which does proper Decimal HALF_UP conversion, not
      bare `int()` truncation. Covered by `backend/tests/test_dispute_refund_cents.py`.
      The backlog text describing this as still-broken was stale.
-  3. **Full legal name in admin response — investigated, left as-is per
-     explicit decision.** Not actually stored "at rest" as originally
-     worded — it's a read-time join (`disputes.user_name` column exists in
-     the schema but is dead, never written by `create_dispute`). The
-     response shape exactly matches `_user_display_name`
-     (`routes/admin/drivers.py:41`), the same helper used identically for
-     rider/driver names in `admin/rides.py` and `admin/drivers.py` —
-     changing only disputes.py would make it inconsistent with the rest of
-     the admin surface, not more compliant. Confirmed with product: leave
-     as-is, matches existing convention.
-- **Files:** `backend/migrations/262_disputes_rls_lockdown.sql` (new)
-- **Acceptance:** ✅ met for the two applicable parts — refund cents already
-  use proper rounding; DELETE on disputes is now blocked at the DB level.
-  The full-name display item was not a bug — no acceptance criterion applies.
+  3. **Full legal name in admin response — already fixed by migration 142,
+     months before this session.** Migration 142 §3 already scrubbed the
+     `disputes.user_name` column (`UPDATE disputes SET user_name = ''`) and
+     its own comment states the backend "no longer writes this column" —
+     the admin list endpoint enriches the display name at read time from
+     `users` instead (PIPEDA data minimization, already done). My first pass
+     at this investigation only grepped current application code and missed
+     migration 142 entirely, incorrectly concluding the column was merely
+     "dead but harmless" and that no fix was needed — the fix had already
+     shipped. Corrected once the migration reviewer's findings surfaced the
+     full picture.
+- **Files:** `backend/migrations/262_disputes_rls_lockdown.sql` (new, DELETE-block
+  trigger only — see file header for the full correction from its first draft)
+- **Acceptance:** ✅ met — refund cents already use proper rounding; disputes
+  RLS was already locked to SELECT-only by migration 142; the full-name PII
+  scrub was already done by migration 142; DELETE on disputes is now blocked
+  at the DB level for every role including `service_role`.
 
 ### B3. Driver location-update hot path (perf + Maps spend)
 - [x] **Status:** done — branch `claude/eager-franklin-69ta0w` (3 commits + completion-flush fix)

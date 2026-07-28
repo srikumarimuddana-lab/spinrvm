@@ -533,8 +533,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   pillTextActive: {
+    // No fontSize here — it would override pillTextCompact (12px) and render
+    // the selected pill larger than the rest on narrow screens.
     color: '#fff',
-    fontSize: 13,
     fontWeight: '700',
   },
   // Earnings card

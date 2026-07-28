@@ -4,7 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import spinrConfig from '@shared/config/spinr.config';
 import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
 import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
-import { checkLocationIntegrity } from './locationIntegrity';
+import { checkLocationIntegrity, haversineKm } from './locationIntegrity';
 import { recordNonFatal } from './crashlytics';
 
 // Use the same backend-URL resolver as the shared API client — it carries the
@@ -28,26 +28,67 @@ const GEOFENCE_ID = 'spinr-recovery';
 // whether to re-arm at trip cadence (a ride is active) or idle cadence.
 const TRIP_ACTIVE_KEY = 'spinr_bg_trip_active';
 
-// ── Geofence re-arm debounce ────────────────────────────────────────────
-// The geofence exit handler re-arms itself (stop + start) on every exit. Without
-// a guard, a moving driver re-arms continuously and each startGeofencingAsync
-// triggers didDetermineState: callbacks that flood EXTaskService's pending-event
-// array. Combined with concurrent mutations from CoreLocation's callback queue,
-// this causes the NSRangeException crash (index beyond bounds).
+// ── Geofence re-arm gating ──────────────────────────────────────────────
+// The exit handler re-arms the geofence, and every startGeofencingAsync makes
+// CoreLocation re-evaluate region state. Ungated, a moving driver re-arms
+// continuously and floods EXTaskService's pending-event array — the
+// NSRangeException crash.
 //
-// Defence: single-flight promise lock (same pattern as tripLocationRecorder's
-// flushPromise) + a minimum-time debounce. The debounce threshold is stored in
-// module scope — it survives within a process lifetime, which covers the
-// foreground session. Headless wakes start a fresh process each time, so the
-// debounce only prevents rapid back-to-back re-arms within one wake cycle.
-const GEOFENCE_REARM_MIN_INTERVAL_MS = 10_000; // 10 seconds between re-arms
+// The gate is *displacement*, not elapsed time. A re-arm exists to recentre the
+// region, so "have we moved?" is the semantically correct question, and because
+// the centre is persisted it still works on a headless wake — where module
+// state starts fresh and a time-based debounce would be dead code in exactly
+// the path this module exists for. Displacement also can't be jammed by a
+// backward wall-clock correction the way a Date.now() debounce can.
+const GEOFENCE_MIN_DISPLACEMENT_M = 150;
+// Device-local, encrypted (same store as TRIP_ACTIVE_KEY). Operational state,
+// never logged or sent anywhere.
+const GEOFENCE_CENTRE_KEY = 'spinr_bg_geofence_centre';
+// Best-effort coalescing of concurrent stop/start pairs into CLLocationManager
+// (go-online racing a headless exit wake). A check-then-act window remains;
+// worst case is one redundant re-arm, which the displacement gate then absorbs.
 let _geofenceRearmPromise: Promise<boolean> | null = null;
-let _lastGeofenceRearmAt = 0;
 
-/** @internal Test-only — reset debounce state between test cases. */
+/** @internal Test-only — reset in-flight gating state between test cases. */
 export function _resetGeofenceDebounce(): void {
   _geofenceRearmPromise = null;
-  _lastGeofenceRearmAt = 0;
+}
+
+async function _readGeofenceCentre(): Promise<{ lat: number; lng: number } | null> {
+  try {
+    const raw = await SecureStore.getItemAsync(GEOFENCE_CENTRE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.lat !== 'number' || typeof parsed?.lng !== 'number') return null;
+    return { lat: parsed.lat, lng: parsed.lng };
+  } catch {
+    // Unreadable/corrupt — treat as "no centre" so we re-arm rather than skip.
+    return null;
+  }
+}
+
+/**
+ * Skip a re-arm only when a geofence is *genuinely* armed and the driver has
+ * not moved far enough from its centre to need recentring. Anything uncertain
+ * (probe throws, no persisted centre) resolves to "do not skip" — leaving a
+ * driver with no recovery geofence is far worse than one redundant re-arm.
+ */
+async function _shouldSkipRearm(lat: number, lng: number): Promise<boolean> {
+  let armed: boolean;
+  try {
+    armed = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
+  } catch (e) {
+    recordNonFatal(e, {
+      domain: 'drivers', surface: 'driver-app', geofence: 'liveness_probe_failed',
+    });
+    return false;
+  }
+  if (!armed) return false;
+
+  const centre = await _readGeofenceCentre();
+  if (!centre) return false;
+
+  return haversineKm(lat, lng, centre.lat, centre.lng) * 1000 < GEOFENCE_MIN_DISPLACEMENT_M;
 }
 
 type LocationTaskData = {
@@ -348,20 +389,6 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
   }
 });
 
-/**
- * Internal geofence re-arm — serialised and debounced.
- *
- * Single-flight: concurrent calls return the same promise (same pattern as
- * tripLocationRecorder.flushPending). This prevents the headless exit handler
- * and the foreground go-online path from driving stop/start concurrently into
- * CLLocationManager, which can corrupt EXGeofencingTaskConsumer's internal
- * region tracking.
- *
- * Debounced: skips if the last successful arm was < GEOFENCE_REARM_MIN_INTERVAL_MS
- * ago. Without this, a moving driver re-arms on every exit and each
- * startGeofencingAsync fires another didDetermineState: callback, feeding the
- * race that causes NSRangeException in EXTaskService.
- */
 async function _startGeofenceRecoveryInner(lat: number, lng: number): Promise<boolean> {
   const { status } = await Location.getBackgroundPermissionsAsync();
   if (status !== 'granted') {
@@ -369,18 +396,17 @@ async function _startGeofenceRecoveryInner(lat: number, lng: number): Promise<bo
     return false;
   }
 
-  // Use hasStartedGeofencingAsync — the correct liveness probe for whether
-  // CLLocationManager is actually monitoring regions. isTaskRegisteredAsync
-  // checks JS task registration only, which persists even after iOS kills
-  // the monitoring (e.g. memory pressure). Using the wrong probe meant
-  // stopGeofencingAsync was sometimes skipped, letting regions accumulate.
+  // stopGeofencingAsync is called unconditionally — it throws harmlessly when
+  // nothing is monitored, and gating it on a probe risks skipping the stop and
+  // letting regions accumulate (the original isTaskRegisteredAsync bug).
   try {
-    const isMonitoring = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
-    if (isMonitoring) {
-      await Location.stopGeofencingAsync(GEOFENCE_TASK);
-    }
-  } catch {
-    // Best-effort cleanup before re-arming.
+    await Location.stopGeofencingAsync(GEOFENCE_TASK);
+  } catch (e) {
+    // Usually "not monitoring" and benign, but a *real* failure here is how
+    // regions accumulate, so surface it instead of swallowing it silently.
+    recordNonFatal(e, {
+      domain: 'drivers', surface: 'driver-app', geofence: 'stop_before_rearm_failed',
+    });
   }
 
   await Location.startGeofencingAsync(GEOFENCE_TASK, [
@@ -393,24 +419,35 @@ async function _startGeofenceRecoveryInner(lat: number, lng: number): Promise<bo
       notifyOnExit: true,
     },
   ]);
-  _lastGeofenceRearmAt = Date.now();
+  // Persist the centre so the displacement gate survives process death.
+  await SecureStore.setItemAsync(GEOFENCE_CENTRE_KEY, JSON.stringify({ lat, lng }))
+    .catch(() => { /* Gate degrades to "always re-arm" — safe direction. */ });
   // PIPEDA: never log raw lat/lng.
   console.log(`[Geofence] Armed (r=${GEOFENCE_RADIUS_M}m)`);
   return true;
 }
 
+/**
+ * Arm (or recentre) the recovery geofence around a position.
+ *
+ * Returns `true` only when a geofence is actually armed — either because this
+ * call armed one, or because one is already armed close enough to `lat`/`lng`
+ * that recentring would be pointless. It never returns `true` speculatively:
+ * `useDriverDashboard.toggleOnline` and the P0/P1 remediation plan both treat
+ * the return value as "the driver has a geofence".
+ */
 export async function startGeofenceRecovery(lat: number, lng: number): Promise<boolean> {
-  // Debounce: skip if we re-armed very recently. Prevents the feedback loop
-  // where exit → re-arm → didDetermineState → exit → re-arm floods the
-  // native task queue.
-  const elapsed = Date.now() - _lastGeofenceRearmAt;
-  if (elapsed < GEOFENCE_REARM_MIN_INTERVAL_MS) {
-    console.log(`[Geofence] Debounced (${elapsed}ms < ${GEOFENCE_REARM_MIN_INTERVAL_MS}ms)`);
+  if (await _shouldSkipRearm(lat, lng)) {
+    console.log('[Geofence] Still armed and driver has not moved enough to recentre');
     return true;
   }
 
-  // Single-flight: if a re-arm is already in progress, piggyback on it.
-  if (_geofenceRearmPromise) return _geofenceRearmPromise;
+  if (_geofenceRearmPromise) {
+    // Wait for the in-flight arm, but don't adopt its result: it may have
+    // centred somewhere materially different, and its rejection isn't ours.
+    await _geofenceRearmPromise.catch(() => {});
+    if (await _shouldSkipRearm(lat, lng)) return true;
+  }
 
   _geofenceRearmPromise = _startGeofenceRecoveryInner(lat, lng).finally(() => {
     _geofenceRearmPromise = null;
@@ -419,13 +456,21 @@ export async function startGeofenceRecovery(lat: number, lng: number): Promise<b
 }
 
 export async function stopGeofenceRecovery(): Promise<void> {
+  // Drop the in-flight arm's claim and the persisted centre first, so the gate
+  // can never suppress a later arm on stale state — a driver toggling offline
+  // and back on must always end up with a geofence.
+  _geofenceRearmPromise = null;
+  await SecureStore.deleteItemAsync(GEOFENCE_CENTRE_KEY).catch(() => {});
+
+  // Stop unconditionally rather than gating on a liveness probe: an arm that
+  // lands between the probe and the stop would otherwise leave an *offline*
+  // driver geofenced, and the exit handler would then silently resume
+  // background tracking for them.
   try {
-    const isMonitoring = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
-    if (!isMonitoring) return;
     await Location.stopGeofencingAsync(GEOFENCE_TASK);
     console.log('[Geofence] Disarmed');
   } catch {
-    // Best-effort — the geofence may already have been stopped by iOS.
+    // Throws when nothing is monitored — the normal case here, not an error.
   }
 }
 

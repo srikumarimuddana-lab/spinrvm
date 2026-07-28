@@ -22,7 +22,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 try:
     from .. import db_supabase
@@ -101,6 +101,11 @@ class ToolSpec:
     # An id-style arg that is neither classified nor banned fails registration.
     owned_id_args: Dict[str, str] = field(default_factory=dict)
     public_id_args: frozenset = field(default_factory=frozenset)
+    # Per-tool handler timeout. None -> the global TOOL_TIMEOUT_SECONDS. Only
+    # the Maps fan-out tools (find_place, get_fare_quote, propose_ride_booking)
+    # need more: their worst case chains concurrent 4 s geocode pairs plus a
+    # 2 s Directions wait, which the 5 s default cut off mid-quote.
+    timeout_seconds: Optional[float] = None
 
 
 TOOL_REGISTRY: Dict[str, ToolSpec] = {}
@@ -370,8 +375,9 @@ async def _execute_tool_inner(
     # it stays server-decided either way.
     handler_user = {**user, "ai_audience": audience}
 
+    handler_timeout = spec.timeout_seconds if spec.timeout_seconds is not None else TOOL_TIMEOUT_SECONDS
     try:
-        result = await asyncio.wait_for(spec.handler(handler_user, **call_args), timeout=TOOL_TIMEOUT_SECONDS)
+        result = await asyncio.wait_for(spec.handler(handler_user, **call_args), timeout=handler_timeout)
     except asyncio.TimeoutError:
         logger.error("ai tool timed out", extra={"tool": name, "user_id": user.get("id")})
         return {"error": "the lookup took too long — try again"}, False

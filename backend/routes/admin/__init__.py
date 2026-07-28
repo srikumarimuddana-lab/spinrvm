@@ -57,6 +57,7 @@ from .ai_console import router as ai_console_router
 from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
+from .data_transfer_export import router as data_transfer_export_router
 from .documents import router as documents_router
 from .driver_import import router as driver_import_router
 from .drivers import router as drivers_router
@@ -110,6 +111,11 @@ admin_router.include_router(driver_import_router, dependencies=[Depends(require_
 # Legacy Stripe mapping import (drivers + riders kinds) — migration ops
 # tooling, gated like the bulk driver import it mirrors.
 admin_router.include_router(stripe_import_router, dependencies=[Depends(require_module("drivers"))])
+# Data Transfer module (export/import users+drivers with docs/history between
+# Spinr's own environments) — gated on the existing "bulk_operations" module
+# (same grant as the page it's consolidating into) rather than inventing a
+# new module string that no staff role has been granted yet.
+admin_router.include_router(data_transfer_export_router, dependencies=[Depends(require_module("bulk_operations"))])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])

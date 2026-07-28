@@ -44,9 +44,9 @@ No unprotected admin API endpoints exist as of this audit.
 from fastapi import APIRouter, Depends
 
 try:
-    from ...dependencies import get_admin_user, require_module
+    from ...dependencies import get_admin_user, require_module, require_super_admin
 except ImportError:
-    from dependencies import get_admin_user, require_module
+    from dependencies import get_admin_user, require_module, require_super_admin
 
 try:
     from ..disputes import admin_router as disputes_admin_router
@@ -117,14 +117,24 @@ admin_router.include_router(driver_import_router, dependencies=[Depends(require_
 # tooling, gated like the bulk driver import it mirrors.
 admin_router.include_router(stripe_import_router, dependencies=[Depends(require_module("drivers"))])
 # Data Transfer module (export/import users+drivers with docs/history between
-# Spinr's own environments) — gated on the existing "bulk_operations" module
-# (same grant as the page it's consolidating into) rather than inventing a
-# new module string that no staff role has been granted yet.
-admin_router.include_router(data_transfer_export_router, dependencies=[Depends(require_module("bulk_operations"))])
-admin_router.include_router(data_transfer_import_router, dependencies=[Depends(require_module("bulk_operations"))])
-admin_router.include_router(data_transfer_search_router, dependencies=[Depends(require_module("bulk_operations"))])
-admin_router.include_router(data_transfer_jobs_router, dependencies=[Depends(require_module("bulk_operations"))])
-admin_router.include_router(sgi_forms_router, dependencies=[Depends(require_module("bulk_operations"))])
+# Spinr's own environments) — gated on require_super_admin, not a module flag.
+# Previously gated on require_module("bulk_operations"); that module string
+# is not in AVAILABLE_MODULES/ALL_MODULES (routes/admin/staff.py,
+# routes/admin/auth.py) or any ROLE_PRESETS, and the "custom" role grant path
+# filters against AVAILABLE_MODULES — so no non-super_admin could actually
+# ever hold it. Effective access was already super_admin-only, but only by
+# omission: a future engineer adding "bulk_operations" to the grantable list
+# for an unrelated feature would have silently reopened this full-fidelity,
+# unredacted PII export/import surface with no signal that they'd done
+# anything sensitive. require_super_admin makes the boundary explicit and
+# independent of what's in the grantable module list. See
+# docs/privacy/2026-07-28-pia-data-transfer-export.md R-A and
+# ACTION_ITEMS.md B11.
+admin_router.include_router(data_transfer_export_router, dependencies=[Depends(require_super_admin)])
+admin_router.include_router(data_transfer_import_router, dependencies=[Depends(require_super_admin)])
+admin_router.include_router(data_transfer_search_router, dependencies=[Depends(require_super_admin)])
+admin_router.include_router(data_transfer_jobs_router, dependencies=[Depends(require_super_admin)])
+admin_router.include_router(sgi_forms_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])

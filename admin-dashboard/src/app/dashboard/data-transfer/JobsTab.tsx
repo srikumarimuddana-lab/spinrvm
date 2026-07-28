@@ -70,6 +70,7 @@ export function JobsTab() {
                         <TableHead>Type</TableHead>
                         <TableHead>Records</TableHead>
                         <TableHead>Format</TableHead>
+                        <TableHead>Reason</TableHead>
                         <TableHead>Expires</TableHead>
                         <TableHead />
                     </TableRow>
@@ -77,7 +78,7 @@ export function JobsTab() {
                 <TableBody>
                     {jobs.length === 0 && !loading && (
                         <TableRow>
-                            <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                            <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                                 No export batches yet.
                             </TableCell>
                         </TableRow>
@@ -99,6 +100,9 @@ export function JobsTab() {
                                 <TableCell className="capitalize">{job.entity_type}</TableCell>
                                 <TableCell>{job.entity_count}</TableCell>
                                 <TableCell className="uppercase">{job.format}</TableCell>
+                                <TableCell className="max-w-[240px] truncate text-sm text-muted-foreground" title={job.reason ?? undefined}>
+                                    {job.reason || "—"}
+                                </TableCell>
                                 <TableCell>
                                     {job.expires_at ? (
                                         <span className={expired ? "text-destructive" : ""}>

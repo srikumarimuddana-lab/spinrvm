@@ -33,6 +33,38 @@ VEHICLE_TEMPLATE = TEMPLATE_DIR / "D00033_vehicle_details_template.pdf"
 MAX_DRIVER_ROWS = 10
 MAX_VEHICLE_ROWS = 16
 
+# Company-section values, set explicitly on every generated form rather than
+# relying on the template's baked-in defaults. D00033 is a 3-page AcroForm
+# with an independent company-name/customer-number field per page
+# (CompanyName/CompanyName2/CompanyName3); the template only ships page 1
+# filled in, so pages 2-3 rendered blank on every generated form until this
+# was set explicitly here. Update these two constants (not the PDF
+# templates) if Spinr's registered company name, SGI customer number, or
+# address changes.
+_COMPANY_NAME = "Spinr Mobility Inc."
+_COMPANY_ADDRESS = "#200, 1956 BROAD STREET, REGINA, SASKATCHEWAN, CANADA, S4P 1Y1"
+_SGI_CUSTOMER_NUMBER = "88816996"
+
+# D00032 has a single company-info section (one page's worth of fields).
+_DRIVER_COMPANY_FIELDS = {
+    "Company name": _COMPANY_NAME,
+    "Street address": _COMPANY_ADDRESS,
+    "SGI customer number": _SGI_CUSTOMER_NUMBER,
+}
+# D00033 repeats the company-info block once per page; confirmed via
+# PdfReader.get_fields() that CompanyName2/CompanyName3 and
+# SGICustomerNumber3 ship blank in the template (SGICustomerNumber2 happens
+# to be pre-filled, StreetAddress has no page-2/3 counterpart at all).
+_VEHICLE_COMPANY_FIELDS = {
+    "CompanyName": _COMPANY_NAME,
+    "CompanyName2": _COMPANY_NAME,
+    "CompanyName3": _COMPANY_NAME,
+    "StreetAddress": _COMPANY_ADDRESS,
+    "SGICustomerNumber": _SGI_CUSTOMER_NUMBER,
+    "SGICustomerNumber2": _SGI_CUSTOMER_NUMBER,
+    "SGICustomerNumber3": _SGI_CUSTOMER_NUMBER,
+}
+
 # AddOrRemove's AcroForm export states are numeric indices ('/0', '/1',
 # '/2'), not the "Add"/"Remove"/"Change" labels printed next to the
 # checkboxes on the form (confirmed via PdfReader.get_fields()['AddOrRemove']
@@ -97,7 +129,7 @@ def fill_driver_details_form(drivers: list[dict[str, Any]]) -> bytes:
     if len(drivers) > MAX_DRIVER_ROWS:
         raise TooManyRowsError(f"{len(drivers)} drivers requested; the D00032 template has {MAX_DRIVER_ROWS} rows")
 
-    field_values: dict[str, Any] = {}
+    field_values: dict[str, Any] = dict(_DRIVER_COMPANY_FIELDS)
     for i, driver in enumerate(drivers, start=1):
         slots = _driver_row_fields(i)
         field_values[slots["full_name"]] = driver.get("full_name", "")
@@ -121,7 +153,7 @@ def fill_vehicle_details_form(vehicles: list[dict[str, Any]]) -> bytes:
     if len(vehicles) > MAX_VEHICLE_ROWS:
         raise TooManyRowsError(f"{len(vehicles)} vehicles requested; the D00033 template has {MAX_VEHICLE_ROWS} rows")
 
-    field_values: dict[str, Any] = {}
+    field_values: dict[str, Any] = dict(_VEHICLE_COMPANY_FIELDS)
     for i, vehicle in enumerate(vehicles, start=1):
         slots = _vehicle_row_fields(i)
         field_values[slots["licence_plate_number"]] = vehicle.get("licence_plate_number", "")

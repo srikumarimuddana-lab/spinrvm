@@ -882,13 +882,15 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   is generated.
 
 ### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
-- [ ] **Status:** in progress (2026-07-28) — R-A, R-B, R-C, R-D (all 4 code
-  items) DONE. Only R-E/R-F/R-G remain — all three are small, non-code
-  (a runbook cross-reference once that runbook exists, a five-minute
-  confirmation, a legal review ask) — plus the still-open AI-3 dual-approval
-  wiring (shared with B10, not specific to this item). The module's P0 gaps
-  (access-control, missing PIA) were fixed 2026-07-28 (PRs #2685, #2687);
-  this item tracks the PIA's own follow-up recommendations.
+- [ ] **Status:** in progress (2026-07-28) — R-A through R-F all DONE/resolved.
+  Only R-G remains open, and only because it genuinely requires a human
+  privacy/legal determination — a self-contained request package for that
+  review has been prepared at `reports/legal/data-transfer-implied-consent-review.md`
+  (2026-07-28), but the actual determination is still pending a named
+  reviewer. Plus the still-open AI-3 dual-approval wiring (shared with B10,
+  not specific to this item). The module's P0 gaps (access-control, missing
+  PIA) were fixed 2026-07-28 (PRs #2685, #2687); this item tracks the PIA's
+  own follow-up recommendations.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -944,7 +946,20 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   - [LOW] R-G: formal legal review of the implied-consent basis for this
     secondary use — **needs a human privacy/legal sign-off, not resolvable
     by an engineering task.** Still open; do not mark done without an actual
-    reviewer name + date in the PIA's Section 9 sign-off table.
+    reviewer name + date in the PIA's Section 9 sign-off table. **Request
+    prepared 2026-07-28:** `reports/legal/data-transfer-implied-consent-review.md`
+    packages the specific question, background, and what a closed-out review
+    should record, following the house format of
+    `reports/legal/supabase-region-attestation-checklist.md`. Also flags two
+    facts not fully surfaced in the PIA itself: (1) `docs/legal/privacy-policy.md`
+    (still unpublished) currently has no language covering this internal
+    cross-environment data-movement use case — if legal concludes a distinct
+    disclosure is needed, that draft is the place to add it before first
+    publication; (2) the module's transfer stays entirely within Spinr's own
+    Supabase project (no third-party recipient), which the request flags as
+    relevant to the reasonable-secondary-use analysis. No privacy-officer/legal
+    role is currently assigned in this repo to actually make the call — see
+    the request's Status table.
   - When AI-3's shared dual-approval mechanism is built (see B10), wire this
     route through it too rather than a one-off gate.
 - **Files:** `backend/routes/admin/data_transfer_export.py`,

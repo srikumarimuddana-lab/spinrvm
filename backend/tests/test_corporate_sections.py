@@ -84,6 +84,83 @@ async def test_update_section_cross_company_is_404():
 
 
 @pytest.mark.anyio
+async def test_update_section_applies_trimmed_patch():
+    from backend.routes.corporate_company_bookings import SectionUpdate, update_section
+
+    existing = {"id": "sec1", "company_id": _COMPANY_ID, "name": "Old", "status": "active"}
+    with (
+        patch(_CCB + "db_supabase.get_rows", AsyncMock(return_value=[existing])),
+        patch(
+            _CCB + "db_supabase.update_one",
+            AsyncMock(return_value={**existing, "name": "New Name"}),
+        ) as upd,
+    ):
+        row = await update_section("sec1", SectionUpdate(name="  New Name  "), _ADMIN_CTX)
+
+    assert row["name"] == "New Name"
+    # The handler strips before persisting — the raw padded value must never reach the DB.
+    assert upd.call_args.args[2] == {"name": "New Name"}
+
+
+@pytest.mark.anyio
+async def test_update_section_empty_patch_is_noop_returns_existing():
+    from backend.routes.corporate_company_bookings import SectionUpdate, update_section
+
+    existing = {"id": "sec1", "company_id": _COMPANY_ID, "name": "Old", "status": "active"}
+    with (
+        patch(_CCB + "db_supabase.get_rows", AsyncMock(return_value=[existing])),
+        patch(_CCB + "db_supabase.update_one", AsyncMock()) as upd,
+    ):
+        row = await update_section("sec1", SectionUpdate(), _ADMIN_CTX)
+
+    assert row == existing
+    upd.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_update_section_duplicate_name_is_409():
+    from backend.routes.corporate_company_bookings import SectionUpdate, update_section
+
+    existing = {"id": "sec1", "company_id": _COMPANY_ID, "name": "Old", "status": "active"}
+    with (
+        patch(_CCB + "db_supabase.get_rows", AsyncMock(return_value=[existing])),
+        patch(
+            _CCB + "db_supabase.update_one",
+            AsyncMock(side_effect=Exception('duplicate key value violates unique constraint "x"')),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await update_section("sec1", SectionUpdate(name="Dup"), _ADMIN_CTX)
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_update_section_non_duplicate_db_error_reraises():
+    from backend.routes.corporate_company_bookings import SectionUpdate, update_section
+
+    existing = {"id": "sec1", "company_id": _COMPANY_ID, "name": "Old", "status": "active"}
+    with (
+        patch(_CCB + "db_supabase.get_rows", AsyncMock(return_value=[existing])),
+        patch(
+            _CCB + "db_supabase.update_one",
+            AsyncMock(side_effect=RuntimeError("connection reset")),
+        ),
+    ):
+        with pytest.raises(RuntimeError):
+            await update_section("sec1", SectionUpdate(name="X"), _ADMIN_CTX)
+
+
+@pytest.mark.anyio
+async def test_archive_section_not_found_is_404():
+    from backend.routes.corporate_company_bookings import archive_section
+
+    with patch(_CCB + "db_supabase.get_rows", AsyncMock(return_value=[])):
+        with pytest.raises(HTTPException) as exc_info:
+            await archive_section("sec_missing", _ADMIN_CTX)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_archive_never_deletes():
     from backend.routes.corporate_company_bookings import archive_section
 

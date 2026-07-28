@@ -956,9 +956,23 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   §8 for R-A through R-G).
 
 ### B12. Corporate billing: race-test coverage gaps and no compensating-transaction runbook
-- [ ] **Status:** not started — the P0 gap (no regression test for the
-  migration-258 allowance-cap race) was fixed 2026-07-28 (PR #2686); these
-  are the remaining P1 items from the same audit.
+- [x] **Status:** DONE (2026-07-28, branch `claude/b12-corporate-coverage-runbook`)
+  — the P0 gap (no regression test for the migration-258 allowance-cap race)
+  was fixed 2026-07-28 (PR #2686); both remaining P1 items from the same
+  audit are now closed:
+  - ~~runbook~~ `docs/runbooks/corporate-compensating-transaction.md` written
+    — detection via the ledger, target-balance compensating-delta computation
+    (not a blind reversal), applying the correction through the same locked
+    RPC, and reconciliation queries.
+  - ~~coverage gap~~ all four files now ≥90% (measured via
+    `pytest --cov=routes.corporate_rider --cov=routes.corporate_company_bookings
+    --cov=routes.corporate_accounts --cov=routes.corporate_company
+    --cov-report=term-missing backend/tests/ -k corporate`, 503 passed / 3
+    skipped / 0 failed):
+    `routes/corporate_rider.py` 65% → **96%**,
+    `routes/corporate_company_bookings.py` 57% → **94%**,
+    `routes/corporate_accounts.py` 79%/82% → **97%**,
+    `routes/corporate_company.py` 79% → **93%**.
 - **Why:** `reports/audits/2026-07-28-data-transfer-corporate-lifecycle-audit-v1.md`
   found: (1) no compensating-transaction runbook exists for a bad
   `corporate_wallet_apply_delta`/`corporate_allowance_apply_delta`
@@ -975,13 +989,24 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   scope (cost centers, approval workflows, SSO/HRIS — currently only
   discoverable via `docs/superpowers/specs/2026-04-15-corporate-accounts-b2b-design.md`)
   here so it isn't lost.
+- **Still open (out of scope for this pass, tracked here per the audit's own
+  note):**
+  - KYB document Storage bucket RLS/access scoping — flagged "not confirmed"
+    by the audit; needs its own security-focused pass, not attempted here.
+  - v2-deferred corporate scope (cost centers, approval workflows, SSO/HRIS)
+    — see `docs/superpowers/specs/2026-04-15-corporate-accounts-b2b-design.md`.
 - **Files:** `backend/services/corporate_wallet_service.py`,
   `backend/services/corporate_allowance_service.py`,
   `backend/routes/corporate_rider.py`, `backend/routes/corporate_company_bookings.py`,
   `backend/routes/corporate_accounts.py`, `backend/routes/corporate_company.py`,
-  new runbook under `docs/runbooks/`.
+  `docs/runbooks/corporate-compensating-transaction.md` (new),
+  `backend/tests/test_corporate_rider_routes.py` (extended),
+  `backend/tests/test_corporate_company_bookings_routes.py` (new),
+  `backend/tests/test_corporate_sections.py` (extended),
+  `backend/tests/test_corporate_accounts_lifecycle.py` (new),
+  `backend/tests/test_corporate_company_gap_coverage.py` (new).
 - **Acceptance:** runbook exists and is concrete/testable (not just "revert
-  the commit"); all four listed files reach ≥90% coverage.
+  the commit") — met; all four listed files reach ≥90% coverage — met.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

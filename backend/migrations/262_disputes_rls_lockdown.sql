@@ -20,10 +20,13 @@
 -- Zoho ticket-id backfill) — so UPDATE stays allowed for admins, only DELETE
 -- is blocked.
 --
--- Rollback plan: drop the trigger, restore the original FOR ALL policy,
--- restore the previous GRANT/REVOKE surface. No data is touched by this
--- migration (RLS/grants/trigger only), so rollback is a straightforward
--- policy/trigger swap with no data-cleanup step.
+-- Rollback: drop trigger disputes_no_delete, DROP the "Admin read disputes"
+-- and "Admin update disputes" policies, recreate "Admin full access
+-- disputes" FOR ALL TO authenticated (as it was in migration 10), and
+-- restore the previous GRANT/REVOKE surface (GRANT ALL ... TO authenticated
+-- via the FOR ALL policy). No data is touched by this migration
+-- (RLS/grants/trigger only), so rollback is a straightforward policy/trigger
+-- swap with no data-cleanup step.
 -- =============================================================================
 
 -- ─────────────────────────────────────────────────────────────────────────────

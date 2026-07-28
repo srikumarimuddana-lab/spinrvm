@@ -263,7 +263,11 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
        `docs/change-log/2026-07-28-corporate-accounts-coverage-80.md`.
      - `services/corporate_wallet_service.py` — **done, 97%** (closed
        2026-07-28, see `docs/change-log/2026-07-28-corporate-wallet-service-coverage-80.md`),
-       `services/corporate_allowance_service.py` — 39% (money math)
+       `services/corporate_allowance_service.py` — **done, 97%**
+       (closed 2026-07-28 — the existing `tests/services/test_corporate_allowance_service.py`
+       already covered every branch once measured in isolation (`pytest tests/ -k allowance`);
+       the previously-tracked 39% figure was stale/measured differently, no new tests were
+       needed; see `docs/change-log/2026-07-28-corporate-allowance-service-coverage-80.md`)
      - `routes/corporate_company_bookings.py` — 38%
      - `routes/corporate_signup.py` — **89%** (was 32-33%; closed
        2026-07-28, see `docs/change-log/2026-07-28-corporate-signup-coverage-80.md`).

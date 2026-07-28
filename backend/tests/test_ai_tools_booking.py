@@ -32,25 +32,26 @@ GEOCODE_OK = {
     ],
 }
 
+# Places API (New) Text Search response shape — see
+# utils/google_places_new.py::legacy_place_results_from_text_search.
 PLACES_OK = {
-    "status": "OK",
-    "results": [
+    "places": [
         {
-            "name": "Walmart Supercentre",
-            "formatted_address": "4500 Gordon Rd, Regina, SK, Canada",
-            "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.4079, "lng": -104.6501}},
+            "displayName": {"text": "Walmart Supercentre"},
+            "formattedAddress": "4500 Gordon Rd, Regina, SK, Canada",
+            "location": {"latitude": 50.4079, "longitude": -104.6501},
         },
         {
-            "name": "Walmart East",
-            "formatted_address": "2150 Prince of Wales Dr, Regina, SK, Canada",
-            "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.4497, "lng": -104.5345}},
+            "displayName": {"text": "Walmart East"},
+            "formattedAddress": "2150 Prince of Wales Dr, Regina, SK, Canada",
+            "location": {"latitude": 50.4497, "longitude": -104.5345},
         },
         {
-            "name": "Walmart Rochdale",
-            "formatted_address": "3939 Rochdale Blvd, Regina, SK, Canada",
-            "geometry": {"location_type": "ROOFTOP", "location": {"lat": 50.4966, "lng": -104.6401}},
+            "displayName": {"text": "Walmart Rochdale"},
+            "formattedAddress": "3939 Rochdale Blvd, Regina, SK, Canada",
+            "location": {"latitude": 50.4966, "longitude": -104.6401},
         },
-    ],
+    ]
 }
 
 
@@ -63,10 +64,17 @@ def _patch_area(area=AREA):
 
 
 def _patch_http(payload):
+    """Mocks both GET (legacy Geocoding/Directions) and POST (Places API
+    (New) Text Search) with the same response body/status. Fine whenever a
+    test only exercises one of the two — the "places" branch is always
+    attempted first for a non-street-address query, so an unused GET mock
+    never gets called."""
     resp = MagicMock()
     resp.json.return_value = payload
+    resp.status_code = 200
     client = MagicMock()
     client.get = AsyncMock(return_value=resp)
+    client.post = AsyncMock(return_value=resp)
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=client)
     ctx.__aexit__ = AsyncMock(return_value=False)
@@ -94,6 +102,83 @@ def test_rider_prompt_requires_fresh_closest_search_without_disclosing_tools():
 
 def _patch_last_ride(rows=None):
     return patch.object(tools_booking.db_supabase, "get_rows", AsyncMock(return_value=rows or []))
+
+
+class TestFindPlaceHardRestriction:
+    """B5: named-place lookups now go through Places API (New) Text Search
+    with a HARD locationRestriction rectangle, not the legacy Text Search
+    API's soft `radius`/`location` bias — Google cannot return a candidate
+    outside the box at all."""
+
+    @pytest.mark.anyio
+    async def test_search_request_carries_a_hard_location_restriction(self):
+        captured = {}
+
+        async def maps_post(url, headers, json_body):
+            captured["url"] = url
+            captured["json"] = json_body
+            return 200, PLACES_OK
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_area(),
+            patch.object(tools_booking, "_maps_post", AsyncMock(side_effect=maps_post)),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
+            )
+
+        assert ok
+        assert captured["url"] == tools_booking.PLACES_NEW_TEXT_SEARCH_URL
+        restriction = captured["json"]["locationRestriction"]["rectangle"]
+        # The rider's point must sit strictly inside the restriction box —
+        # otherwise the "hard filter" claim is meaningless.
+        assert restriction["low"]["latitude"] < 50.41 < restriction["high"]["latitude"]
+        assert restriction["low"]["longitude"] < -104.65 < restriction["high"]["longitude"]
+
+    @pytest.mark.anyio
+    async def test_no_bias_point_sends_no_restriction(self):
+        """Without a near_lat/near_lng, there is nothing to build a hard box
+        around — matches the legacy branch's behaviour of searching
+        unrestricted in that case."""
+        captured = {}
+
+        async def maps_post(url, headers, json_body):
+            captured["json"] = json_body
+            return 200, {"places": []}
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            patch.object(tools_booking, "_maps_post", AsyncMock(side_effect=maps_post)),
+            patch.object(tools_booking, "_maps_get", AsyncMock(return_value={"status": "ZERO_RESULTS"})),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "walmart"}, user=RIDER)
+
+        assert ok
+        assert "locationRestriction" not in captured["json"]
+
+    @pytest.mark.anyio
+    async def test_places_api_error_status_is_reported_and_not_silently_swallowed(self):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            patch.object(
+                tools_booking,
+                "_maps_post",
+                AsyncMock(return_value=(403, {"error": {"message": "API key not valid"}})),
+            ),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
+            )
+
+        assert ok
+        assert "error" in result
 
 
 class TestFindPlace:
@@ -167,17 +252,17 @@ class TestFindPlace:
 
     @pytest.mark.anyio
     async def test_named_search_keeps_ten_unique_in_area_addresses(self):
-        results = []
+        places_list = []
         for index in range(12):
             address_index = 0 if index == 1 else index
-            results.append(
+            places_list.append(
                 {
-                    "name": "Walmart Pharmacy" if index == 1 else f"Walmart {index}",
-                    "formatted_address": f"{100 + address_index} Test Rd, Regina, SK",
-                    "geometry": {"location": {"lat": 50.41 + index * 0.001, "lng": -104.65}},
+                    "displayName": {"text": "Walmart Pharmacy" if index == 1 else f"Walmart {index}"},
+                    "formattedAddress": f"{100 + address_index} Test Rd, Regina, SK",
+                    "location": {"latitude": 50.41 + index * 0.001, "longitude": -104.65},
                 }
             )
-        places = {"status": "OK", "results": results}
+        places = {"places": places_list}
 
         async def areas(points):
             # The last unique candidate is outside service and must not be shown.
@@ -211,8 +296,6 @@ class TestFindPlace:
     @pytest.mark.anyio
     async def test_named_place_suggestions_rank_by_google_driving_distance(self):
         async def maps_get(url, params):
-            if url == tools_booking._PLACES_TEXT_URL:
-                return PLACES_OK
             destination = params["destination"]
             route_by_destination = {
                 # Closest as the crow flies, but 8 km by road.
@@ -241,6 +324,7 @@ class TestFindPlace:
             _patch_settings(),
             _patch_budget(),
             _patch_area(),
+            patch.object(tools_booking, "_maps_post", AsyncMock(return_value=(200, PLACES_OK))),
             patch.object(tools_booking, "_maps_get", AsyncMock(side_effect=maps_get)),
             patch.object(tools_booking, "record_call", AsyncMock()),
         ):
@@ -259,14 +343,13 @@ class TestFindPlace:
     @pytest.mark.anyio
     async def test_route_ranking_failure_keeps_proximity_order(self):
         async def maps_get(url, params):
-            if url == tools_booking._PLACES_TEXT_URL:
-                return PLACES_OK
             raise TimeoutError("directions timeout")
 
         with (
             _patch_settings(),
             _patch_budget(),
             _patch_area(),
+            patch.object(tools_booking, "_maps_post", AsyncMock(return_value=(200, PLACES_OK))),
             patch.object(tools_booking, "_maps_get", AsyncMock(side_effect=maps_get)),
             patch.object(tools_booking, "record_call", AsyncMock()),
         ):

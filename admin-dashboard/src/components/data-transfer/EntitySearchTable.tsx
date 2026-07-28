@@ -78,7 +78,7 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
 
     useEffect(() => {
         getServiceAreas()
-            .then((areas) => setServiceAreas(areas ?? []))
+            .then((areas) => setServiceAreas(Array.isArray(areas) ? areas : []))
             .catch(() => setServiceAreas([]));
     }, []);
 

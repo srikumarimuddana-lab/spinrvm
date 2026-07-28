@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 from fastapi import HTTPException
 
 PLACES_NEW_AUTOCOMPLETE_URL = "https://places.googleapis.com/v1/places:autocomplete"
 PLACES_NEW_DETAILS_BASE_URL = "https://places.googleapis.com/v1/places"
+PLACES_NEW_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 
 # Keep autocomplete in the lower-cost request tier by asking only for fields the
 # mobile/admin UIs already render, then translate those fields back to the legacy
@@ -25,6 +27,17 @@ PLACES_NEW_AUTOCOMPLETE_FIELD_MASK = ",".join(
 
 # Essentials fields only: enough for our pickup/dropoff coordinates and label.
 PLACES_NEW_DETAILS_FIELD_MASK = "location,formattedAddress"
+
+# Named-place lookups (e.g. "walmart", "saskatoon airport") only need enough
+# to build a candidate list + hand a coordinate to the fare/dispatch path —
+# not the richer Essentials/Pro field set.
+PLACES_NEW_TEXT_SEARCH_FIELD_MASK = ",".join(
+    [
+        "places.displayName.text",
+        "places.formattedAddress",
+        "places.location",
+    ]
+)
 
 
 def places_new_headers(api_key: str, field_mask: str) -> dict[str, str]:
@@ -141,3 +154,71 @@ def legacy_details_from_new_response(data: dict[str, Any]) -> dict[str, Any]:
         "lng": loc.get("longitude"),
         "formatted_address": data.get("formattedAddress"),
     }
+
+
+def build_text_search_payload(
+    text_query: str,
+    near_lat: Optional[float],
+    near_lng: Optional[float],
+    radius_meters: float,
+) -> dict[str, Any]:
+    """Build a Places API (New) Text Search (searchText) request body.
+
+    Unlike Autocomplete (New), Text Search (New)'s ``locationRestriction``
+    only accepts a rectangle, not a circle — so the bias box below IS the
+    hard filter (no candidate outside it can be returned at all), not a soft
+    hint like the legacy Geocoding/Text-Search APIs' ``bounds`` parameter.
+    """
+    payload: dict[str, Any] = {
+        "textQuery": text_query,
+        "languageCode": "en",
+        "regionCode": "CA",
+    }
+    if near_lat is not None and near_lng is not None:
+        dlat = radius_meters / 111_000
+        dlng = dlat / max(math.cos(math.radians(near_lat)), 0.2)
+        payload["locationRestriction"] = {
+            "rectangle": {
+                "low": {"latitude": near_lat - dlat, "longitude": near_lng - dlng},
+                "high": {"latitude": near_lat + dlat, "longitude": near_lng + dlng},
+            }
+        }
+        # Soft ranking signal on top of the hard restriction above — Text
+        # Search (New) sorts by relevance by default; origin nudges ties
+        # toward the nearer result, matching the Autocomplete (New) path.
+        payload["locationBias"] = {
+            "circle": {
+                "center": {"latitude": near_lat, "longitude": near_lng},
+                "radius": min(radius_meters, 50000.0),
+            }
+        }
+    return payload
+
+
+def legacy_place_results_from_text_search(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Translate a Text Search (New) response into the legacy Google Places
+    ``results[]`` shape (``name`` / ``formatted_address`` /
+    ``geometry.location.{lat,lng}``) so it can flow through the same
+    candidate-building code as the legacy Geocoding/Text-Search responses.
+
+    Text Search (New) carries no location-precision signal (no
+    ``location_type`` / ``partial_match``), same as the legacy Text Search
+    API it replaces — callers already treat that combination as UNKNOWN
+    precision, never flagged as imprecise.
+    """
+    results: list[dict[str, Any]] = []
+    for place in data.get("places") or []:
+        if not isinstance(place, dict):
+            continue
+        loc = place.get("location") or {}
+        lat, lng = loc.get("latitude"), loc.get("longitude")
+        if lat is None or lng is None:
+            continue
+        results.append(
+            {
+                "name": _text_value(place.get("displayName")),
+                "formatted_address": place.get("formattedAddress"),
+                "geometry": {"location": {"lat": lat, "lng": lng}},
+            }
+        )
+    return results

@@ -6,6 +6,7 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 import { EntitySearchTable } from "@/components/data-transfer/EntitySearchTable";
 import { useEntitySelection } from "@/components/data-transfer/useEntitySelection";
 import { ExportTab } from "./ExportTab";
+import { ImportTab } from "./ImportTab";
 
 /**
  * Data Transfer module — consolidates the former Bulk Import (drivers) and
@@ -77,9 +78,14 @@ export default function DataTransferPage() {
                     <Card>
                         <CardHeader>
                             <CardTitle>Import</CardTitle>
-                            <CardDescription>Coming soon.</CardDescription>
+                            <CardDescription>
+                                Upload a bundle ZIP exported from another Spinr environment. Validate first — nothing
+                                is written until you commit.
+                            </CardDescription>
                         </CardHeader>
-                        <CardContent />
+                        <CardContent>
+                            <ImportTab />
+                        </CardContent>
                     </Card>
                 </TabsContent>
 

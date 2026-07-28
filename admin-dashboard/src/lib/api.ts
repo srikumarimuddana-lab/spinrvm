@@ -3420,3 +3420,39 @@ export const exportDataTransferEntities = (
         method: "POST",
         body: JSON.stringify({ entities, format, doc_types: docTypes ?? null }),
     });
+
+export interface DataTransferImportReportItem {
+    entity_id: string;
+    field: string;
+    message: string;
+}
+export interface DataTransferImportReport {
+    can_commit: boolean;
+    counts: { entities: number; new: number; existing_match: number; conflict: number };
+    warnings: DataTransferImportReportItem[];
+    errors: DataTransferImportReportItem[];
+}
+export interface DataTransferImportCommitResult extends DataTransferImportReport {
+    committed: boolean;
+    created_users?: number;
+    created_drivers?: number;
+    documents_replayed?: number;
+    insurance_periods_replayed?: number;
+}
+export const adminValidateDataTransferImport = (file: File) => {
+    const fd = new FormData();
+    fd.append("bundle_zip", file);
+    return request<DataTransferImportReport>("/api/admin/data-transfer/import/validate", {
+        method: "POST",
+        body: fd,
+    });
+};
+export const adminCommitDataTransferImport = (file: File, batch?: string) => {
+    const fd = new FormData();
+    fd.append("bundle_zip", file);
+    if (batch) fd.append("batch", batch);
+    return request<DataTransferImportCommitResult>("/api/admin/data-transfer/import/commit", {
+        method: "POST",
+        body: fd,
+    });
+};

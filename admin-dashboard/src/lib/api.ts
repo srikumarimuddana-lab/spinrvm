@@ -3362,3 +3362,39 @@ export const aiSuggestDeskReply = (id: string, instruction?: string) =>
                 : {}),
         },
     );
+
+/* ── Data Transfer module (backend/routes/admin/data_transfer_*.py) ─────── */
+export interface DataTransferEntityRow {
+    id: string;
+    user_id?: string;
+    full_name?: string;
+    email?: string;
+    phone?: string;
+    created_at?: string;
+    role?: string;
+    vehicle_plate?: string;
+}
+export interface DataTransferSearchResult {
+    rows: DataTransferEntityRow[];
+    total_count: number;
+    page: number;
+    page_size: number;
+}
+export interface DataTransferSearchParams {
+    q?: string;
+    entityType?: "driver" | "rider";
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    pageSize?: number;
+}
+export const searchDataTransferEntities = (params: DataTransferSearchParams) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.entityType) qs.set("entity_type", params.entityType);
+    if (params.dateFrom) qs.set("date_from", params.dateFrom);
+    if (params.dateTo) qs.set("date_to", params.dateTo);
+    qs.set("page", String(params.page ?? 1));
+    qs.set("page_size", String(params.pageSize ?? 50));
+    return request<DataTransferSearchResult>(`/api/admin/data-transfer/search?${qs.toString()}`);
+};

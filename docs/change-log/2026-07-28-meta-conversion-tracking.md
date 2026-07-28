@@ -235,3 +235,48 @@ Stated explicitly rather than implied by silence:
       and that the consent language version on file covers it (PIPEDA: material
       changes require re-consent). This is a business/legal decision, not a
       code one, and it gates pasting in the access token — not this merge.
+
+---
+
+## 12. Addendum — Codex review round (2026-07-28)
+
+Nine findings; seven confirmed against the code and fixed, one already fixed,
+one escalated to the owner. Verified each claim before acting rather than
+accepting or dismissing it.
+
+| # | Finding | Verdict | Resolution |
+|---|---|---|---|
+| 1 | Migration never adds the 4 Meta columns to `settings` | **True — real bug** | Added to migration 264. Without them every admin save raises PGRST204 and Meta could never be configured. Precedent: migrations 93/95. |
+| 2 | `Purchase` misses `preauth_capture` and `payment_retry` | **True — real gap** | Hooked both. Auto-captured holds are a *common* completion path that was emitting nothing. |
+| 3 | Third-party ad SDK violates the repo guardrail | **True** | **Escalated — owner approved the exception.** Scope recorded in `META_EVENTS.md` §7a so it cannot widen by drift. |
+| 4 | Lockfiles not regenerated | True | Already fixed in `063668a`. |
+| 5 | `meta_capi_events` mutated despite `*_events` append-only convention | **True** | Renamed to `meta_capi_deliveries` — it is mutable delivery state, and calling it an events table promised history it does not keep. |
+| 6 | Meta destination not super-admin gated | **True — security** | Added dataset ids + token to `_SUPER_ADMIN_ONLY_FIELDS`. Same risk shape as the LMS pair: a settings-module admin could repoint the sender at a dataset they control. `meta_test_event_code` deliberately excluded — it leaks nothing. |
+| 7 | Client logs a custom event, not the SDK's standard one | **True** | Verified empirically against the installed package: `AppEventsLogger.AppEvents.CompletedRegistration` = `fb_mobile_complete_registration`. The literal `'CompleteRegistration'` would have been a *custom* event and would never have de-duplicated against the CAPI copy. This was the real root cause of the dedup risk previously flagged as "check the parameter name". |
+| 8 | No consent gate on identity sharing | **True** | **Escalated — owner chose to gate in code.** New `marketing_preferences.ad_attribution_opt_in`, default FALSE, fails closed. Non-consenting users still produce a conversion but with an empty `user_data` (no hashed contacts, no IP, no user agent). |
+| 9 | `dedup_key` embeds a raw driver UUID with no purge path | **True** | `dedup_key` now stores `sha256(subject_id)`. Idempotency is unchanged (same input → same key); the row is no longer linkable to a deleted driver. |
+
+### Architectural change worth calling out
+
+Finding 2 asked for "per-ride idempotency" across settlement paths. Rather than
+coordinating four call sites, `Purchase`/`FirstRide` now use a **deterministic
+`event_id`** (UUIDv5 over the ride id / user id). Every path computes the same
+id for the same ride, so Meta collapses a duplicate emission instead of
+double-counting revenue — no locking, no DB round-trip, and correct even if a
+new settlement path is added later without knowing about this one.
+
+`_EVENT_NS` must never change: it would re-issue ids for rides already reported
+and let Meta count them twice.
+
+### Verification for this round
+
+- `pytest tests/test_meta_conversions.py`: **64 passed** (54 + 10 new, covering
+  the consent gate fail-closed behaviour, cross-path id stability, and that
+  `dedup_key` carries no raw driver id).
+- CI Guard Rails at this point: Coverage, Lint, Security Posture, Migration
+  Safety, Breaking Changes, Test Placement, Change Impact Log — **all green**.
+- Still NOT verified: the EAS/native build, and any event actually reaching
+  Meta. Both unchanged from §10.
+- New, NOT verified: migration 264 has not been run against a real Postgres.
+  The `settings`/`marketing_preferences` ALTERs and the CHECK-constraint swap
+  were written against the schema in `migrations/`, not executed.

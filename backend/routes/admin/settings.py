@@ -85,7 +85,24 @@ _CREDENTIAL_FIELDS = frozenset(
 # only) and gain direct access to the LMS's driver PII — plus backend SSRF.
 # Changing either half of the pair therefore requires the same privilege as
 # the credential-reveal flow.
-_SUPER_ADMIN_ONLY_FIELDS = frozenset({"lms_api_base_url", "lms_api_key"})
+#
+# The Meta dataset ids + access token are the same shape of risk as the LMS
+# pair: they are a DESTINATION for user data. A settings-module admin who could
+# change them could point the conversions sender at a Meta dataset they
+# control, after which the backend exports hashed rider/driver identities (plus
+# client IP and user agent) to that destination. Changing the destination or
+# the token therefore requires the same privilege as revealing a credential.
+# meta_test_event_code is deliberately NOT here — it only routes events to the
+# Test Events tab and leaks nothing.
+_SUPER_ADMIN_ONLY_FIELDS = frozenset(
+    {
+        "lms_api_base_url",
+        "lms_api_key",
+        "meta_rider_dataset_id",
+        "meta_driver_dataset_id",
+        "meta_capi_access_token",
+    }
+)
 
 
 def _mask_credentials(settings: Dict[str, Any]) -> Dict[str, Any]:

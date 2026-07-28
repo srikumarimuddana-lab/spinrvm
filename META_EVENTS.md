@@ -44,7 +44,17 @@ Meta collapses two events into one conversion when **`event_name` and
 `event_id` both match**. Only `CompleteRegistration` fires on both sides, so it
 is the only event that needs this.
 
-**Direction: the backend mints the `event_id`, the client receives it.**
+**`CompleteRegistration` — the backend mints the `event_id`, the client receives it.**
+
+**`Purchase` / `FirstRide` — the `event_id` is deterministic**, derived from the
+ride id (resp. user id) via UUIDv5. Money can settle through
+`process_payment`, the pre-auth capture sweep, the payment-retry loop, or
+guest-corporate auto-settle, and a ride can legitimately be reached by more
+than one of them. Because every path computes the *same* id for the same ride,
+Meta collapses a second emission instead of double-counting revenue — no
+cross-path locking required. Never change `_EVENT_NS` in
+`meta_conversions_service`: it would re-issue new ids for rides already
+reported and let Meta count them twice.
 
 ```
 POST /auth/verify-otp
@@ -106,6 +116,27 @@ Events Manager change.
 They are not PII and not user identifiers.
 
 ---
+
+## 3a. Consent gate (PIPEDA) — read this before interpreting match quality
+
+Identity is attached **only** for users who have opted in to advertising
+attribution: `marketing_preferences.ad_attribution_opt_in`.
+
+- **Opted in** → full Advanced Matching (hashed `em` / `ph` / `external_id`,
+  plus client IP and user agent).
+- **Not opted in** → the conversion is still sent, so campaign counts and
+  optimisation keep working, but `user_data` is **empty**. No hashed contact
+  details, and no IP or user agent either — both are personal information and
+  neither may be exported for a purpose the user has not accepted.
+- **Fails closed.** No row, no opt-in, or a DB error all count as no consent.
+  Silence is never consent (the stance migration 190 already takes), so
+  enabling the access token cannot retroactively export the identity of an
+  existing user who never accepted this purpose.
+
+**Consequence for reporting:** Event Match Quality will track opt-in rate, not
+just field coverage. A low EMQ with healthy event volume means low consent
+uptake, not a broken integration — check the opt-in rate before debugging the
+hashing.
 
 ## 4. Advanced Matching — server-side only
 
@@ -198,15 +229,35 @@ nothing is silently burned before the credentials land.
 | Hashing, HTTP transport, retry | `backend/utils/meta_capi.py` |
 | Event construction, dedup gates | `backend/services/meta_conversions_service.py` |
 | `CompleteRegistration` + `event_id` | `backend/routes/auth.py` |
-| `Purchase` / `FirstRide` | `backend/routes/rides/payments.py`, `backend/services/payment_service.py` |
+| `Purchase` / `FirstRide` | `backend/routes/rides/payments.py`, `backend/services/payment_service.py`, `backend/utils/preauth_capture.py`, `backend/utils/payment_retry.py` |
 | `DriverApproved` | `backend/routes/admin/drivers.py` |
 | `DriverActivated` | `backend/routes/drivers/ride_complete.py` |
 | Client SDK wrapper | `shared/analytics/meta.ts` |
 | SDK init | `rider-app/app/_layout.tsx`, `driver-app/app/_layout.tsx` |
 | Client `CompleteRegistration` | `rider-app/app/otp.tsx`, `driver-app/app/otp.tsx` |
+| Consent gate | `meta_conversions_service.has_ad_attribution_consent` |
 | Schema | `backend/migrations/264_meta_conversions_tracking.sql` |
 
 ---
+
+## 7a. Recorded deviation — third-party ad SDK
+
+`CLAUDE.md` / `AGENTS.md` ("What Spinr Is NOT") state: *"Never add third-party
+ad SDKs or behavioral retargeting."* Adding `react-native-fbsdk-next` to both
+apps is a deliberate, owner-approved exception to that guardrail, taken on
+2026-07-28 after the conflict was raised explicitly.
+
+Scope of the exception, so it does not widen by drift:
+
+- The SDK is used for **app lifecycle + install/activation attribution** and
+  the client half of `CompleteRegistration`. Nothing else.
+- Advertiser tracking and IDFA collection are **pinned off**
+  (`setAdvertiserTrackingEnabled(false)`, `advertiserIDCollectionEnabled: false`).
+- **No user data is attached on-device** — no `Settings.setUserData`, no
+  Advanced Matching in the app.
+- No behavioural retargeting, no ad-profile analytics, no other ad SDK.
+
+Anything beyond this list is a fresh decision, not covered by this exception.
 
 ## 8. Known limitations
 
@@ -221,7 +272,7 @@ nothing is silently burned before the credentials land.
   and will fire `FirstRide` on their next paid ride. Backfilling from ride
   history was rejected — it would emit a burst of historical conversions
   stamped with today's timestamps, corrupting attribution windows.
-- **No retry sweep for failed backend-only events.** `meta_capi_events` rows
+- **No retry sweep for failed backend-only events.** `meta_capi_deliveries` rows
   are left at `status = 'failed'` with their `event_id` preserved, so a sweep
   can be added later and will de-duplicate correctly. There is no loop today.
 - **Driver `CompleteRegistration` fires at account creation**, not at vehicle/

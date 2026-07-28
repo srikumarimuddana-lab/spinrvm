@@ -65,6 +65,41 @@ logger = logging.getLogger(__name__)
 _INVOICE_CLAIM_STALE_SECONDS = 300
 
 
+async def _fire_purchase_conversion(ride_id: str) -> None:
+    """Meta Purchase/FirstRide for a ride this sweep just settled or reconciled.
+
+    The retry loop moves money without going through
+    rides/payments.py::process_payment, so without this hook a recovered
+    payment would produce no conversion.
+
+    Safe to call even when another path already reported the same ride: the
+    Purchase event_id is derived from the ride id (see
+    meta_conversions_service.stable_event_id), so Meta collapses a duplicate
+    emission instead of counting the revenue twice.
+
+    Never raises — this runs inside a background loop that must keep sweeping.
+    """
+    try:
+        try:
+            from ..services.meta_conversions_service import send_ride_purchase_for_ride
+        except ImportError:
+            from services.meta_conversions_service import send_ride_purchase_for_ride  # type: ignore
+        ride_row = await db.get_ride(ride_id) if hasattr(db, "get_ride") else None
+        if not ride_row:
+            rows = await db.get_rows("rides", {"id": ride_id}, limit=1)
+            ride_row = rows[0] if rows else None
+        if not ride_row:
+            logger.error("meta: could not load ride %s for Purchase conversion", ride_id)
+            return
+        charged = ride_row.get("grand_total")
+        if charged is None:
+            charged = ride_row.get("total_fare", 0)
+        charged = Decimal(str(charged or 0)) + Decimal(str(ride_row.get("tip_amount") or 0))
+        await send_ride_purchase_for_ride(ride_row, ride_row.get("rider_id"), charged)
+    except Exception:
+        logger.error("meta: Purchase conversion failed for ride %s", ride_id, exc_info=True)
+
+
 def _invoice_claim_is_stale(sentinel: str) -> bool:
     """True if a `pending:<epoch>:<uuid>` invoice claim is old enough to reclaim.
 
@@ -342,6 +377,7 @@ async def retry_failed_payments():
                     },
                 )
                 logger.info(f"Payment retry: ride {ride_id} already paid (intent succeeded)")
+                await _fire_purchase_conversion(ride_id)
                 continue
 
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
@@ -467,6 +503,7 @@ async def retry_failed_payments():
                     f"Payment retry: captured stranded hold for ride {ride_id} "
                     f"({capture_cents} cents of {intent.amount} authorized)"
                 )
+                await _fire_purchase_conversion(ride_id)
                 continue
 
             elif intent.status == "canceled":

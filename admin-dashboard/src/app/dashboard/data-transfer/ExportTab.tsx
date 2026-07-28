@@ -13,6 +13,8 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import {
     exportDataTransferEntities,
+    getDataTransferJob,
+    regenerateDataTransferJobDownload,
     searchDataTransferEntities,
     type DataTransferExportEntityRef,
     type DataTransferExportFormat,
@@ -54,6 +56,25 @@ async function resolveSelection(
     return { refs: Array.from(selection.selectedRefs.values()), truncated: false };
 }
 
+const POLL_INTERVAL_MS = 2000;
+const POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes — a very large batch could legitimately take a while
+
+/** The export route is backgrounded — it returns a job_id immediately, not
+ * a download link. Poll the job until it leaves "pending", then mint a
+ * fresh download link (jobs never store their signed URL — see
+ * data_transfer_jobs.py's GET .../download). */
+async function pollJobUntilDone(jobId: string): Promise<{ status: "completed" | "failed"; errorMessage?: string }> {
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        const job = await getDataTransferJob(jobId);
+        if (job.status !== "pending") {
+            return { status: job.status as "completed" | "failed", errorMessage: job.error_message ?? undefined };
+        }
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+    throw new Error("Export is taking longer than expected — check the Jobs & History tab for its status.");
+}
+
 export function ExportTab({ selection }: { selection: EntitySelectionState }) {
     const { toast } = useToast();
     const [format, setFormat] = useState<DataTransferExportFormat>("zip");
@@ -87,13 +108,26 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             }
             const docTypeFilter =
                 format === "zip" && docTypes.size < DOC_TYPE_OPTIONS.length ? Array.from(docTypes) : undefined;
-            const result = await exportDataTransferEntities(refs, format, docTypeFilter);
+            const queued = await exportDataTransferEntities(refs, format, docTypeFilter);
             toast({
-                title: "Export ready",
-                description: `${result.entity_count} record(s) exported.`,
+                title: "Export queued",
+                description: `Preparing ${queued.requested_count} record(s)… this may take a moment for large batches.`,
             });
+
+            const outcome = await pollJobUntilDone(queued.job_id);
+            if (outcome.status === "failed") {
+                toast({
+                    title: "Export failed",
+                    description: outcome.errorMessage || "Unknown error",
+                    variant: "destructive",
+                });
+                return;
+            }
+
+            const { download_url } = await regenerateDataTransferJobDownload(queued.job_id);
+            toast({ title: "Export ready", description: "Download starting…" });
             if (typeof window !== "undefined") {
-                window.open(result.download_url, "_blank");
+                window.open(download_url, "_blank");
             }
         } catch (e: any) {
             toast({ title: "Export failed", description: e?.message ?? "Unknown error", variant: "destructive" });

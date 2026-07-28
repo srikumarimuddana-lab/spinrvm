@@ -522,6 +522,45 @@ describe('geofence re-arm gating (NSRangeException fix)', () => {
     expect(mockStartGeofencing).toHaveBeenCalledTimes(1);
   });
 
+  describe('stop vs. in-flight arm races (generation fence)', () => {
+    beforeEach(() => { jest.useFakeTimers(); });
+    afterEach(() => { jest.useRealTimers(); });
+
+    it('a stop always supersedes an in-flight arm, even one that only settles after the wait times out', async () => {
+      // Regression: dropping (or even awaiting) the in-flight-promise reference
+      // alone left a window where a start could land after stop's own disarm
+      // call, geofencing a driver who had already gone offline. The generation
+      // fence must catch this regardless of how long the arm takes to settle.
+      let resolveArm!: () => void;
+      mockStartGeofencing.mockImplementationOnce(
+        () => new Promise<void>((resolve) => { resolveArm = resolve; }),
+      );
+
+      const startPromise = startGeofenceRecovery(52.1, -106.6);
+      // Let the arm's call chain reach the hung startGeofencingAsync.
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+
+      const stopPromise = stopGeofenceRecovery();
+      // The arm never settles on its own — stop must give up rather than
+      // block the caller (toggleOnline) forever.
+      await jest.advanceTimersByTimeAsync(8_000);
+      await stopPromise;
+
+      const stopCallsBeforeArmSettles = mockStopGeofencing.mock.calls.length;
+      expect(stopCallsBeforeArmSettles).toBeGreaterThan(0); // disarmed without waiting for the arm
+      expect(centreStore).toBeNull();
+
+      // The native call finally "returns" well after stop gave up.
+      resolveArm();
+      const result = await startPromise;
+
+      expect(result).toBe(false); // must not report armed — a stop was requested
+      expect(centreStore).toBeNull(); // the late arm must not resurrect the centre
+      // Self-correction ran a second disarm rather than leaving the region armed.
+      expect(mockStopGeofencing.mock.calls.length).toBeGreaterThan(stopCallsBeforeArmSettles);
+    });
+  });
+
   it('stopGeofenceRecovery stops unconditionally and clears the centre', async () => {
     await startGeofenceRecovery(52.1, -106.6);
     mockStopGeofencing.mockClear();

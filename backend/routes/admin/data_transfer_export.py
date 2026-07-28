@@ -29,7 +29,7 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...documents import _extract_signed_url
-    from ...services.data_transfer import bundle_zip_builder, entity_export_service, tabular_writer
+    from ...services.data_transfer import bundle_zip_builder, entity_export_service, observability, tabular_writer
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
     from ...utils.rate_limiter import data_transfer_export_limit
@@ -125,9 +125,12 @@ async def _run_export_job(
     """Background task: gather, build, upload, and update the job row.
     Any failure here is recorded on the job row (status=failed,
     error_message) rather than raised — there is no request left to raise
-    to by the time this runs, so the Jobs & History tab is the only place
-    a failure surfaces to the admin."""
+    to by the time this runs, so the Jobs & History tab (plus the Sentry
+    capture below) is the only way a failure surfaces to anyone."""
+    import time  # noqa: PLC0415
+
     builder, ext, content_type = _FORMAT_BUILDERS[fmt]
+    t0 = time.monotonic()
     try:
         bundles = await entity_export_service.gather_entity_bundles(pairs, doc_types)
         if not bundles:
@@ -135,12 +138,26 @@ async def _run_export_job(
         file_bytes = builder(bundles)
         signed_url, storage_path = await _upload_bundle(admin.get("id", "unknown"), file_bytes, ext, content_type)
     except Exception as e:
+        duration_ms = (time.monotonic() - t0) * 1000.0
         logger.error("data-transfer export: job %s failed", job_id, exc_info=True)
+        observability.record_export_result("failed", fmt, duration_ms)
+        observability.capture_failure(
+            "Data Transfer export job failed",
+            "data_transfer_export_failed",
+            {
+                "job_id": job_id,
+                "admin_id": admin.get("id"),
+                "format": fmt,
+                "requested_count": len(pairs),
+                "error": str(e),
+            },
+        )
         await db_supabase.update_one(
             "data_transfer_export_jobs", {"id": job_id}, {"status": "failed", "error_message": str(e)}
         )
         return
 
+    observability.record_export_result("completed", fmt, (time.monotonic() - t0) * 1000.0)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=_EXPORT_LINK_TTL_SECONDS)
     await db_supabase.update_one(
         "data_transfer_export_jobs",

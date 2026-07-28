@@ -455,26 +455,32 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   confirmation (≥3 consecutive green `backend-test` runs) pending merge.
 
 ### A7. 8 failing tests in `test_ai_tools_booking.py` on `main`
-- [ ] **Status:** open — found via PR #2523's `backend-test` run (2026-07-27),
-  confirmed reproducible directly on `origin/main` in isolation (checked out
-  `backend/tests/test_ai_tools_booking.py` + `backend/ai/` from `main` alone
-  and re-ran — identical failures), so this is pre-existing drift already on
-  `main`, not introduced by any A1/A6 branch this session.
-- **Why:** all 8 failures are `KeyError` — either `'quotes'` or
-  `'_client_action'` — across `TestSameStreetGuard`, `TestFareQuote`,
-  `TestSamePlaceGuard`, `TestProposal`. Pattern strongly suggests the AI
-  booking tool's response shape changed (likely a key renamed or moved to a
-  different response envelope) and these tests were never updated — the same
-  class of test-drift root cause as A4.
-- **Files:** `backend/tests/test_ai_tools_booking.py`, and whichever
-  `backend/ai/` module builds the booking-tool response (likely
-  `ai/tools_booking.py` or similar — not yet located).
-- **Approach:** read the current booking-tool response builder, compare
-  against what the 8 tests assert, and either fix the tests to match
-  already-correct current behavior or, if the response shape itself is wrong,
-  fix the production code — root-cause first, same as every A4 bucket.
-- **Acceptance:** `pytest tests/test_ai_tools_booking.py` passes with 0
-  failures on `main`.
+- [x] **Status:** done (2026-07-28) — actually 9 failing tests, not 8 (the
+  count in this item's own text was stale). Root-caused to two distinct
+  test-drift causes, both against genuinely-newer production code, not a
+  production bug:
+  1. **8 of 9** — a `_dropoff_pair_refusal` guard (shipped for the Walmart
+     dropoff-label incident, correctly fails closed when Maps/Places is
+     unavailable) now runs inside both `get_fare_quote` and
+     `propose_ride_booking` and intercepts *before* the guard each test
+     actually means to exercise (same-street, same-place, fare-quote,
+     proposal). These tests mock Maps as unavailable to isolate an unrelated
+     guard, which used to be safe — the new guard changed that. Fixed by
+     bypassing it (`patch.object(tools_booking, "_dropoff_pair_refusal",
+     AsyncMock(return_value=None))`), matching the pattern already
+     established by sibling tests in the same file that predate this guard's
+     addition.
+  2. **1 of 9** (`test_proposal_reresolves_pickup_address_when_coords_are_stale`)
+     — `_resolve_candidate_areas` (a batched service-area lookup added later
+     as an optimization — "one read, not an N+1 loop" — for tagging geocode
+     candidates) bypasses the older `_resolve_area` mock this one test still
+     relied on exclusively. Fixed by also mocking
+     `_resolve_candidate_areas`.
+- **Files:** `backend/tests/test_ai_tools_booking.py` only — no production
+  code changed; both guards are correct, newer behavior.
+- **Acceptance:** ✅ met — `pytest tests/test_ai_tools_booking.py` reports
+  72 passed, 0 failed. Full local backend suite re-run to confirm no
+  regressions elsewhere.
 
 ## P1 — Fix before launch (code)
 

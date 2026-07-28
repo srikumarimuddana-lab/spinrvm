@@ -523,8 +523,14 @@ class TestSameStreetGuard:
     }
 
     def _maps_unavailable(self):
-        return patch.object(
-            tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))
+        # Isolates these tests from the geocoding path entirely — including
+        # the dropoff stale-coordinate guard, which also fails closed when
+        # Maps is unavailable and would otherwise intercept before the
+        # same-street guard under test ever runs.
+        return patch.multiple(
+            tools_booking,
+            _places_available=AsyncMock(return_value=(None, {"error": "unavailable"})),
+            _dropoff_pair_refusal=AsyncMock(return_value=None),
         )
 
     @pytest.mark.anyio
@@ -712,8 +718,16 @@ class TestFareQuote:
         args = dict(self.ARGS, pickup_address="123 Main St, Saskatoon", dropoff_address="Saskatoon Airport")
         # Maps unavailable → pickup reconciliation keeps the supplied coords;
         # the geocoding path has its own tests. _patch_area is required now
-        # that the quote enforces reconciliation's service-area verdict.
-        with _patch_estimates(ESTIMATES), _patch_promos(PROMOS), _patch_settings(key=""), _patch_area():
+        # that the quote enforces reconciliation's service-area verdict. The
+        # dropoff stale-coordinate guard also fails closed when Maps is
+        # unavailable — bypass it here since it isn't what this test covers.
+        with (
+            _patch_estimates(ESTIMATES),
+            _patch_promos(PROMOS),
+            _patch_settings(key=""),
+            _patch_area(),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+        ):
             result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
         assert ok
         # Only the available vehicle type is quoted; the other is named.
@@ -926,9 +940,14 @@ class TestSamePlaceGuard:
 
     def _maps_unavailable(self):
         # _reconcile_pickup keeps the supplied coords when Maps is unavailable,
-        # isolating these tests from the geocoding path.
-        return patch.object(
-            tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))
+        # isolating these tests from the geocoding path — including the
+        # dropoff stale-coordinate guard, which also fails closed when Maps
+        # is unavailable and would otherwise intercept before the
+        # same-place guard under test ever runs.
+        return patch.multiple(
+            tools_booking,
+            _places_available=AsyncMock(return_value=(None, {"error": "unavailable"})),
+            _dropoff_pair_refusal=AsyncMock(return_value=None),
         )
 
     @pytest.mark.anyio
@@ -1012,6 +1031,10 @@ class TestProposal:
         with (
             _patch_area(),
             patch("backend.db_supabase.insert_one", insert, create=True),
+            # No Maps key configured in the test env — the dropoff
+            # stale-coordinate guard fails closed on that; bypass it since
+            # it isn't what this test covers.
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
@@ -1041,6 +1064,12 @@ class TestProposal:
         }
         with (
             patch.object(tools_booking, "_resolve_area", stale_then_fixed),
+            # _resolve_candidate_areas is a separate batched service-area
+            # lookup used when tagging geocode candidates (not routed through
+            # _resolve_area) — must also resolve the re-geocoded downtown
+            # candidate into a service area, or reconciliation falls back to
+            # the (stale, out-of-area) supplied point.
+            patch.object(tools_booking, "_resolve_candidate_areas", AsyncMock(return_value=[AREA])),
             _patch_settings(),
             _patch_budget(),
             _patch_http(downtown),
@@ -1129,6 +1158,9 @@ class TestProposal:
         with (
             _patch_area(),
             patch.object(tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))),
+            # The dropoff stale-coordinate guard also fails closed when Maps
+            # is unavailable — bypass it since it isn't what this test covers.
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
@@ -1140,6 +1172,9 @@ class TestProposal:
         with (
             _patch_area(),
             patch.object(tools_booking, "_places_available", AsyncMock(return_value=(None, {"error": "unavailable"}))),
+            # The dropoff stale-coordinate guard also fails closed when Maps
+            # is unavailable — bypass it since it isn't what this test covers.
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok

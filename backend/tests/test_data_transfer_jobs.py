@@ -1,11 +1,15 @@
 """Endpoint tests for the admin Data Transfer job-history routes.
 
-These three endpoints (list, single-job lookup, download-link regeneration)
-were tightened to require super_admin — the router-level gate is only the
-"bulk_operations" module flag, which is broader than super_admin and was
-previously letting any bulk_operations admin see (and, via the download
-endpoint, actually pull) other admins' PII export bundles. See
-docs/change-log/2026-07-28-data-transfer-jobs-super-admin-gate.md.
+The whole Data Transfer router (export/import/search/jobs/SGI-forms) is
+gated on require_super_admin at include_router time (routes/admin/__init__.py)
+— see docs/change-log/2026-07-28-data-transfer-jobs-super-admin-gate.md for
+the original per-endpoint version of this fix, and ACTION_ITEMS.md B11/R-A
+for why it moved to a router-level dependency instead: the previous
+require_module("bulk_operations") gate was never actually grantable to a
+non-super_admin (the flag isn't in AVAILABLE_MODULES/ALL_MODULES), so this
+test module's non-super-admin fixture uses a plain "admin" role with no
+special modules — there was never a real way to hold "bulk_operations" in
+the first place.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -24,18 +28,13 @@ def super_admin_override():
 
 
 @pytest.fixture
-def bulk_operations_admin_override():
-    """A non-super_admin who holds the router-level "bulk_operations" module
-    flag — passes the router gate but must still be rejected by the
-    endpoint-level _require_super_admin check."""
+def regular_admin_override():
+    """A plain, non-super_admin admin — must be rejected by the router-level
+    require_super_admin dependency before reaching any handler."""
     from backend.server import app
     from dependencies import get_admin_user
 
-    app.dependency_overrides[get_admin_user] = lambda: {
-        "id": "admin_2",
-        "role": "admin",
-        "modules": ["bulk_operations"],
-    }
+    app.dependency_overrides[get_admin_user] = lambda: {"id": "admin_2", "role": "admin", "modules": []}
     yield
     app.dependency_overrides.pop(get_admin_user, None)
 
@@ -56,7 +55,7 @@ _JOB_ROW = {
 
 
 class TestListDataTransferJobs:
-    def test_non_super_admin_is_403(self, test_client, bulk_operations_admin_override):
+    def test_non_super_admin_is_403(self, test_client, regular_admin_override):
         resp = test_client.get("/api/admin/data-transfer/jobs")
         assert resp.status_code == 403
         assert "super_admin" in resp.json()["detail"]
@@ -74,7 +73,7 @@ class TestListDataTransferJobs:
 
 
 class TestGetDataTransferJob:
-    def test_non_super_admin_is_403(self, test_client, bulk_operations_admin_override):
+    def test_non_super_admin_is_403(self, test_client, regular_admin_override):
         resp = test_client.get("/api/admin/data-transfer/jobs/job_1")
         assert resp.status_code == 403
         assert "super_admin" in resp.json()["detail"]
@@ -90,7 +89,7 @@ class TestGetDataTransferJob:
 
 
 class TestRegenerateJobDownload:
-    def test_non_super_admin_is_403_before_touching_storage(self, test_client, bulk_operations_admin_override):
+    def test_non_super_admin_is_403_before_touching_storage(self, test_client, regular_admin_override):
         """The 403 must fire before any Storage call — a non-super_admin
         should never reach the signed-URL path, not even to have it fail."""
         with patch("backend.routes.admin.data_transfer_jobs.supabase") as mock_supabase:

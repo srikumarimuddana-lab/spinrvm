@@ -123,8 +123,20 @@ async def search_entities(
         # UI (EntitySearchTable.tsx) reads `vehicle_plate` — the real
         # column is `license_plate`; rename in the response rather than
         # coupling the frontend's field name to the DB's.
+        #
+        # Regression: `id` here was `drivers.id`, but every other consumer
+        # of this module's entity_id (entity_export_service.gather_entity_bundle,
+        # sgi_forms.py's driver lookup) treats entity_id as `users.id` —
+        # selecting a driver from THIS search mode made export 404 even
+        # though SGI forms happened to work (and vice versa for the default/
+        # mixed search below, which already returned users.id). Standardize
+        # on users.id here too: drop the drivers.id, expose user_id as `id`.
         rows = [
-            {**{k: v for k, v in r.items() if k != "license_plate"}, "vehicle_plate": r.get("license_plate")}
+            {
+                **{k: v for k, v in r.items() if k not in ("license_plate", "id", "user_id")},
+                "id": r.get("user_id"),
+                "vehicle_plate": r.get("license_plate"),
+            }
             for r in rows
         ]
     elif entity_type == "rider":

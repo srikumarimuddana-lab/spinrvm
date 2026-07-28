@@ -24,8 +24,10 @@ from typing import Any, Optional
 
 try:
     from ... import db_supabase
+    from . import bundle_document_uploader
 except ImportError:
     import db_supabase
+
 
 IMPORT_SOURCE = "data_transfer_bundle_import"
 
@@ -180,16 +182,21 @@ async def build_plan(entities: list[BundleEntity]) -> ImportPlan:
 
 
 async def commit_plan(plan: ImportPlan) -> dict[str, int]:
-    """Insert the 'new' entities' user + driver profile rows. Document
-    re-upload and insurance-period replay are handled by
-    bundle_document_uploader (Phase 2.2), called separately by the route
-    after this returns — kept separate so a document-upload failure doesn't
-    roll back an already-created profile silently."""
+    """Insert the 'new' entities' user + driver profile rows, then replay
+    their documents and insurance-period audit trail under the freshly
+    created driver_id. A document-upload or insurance-period-replay failure
+    for one entity is logged and skipped (see bundle_document_uploader) —
+    it does not roll back that entity's already-created profile, since a
+    driver record with a metadata gap is recoverable via manual re-upload,
+    while rolling back a profile the operator is actively relying on is not
+    an improvement."""
     if not plan.can_commit:
         raise ValueError("commit_plan called on a plan with unresolved errors")
 
     created_users = 0
     created_drivers = 0
+    documents_replayed = 0
+    insurance_periods_replayed = 0
     for entity in plan.to_create:
         new_user_id = str(uuid.uuid4())
         user_record = {k: v for k, v in entity.user.items() if k not in ("id", "created_at", "updated_at")}
@@ -198,10 +205,11 @@ async def commit_plan(plan: ImportPlan) -> dict[str, int]:
         created_users += 1
 
         if entity.entity_type == "driver" and entity.driver_profile:
+            new_driver_id = str(uuid.uuid4())
             driver_record = {
                 k: v for k, v in entity.driver_profile.items() if k not in ("id", "created_at", "updated_at")
             }
-            driver_record["id"] = str(uuid.uuid4())
+            driver_record["id"] = new_driver_id
             driver_record["user_id"] = new_user_id
             driver_record["legacy_import_metadata"] = {
                 "old_driver_id": entity.entity_id,
@@ -210,4 +218,16 @@ async def commit_plan(plan: ImportPlan) -> dict[str, int]:
             await db_supabase.insert_one("drivers", driver_record)
             created_drivers += 1
 
-    return {"created_users": created_users, "created_drivers": created_drivers}
+            documents_replayed += await bundle_document_uploader.replay_documents(
+                new_driver_id, entity.documents, entity.document_files
+            )
+            insurance_periods_replayed += await bundle_document_uploader.replay_insurance_periods(
+                new_driver_id, entity.driver_insurance_periods
+            )
+
+    return {
+        "created_users": created_users,
+        "created_drivers": created_drivers,
+        "documents_replayed": documents_replayed,
+        "insurance_periods_replayed": insurance_periods_replayed,
+    }

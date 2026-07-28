@@ -158,6 +158,116 @@ async def test_document_fetch_failure_leaves_content_none_not_raised(monkeypatch
 
 
 @pytest.mark.anyio
+async def test_include_ride_gps_false_strips_gps_fields_but_keeps_ride_rows(monkeypatch):
+    """PIA recommendation R-B (ACTION_ITEMS.md B11): opting out of ride GPS
+    must still return the ride rows (record counts unchanged) with only the
+    four coordinate fields removed."""
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "drivers": [{"id": "drv1", "user_id": "u1"}],
+            "notification_preferences": [],
+            "rides": [
+                {
+                    "id": "r1",
+                    "driver_id": "drv1",
+                    "pickup_lat": 52.1,
+                    "pickup_lng": -106.6,
+                    "dropoff_lat": 52.2,
+                    "dropoff_lng": -106.7,
+                    "fare": 12.5,
+                }
+            ],
+            "driver_documents": [],
+            "driver_insurance_periods": [],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", include_ride_gps=False)
+
+    assert len(bundle["rides"]) == 1
+    ride = bundle["rides"][0]
+    assert ride["id"] == "r1"
+    assert ride["fare"] == 12.5
+    for field in ("pickup_lat", "pickup_lng", "dropoff_lat", "dropoff_lng"):
+        assert field not in ride
+
+
+@pytest.mark.anyio
+async def test_include_ride_gps_true_default_keeps_gps_fields(monkeypatch):
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "drivers": [{"id": "drv1", "user_id": "u1"}],
+            "notification_preferences": [],
+            "rides": [{"id": "r1", "driver_id": "drv1", "pickup_lat": 52.1, "pickup_lng": -106.6}],
+            "driver_documents": [],
+            "driver_insurance_periods": [],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1")
+
+    assert bundle["rides"][0]["pickup_lat"] == 52.1
+    assert bundle["rides"][0]["pickup_lng"] == -106.6
+
+
+@pytest.mark.anyio
+async def test_include_document_bytes_false_skips_storage_fetch_but_keeps_metadata(monkeypatch):
+    """Document rows must still appear (metadata intact, same as the
+    fetch-failure path) but _content stays None and the storage download is
+    never even attempted — not just discarded after fetching."""
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "drivers": [{"id": "drv1", "user_id": "u1"}],
+            "notification_preferences": [],
+            "rides": [],
+            "driver_documents": [
+                {
+                    "id": "doc1",
+                    "driver_id": "drv1",
+                    "document_type": "insurance",
+                    "document_url": "https://x.supabase.co/storage/v1/object/sign/driver-documents/present.pdf",
+                }
+            ],
+            "driver_insurance_periods": [],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+    fake_supabase = MagicMock()
+    monkeypatch.setattr(svc, "supabase", fake_supabase)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", include_document_bytes=False)
+
+    assert bundle["documents"][0]["id"] == "doc1"
+    assert bundle["documents"][0]["_content"] is None
+    fake_supabase.storage.from_.return_value.download.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_gather_entity_bundles_threads_scope_flags_through(monkeypatch):
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "notification_preferences": [],
+            "rides": [{"id": "r1", "rider_id": "u1", "pickup_lat": 1.0, "pickup_lng": 2.0}],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+
+    bundles = await svc.gather_entity_bundles([("rider", "u1")], include_ride_gps=False)
+
+    assert "pickup_lat" not in bundles[0]["rides"][0]
+
+
+@pytest.mark.anyio
 async def test_gather_entity_bundles_skips_a_failing_entity_and_keeps_the_rest(monkeypatch):
     _install_fake_db(
         monkeypatch,

@@ -4,6 +4,8 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import time as _time
+
 from . import _deps
 from ._deps import (  # noqa: F401
     APIRouter,
@@ -280,6 +282,16 @@ async def compute_ride_estimates(
     async def _route_fetch() -> Optional[dict]:
         if not _maps_key:
             return None
+        # B6: real Directions latency distribution — the timeout constants
+        # (DIRECTIONS_TIMEOUT_S / _PRICING_ROUTE_WAIT_S) were picked by
+        # judgement, not data. This times the actual call regardless of
+        # whether the pricing loop below ends up waiting long enough to use
+        # the result, so a request that hits the HTTP timeout still shows up
+        # near DIRECTIONS_TIMEOUT_S * 1000 in the histogram — the p99 this
+        # metric exists to reveal. Recorded even on failure/timeout (a slow
+        # or dead call is still latency the SLA dashboards must see, same
+        # convention as utils/metrics.py's time_ms).
+        _route_t0 = _time.monotonic()
         try:
             return await _fetch_directions_route(
                 body.pickup_lat,
@@ -292,6 +304,11 @@ async def compute_ride_estimates(
         except Exception as _route_err:
             logger.warning("[estimate] route fetch failed (non-fatal): %s", _route_err)
             return None
+        finally:
+            _deps._metric_observe(
+                "spinr_fare_directions_duration_ms",
+                (_time.monotonic() - _route_t0) * 1000.0,
+            )
 
     _need_route = include_polyline or _fare_mode != "haversine"
     route_task = _deps.spawn(_route_fetch()) if _need_route else None

@@ -163,6 +163,19 @@ class AppSettings(BaseModel):
     # verified in staging before being switched on for live closures — see
     # services/corporate_wallet_winddown_service.py.
     corporate_close_refunds_wallet_balance: bool = False
+    # When true, booking a company_allowance ride with no matching *active*
+    # corporate_members row is rejected at booking time (403) instead of
+    # silently proceeding and only failing later at settlement. Defaults to
+    # true because the un-flagged behavior (fail open) was a bug — a removed
+    # member could complete a full ride that lands unbilled in payment
+    # limbo. Flip to false only to roll back without a redeploy.
+    corporate_member_removal_blocks_booking: bool = True
+    # When true, removing/deactivating a corporate member auto-cancels that
+    # member's pre-pickup rides (searching/driver_assigned/driver_accepted/
+    # driver_arrived), mirroring corporate_suspend_cancels_pre_pickup_rides
+    # at the member level. Defaults to true for the same reason. See
+    # services/corporate_member_offboarding_service.py.
+    corporate_member_removal_cancels_pre_pickup_rides: bool = True
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no

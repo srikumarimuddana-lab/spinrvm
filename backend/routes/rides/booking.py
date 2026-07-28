@@ -755,6 +755,25 @@ async def create_ride(
         )
         if _corp_members:
             _corp_member_id = _corp_members[0]["id"]
+        else:
+            # Fail closed: the policy check above can pass even with no active
+            # membership (e.g. the company has no policy row configured, or
+            # allowed_payment_source != "allowance_only") — without this, a
+            # removed/never-a-member rider could get a company_allowance ride
+            # created and dispatched, only failing later at settlement with
+            # payment_status="pending". See corporate module review gap #3.
+            try:
+                _bk_settings_member = await _deps.get_app_settings() or {}
+            except Exception:
+                _bk_settings_member = {}
+            if _bk_settings_member.get("corporate_member_removal_blocks_booking", True):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "message": "You're no longer an active member of this company account.",
+                        "failed_rules": ["membership_inactive"],
+                    },
+                )
 
     # _is_deferred_schedule is computed above (before the corporate policy
     # check). Deferred rides are parked in SCHEDULED; the scheduled-ride

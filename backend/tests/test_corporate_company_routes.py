@@ -137,6 +137,144 @@ def test_remove_member_sets_status_removed(test_client, rider_override):
     m_upd.assert_awaited_once_with("m1", {"status": "removed"})
 
 
+def test_remove_member_cancels_pre_pickup_rides_and_logs(test_client, rider_override):
+    """Gap #3: removing a member must cancel their pre-pickup rides and
+    write an audit log entry, mirroring the company-level suspend/close
+    behavior at member scope."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "removed"}),
+        ),
+        patch(
+            "routes.corporate_company.cancel_pre_pickup_rides_for_member",
+            AsyncMock(return_value=2),
+        ) as mock_cancel,
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.delete("/company/c1/members/m1")
+    assert resp.status_code == 200, resp.text
+    mock_cancel.assert_awaited_once_with("c1", "m1")
+    assert mock_audit.await_args.kwargs["details"]["pre_pickup_rides_cancelled"] == 2
+    assert mock_audit.await_args.kwargs["details"]["old_status"] == "active"
+    assert mock_audit.await_args.kwargs["details"]["new_status"] == "removed"
+
+
+def test_remove_member_skips_cancellation_when_flag_disabled(test_client, rider_override):
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "removed"}),
+        ),
+        patch(
+            "routes.corporate_company.get_app_settings",
+            AsyncMock(return_value={"corporate_member_removal_cancels_pre_pickup_rides": False}),
+        ),
+        patch(
+            "routes.corporate_company.cancel_pre_pickup_rides_for_member",
+            AsyncMock(),
+        ) as mock_cancel,
+    ):
+        resp = test_client.delete("/company/c1/members/m1")
+    assert resp.status_code == 200, resp.text
+    mock_cancel.assert_not_awaited()
+
+
+def test_removing_already_removed_member_is_idempotent_noop(test_client, rider_override):
+    """Repeat-DELETE on an already-removed member must not re-cancel rides
+    or re-fire the audit log — the transition guard only fires on an actual
+    status change."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "removed"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "removed"}),
+        ),
+        patch(
+            "routes.corporate_company.cancel_pre_pickup_rides_for_member",
+            AsyncMock(),
+        ) as mock_cancel,
+    ):
+        resp = test_client.delete("/company/c1/members/m1")
+    assert resp.status_code == 200, resp.text
+    mock_cancel.assert_not_awaited()
+
+
+def test_update_member_status_to_suspended_cancels_pre_pickup_rides(test_client, rider_override):
+    """PATCH status=suspended is also an access-revoking transition —
+    mirrors company-level suspend, which already cancels pre-pickup rides."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "suspended"}),
+        ),
+        patch(
+            "routes.corporate_company.cancel_pre_pickup_rides_for_member",
+            AsyncMock(return_value=1),
+        ) as mock_cancel,
+    ):
+        resp = test_client.patch("/company/c1/members/m1", json={"status": "suspended"})
+    assert resp.status_code == 200, resp.text
+    mock_cancel.assert_awaited_once_with("c1", "m1")
+
+
+def test_update_member_role_change_does_not_trigger_revocation(test_client, rider_override):
+    """A non-status field update (e.g. role change) must not touch ride
+    cancellation at all."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active", "role": "member"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "active", "role": "admin"}),
+        ),
+        patch(
+            "routes.corporate_company.cancel_pre_pickup_rides_for_member",
+            AsyncMock(),
+        ) as mock_cancel,
+    ):
+        resp = test_client.patch("/company/c1/members/m1", json={"role": "admin"})
+    assert resp.status_code == 200, resp.text
+    mock_cancel.assert_not_awaited()
+
+
 def test_add_allowed_domain_lowercases(test_client, rider_override):
     with (
         patch(

@@ -264,6 +264,25 @@ dsar_export_limit = default_limiter.limit("3/hour")
 # export volume per admin-facing client over time (cf. dsar_export_limit).
 data_transfer_export_limit = default_limiter.limit("10/hour")
 
+# Admin Data Transfer import — /validate is a read-only dry-run (parse +
+# report, no writes); /commit creates users/drivers rows and, with
+# update_existing=true, mutates already-imported ones. commit is the
+# write path and gets the tighter limit — a compromised or scripted admin
+# session should not be able to mass-create/mutate accounts unbounded.
+data_transfer_import_validate_limit = default_limiter.limit("30/hour")
+data_transfer_import_commit_limit = default_limiter.limit("10/hour")
+
+# Admin Data Transfer jobs (list/detail/download-link) — read-only status
+# polling, but download-link regeneration mints a fresh signed Storage URL
+# each call; bound it the same as other admin list/detail endpoints.
+data_transfer_jobs_limit = default_limiter.limit("60/minute")
+
+# Admin Data Transfer search — read-only, but runs a count_documents
+# head-count query per call; same order of magnitude as other admin
+# search/autocomplete endpoints (cf. admin_places_autocomplete's 60/minute
+# in routes/admin/rides.py).
+data_transfer_search_limit = default_limiter.limit("60/minute")
+
 # Tax-document email (T4A PDF / earnings CSV) — each call reads up to 10k rides,
 # renders/builds a document, and sends an email to the driver. Cap prevents
 # inbox-bombing + SES quota / sender-reputation abuse (cf. dsar_export_limit).

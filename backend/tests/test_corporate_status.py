@@ -69,6 +69,40 @@ def test_suspend_cancels_pre_pickup_rides_and_logs_count(test_client, admin_over
     assert mock_audit.await_args.kwargs["details"]["pre_pickup_rides_cancelled"] == 2
 
 
+def test_suspend_skips_cancellation_when_flag_disabled(test_client, admin_override):
+    """Rollback path: flipping corporate_suspend_cancels_pre_pickup_rides off
+    in app_settings must fully disable the new cancellation behavior without
+    a redeploy."""
+    with (
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "db_supabase.update_corporate_account_status",
+            AsyncMock(return_value=corporate_account_row("suspended")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_wallet_by_company",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "routes.corporate_accounts.get_app_settings",
+            AsyncMock(return_value={"corporate_suspend_cancels_pre_pickup_rides": False}),
+        ),
+        patch(
+            "routes.corporate_accounts.cancel_pre_pickup_rides_for_company",
+            AsyncMock(),
+        ) as mock_cancel,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/status",
+            json={"status": "suspended", "reason": "overdue balance"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_cancel.assert_not_awaited()
+
+
 def test_reactivating_company_does_not_cancel_rides(test_client, admin_override):
     with (
         patch(

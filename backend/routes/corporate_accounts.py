@@ -736,13 +736,15 @@ async def change_company_status(
     # normally at settlement (flagged there for audit, not blocked here).
     cancelled_rides = 0
     if transition.status in (CompanyStatus.SUSPENDED, CompanyStatus.CLOSED):
-        try:
-            cancelled_rides = await cancel_pre_pickup_rides_for_company(normalized_id)
-        except Exception as _cancel_exc:
-            logger.error(
-                f"Pre-pickup ride cancellation failed for suspended company {normalized_id}: {_cancel_exc}",
-                exc_info=True,
-            )
+        settings = await get_app_settings()
+        if settings.get("corporate_suspend_cancels_pre_pickup_rides", True):
+            try:
+                cancelled_rides = await cancel_pre_pickup_rides_for_company(normalized_id)
+            except Exception as _cancel_exc:
+                logger.error(
+                    f"Pre-pickup ride cancellation failed for suspended company {normalized_id}: {_cancel_exc}",
+                    exc_info=True,
+                )
 
     try:
         await log_admin_action(

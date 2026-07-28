@@ -148,6 +148,14 @@ class AppSettings(BaseModel):
     # this to true to enforce the subscription gate at the "go online" call.
     # Defaults to false so the product works out of the box pre-launch.
     require_driver_subscription: bool = False
+    # When true, suspending/closing a corporate account auto-cancels its
+    # employees' pre-pickup rides (searching/driver_assigned/driver_accepted/
+    # driver_arrived) instead of leaving them to run to completion as if the
+    # company were still active. In-progress rides are always grandfathered
+    # regardless of this flag — see routes/corporate_accounts.py. Defaults to
+    # true because the un-flagged behavior (do nothing) was a bug, not the
+    # intended design; flip to false only to roll back without a redeploy.
+    corporate_suspend_cancels_pre_pickup_rides: bool = True
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no

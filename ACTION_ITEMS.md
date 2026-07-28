@@ -35,7 +35,7 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     `matching.py` 64.7% (now **79.41%** combined — PR #2557 merged, this PR
     adds the remaining increment; see below — just under the 80% target),
     `lifecycle.py` 65.1% (now **87.88%** — meets target),
-    `booking.py` 65.7% (now **84.54%** — meets target, PR #2559),
+    `booking.py` 65.7% (now **91.75%** — meets target, PR #2559 + follow-up),
     `queries.py` 69.2% (now **92.20%** — meets target, PR #2544),
     `estimates.py` 71.0% (now **93.99%** — meets target, PR #2552),
     `cancellation.py` 71.0% (now **95.06%** — meets target, PR #2555),
@@ -140,7 +140,25 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
     ever inserting a ride — the state machine must stay clean until the
     client re-books with the confirmed hold), the DB-level idempotency-key
     replay early return, and `calculate_all_fees` failing mid-booking → 503.
-    Meets the 80% target.
+    Meets the 80% target. **Now 91.75%** after a further 7 tests
+    (new `tests/test_create_ride_post_insert_branches.py`) covering
+    `create_ride`'s post-insert side-effect blocks: promo-code application
+    (success — updates `grand_total`/`discount_amount`/`promo_code` on the
+    ride; rejection via `HTTPException` — sets `promo_error`, non-fatal;
+    unexpected exception — sets a generic `promo_error`, non-fatal), the
+    fare-breakdown snapshot save failure (non-fatal, logged), the admin
+    live-monitoring broadcast failure (non-fatal), the post-dispatch
+    `ride_search_timeout` spawn when the ride is still `searching`, and the
+    road-distance settings-fetch exception inside the haversine-fallback
+    safety net (swallowed, falls back to the `"road"` mode default). The
+    geofence stop-loop's `s_lat is None or s_lng is None: continue` branch
+    (line 507) was investigated and confirmed **unreachable via the public
+    API** — `CreateRideRequest.validate_stops` already rejects any stop
+    missing lat/lng at the Pydantic layer before `create_ride` runs, so it's
+    defensive dead code, not a real gap; not covered, and not worth
+    covering. Remaining ~8% gap is the corporate work-profile pre-dispatch
+    block's happy path and the planned-route-snapshot spawn's inner
+    success/failure branches — low-value, not scheduled.
   - `routes/rides/queries.py`: was 69.2%, **now 92.20%** (PR #2544) — meets
     the 80% target.
   - `routes/rides/estimates.py`: was 71.0%, **now 93.99%** (PR #2552) — meets

@@ -236,7 +236,7 @@ nothing is silently burned before the credentials land.
 | SDK init | `rider-app/app/_layout.tsx`, `driver-app/app/_layout.tsx` |
 | Client `CompleteRegistration` | `rider-app/app/otp.tsx`, `driver-app/app/otp.tsx` |
 | Consent gate | `meta_conversions_service.has_ad_attribution_consent` |
-| Schema | `backend/migrations/264_meta_conversions_tracking.sql` |
+| Schema | `backend/migrations/266_meta_conversions_tracking.sql` |
 
 ---
 
@@ -268,7 +268,7 @@ Anything beyond this list is a fresh decision, not covered by this exception.
   truth ("this rider has completed a paid ride"), and redefining it as "Meta
   acknowledged our event" would mislead every future reader. `Purchase` still
   fires for that ride, so only the first-ride segmentation is lost.
-- **Riders who completed rides before migration 264** start with a NULL flag
+- **Riders who completed rides before migration 266** start with a NULL flag
   and will fire `FirstRide` on their next paid ride. Backfilling from ride
   history was rejected — it would emit a burst of historical conversions
   stamped with today's timestamps, corrupting attribution windows.

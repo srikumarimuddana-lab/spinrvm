@@ -71,7 +71,13 @@ def _with_full_name(rows: list[dict]) -> list[dict]:
     return out
 
 
-def _build_filters(q: Optional[str], date_from: Optional[str], date_to: Optional[str], table: str = "users") -> dict:
+def _build_filters(
+    q: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    status: Optional[str] = None,
+    table: str = "users",
+) -> dict:
     filters: dict = {}
     if q:
         filters.update(_text_filter(q, table))
@@ -82,6 +88,8 @@ def _build_filters(q: Optional[str], date_from: Optional[str], date_to: Optional
         if date_to:
             range_filter["$lte"] = date_to
         filters["created_at"] = range_filter
+    if status:
+        filters["status"] = status
     return filters
 
 
@@ -93,6 +101,13 @@ async def search_entities(
     entity_type: Optional[str] = Query(None, pattern="^(driver|rider)$"),
     date_from: Optional[str] = Query(None, description="ISO date, filters on created_at >="),
     date_to: Optional[str] = Query(None, description="ISO date, filters on created_at <="),
+    # `drivers.status` (active/pending/needs_review/suspended/banned) and
+    # `users.status` are the same column name on both tables — real values
+    # differ per table (confirmed against the real schema; drivers has 5
+    # distinct statuses, users effectively only "active" today), so this is
+    # deliberately a free-text exact match rather than a shared enum that
+    # would either over- or under-constrain one of the two tables.
+    status: Optional[str] = Query(None, description="Exact match on status (e.g. active, suspended, banned)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
     admin: dict = Depends(get_admin_user),
@@ -109,7 +124,7 @@ async def search_entities(
         # Drivers has no `email` column (email lives on `users`, joined via
         # user_id) — _build_filters(table="drivers") excludes it.
         table = "drivers"
-        table_filters = _build_filters(q, date_from, date_to, table=table)
+        table_filters = _build_filters(q, date_from, date_to, status, table=table)
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -117,7 +132,7 @@ async def search_entities(
             desc=True,
             limit=page_size,
             offset=offset,
-            columns="id,user_id,name,first_name,last_name,phone,created_at,license_plate",
+            columns="id,user_id,name,first_name,last_name,phone,created_at,license_plate,status",
         )
         rows = _with_full_name(rows or [])
         # UI (EntitySearchTable.tsx) reads `vehicle_plate` — the real
@@ -141,7 +156,7 @@ async def search_entities(
         ]
     elif entity_type == "rider":
         table = "users"
-        table_filters = {**_build_filters(q, date_from, date_to, table=table), "role": "rider"}
+        table_filters = {**_build_filters(q, date_from, date_to, status, table=table), "role": "rider"}
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -149,12 +164,12 @@ async def search_entities(
             desc=True,
             limit=page_size,
             offset=offset,
-            columns="id,first_name,last_name,email,phone,created_at,role",
+            columns="id,first_name,last_name,email,phone,created_at,role,status",
         )
         rows = _with_full_name(rows or [])
     else:
         table = "users"
-        table_filters = _build_filters(q, date_from, date_to, table=table)
+        table_filters = _build_filters(q, date_from, date_to, status, table=table)
         rows = await db_supabase.get_rows(
             table,
             table_filters,
@@ -162,7 +177,7 @@ async def search_entities(
             desc=True,
             limit=page_size,
             offset=offset,
-            columns="id,first_name,last_name,email,phone,created_at,role",
+            columns="id,first_name,last_name,email,phone,created_at,role,status",
         )
         rows = _with_full_name(rows or [])
 

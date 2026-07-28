@@ -65,6 +65,17 @@ def test_build_filters_combines_text_and_date():
     assert filters["created_at"] == {"$gte": "2026-01-01", "$lte": "2026-12-31"}
 
 
+def test_build_filters_status_only():
+    assert _build_filters(None, None, None, status="suspended") == {"status": "suspended"}
+
+
+def test_build_filters_combines_status_with_text_and_date():
+    filters = _build_filters("jane", "2026-01-01", "2026-12-31", status="active")
+    assert filters["status"] == "active"
+    assert "$or" in filters
+    assert filters["created_at"] == {"$gte": "2026-01-01", "$lte": "2026-12-31"}
+
+
 def test_build_filters_respects_table_param():
     users_filters = _build_filters("jane", None, None, table="users")
     drivers_filters = _build_filters("jane", None, None, table="drivers")

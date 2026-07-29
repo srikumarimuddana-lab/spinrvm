@@ -84,6 +84,62 @@ export type {
     DriverPayoutSummary,
     RevealSinResponse,
 } from "./api/drivers";
+export {
+    getCorporateAccounts,
+    listCorporateAccounts,
+    reviewKyb,
+    getCorporateAccount,
+    changeCompanyStatus,
+    fetchKybDocumentBlob,
+    createCorporateAccount,
+    updateCorporateAccount,
+    deleteCorporateAccount,
+    getCorporateWallet,
+    updateWalletConfig,
+    walletTopupIntent,
+    walletAdjust,
+    listCompanyMembers,
+    inviteCompanyMember,
+    removeCompanyMember,
+    getMemberAllowance,
+    putMemberAllowance,
+    listCompanyAllowanceRequests,
+    decideAllowanceRequest,
+    updateCompanyMember,
+    getCompanyPolicy,
+    putCompanyPolicy,
+    patchCompanyPolicy,
+    listAllowedDomains,
+    addAllowedDomain,
+    removeAllowedDomain,
+    getCompanyBillingSummary,
+    getCompanyBillingStatement,
+    getCompanyBillingTransactions,
+} from "./api/corporate";
+export type {
+    CompanyStatus,
+    SizeTier,
+    CorporateAccount,
+    WalletTxn,
+    CorporateWallet,
+    WalletConfigPatch,
+    CorporateMemberRole,
+    CorporateMemberStatus,
+    AllowanceTypeValue,
+    CorporateMember,
+    CorporateAllowance,
+    AllowanceRequestRow,
+    PaymentSourcePolicy,
+    TimeWindowPolicy,
+    CorporatePolicy,
+    AllowedDomainRow,
+    BillingMemberBreakdown,
+    BillingSummary,
+    BillingLineItem,
+    BillingStatement,
+    BillingTransaction,
+    BillingTransactionsPage,
+} from "./api/corporate";
 import { request } from "./api/client";
 import { useAuthStore } from "@/store/authStore";
 
@@ -994,421 +1050,7 @@ export const nudgeDriverExpiry = (
         body: JSON.stringify(body),
     });
 
-/* ── Corporate Accounts ─────────────────────── */
-export type CompanyStatus =
-    | "pending_verification"
-    | "active"
-    | "suspended"
-    | "closed";
-
-export type SizeTier = "smb" | "mid_market" | "enterprise";
-
-export interface CorporateAccount {
-    id: string;
-    name: string;
-    legal_name?: string | null;
-    business_number?: string | null;
-    tax_region?: string | null;
-    billing_email?: string | null;
-    contact_name?: string | null;
-    contact_email?: string | null;
-    contact_phone?: string | null;
-    status: CompanyStatus;
-    size_tier: SizeTier;
-    kyb_document_url?: string | null;
-    kyb_reviewed_at?: string | null;
-    kyb_reviewed_by?: string | null;
-    kyb_submitted_at?: string | null;
-    kyb_review_note?: string | null;
-    kyb_last_decision?: "approved" | "rejected" | null;
-    credit_limit?: number;
-    is_active: boolean;
-    created_at: string;
-    updated_at: string;
-}
-
-export const getCorporateAccounts = () =>
-    request<CorporateAccount[]>("/api/admin/corporate-accounts");
-
-export const listCorporateAccounts = (opts: {
-    status?: CompanyStatus;
-    size_tier?: SizeTier;
-    search?: string;
-    skip?: number;
-    limit?: number;
-} = {}) => {
-    const p = new URLSearchParams();
-    if (opts.status) p.set("status", opts.status);
-    if (opts.size_tier) p.set("size_tier", opts.size_tier);
-    if (opts.search) p.set("search", opts.search);
-    if (opts.skip != null) p.set("skip", String(opts.skip));
-    if (opts.limit != null) p.set("limit", String(opts.limit));
-    const qs = p.toString();
-    return request<CorporateAccount[]>(
-        `/api/admin/corporate-accounts${qs ? `?${qs}` : ""}`
-    );
-};
-
-export const reviewKyb = (id: string, decision: { approve: boolean; note?: string }) =>
-    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}/kyb-review`, {
-        method: "POST",
-        body: JSON.stringify(decision),
-    });
-
-export const getCorporateAccount = (id: string) =>
-    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}`);
-
-export const changeCompanyStatus = (
-    id: string,
-    transition: { status: CompanyStatus; reason?: string }
-) =>
-    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}/status`, {
-        method: "POST",
-        body: JSON.stringify(transition),
-    });
-
-// Blob-fetch the KYB document through the backend streaming endpoint
-// (kyb_document_url is a raw PRIVATE-bucket key, not a browser-usable URL).
-export async function fetchKybDocumentBlob(id: string): Promise<Blob> {
-    const token = useAuthStore.getState().token;
-    const res = await fetch(`/api/admin/corporate-accounts/${id}/kyb/view`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!res.ok) throw new Error(`Could not load document (${res.status})`);
-    return res.blob();
-}
-
-export const createCorporateAccount = (data: any) =>
-    request<CorporateAccount>("/api/admin/corporate-accounts", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updateCorporateAccount = (id: string, data: any) =>
-    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-export const deleteCorporateAccount = (id: string) =>
-    request<any>(`/api/admin/corporate-accounts/${id}`, { method: "DELETE" });
-
-/* ── Corporate Wallet ─────────────────────── */
-export interface WalletTxn {
-    id: string;
-    type: string;
-    scope: string;
-    amount: string;
-    balance_after: string;
-    created_at: string;
-    notes?: string | null;
-    ride_id?: string | null;
-    member_id?: string | null;
-}
-
-export interface CorporateWallet {
-    id: string;
-    company_id: string;
-    balance: string;
-    currency: string;
-    auto_topup_enabled: boolean;
-    auto_topup_threshold: string | null;
-    auto_topup_amount: string | null;
-    auto_topup_daily_cap: string;
-    soft_negative_floor: string;
-    transactions: WalletTxn[];
-}
-
-export type WalletConfigPatch = Partial<
-    Pick<
-        CorporateWallet,
-        | "auto_topup_enabled"
-        | "auto_topup_threshold"
-        | "auto_topup_amount"
-        | "auto_topup_daily_cap"
-    >
->;
-
-export const getCorporateWallet = (companyId: string) =>
-    request<CorporateWallet>(`/api/admin/corporate-accounts/${companyId}/wallet`);
-
-export const updateWalletConfig = (companyId: string, patch: WalletConfigPatch) =>
-    request<CorporateWallet>(
-        `/api/admin/corporate-accounts/${companyId}/wallet/config`,
-        { method: "PUT", body: JSON.stringify(patch) }
-    );
-
-export const walletTopupIntent = (
-    companyId: string,
-    body: { amount: number; payment_method_id?: string }
-) =>
-    request<{ payment_intent_id: string; client_secret: string }>(
-        `/api/admin/corporate-accounts/${companyId}/wallet/topup`,
-        { method: "POST", body: JSON.stringify(body) }
-    );
-
-export const walletAdjust = (
-    companyId: string,
-    body: { amount: number; notes: string }
-) =>
-    request<{ transaction_id: string; balance_after: string }>(
-        `/api/admin/corporate-accounts/${companyId}/wallet/adjust`,
-        { method: "POST", body: JSON.stringify(body) }
-    );
-
-/* ── Corporate members / allowances (Plan 3) ── */
-export type CorporateMemberRole = "owner" | "admin" | "member";
-export type CorporateMemberStatus = "invited" | "active" | "suspended" | "removed";
-export type AllowanceTypeValue = "fixed_recurring" | "one_time" | "unlimited";
-
-export interface CorporateMember {
-    id: string;
-    company_id: string;
-    user_id?: string | null;
-    role: CorporateMemberRole;
-    status: CorporateMemberStatus;
-    invited_email?: string | null;
-    created_at?: string;
-    updated_at?: string;
-}
-
-export interface CorporateAllowance {
-    id: string;
-    member_id: string;
-    type: AllowanceTypeValue;
-    amount?: number | null;
-    used: number;
-    period_start?: string | null;
-    period_end?: string | null;
-    rollover?: boolean;
-    auto_approve_topup_amount?: number | null;
-    auto_approve_monthly_count?: number | null;
-    status: "active" | "paused" | "expired";
-}
-
-export interface AllowanceRequestRow {
-    id: string;
-    member_id: string;
-    amount: number;
-    reason: string;
-    status: "pending" | "approved" | "denied" | "auto_approved";
-    reviewed_by?: string | null;
-    decision_notes?: string | null;
-    created_at?: string;
-}
-
-export const listCompanyMembers = (companyId: string, status?: string) =>
-    request<CorporateMember[]>(
-        `/api/company/${companyId}/members${status ? `?status=${encodeURIComponent(status)}` : ""}`
-    );
-
-export const inviteCompanyMember = (
-    companyId: string,
-    body: { email: string; role: CorporateMemberRole; policy_override?: boolean }
-) =>
-    request<{ member: CorporateMember; invite_url: string }>(
-        `/api/company/${companyId}/members/invite`,
-        { method: "POST", body: JSON.stringify(body) }
-    );
-
-export const removeCompanyMember = (companyId: string, memberId: string) =>
-    request<CorporateMember>(`/api/company/${companyId}/members/${memberId}`, {
-        method: "DELETE",
-    });
-
-export const getMemberAllowance = (companyId: string, memberId: string) =>
-    request<CorporateAllowance | Record<string, never>>(
-        `/api/company/${companyId}/members/${memberId}/allowance`
-    );
-
-export const putMemberAllowance = (
-    companyId: string,
-    memberId: string,
-    body: {
-        type: AllowanceTypeValue;
-        amount?: number | null;
-        period_start?: string | null;
-        period_end?: string | null;
-        rollover?: boolean;
-        auto_approve_topup_amount?: number | null;
-        auto_approve_monthly_count?: number | null;
-    }
-) =>
-    request<CorporateAllowance>(
-        `/api/company/${companyId}/members/${memberId}/allowance`,
-        { method: "PUT", body: JSON.stringify(body) }
-    );
-
-export const listCompanyAllowanceRequests = (companyId: string, status = "pending") =>
-    request<AllowanceRequestRow[]>(
-        `/api/company/${companyId}/allowance-requests?status=${encodeURIComponent(status)}`
-    );
-
-export const decideAllowanceRequest = (
-    companyId: string,
-    requestId: string,
-    body: { approve: boolean; note?: string }
-) =>
-    request<AllowanceRequestRow>(
-        `/api/company/${companyId}/allowance-requests/${requestId}/decide`,
-        { method: "POST", body: JSON.stringify(body) }
-    );
-
-export const updateCompanyMember = (
-    companyId: string,
-    memberId: string,
-    body: { role?: CorporateMemberRole; status?: CorporateMemberStatus; policy_override?: boolean }
-) =>
-    request<CorporateMember>(
-        `/api/company/${companyId}/members/${memberId}`,
-        { method: "PATCH", body: JSON.stringify(body) }
-    );
-
-/* ── Company policy (Plan 6) ── */
-export type PaymentSourcePolicy = "allowance_only" | "master_only" | "both";
-
-export interface TimeWindowPolicy {
-    day: "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
-    start: string;
-    end: string;
-}
-
-export interface CorporatePolicy {
-    id?: string;
-    company_id?: string;
-    active: boolean;
-    max_fare_per_ride?: number | null;
-    allowed_geofence?: Record<string, unknown> | null;
-    allowed_time_windows?: TimeWindowPolicy[] | null;
-    allowed_payment_source: PaymentSourcePolicy;
-}
-
-export const getCompanyPolicy = (companyId: string) =>
-    request<CorporatePolicy | Record<string, never>>(`/api/company/${companyId}/policy`);
-
-export const putCompanyPolicy = (
-    companyId: string,
-    body: Omit<CorporatePolicy, "id" | "company_id">
-) =>
-    request<CorporatePolicy>(`/api/company/${companyId}/policy`, {
-        method: "PUT",
-        body: JSON.stringify(body),
-    });
-
-export const patchCompanyPolicy = (
-    companyId: string,
-    body: Partial<Omit<CorporatePolicy, "id" | "company_id">>
-) =>
-    request<CorporatePolicy>(`/api/company/${companyId}/policy`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-    });
-
-/* ── Company allowed domains (Plan 7) ── */
-export interface AllowedDomainRow {
-    company_id: string;
-    domain: string;
-}
-
-export const listAllowedDomains = (companyId: string) =>
-    request<AllowedDomainRow[]>(`/api/company/${companyId}/allowed-domains`);
-
-export const addAllowedDomain = (companyId: string, domain: string) =>
-    request<AllowedDomainRow>(`/api/company/${companyId}/allowed-domains`, {
-        method: "POST",
-        body: JSON.stringify({ domain }),
-    });
-
-export const removeAllowedDomain = (companyId: string, domain: string) =>
-    request<{ status: string }>(
-        `/api/company/${companyId}/allowed-domains/${encodeURIComponent(domain)}`,
-        { method: "DELETE" }
-    );
-
-/* ── Company billing (Plan 6) ── */
-export interface BillingMemberBreakdown {
-    member_id: string;
-    ride_count: number;
-    allowance_total: number;
-    master_total: number;
-    total: number;
-}
-
-export interface BillingSummary {
-    month: string;
-    wallet_balance: number;
-    wallet_currency: string;
-    ride_count: number;
-    allowance_total: number;
-    master_total: number;
-    total: number;
-    avg_fare: number;
-    by_member: BillingMemberBreakdown[];
-}
-
-export interface BillingLineItem {
-    ride_id: string;
-    member_id: string;
-    source_type: string;
-    allowance_debit_amount: number;
-    master_fallback_amount: number;
-    policy_check_result?: string;
-    created_at: string;
-}
-
-export interface BillingStatement {
-    month: string;
-    from: string;
-    to: string;
-    line_items: BillingLineItem[];
-    summary: {
-        ride_count: number;
-        allowance_total: number;
-        master_total: number;
-        total: number;
-        avg_fare: number;
-        by_member: BillingMemberBreakdown[];
-    };
-}
-
-export interface BillingTransaction {
-    id: string;
-    type: string;
-    amount: number;
-    balance_after?: number;
-    notes?: string | null;
-    ride_id?: string | null;
-    member_id?: string | null;
-    stripe_payment_intent_id?: string | null;
-    created_at: string;
-}
-
-export interface BillingTransactionsPage {
-    wallet_id: string;
-    balance: number;
-    currency: string;
-    transactions: BillingTransaction[];
-}
-
-export const getCompanyBillingSummary = (companyId: string, month?: string) => {
-    const qs = month ? `?month=${encodeURIComponent(month)}` : "";
-    return request<BillingSummary>(`/api/company/${companyId}/billing/summary${qs}`);
-};
-
-export const getCompanyBillingStatement = (companyId: string, month: string) =>
-    request<BillingStatement>(
-        `/api/company/${companyId}/billing/statements/${encodeURIComponent(month)}`
-    );
-
-export const getCompanyBillingTransactions = (
-    companyId: string,
-    skip = 0,
-    limit = 50
-) =>
-    request<BillingTransactionsPage>(
-        `/api/company/${companyId}/billing/transactions?skip=${skip}&limit=${limit}`
-    );
-
+/* ── Corporate accounts/wallet/members/policy/domains/billing ── moved to lib/api/corporate.ts, re-exported above. */
 /* ── Cloud Messaging (merged with Notifications) ── */
 export const getCloudMessages = (status?: string, audience?: string) => {
     const params = new URLSearchParams();

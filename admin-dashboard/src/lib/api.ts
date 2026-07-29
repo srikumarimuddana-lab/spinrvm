@@ -153,198 +153,50 @@ export type {
     MetricWithDelta,
     EarningsOverview,
 } from "./api/earnings";
+export {
+    loginAdmin,
+    loginAdminSession,
+    mfaChallenge,
+    mfaStatus,
+    mfaEnroll,
+    mfaConfirm,
+    mfaDisable,
+    sendOtp,
+    logoutAllAdmin,
+} from "./api/auth";
+export type {
+    AuthResponse,
+    AdminLoginResponse,
+    AdminMfaRequired,
+    AdminMfaEnrollmentRequired,
+    AdminLoginResult,
+    MfaConfirmResponse,
+} from "./api/auth";
+export { getStats } from "./api/dashboard";
+export {
+    getEmailDeliverability,
+    getSettings,
+    updateSettings,
+    getAiCatalog,
+    adminAiChat,
+    getAdminAiConversations,
+    getAdminAiMessages,
+} from "./api/settings-ai";
+export type {
+    AiCatalogModel,
+    AiCatalogProvider,
+    AdminAiChatResponse,
+} from "./api/settings-ai";
 import { request } from "./api/client";
 import { useAuthStore } from "@/store/authStore";
 import type { EarningsPeriod, MetricWithDelta } from "./api/earnings";
 
-/* ── Auth ─────────────────────────────────── */
-export interface AuthResponse {
-    token: string;
-    user: {
-        id: string;
-        phone: string;
-        first_name?: string;
-        last_name?: string;
-        email?: string;
-        role: string;
-        profile_complete: boolean;
-    };
-    is_new_user: boolean;
-}
-
-export interface AdminLoginResponse {
-    token: string;
-    access_expires_at: string;
-    csrf_token?: string;
-    user: {
-        id: string;
-        email: string;
-        role: string;
-        first_name?: string;
-        last_name?: string;
-        modules?: string[];
-    };
-}
-
-export interface AdminMfaRequired {
-    mfa_required: true;
-    mfa_token: string;
-}
-
-// ADMIN_MFA_ENFORCED: password was correct but the account has no MFA yet.
-// mfa_token is enrollment-scoped — only /mfa/enroll and /mfa/confirm accept it.
-export interface AdminMfaEnrollmentRequired {
-    mfa_enrollment_required: true;
-    mfa_token: string;
-}
-
-export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired | AdminMfaEnrollmentRequired;
-
-export const loginAdmin = (phone: string, code: string) =>
-    request<AuthResponse>("/api/auth/verify-otp", {
-        method: "POST",
-        body: JSON.stringify({ phone, code }),
-    });
-
-export const loginAdminSession = (email: string, password: string) =>
-    request<AdminLoginResult>("/api/admin/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-    });
-
-export const mfaChallenge = (mfa_token: string, totp_code: string) =>
-    request<AdminLoginResponse>("/api/admin/auth/mfa/challenge", {
-        method: "POST",
-        body: JSON.stringify({ mfa_token, totp_code }),
-    });
-
-export const mfaStatus = () =>
-    request<{ mfa_enabled: boolean; available: boolean; enforced?: boolean }>("/api/admin/auth/mfa/status");
-
-// Confirm also returns full session tokens so first-login enrollment
-// (no session yet, only the enrollment-scoped token) lands in the dashboard.
-// Settings-flow callers already have a session and can ignore them.
-export interface MfaConfirmResponse extends AdminLoginResponse {
-    backup_codes: string[];
-    refresh_expires_at?: string;
-}
-
-// `authToken` carries the enrollment-scoped token during forced first-login
-// enrollment; omitted, the session token from the store is used (Settings flow).
-// The store token is null in the forced flow, so this header is not overwritten.
-export const mfaEnroll = (authToken?: string) =>
-    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", {
-        method: "POST",
-        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
-    });
-
-export const mfaConfirm = (totp_code: string, authToken?: string) =>
-    request<MfaConfirmResponse>("/api/admin/auth/mfa/confirm", {
-        method: "POST",
-        body: JSON.stringify({ totp_code }),
-        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
-    });
-
-export const mfaDisable = (totp_code: string, password: string) =>
-    request<{ success: boolean }>("/api/admin/auth/mfa/disable", {
-        method: "POST",
-        body: JSON.stringify({ totp_code, password }),
-    });
-
-export const sendOtp = (phone: string) =>
-    request<{ success: boolean }>("/api/auth/send-otp", {
-        method: "POST",
-        body: JSON.stringify({ phone }),
-    });
-
-// Admin "sign out everywhere" — closes B-P1-13. Bumps
-// admin_staff.token_version (kills all in-flight admin access tokens
-// on next request) and revokes every refresh token for this staff row.
-// Refused server-side for admin-001 (env-var super admin); rotate
-// ADMIN_PASSWORD to globally kill that account.
-export const logoutAllAdmin = () =>
-    request<{ success: boolean; revoked_refresh_tokens: number }>("/api/admin/auth/logout-all", {
-        method: "POST",
-    });
-
-/* ── Dashboard ────────────────────────────── */
-export const getStats = () =>
-    request<{
-        total_rides: number;
-        completed_rides: number;
-        cancelled_rides: number;
-        active_rides: number;
-        total_drivers: number;
-        online_drivers: number;
-        total_users: number;
-        total_driver_earnings: number;
-        total_admin_earnings: number;
-        total_tips: number;
-    }>("/api/admin/stats");
-
+/* ── Auth ── moved to lib/api/auth.ts, re-exported above. */
+/* ── Dashboard ── moved to lib/api/dashboard.ts, re-exported above. */
 /* ── Rides, flags, complaints, lost-and-found ── moved to lib/api/rides.ts, re-exported above. */
 /* ── Drivers (listings, live stats, referrals, training, payouts) ── moved to lib/api/drivers.ts, re-exported above. */
 /* ── Earnings ── moved to lib/api/earnings.ts, re-exported above. */
-/* ── Settings ─────────────────────────────── */
-export const getEmailDeliverability = (days = 7) =>
-    request<{
-        window_days: number;
-        total: number;
-        by_status: Record<string, number>;
-        by_provider: Record<string, number>;
-        by_type: Record<string, number>;
-        failure_rate: number;
-        suppressed_in_window: number;
-        suppression_list_size: number;
-        recent_failures: Array<{ email_type: string; provider: string; status: string; recipient_user_id: string | null; created_at: string }>;
-        recent_suppressions: Array<{ reason: string; detail: string | null; source: string; message_id: string | null; created_at: string }>;
-    }>(`/api/admin/monitoring/email-deliverability?days=${days}`);
-
-export const getSettings = () => request<any>("/api/admin/settings");
-export const updateSettings = (data: any) =>
-    request<{ message: string; audit_log_id?: string }>("/api/admin/settings", {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-/* ── AI Assistant ─────────────────────────── */
-export interface AiCatalogModel { id: string; label: string; }
-export interface AiCatalogProvider {
-    provider: string;
-    label: string;
-    key_field: string;
-    models: AiCatalogModel[];
-}
-export const getAiCatalog = () =>
-    request<{ providers: AiCatalogProvider[] }>("/api/admin/ai/catalog");
-
-/* Super-admin AI console — chat as a user + view their threads. */
-export interface AdminAiChatResponse {
-    conversation_id: string;
-    message_id: string;
-    reply: string;
-    actions: any[];
-    audience: string;
-}
-export const adminAiChat = (data: {
-    user_id: string;
-    message: string;
-    conversation_id?: string | null;
-    audience?: "rider" | "driver";
-}) =>
-    request<AdminAiChatResponse>("/api/admin/ai/chat", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-export const getAdminAiConversations = (userId: string) =>
-    request<{ conversations: { id: string; title: string; updated_at: string }[] }>(
-        `/api/admin/ai/users/${userId}/conversations`,
-    );
-export const getAdminAiMessages = (userId: string, conversationId: string) =>
-    request<{ messages: { id: string; role: "user" | "assistant"; content: string; created_at: string }[] }>(
-        `/api/admin/ai/users/${userId}/conversations/${conversationId}/messages`,
-    );
-
+/* ── Settings + AI Assistant ── moved to lib/api/settings-ai.ts, re-exported above. */
 /* ── Service Areas ────────────────────────── */
 export const getServiceAreas = () =>
     request<any[]>("/api/admin/service-areas");

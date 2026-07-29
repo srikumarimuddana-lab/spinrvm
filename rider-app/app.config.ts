@@ -236,18 +236,25 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // not a code change — it needs NSPrivacyTracking: true,
         // NSUserTrackingUsageDescription, an ATT prompt, and re-answering the
         // App Store Connect privacy questionnaire.
-        [
-            'react-native-fbsdk-next',
-            {
-                appID: process.env.EXPO_PUBLIC_FB_APP_ID,
-                clientToken: process.env.EXPO_PUBLIC_FB_CLIENT_TOKEN,
-                displayName: APP_NAME,
-                scheme: `fb${process.env.EXPO_PUBLIC_FB_APP_ID ?? ''}`,
-                advertiserIDCollectionEnabled: false,
-                autoLogAppEventsEnabled: true,
-                isAutoInitEnabled: true,
-            },
-        ],
+        // react-native-fbsdk-next's config plugin throws at config-eval time
+        // ("missing appID in the plugin properties") if appID is undefined —
+        // it doesn't tolerate a not-yet-configured Meta app the way the
+        // Sentry plugin below does. Omit the plugin entirely when the env var
+        // isn't set (local dev, CI) rather than passing it an empty appID.
+        ...(process.env.EXPO_PUBLIC_FB_APP_ID
+            ? [[
+                'react-native-fbsdk-next',
+                {
+                    appID: process.env.EXPO_PUBLIC_FB_APP_ID,
+                    clientToken: process.env.EXPO_PUBLIC_FB_CLIENT_TOKEN,
+                    displayName: APP_NAME,
+                    scheme: `fb${process.env.EXPO_PUBLIC_FB_APP_ID}`,
+                    advertiserIDCollectionEnabled: false,
+                    autoLogAppEventsEnabled: true,
+                    isAutoInitEnabled: true,
+                },
+            ] as [string, Record<string, unknown>]]
+            : []),
         // Sentry native crash capture + automatic sourcemap upload at EAS build
         // time. organization/project/url come from build env; the auth token is
         // read from SENTRY_AUTH_TOKEN by sentry-cli (never commit it). Runtime JS

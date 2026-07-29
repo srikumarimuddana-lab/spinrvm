@@ -17,6 +17,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { BookingProposal } from '@shared/types/ai';
 import { useRideStore } from '../store/rideStore';
+import { useWorkProfileStore } from '../store/workProfileStore';
 import {
   QUOTE_REFRESH_SECONDS,
   displayFare,
@@ -56,12 +57,35 @@ export default function BookingProposalCard({ proposal }: Props) {
   const appliedPromo = useRideStore((s) => s.appliedPromo);
   const fetchAvailablePromos = useRideStore((s) => s.fetchAvailablePromos);
 
+  // Mirrors /ride-options' own default: a rider with Work Mode on bills the
+  // company by default there too. Applying the same default here (rather
+  // than always defaulting to personal wallet, or inventing a new default)
+  // closes the AI-chat corporate-billing bypass without introducing a
+  // separate, unreviewed payer decision (ACTION_ITEMS.md B-AI1).
+  const workModeEnabled = useWorkProfileStore((s) => s.workModeEnabled);
+  const activeCompanyId = useWorkProfileStore((s) => s.activeCompanyId);
+  const workProfiles = useWorkProfileStore((s) => s.profiles);
+  const fetchPolicy = useWorkProfileStore((s) => s.fetchPolicy);
+  const checkRide = useWorkProfileStore((s) => s.checkRide);
+  const corporateAccountId = workModeEnabled && activeCompanyId ? activeCompanyId : null;
+  const corporateAccountName = useMemo(
+    () => workProfiles.find((p) => p.company.id === corporateAccountId)?.company.name ?? null,
+    [workProfiles, corporateAccountId],
+  );
+
   const [phase, setPhase] = useState<Phase>('quoting');
   const [errorInfo, setErrorInfo] = useState<BookingErrorDescriptor | null>(null);
   const bookedRef = useRef(false);
   const paymentMethod = useMemo(() => paymentMethodForProposal(proposal), [proposal]);
   const scheduledDate = useMemo(() => scheduledDateForProposal(proposal), [proposal]);
   const proposedPromo = useMemo(() => promoForProposal(proposal), [proposal]);
+
+  // Same policy fetch /ride-options runs on mount so checkRide() below has
+  // an up-to-date policy to evaluate rather than silently passing (checkRide
+  // fails open when `policy` is null).
+  useEffect(() => {
+    if (corporateAccountId) fetchPolicy();
+  }, [corporateAccountId, fetchPolicy]);
 
   const loadQuote = useCallback(() => {
     // A leftover stop from an earlier manual search would silently price into
@@ -148,11 +172,26 @@ export default function BookingProposalCard({ proposal }: Props) {
       router.push('/ride-options' as never);
       return;
     }
+    // Same company-policy gate /ride-options enforces client-side before
+    // booking (server-side enforcement is the real gate — see
+    // backend/routes/rides/booking.py — this is UX parity, not the security
+    // boundary).
+    if (corporateAccountId) {
+      const check = checkRide(grandTotalOf(estimate), scheduledDate ?? undefined);
+      if (!check.ok) {
+        setErrorInfo({
+          message: `Blocked by company policy: ${check.reasons.join(' ')}`,
+          link: { label: 'Review in booking', href: '/ride-options' },
+        });
+        setPhase('error');
+        return;
+      }
+    }
     setPhase('booking');
     try {
       selectVehicle(estimate.vehicle_type as never);
       setScheduledTime(scheduledDate);
-      const ride = await createRide(paymentMethod, undefined, undefined, undefined, {
+      const ride = await createRide(paymentMethod, corporateAccountId, undefined, undefined, {
         // The assistant only stamps this after the rider explicitly confirmed
         // a same-place trip in chat — don't make them confirm twice.
         allowSamePlace: !!proposal.same_location_confirmed,
@@ -176,7 +215,18 @@ export default function BookingProposalCard({ proposal }: Props) {
       setErrorInfo(mapBookingError(error));
       setPhase('error');
     }
-  }, [estimate, selectVehicle, setScheduledTime, scheduledDate, createRide, paymentMethod, proposal, router]);
+  }, [
+    estimate,
+    selectVehicle,
+    setScheduledTime,
+    scheduledDate,
+    createRide,
+    paymentMethod,
+    proposal,
+    router,
+    corporateAccountId,
+    checkRide,
+  ]);
 
   return (
     <View style={styles.card}>
@@ -233,6 +283,14 @@ export default function BookingProposalCard({ proposal }: Props) {
               <Ionicons name={paymentMethod === 'wallet' ? 'wallet-outline' : 'card-outline'} size={12} color={colors.textDim} />
               <Text style={styles.preferenceText}>{paymentMethod === 'wallet' ? 'Wallet' : 'Card'}</Text>
             </View>
+            {corporateAccountId ? (
+              <View style={styles.preferencePill}>
+                <Ionicons name="business-outline" size={12} color={colors.textDim} />
+                <Text style={styles.preferenceText}>
+                  Charged to {corporateAccountName ?? 'company account'}
+                </Text>
+              </View>
+            ) : null}
             {appliedPromo?.code ? (
               <View style={styles.preferencePill}>
                 <Ionicons name="pricetag-outline" size={12} color={colors.success} />

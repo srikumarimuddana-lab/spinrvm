@@ -220,12 +220,27 @@ one.
 
 ## 9. Verification performed
 
-- [x] **Automated tests run** — unit. `pytest tests/test_db_supabase_helpers.py`
-      (56 passed), `tests/test_admin_driver_search.py` (19 passed, new), and the
-      blast-radius selection `-k "or_clause or apply_filters or drivers or rides
-      or promotions or data_transfer or maintenance or safety or admin_users or
-      admin_extended"` (471 passed, 1 skipped). Full `pytest tests/` run — see
-      "What was NOT verified" for the result caveat.
+- [x] **Automated tests run** — unit. Full backend suite at HEAD:
+      **5735 passed, 8 skipped, 1 xfailed, 0 failed** (240s). Baseline at
+      `HEAD~5` (pre-change): **5704 passed, 8 skipped, 1 xfailed, 0 failed**.
+      The delta is exactly the 31 tests this change adds (22 in
+      `test_admin_driver_search.py`, 9 in `test_db_supabase_helpers.py`), so no
+      pre-existing test changed state.
+- [x] **One intermittent failure investigated and attributed, not waved off** —
+      an earlier full-suite run failed
+      `test_compliance_reports_http.py::test_knight_archer_report_filters_by_status`.
+      It passes 5/5 in isolation and passed the next full-suite run at the
+      identical commit. Root cause: several *pre-existing* test files leave
+      `AsyncMock` coroutines un-awaited, and pytest 9's
+      `_pytest/unraisableexception` plugin **re-raises** those errors
+      (`raise errors[0]`) against whichever test is running when the GC collects
+      them — so blame lands on an innocent test and moves whenever test count or
+      ordering changes. Confirmed pre-existing: `test_ride_accept_flow.py` +
+      `test_drivers_extended.py` emit 7 such warnings on an unmodified baseline
+      checkout, while `test_admin_driver_search.py` (this change's new file)
+      emits **0**. This change adds no leaks; it shifted GC timing by adding
+      tests ahead of the compliance file alphabetically. Logged as
+      `ACTION_ITEMS.md` A8 rather than re-diagnosed every session.
 - [x] **Regression tests proven to fail pre-fix** — `_base.py` was reverted to
       its pre-fix state and `test_name_search_renders_the_in_leaf_into_the_postgrest_clause`
       failed, confirming the test reproduces the reported bug rather than
@@ -283,6 +298,10 @@ one.
   back in the list's sort order (default `created_at DESC`), not by match
   quality, so an exact name match can still sit below an incidental substring
   match. Out of scope here; noted as a follow-up.
+- **The suite's own reliability as a merge gate** is limited by `ACTION_ITEMS.md`
+  A8 (leaked un-awaited coroutines → GC-timed blame under pytest 9). This change
+  is green over a full run and adds no leaks, but a future green run on this
+  branch is weaker evidence than it looks until A8 is closed.
 - **Pagination interacts with the post-query dedup** (`admin_get_drivers` dedups
   by `user_id`/`phone` *after* the DB `LIMIT`), so a page can render fewer than
   `limit` rows. Pre-existing, untouched by this change, and not fixed here.

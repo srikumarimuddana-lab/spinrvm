@@ -12,6 +12,7 @@ import asyncio
 import json as _json
 import os as _os
 import random as _random
+import re as _re
 import time as _time
 import traceback
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
@@ -518,26 +519,71 @@ def _unwrap_enum(v: Any) -> Any:
     return v.value if isinstance(v, _Enum) else v
 
 
+_OR_VALUE_NEEDS_QUOTE = _re.compile(r'[,()"\\]')
+
+
+def _postgrest_or_value(value: Any) -> str:
+    r"""Render one scalar as a PostgREST value inside an ``or=(...)`` group.
+
+    Inside an or-group PostgREST splits terms on ``,`` and closes the group on
+    ``)``, so a value containing either silently truncates or corrupts the
+    *whole* clause rather than just its own term. Such values are double-quoted
+    (with ``"`` and ``\`` backslash-escaped, the only escaping PostgREST honours
+    inside a quoted value). Values with no reserved character are emitted bare
+    so the generated clause stays byte-identical to what callers relied on
+    before quoting existed — timestamps (``:``) and emails (``.``) parse fine
+    unquoted because PostgREST splits ``col.op.value`` on the first two dots
+    only.
+    """
+    s = str(_unwrap_enum(value))
+    if _OR_VALUE_NEEDS_QUOTE.search(s):
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return s
+
+
 def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
-    """Convert one {col: predicate} pair into a PostgREST or_() leaf term."""
+    """Convert one {col: predicate} pair into a PostgREST or_() leaf term.
+
+    Returns None ONLY for an empty ``$in`` list, which matches no rows and so
+    contributes nothing to an OR. Every other unsupported predicate raises:
+    returning None for them (the previous behaviour) made `_build_or_clause`
+    drop the term silently, which *widens* the result set — and for an ``$or``
+    used as an update/delete filter would widen it to the entire table. A
+    predicate this builder cannot express is a programming error and must
+    surface loudly rather than change what the query matches.
+    """
     if isinstance(val, dict):
         if "$regex" in val:
             op = "ilike" if val.get("$options") == "i" else "like"
-            return f"{col}.{op}.*{_postgrest_pattern(val['$regex'])}*"
+            # Escape LIKE wildcards before PostgREST-escaping, mirroring the
+            # non-$or path in _apply_filters (C6). Without this a `%` typed into
+            # an admin search box matches every row, and `_` matches any char.
+            return f"{col}.{op}.*{_postgrest_pattern(_escape_like(val['$regex']))}*"
+        if "$in" in val:
+            values = val["$in"]
+            if not isinstance(values, (list, tuple)):
+                raise ValueError(f"$or term {col!r}: $in expects a list/tuple, got {type(values).__name__}: {values!r}")
+            if not values:
+                return None
+            return f"{col}.in.({','.join(_postgrest_or_value(v) for v in values)})"
         if "$ne" in val:
-            return f"{col}.neq.{_unwrap_enum(val['$ne'])}"
+            return f"{col}.neq.{_postgrest_or_value(val['$ne'])}"
         if "$gt" in val:
-            return f"{col}.gt.{_unwrap_enum(val['$gt'])}"
+            return f"{col}.gt.{_postgrest_or_value(val['$gt'])}"
         if "$gte" in val:
-            return f"{col}.gte.{_unwrap_enum(val['$gte'])}"
+            return f"{col}.gte.{_postgrest_or_value(val['$gte'])}"
         if "$lt" in val:
-            return f"{col}.lt.{_unwrap_enum(val['$lt'])}"
+            return f"{col}.lt.{_postgrest_or_value(val['$lt'])}"
         if "$lte" in val:
-            return f"{col}.lte.{_unwrap_enum(val['$lte'])}"
-        return None
+            return f"{col}.lte.{_postgrest_or_value(val['$lte'])}"
+        if "$notnull" in val:
+            return f"{col}.not.is.null" if val["$notnull"] else f"{col}.is.null"
+        raise ValueError(
+            f"$or term {col!r}: unsupported predicate {val!r} — cannot be expressed as a PostgREST or() leaf"
+        )
     if val is None:
         return f"{col}.is.null"
-    return f"{col}.eq.{_unwrap_enum(val)}"
+    return f"{col}.eq.{_postgrest_or_value(val)}"
 
 
 def _build_or_clause(clauses: List[Dict[str, Any]]) -> str:
@@ -546,7 +592,7 @@ def _build_or_clause(clauses: List[Dict[str, Any]]) -> str:
     for clause in clauses or []:
         for col, val in clause.items():
             term = _build_or_clause_term(col, val)
-            if term:
+            if term is not None:
                 parts.append(term)
     return ",".join(parts)
 
@@ -565,6 +611,15 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
             clause = _build_or_clause(v)
             if clause:
                 q = q.or_(clause)
+            elif v:
+                # Every leaf collapsed to "matches nothing" (empty $in lists), so
+                # the OR as a whole matches nothing — but applying no filter would
+                # instead match the ENTIRE table, and on an update/delete would
+                # write it. Callers must guard the empty case themselves.
+                raise ValueError(
+                    f"$or filter {v!r} produced no PostgREST terms; every leaf matches nothing. "
+                    "Guard the empty case in the caller rather than issuing an unfiltered query."
+                )
             continue
         if k == "$and" and isinstance(v, list):
             for sub in v:

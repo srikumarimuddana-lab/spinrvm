@@ -221,3 +221,81 @@ async def test_rate_driver_tip_with_null_ride_fields():
     tip_payload = update_ride_mock.call_args_list[1].args[1]
     assert tip_payload["tip_amount"] == Decimal("2.00")
     assert tip_payload["driver_earnings"] == Decimal("2.00")
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_rate_driver_rejects_imported_legacy_ride():
+    """Rides imported from the previous app cannot be rated.
+
+    There is no age guard on this endpoint, so without this check a rider
+    could rate a months-old imported trip and fold it into the driver's live
+    rolling average.
+    """
+    from fastapi import HTTPException
+
+    from backend.schemas import RideRatingRequest
+
+    legacy_ride = {
+        "id": "ride-legacy",
+        "rider_id": "rider-1",
+        "driver_id": "driver-1",
+        "status": "completed",
+        "tip_amount": Decimal("0.0"),
+        "driver_earnings": Decimal("16.72"),
+        "legacy_import_metadata": {"source": "legacy_mongo_booking_import", "old_booking_id": "bk-1"},
+    }
+    update_one_mock = AsyncMock(return_value={})
+    update_ride_mock = AsyncMock(return_value=legacy_ride)
+
+    with (
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=legacy_ride)),
+        patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value={"id": "driver-1"})),
+        patch("backend.routes.rides._deps.db_supabase.update_one", update_one_mock),
+        patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await _rides_module.rate_driver(
+                "ride-legacy",
+                RideRatingRequest(rating=5, tip_amount=Decimal("0.0")),
+                current_user={"id": "rider-1"},
+            )
+
+    assert exc.value.status_code == 400
+    # Neither the ride nor the driver aggregate may be touched.
+    update_ride_mock.assert_not_awaited()
+    update_one_mock.assert_not_awaited()
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_rate_driver_allows_normal_ride_with_empty_legacy_metadata():
+    """The guard keys on a non-empty blob: '{}' is the default for every real ride."""
+    from backend.schemas import RideRatingRequest
+
+    base_ride = {
+        "id": "ride-normal",
+        "rider_id": "rider-1",
+        "driver_id": "driver-1",
+        "status": "completed",
+        "tip_amount": Decimal("0.0"),
+        "driver_earnings": Decimal("10.0"),
+        "legacy_import_metadata": {},
+    }
+    driver = {"id": "driver-1", "user_id": "user-driver-1", "rating": 5.0, "total_ratings": 1, "name": "Test"}
+
+    with (
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=base_ride)),
+        patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=base_ride)),
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+        patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value={})),
+        patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+    ):
+        result = await _rides_module.rate_driver(
+            "ride-normal",
+            RideRatingRequest(rating=4, tip_amount=Decimal("0.0")),
+            current_user={"id": "rider-1"},
+        )
+
+    assert result.get("success") is True

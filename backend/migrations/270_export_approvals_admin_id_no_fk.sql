@@ -1,6 +1,12 @@
--- 269_export_approvals_admin_id_no_fk.sql
+-- 270_export_approvals_admin_id_no_fk.sql
 -- Fix: admin_export_approval_requests.requested_by/decided_by can never
 -- actually satisfy their `REFERENCES users(id)` FK for a real admin caller.
+--
+-- Rollback: forward-only fix, nothing to revert data-wise (DROP CONSTRAINT
+-- has no down-migration file per convention — see the note at the bottom of
+-- this file). To undo, add a NEW migration that re-runs migration 268's
+-- original `REFERENCES users(id)` DDL; never hand-edit this file or restore
+-- a dropped constraint by re-applying 270 in reverse.
 --
 -- Same bug class as migrations 213 (kyb_reviewed_by) and 214
 -- (corporate_wallet_transactions.actor_user_id): platform-admin identity

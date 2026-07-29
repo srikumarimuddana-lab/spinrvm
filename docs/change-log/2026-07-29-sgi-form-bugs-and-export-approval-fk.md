@@ -36,7 +36,7 @@ Four separate real bugs, reported by a live admin user testing the SGI complianc
 1. `sgi_field_maps.py`: changed every `.get(key, "")` on a nullable driver/vehicle column to `.get(key) or ""`, which also blanks an explicit `None`.
 2. `sgi_form_filler.py`: both fill functions now explicitly write blank values (`""` for text/date fields, `"/Off"` for radio/checkbox fields — verified `/Off` is accepted by pypdf even though it's not enumerated in the templates' own `/_States_` list) for every row from `len(items)+1` through `MAX_DRIVER_ROWS`/`MAX_VEHICLE_ROWS`.
 3. `SgiFormsTab.tsx`: a selection larger than a form's row limit is now split into consecutive chunks (`chunk()` helper) and generates one PDF download per chunk (`_1.pdf`, `_2.pdf`, …) instead of refusing.
-4. New migration `269_export_approvals_admin_id_no_fk.sql` drops both FK constraints (no column type change needed — both were already `TEXT`). The self-approval `CHECK` constraint is untouched.
+4. New migration `270_export_approvals_admin_id_no_fk.sql` drops both FK constraints (no column type change needed — both were already `TEXT`). The self-approval `CHECK` constraint is untouched.
 5. `compliance.py`: wrapped the `send_transactional_email` call in `_deliver_report` in `try/except`, logging the real exception with `exc_info=True` and surfacing the existing clean 502 instead of an unhandled 500. `compliance/page.tsx`: added a distinct `onEmailError` handler titled "Could not email report," wired to all three email-flow catch blocks.
 6. `sgi_forms.py`: sorts `driver_rows` by `name` (case-insensitive) right after PII decryption, before mapping to form rows.
 
@@ -55,7 +55,7 @@ Four separate real bugs, reported by a live admin user testing the SGI complianc
 
 - **Internal admin only** — no rider/driver/corporate-admin-facing surface touched.
 - Admin generating SGI forms: license number/class now render blank instead of "None" for the 22 backfill-pending drivers (ACTION_ITEMS.md B14); unused rows render fully blank instead of showing stale leftover dates/selections; a >10/>16-driver selection now produces multiple numbered PDF downloads instead of an error.
-- Admin using the Export Approvals queue: creating a request that previously always failed with a DB error now succeeds (once migration 269 is applied).
+- Admin using the Export Approvals queue: creating a request that previously always failed with a DB error now succeeds (once migration 270 is applied).
 - Admin emailing a Compliance report: a genuine send failure now shows "Could not email report" (with the real underlying reason) instead of the misleading "Could not generate report."
 - None of this is visible mid-session to a rider or driver.
 
@@ -67,7 +67,7 @@ Four separate real bugs, reported by a live admin user testing the SGI complianc
 | `backend/services/data_transfer/sgi_form_filler.py` | Explicitly blank every unused row (text/date → `""`, radio/checkbox → `"/Off"`) | Fix #2 |
 | `backend/routes/admin/sgi_forms.py` | Sort `driver_rows` by name after decryption | Fix #6 |
 | `admin-dashboard/src/app/dashboard/data-transfer/SgiFormsTab.tsx` | Chunk oversized selections into multiple PDF downloads instead of refusing | Fix #3 |
-| `backend/migrations/269_export_approvals_admin_id_no_fk.sql` (new) | Drop `requested_by`/`decided_by` FKs to `users(id)` | Fix #4 |
+| `backend/migrations/270_export_approvals_admin_id_no_fk.sql` (new) | Drop `requested_by`/`decided_by` FKs to `users(id)` | Fix #4 |
 | `backend/routes/admin/compliance.py` | `try/except` around `send_transactional_email` in `_deliver_report`, logging the real exception | Fix #5 |
 | `admin-dashboard/src/app/dashboard/compliance/page.tsx` | New `onEmailError` handler (distinct title), wired to all 3 email flows | Fix #5 |
 | `backend/tests/test_sgi_form_filler.py` | 4 new regression tests (None-value blanking, unused-row blanking ×2) | Test coverage for fixes #1/#2 |
@@ -86,7 +86,7 @@ Four separate real bugs, reported by a live admin user testing the SGI complianc
 -- Before (migration 268)
 requested_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
 
--- After (migration 269, additive)
+-- After (migration 270, additive)
 ALTER TABLE admin_export_approval_requests
     DROP CONSTRAINT IF EXISTS admin_export_approval_requests_requested_by_fkey;
 ```
@@ -95,7 +95,7 @@ ALTER TABLE admin_export_approval_requests
 
 - SGI form-filler/field-map fixes and the sort-by-name change: plain `git revert` — pure code, no data touched, no flag involved.
 - `SgiFormsTab.tsx` chunking: plain `git revert` — frontend-only, no API contract change (each chunk is a normal existing single-form request).
-- Migration 269: **not** a plain `git revert` once applied — re-adding the FK requires `ALTER TABLE ... ADD CONSTRAINT ... REFERENCES users(id)`, which would immediately fail again for the same reason unless every existing `requested_by`/`decided_by` value happens to match a `users.id` (unlikely, since the whole point is they don't). If migration 269 itself needs to be undone, the correct rollback is to re-run migration 268's original constraint DDL as a new migration — never re-apply 269 in reverse by hand.
+- Migration 270: **not** a plain `git revert` once applied — re-adding the FK requires `ALTER TABLE ... ADD CONSTRAINT ... REFERENCES users(id)`, which would immediately fail again for the same reason unless every existing `requested_by`/`decided_by` value happens to match a `users.id` (unlikely, since the whole point is they don't). If migration 270 itself needs to be undone, the correct rollback is to re-run migration 268's original constraint DDL as a new migration — never re-apply 270 in reverse by hand.
 - Compliance email fixes: plain `git revert` — the `try/except` only changes what the admin sees on an already-failing send, and the toast title change is display-only.
 
 ## 9. Verification performed
@@ -104,7 +104,7 @@ ALTER TABLE admin_export_approval_requests
 - [x] Real production build (`npm run build`) run for `admin-dashboard` — succeeded, all pages including `/dashboard/compliance` and `/dashboard/data-transfer` compiled.
 - [x] `ruff check` on all touched backend files — clean.
 - [x] Manually generated both D00032 and D00033 PDFs via the real templates (not mocked) with a partial row count and confirmed via `PdfReader` that unused rows and NULL license fields render blank as expected.
-- [ ] Not run against the real Supabase instance — migration 269 has not been applied to staging/production in this session; the FK-violation diagnosis is based on reading the schema (migration 268) against the documented admin-identity model (CLAUDE.md JWT trust model, migrations 213/214's identical prior fix), not a live repro.
+- [ ] Not run against the real Supabase instance — migration 270 has not been applied to staging/production in this session; the FK-violation diagnosis is based on reading the schema (migration 268) against the documented admin-identity model (CLAUDE.md JWT trust model, migrations 213/214's identical prior fix), not a live repro.
 
 ## 10. What was NOT verified / deferred
 

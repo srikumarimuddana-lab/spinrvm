@@ -10,7 +10,6 @@ routes/admin/__init__.py wiring at module mount time).
 """
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
@@ -87,7 +86,7 @@ async def admin_list_safety_incidents(
         # Push search into the DB filter (case-insensitive substring on
         # description) so it matches across the whole result set, not just the
         # rows that happened to land on the current page.
-        filters["description"] = {"$regex": re.escape(search.strip()), "$options": "i"}
+        filters["description"] = {"$regex": search.strip(), "$options": "i"}
 
     try:
         # Fetch exactly one page via the DB's native offset — project only the

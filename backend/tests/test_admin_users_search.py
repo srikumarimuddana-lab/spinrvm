@@ -29,4 +29,8 @@ def test_search_matches_user_id_uuid():
         asyncio.run(admin_users.admin_get_users(search="uid-rider-target"))
 
     or_clauses = captured_filters.get("$or", [])
-    assert any(c.get("id", {}).get("$regex") == "uid\\-rider\\-target" for c in or_clauses)
+    # Raw term, not re.escape()'d: $regex compiles to a SQL ILIKE pattern and the
+    # query layer owns escaping. The old "uid\\-rider\\-target" assertion froze a
+    # bug — regex escapes leaked into the LIKE pattern, so any term with a
+    # hyphen, space, or period searched for a literal backslash.
+    assert any(c.get("id", {}).get("$regex") == "uid-rider-target" for c in or_clauses)

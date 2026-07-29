@@ -1,5 +1,4 @@
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -136,8 +135,8 @@ async def admin_get_promotions(
         term = search.strip()
         if term:
             search_clauses = [
-                {"code": {"$regex": re.escape(term), "$options": "i"}},
-                {"description": {"$regex": re.escape(term), "$options": "i"}},
+                {"code": {"$regex": term, "$options": "i"}},
+                {"description": {"$regex": term, "$options": "i"}},
             ]
             # If we already used $or for status, AND the two via $and so neither is overwritten.
             if "$or" in filters:

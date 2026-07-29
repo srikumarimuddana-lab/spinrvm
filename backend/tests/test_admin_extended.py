@@ -693,7 +693,8 @@ class TestAdminGetDrivers:
             asyncio.run(admin_drivers.admin_get_drivers(search="uid-driver-target"))
 
         or_clauses = captured_filters.get("$or", [])
-        assert any(c.get("user_id", {}).get("$regex") == "uid\\-driver\\-target" for c in or_clauses)
+        # Raw term — escaping is the query layer's job (see _escape_like).
+        assert any(c.get("user_id", {}).get("$regex") == "uid-driver-target" for c in or_clauses)
 
     def test_sort_by_maps_to_db_order_column(self):
         """sort_by/sort_dir must drive the DB ORDER BY (mapped to a real

@@ -90,14 +90,19 @@ async def admin_get_users(
         # pass partial phone digits or email substrings. `id` is included so
         # pasting a rider/driver UUID (e.g. from a support ticket) still finds
         # the exact user even though it never matches name/contact fields.
+        #
+        # Pass the raw term: $regex is compiled to a SQL ILIKE pattern, and the
+        # query layer owns escaping (_escape_like + PostgREST quoting). Applying
+        # re.escape() here — as this did — leaked regex escapes into the LIKE
+        # pattern, so "O'Neil-Smith" searched for a literal backslash.
         term = search.strip()
         if term:
             filters["$or"] = [
-                {"phone": {"$regex": re.escape(term), "$options": "i"}},
-                {"email": {"$regex": re.escape(term), "$options": "i"}},
-                {"first_name": {"$regex": re.escape(term), "$options": "i"}},
-                {"last_name": {"$regex": re.escape(term), "$options": "i"}},
-                {"id": {"$regex": re.escape(term), "$options": "i"}},
+                {"phone": {"$regex": term, "$options": "i"}},
+                {"email": {"$regex": term, "$options": "i"}},
+                {"first_name": {"$regex": term, "$options": "i"}},
+                {"last_name": {"$regex": term, "$options": "i"}},
+                {"id": {"$regex": term, "$options": "i"}},
             ]
     users = await db_supabase.get_rows(
         "users",

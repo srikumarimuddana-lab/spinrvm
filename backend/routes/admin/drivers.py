@@ -211,7 +211,6 @@ async def admin_get_drivers(
     We still collapse by phone/user_id here so that if a legacy snapshot
     ever restores old state, the admin UI won't show duplicate rows.
     """
-    import re
 
     filters = {}
     if is_verified is not None:
@@ -233,10 +232,10 @@ async def admin_get_drivers(
         if term:
             user_filters = {
                 "$or": [
-                    {"phone": {"$regex": re.escape(term), "$options": "i"}},
-                    {"email": {"$regex": re.escape(term), "$options": "i"}},
-                    {"first_name": {"$regex": re.escape(term), "$options": "i"}},
-                    {"last_name": {"$regex": re.escape(term), "$options": "i"}},
+                    {"phone": {"$regex": term, "$options": "i"}},
+                    {"email": {"$regex": term, "$options": "i"}},
+                    {"first_name": {"$regex": term, "$options": "i"}},
+                    {"last_name": {"$regex": term, "$options": "i"}},
                 ]
             }
             # Only the matched ids feed the driver $or filter below — project
@@ -251,11 +250,11 @@ async def admin_get_drivers(
             # doesn't substring-match phone/email/name. `id` preserves the parity the
             # old client-side search had (it matched the driver row id too).
             filters["$or"] = [
-                {"id": {"$regex": re.escape(term), "$options": "i"}},
-                {"phone": {"$regex": re.escape(term), "$options": "i"}},
-                {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
-                {"driver_code": {"$regex": re.escape(term), "$options": "i"}},
-                {"user_id": {"$regex": re.escape(term), "$options": "i"}},
+                {"id": {"$regex": term, "$options": "i"}},
+                {"phone": {"$regex": term, "$options": "i"}},
+                {"license_plate": {"$regex": term, "$options": "i"}},
+                {"driver_code": {"$regex": term, "$options": "i"}},
+                {"user_id": {"$regex": term, "$options": "i"}},
             ]
             if matching_uids:
                 filters["$or"].append({"user_id": {"$in": matching_uids}})

@@ -57,6 +57,7 @@ from .ai_console import router as ai_console_router
 from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
+from .booking_import import router as booking_import_router
 from .compliance import api_router as compliance_router
 from .data_transfer_export import router as data_transfer_export_router
 from .data_transfer_import import router as data_transfer_import_router
@@ -139,6 +140,12 @@ admin_router.include_router(sgi_forms_router, dependencies=[Depends(require_supe
 # ACTION_ITEMS.md B10 -- approving/denying an export request is at least as
 # sensitive as the export routes it gates; same require_super_admin posture.
 admin_router.include_router(export_approvals_router, dependencies=[Depends(require_super_admin)])
+# Legacy booking import (previous-app ride history -> rides + offsetting
+# payouts). Same require_super_admin boundary as Data Transfer, for the same
+# reason plus one more: it writes to rides and payouts, the two tables
+# get_driver_balance reads to bound a Stripe payout Transfer. The handlers
+# re-check the role themselves so the guard survives a future re-mount.
+admin_router.include_router(booking_import_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])

@@ -311,6 +311,12 @@ class AppSettings(BaseModel):
     apns_team_id: str = ""  # 10-char Apple Team ID
     apns_bundle_id: str = ""  # rider bundle id; topic = this + ".push-type.liveactivity"
     apns_p8_key: str = ""  # full PEM of the .p8 private key (multi-line)
+    # ── admin-dashboard visual refresh (epic #2785 Phase 3+) ─────────────
+    # Gates the shared shell/typography/radius restyle behind a canary-able
+    # flag rather than a big-bang release, given the blast radius is all 34
+    # admin-dashboard routes. Read by the frontend's useFeatureFlag() hook
+    # via GET /api/admin/settings; effective within the 60s settings TTL.
+    admin_theme_v2_enabled: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

@@ -53,6 +53,13 @@ async def rate_driver(
     if ride.get("rider_rating") is not None:
         raise HTTPException(status_code=409, detail="Ride already rated")
 
+    # Rides imported from the previous app are historical records: they carry
+    # no rating from that app, and there is no age guard on this endpoint, so
+    # rating one would fold a months-old trip into the driver's live rolling
+    # average (and their earnings, via the tip path below).
+    if ride.get("legacy_import_metadata"):
+        raise HTTPException(status_code=400, detail="Imported historical rides cannot be rated")
+
     _pay_status = (ride.get("payment_status") or "").lower()
     if rating_data.tip_amount > 0 and _pay_status not in ("pending", "failed", ""):
         raise HTTPException(

@@ -2,7 +2,7 @@
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useRequireModule } from "@/hooks/useRequireModule";
+import { useRequireSuperAdmin } from "@/hooks/useRequireSuperAdmin";
 import { EntitySearchTable } from "@/components/data-transfer/EntitySearchTable";
 import { useEntitySelection } from "@/components/data-transfer/useEntitySelection";
 import { ExportTab } from "./ExportTab";
@@ -22,7 +22,11 @@ import { JobsTab } from "./JobsTab";
  * module's shape is visible end-to-end as each piece lands.
  */
 export default function DataTransferPage() {
-    const { allowed } = useRequireModule("bulk_operations");
+    // Backend gates every Data Transfer route on require_super_admin
+    // (strict role == "super_admin"), not a module flag — see
+    // ACTION_ITEMS.md B11/R-A. Use the matching strict client hook so an
+    // "admin"-role user doesn't pass this gate only to 403 on every call.
+    const { allowed } = useRequireSuperAdmin();
     const selection = useEntitySelection();
 
     if (!allowed) return null;

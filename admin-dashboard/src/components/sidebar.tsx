@@ -30,6 +30,14 @@ interface NavItem {
      *  admin) — for pages whose content lives inside another module's page,
      *  so the entry only shows for staff who can't reach it there. */
     hideIfModule?: string;
+    /** Strict role == "super_admin" gate, matching the backend's
+     *  require_super_admin dependency exactly (not the module system, and
+     *  NOT satisfied by role "admin" the way the normal isSuperAdmin bypass
+     *  is). Use for pages whose backend routes use require_super_admin
+     *  instead of require_module — otherwise an "admin"-role user sees the
+     *  nav entry, clicks it, and gets 403'd on every API call. `module` is
+     *  still required by the type but ignored when this is set. */
+    superAdminOnly?: boolean;
 }
 
 interface NavGroup {
@@ -120,24 +128,33 @@ const NAV_GROUPS: NavGroup[] = [
             // the isSuperAdmin bypass this makes the entry super-admin-only;
             // the page and the backend re-check the role themselves.
             { href: "/dashboard/ai-console", label: "AI Console", icon: Sparkles, module: "ai_console" },
-            // Two entries share the "bulk_operations" module key with two
-            // DIFFERENT access models — do not assume they're equivalent:
-            //  - Data Transfer: gated the normal way, via useRequireModule
-            //    ("bulk_operations") — grantable to any staff role through
-            //    Staff Management's ALL_MODULES (staff/page.tsx). Consolidates
-            //    the former rider-import section of Bulk Operations and the
-            //    Drivers → Bulk Import page: search/select, export, import,
-            //    and SGI compliance forms.
-            //  - Bulk Operations: independently hard-codes role ===
-            //    "super_admin" in its own page component (see that page's
-            //    file-header comment) — NOT gated by the module grant, so
-            //    making "bulk_operations" grantable (staff/page.tsx) does not
-            //    open this page to non-super-admins. Hosts the still-separate
-            //    legacy Stripe mapping tool, out of Data Transfer's scope.
-            // See reports/audits/2026-07-28-data-transfer-module-lifecycle-audit-v1.md
-            // gap H9 for the full reasoning on why this split exists and is safe.
-            { href: "/dashboard/data-transfer", label: "Data Transfer", icon: Upload, module: "bulk_operations" },
-            { href: "/dashboard/bulk-operations", label: "Bulk Operations", icon: Upload, module: "bulk_operations" },
+            // Data Transfer and Bulk Operations both used to key off the
+            // "bulk_operations" module flag, but that flag was never
+            // actually grantable to any non-super_admin role (it's absent
+            // from AVAILABLE_MODULES/ALL_MODULES/ROLE_PRESETS — confirmed
+            // by grep, see ACTION_ITEMS.md B11/R-A) — so gating on it was
+            // fragile-by-omission rather than a deliberate super_admin-only
+            // control. The backend closed that gap by switching Data
+            // Transfer's 5 routers to an explicit require_super_admin
+            // dependency; this nav entry now matches that exactly via
+            // superAdminOnly instead of a phantom module grant. Consolidates
+            // the former rider-import section of Bulk Operations and the
+            // Drivers → Bulk Import page: search/select, export, import,
+            // and SGI compliance forms.
+            {
+                href: "/dashboard/data-transfer", label: "Data Transfer", icon: Upload,
+                module: "bulk_operations", superAdminOnly: true,
+            },
+            // Bulk Operations independently hard-codes role === "super_admin"
+            // in its own page component (see that page's file-header
+            // comment) — not gated by any module grant. Hosts the
+            // still-separate legacy Stripe mapping tool, out of Data
+            // Transfer's scope. `module` here is likewise unused/vestigial
+            // for the same reason; kept only because NavItem requires it.
+            {
+                href: "/dashboard/bulk-operations", label: "Bulk Operations", icon: Upload,
+                module: "bulk_operations", superAdminOnly: true,
+            },
             // GST/PST remittance + insurance-period audit exports. Granted
             // via admin management, same pattern as every other module here
             // — see backend routes/admin/compliance.py's require_module("compliance").
@@ -265,6 +282,7 @@ export function Sidebar() {
                             // Suppressed when the user can already reach this
                             // content inside another module's page.
                             if (item.hideIfModule && (isSuperAdmin || userModules.includes(item.hideIfModule))) return false;
+                            if (item.superAdminOnly) return user?.role === "super_admin";
                             return isSuperAdmin || userModules.includes(item.module);
                         });
                         if (visibleItems.length === 0) return null;
@@ -284,7 +302,9 @@ export function Sidebar() {
                                     // — admin/super_admin always see them; other staff only see
                                     // children whose module they hold.
                                     const childItems = (item.children || []).filter(child =>
-                                        isSuperAdmin || userModules.includes(child.module)
+                                        child.superAdminOnly
+                                            ? user?.role === "super_admin"
+                                            : (isSuperAdmin || userModules.includes(child.module))
                                     );
                                     return (
                                         <div key={item.href}>

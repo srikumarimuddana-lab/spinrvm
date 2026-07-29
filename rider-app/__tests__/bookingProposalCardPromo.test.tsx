@@ -79,6 +79,18 @@ jest.mock('../store/rideStore', () => ({
   useRideStore: (selector: any) => selector(mockStore),
 }));
 
+// Not under test here — stub so BookingProposalCard's workProfileStore import
+// doesn't pull in the native AsyncStorage module under Jest.
+jest.mock('../store/workProfileStore', () => ({
+  useWorkProfileStore: (selector: any) => selector({
+    workModeEnabled: false,
+    activeCompanyId: null,
+    profiles: [],
+    fetchPolicy: jest.fn(),
+    checkRide: jest.fn(() => ({ ok: true, reasons: [] })),
+  }),
+}));
+
 import BookingProposalCard from '../components/BookingProposalCard';
 import { displayFareWithPromo } from '../components/bookingProposal';
 

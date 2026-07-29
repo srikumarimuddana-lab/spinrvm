@@ -1142,27 +1142,53 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   doesn't become a permanently-forgotten "temporary" gap.
 
 ### B-AI1. Corporate rider booking via AI chat bypasses corporate billing
-- [ ] **Status:** open — found by the 2026-07-28 AI guardrail audit (branch
-  `claude/rider-ai-location-selection-yn0mem`). The in-chat booking card
-  always books with `corporateAccountId=undefined`:
-  `rider-app/components/BookingProposalCard.tsx:155-159` calls
+- [x] **Status:** done (2026-07-29) — found by the 2026-07-28 AI guardrail
+  audit (branch `claude/rider-ai-location-selection-yn0mem`), fixed on branch
+  `claude/b-ai1-corporate-billing-chat`. The in-chat booking card always
+  booked with `corporateAccountId=undefined`:
+  `rider-app/components/BookingProposalCard.tsx:155-159` called
   `createRide(paymentMethod, undefined, ...)` →
-  `rider-app/store/rideStore.ts` sends `corporate_account_id: null,
+  `rider-app/store/rideStore.ts` sent `corporate_account_id: null,
   work_profile: null`, so corporate policy checks
-  (`backend/routes/rides/booking.py:717-721`) never run and the ride bills
-  the rider personally. Only **wallet**-payment proposals book inline (card
-  proposals deep-link to `/ride-options`, where Bill-to-Business works), so
-  the exposure is corporate riders who say "pay with wallet" in chat.
+  (`backend/routes/rides/booking.py:717-721`) never ran and the ride billed
+  the rider personally. Only **wallet**-payment proposals booked inline (card
+  proposals deep-link to `/ride-options`, where Bill-to-Business worked), so
+  the exposure was corporate riders who said "pay with wallet" in chat.
+- **Approach chosen (user confirmed via `AskUserQuestion` — see
+  `docs/change-log/2026-07-29-b-ai1-corporate-billing-chat-bypass.md` §3):**
+  mirror `/ride-options.tsx`'s own default — if the rider's Work Mode toggle
+  (`useWorkProfileStore`) is on with an active company, book to that company
+  by default, same as the standard screen already does for the same rider
+  state. Not a new payer-selection design; the two rejected alternatives
+  (force to `/ride-options` unconditionally, or add a new explicit
+  payer-picker UI) are recorded in the change-log for reference if revisited.
+- **Fix:** `BookingProposalCard.tsx` now reads `workModeEnabled`/
+  `activeCompanyId`, computes `corporateAccountId` the same way
+  `/ride-options` does, runs the same `checkRide()` client-side policy
+  pre-check before booking (blocking with the policy-violation reason
+  instead of silently booking), passes the id to `createRide`, and shows a
+  "Charged to `<Company>`" pill on the card so the payer is visible before
+  the rider confirms.
 - **Files:** `rider-app/components/BookingProposalCard.tsx`,
-  `rider-app/store/rideStore.ts`, `backend/ai/tools_booking.py`
-  (`propose_ride_booking` `payment_method` enum is `card|wallet` only).
-- **Approach (needs its own Change Impact analysis — money surface):** either
-  route riders with an active corporate membership to `/ride-options` from
-  the AI card unconditionally, or plumb a Bill-to-Business choice through the
-  proposal. Do NOT silently pick a payer.
-- **Acceptance:** a corporate rider booking via AI chat gets the same payer
-  selection (and policy enforcement) as the standard flow; regression test
-  against `mock_supabase_client` fixtures.
+  `rider-app/__tests__/bookingProposalCardCorporate.test.tsx` (new, 4 tests),
+  `rider-app/__tests__/bookingProposalCardPromo.test.tsx` (added a
+  `workProfileStore` mock stub — unrelated to that test's own assertions,
+  needed once the component started importing the store).
+- **Acceptance:** ✅ met — a corporate rider booking via AI chat with Work
+  Mode on now gets the same payer (and the same client-side policy
+  pre-check) as `/ride-options`; regression tests pin Work-Mode-off (no
+  change), Work-Mode-on (books to company + shows the pill), policy-failure
+  (blocks + shows the reason), and card-path-unaffected. Full `rider-app`
+  suite re-run: 51 suites / 434 tests passed. `tsc --noEmit` clean.
+- **Not verified (see change-log §10 for full list):** the real production
+  build CLAUDE.md requires for `rider-app` was attempted
+  (`expo export --platform web`) but fails before reaching any app code, on
+  a pre-existing environment-level `react-native-fbsdk-next` config-plugin
+  resolution error unrelated to this diff (same known issue as this
+  session's rider/driver-app E2E CI noise) — not skipped, but not a passing
+  build either. `tsc --noEmit` (clean) + full Jest suite (434/434) are the
+  strongest verification available here. Also not exercised against a real
+  backend/Supabase instance or a live corporate membership.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

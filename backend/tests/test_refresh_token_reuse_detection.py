@@ -515,6 +515,28 @@ async def test_cascade_swallows_audit_insert_failure():
 
 
 @pytest.mark.asyncio
+async def test_cascade_swallows_sentry_capture_failure():
+    """A Sentry capture failure (misconfigured DSN, network blip) must not
+    interrupt the cascade — the logger.error right before it already carries
+    the same signal via the loguru→Sentry bridge."""
+    insert_mock = AsyncMock(return_value={"id": "audit-1"})
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", insert_mock),
+        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=1)),
+        patch("sentry_sdk.capture_message", side_effect=RuntimeError("sentry unreachable")),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse
+
+        # MUST NOT raise, and the rest of the cascade must still complete.
+        await _handle_refresh_token_reuse(_revoked_row())
+
+    insert_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_cascade_swallows_revoke_all_failure():
     async def _failing_revoke(_uid):
         raise RuntimeError("revoke scan failed")

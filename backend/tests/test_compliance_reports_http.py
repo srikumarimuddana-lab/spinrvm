@@ -195,6 +195,62 @@ def test_insurance_period_audit_empty_result_still_200(admin_client):
     assert resp.status_code == 200
 
 
+# ── knight-archer-driver-onboarding ─────────────────────────────────────────
+
+_KA_DRIVER_ROW = {
+    "id": "d1",
+    "name": "Jane Doe",
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "license_number": "D12345",
+    "license_class": "5",
+    "status": "pending",
+    "created_at": "2026-07-01T09:00:00Z",
+}
+
+
+def test_knight_archer_report_requires_admin_auth(test_client):
+    resp = test_client.get("/api/admin/compliance/knight-archer-driver-onboarding")
+    assert resp.status_code in (401, 403)
+
+
+def test_knight_archer_report_returns_pdf_and_includes_all_statuses(admin_client):
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(return_value=[_KA_DRIVER_ROW])),
+        patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")) as log,
+    ):
+        resp = admin_client.get("/api/admin/compliance/knight-archer-driver-onboarding")
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"%PDF")
+    assert log.call_args[0][1]["report_type"] == "knight_archer_driver_onboarding"
+    # no status filter passed -> every status is included, not just active
+    assert log.call_args[0][1]["params"]["status"] is None
+
+
+def test_knight_archer_report_filters_by_status(admin_client):
+    captured = {}
+
+    async def get_rows_side(table, filters=None, **kw):
+        captured["filters"] = filters
+        return [_KA_DRIVER_ROW]
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/knight-archer-driver-onboarding?status=pending")
+    assert resp.status_code == 200
+    assert captured["filters"] == {"status": "pending"}
+
+
+def test_knight_archer_report_503_on_db_failure(admin_client):
+    with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
+        resp = admin_client.get("/api/admin/compliance/knight-archer-driver-onboarding")
+    assert resp.status_code == 503
+
+
 # ── audit logging is best-effort ────────────────────────────────────────────
 
 
@@ -209,3 +265,34 @@ def test_report_still_returns_when_audit_log_write_fails(admin_client):
     ):
         resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
     assert resp.status_code == 200
+
+
+# ── email_to (spinr.ca report delivery) ─────────────────────────────────────
+
+
+def test_email_to_non_spinr_ca_rejected(admin_client):
+    resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?email_to=someone@gmail.com")
+    assert resp.status_code == 422
+
+
+def test_email_to_spinr_ca_sends_and_returns_confirmation(admin_client):
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("routes.admin.compliance.send_transactional_email", AsyncMock(return_value=True)) as send,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?email_to=ops@spinr.ca")
+    assert resp.status_code == 200
+    assert resp.json() == {"emailed_to": "ops@spinr.ca"}
+    assert send.call_args.kwargs["to"] == "ops@spinr.ca"
+    assert send.call_args.kwargs["attachments"][0]["filename"] == "gst_pst_remittance.pdf"
+
+
+def test_email_to_send_failure_returns_502(admin_client):
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("routes.admin.compliance.send_transactional_email", AsyncMock(return_value=False)),
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?email_to=ops@spinr.ca")
+    assert resp.status_code == 502

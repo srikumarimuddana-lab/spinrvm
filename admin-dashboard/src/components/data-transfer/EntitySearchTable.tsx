@@ -13,14 +13,21 @@ import {
 } from "@/components/ui/select";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HelpCircle } from "lucide-react";
 import {
     searchDataTransferEntities,
+    getServiceAreas,
     type DataTransferEntityRow,
     type DataTransferSearchParams,
 } from "@/lib/api";
 import type { EntitySelectionState } from "./useEntitySelection";
 
 const PAGE_SIZE = 50;
+// Typing pauses this long before the search re-runs automatically -- long
+// enough that a fast typist doesn't fire a request per keystroke, short
+// enough that results still feel "live" as you type.
+const SEARCH_DEBOUNCE_MS = 300;
 
 // Status vocabularies differ between drivers and users (drivers has 5 real
 // values in production; users is effectively just "active" today) -- offer
@@ -29,11 +36,39 @@ const PAGE_SIZE = 50;
 // currently-selected entity type.
 const STATUS_OPTIONS = ["active", "pending", "needs_review", "suspended", "banned"];
 
+function Hint({ text }: { text: string }) {
+    return (
+        <Tooltip>
+            <TooltipTrigger asChild>
+                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0 cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-[260px]">{text}</TooltipContent>
+        </Tooltip>
+    );
+}
+
+// Client-side re-sort so rows whose name starts with what was typed float to
+// the top (typing "ja" surfaces "Jane" before "Rajan") -- the backend match
+// itself is still substring/ILIKE, this only re-orders the page it returns.
+function sortByQueryRelevance(rows: DataTransferEntityRow[], q: string): DataTransferEntityRow[] {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    const rank = (r: DataTransferEntityRow) => {
+        const name = (r.full_name ?? "").toLowerCase();
+        if (name.startsWith(needle)) return 0;
+        if (name.includes(needle)) return 1;
+        return 2;
+    };
+    return [...rows].sort((a, b) => rank(a) - rank(b));
+}
+
 export function EntitySearchTable({ selection }: { selection: EntitySelectionState }) {
     const { toast } = useToast();
     const [q, setQ] = useState("");
     const [entityType, setEntityType] = useState<"all" | "driver" | "rider">("all");
     const [status, setStatus] = useState<string>("all");
+    const [serviceAreaId, setServiceAreaId] = useState<string>("all");
+    const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [page, setPage] = useState(1);
@@ -41,10 +76,17 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
     const [totalCount, setTotalCount] = useState(0);
     const [loading, setLoading] = useState(false);
 
+    useEffect(() => {
+        getServiceAreas()
+            .then((areas) => setServiceAreas(Array.isArray(areas) ? areas : []))
+            .catch(() => setServiceAreas([]));
+    }, []);
+
     const currentParams: DataTransferSearchParams = {
         q: q.trim() || undefined,
         entityType: entityType === "all" ? undefined : entityType,
         status: status === "all" ? undefined : status,
+        serviceAreaId: serviceAreaId === "all" ? undefined : serviceAreaId,
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
         page,
@@ -55,7 +97,7 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
         setLoading(true);
         try {
             const result = await searchDataTransferEntities(currentParams);
-            setRows(result.rows);
+            setRows(sortByQueryRelevance(result.rows, q));
             setTotalCount(result.total_count);
         } catch (e: any) {
             toast({ title: "Search failed", description: e?.message ?? "Unknown error", variant: "destructive" });
@@ -64,12 +106,24 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
         }
     };
 
-    // Re-run on page change only — text/date/entity-type changes require the
-    // explicit Search button so every keystroke doesn't fire a request.
+    // Re-run on page change immediately.
     useEffect(() => {
         runSearch();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [page]);
+
+    // Re-run as the admin types, debounced -- filters live instead of
+    // requiring an explicit Search click for text changes. Dropdown/date
+    // filters still apply immediately via onSearchClick / their own
+    // onValueChange handlers below.
+    useEffect(() => {
+        const handle = setTimeout(() => {
+            setPage(1);
+            void runSearch();
+        }, SEARCH_DEBOUNCE_MS);
+        return () => clearTimeout(handle);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [q]);
 
     const onSearchClick = () => {
         setPage(1);
@@ -84,13 +138,14 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
     return (
         <div className="space-y-4">
             <div className="flex flex-wrap gap-2 items-end">
-                <div className="flex-1 min-w-[200px]">
+                <div className="flex-1 min-w-[200px] flex items-center gap-1.5">
                     <Input
                         placeholder="Search name, email, or phone…"
                         value={q}
                         onChange={(e) => setQ(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && onSearchClick()}
                     />
+                    <Hint text="Results filter automatically as you type, sorted so the closest name match is first. Press Enter or Search to apply the other filters right away." />
                 </div>
                 <Select value={entityType} onValueChange={(v) => setEntityType(v as typeof entityType)}>
                     <SelectTrigger className="w-[140px]">
@@ -115,6 +170,22 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
                         ))}
                     </SelectContent>
                 </Select>
+                <div className="flex items-center gap-1.5">
+                    <Select value={serviceAreaId} onValueChange={setServiceAreaId}>
+                        <SelectTrigger className="w-[170px]">
+                            <SelectValue placeholder="Service area" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All service areas</SelectItem>
+                            {serviceAreas.map((a) => (
+                                <SelectItem key={a.id} value={a.id}>
+                                    {a.name}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <Hint text="Only narrows driver results — riders aren't assigned to a service area, so this filter has no effect when searching riders." />
+                </div>
                 <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-[160px]" />
                 <span className="text-sm text-muted-foreground self-center">to</span>
                 <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-[160px]" />

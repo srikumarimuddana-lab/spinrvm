@@ -180,10 +180,81 @@ def _match_quality(result: Dict[str, Any]) -> str:
     return ((result.get("geometry") or {}).get("location_type")) or "UNKNOWN"
 
 
+# Two POIs this close are the same building for drop-off purposes — a store's
+# departments (Walmart Vision Centre, Walmart Wireless) each get their own
+# Google listing and their own pin metres apart. Only applied to named-place
+# results: street-address geocodes must NOT collapse, neighbouring houses are
+# well inside this radius.
+_COLOCATED_MAX_KM = 0.075
+
+
+def _leading_token(name: Optional[str]) -> Optional[str]:
+    """First word of a place name, normalized — the brand token shared by a
+    store and its in-store departments."""
+    tokens = [token for token in re.split(r"[^a-z0-9]+", (name or "").casefold()) if token]
+    return tokens[0] if tokens else None
+
+
+def _collapse_colocated(items: list) -> list:
+    """Collapse same-brand POIs sharing one building into one choice.
+
+    Address-string dedupe alone misses these: Google hands a department its
+    own listing whose formatted_address can carry a unit/suite token, so the
+    keys differ and the rider is offered "Walmart Wireless" and "Walmart
+    Vision & Glasses" as if they were two destinations. Requires BOTH
+    proximity and a shared leading brand token, so two genuinely different
+    businesses sharing a plaza are never merged.
+
+    Keeps the nearest member as the representative, but prefers a name that
+    is a prefix of the others ("Walmart" over "Walmart Wireless"). Never
+    invents a name that Google did not return.
+    """
+    groups: list = []
+    for item in items:
+        _distance, result, lat, lng = item
+        token = _leading_token(result.get("name"))
+        for group in groups:
+            head = group[0]
+            if (
+                token is not None
+                and token == _leading_token(head[1].get("name"))
+                and _trip_distance_km(head[2], head[3], lat, lng) <= _COLOCATED_MAX_KM
+            ):
+                group.append(item)
+                break
+        else:
+            groups.append([item])
+
+    collapsed = []
+    for group in groups:
+        representative = group[0]  # nearest — ordering is preserved from the caller
+        if len(group) > 1:
+            names = [str(member[1].get("name") or "") for member in group]
+            parent = min(
+                (
+                    name
+                    for name in names
+                    if name and all(other.casefold().startswith(name.casefold()) for other in names)
+                ),
+                key=len,
+                default=None,
+            )
+            if parent and parent != representative[1].get("name"):
+                representative = (
+                    representative[0],
+                    {**representative[1], "name": parent},
+                    representative[2],
+                    representative[3],
+                )
+        collapsed.append(representative)
+    return collapsed
+
+
 async def _candidates_from_results(
     results,
     near_lat: Optional[float] = None,
     near_lng: Optional[float] = None,
+    collapse_colocated: bool = False,
 ) -> list:
     biased = near_lat is not None and near_lng is not None
     parsed = []
@@ -212,6 +283,12 @@ async def _candidates_from_results(
             continue
         seen_addresses.add(dedupe_key)
         unique.append(item)
+
+    # Address-string dedupe only catches departments whose formatted_address
+    # matches exactly; same-building listings that differ by a unit token
+    # survive it, so named-place results get a second pass on proximity.
+    if collapse_colocated:
+        unique = _collapse_colocated(unique)
 
     areas = await _resolve_candidate_areas([(lat, lng) for _distance, _result, lat, lng in unique])
     candidates = []
@@ -336,7 +413,9 @@ async def _lookup_place_candidates(
             logger.error("ai find_place maps request failed", exc_info=True)
             return {"error": "place lookup failed — try again or pick the location in the app"}
 
-        candidates = await _candidates_from_results(results, near_lat=near_lat, near_lng=near_lng)
+        candidates = await _candidates_from_results(
+            results, near_lat=near_lat, near_lng=near_lng, collapse_colocated=(kind == "places")
+        )
         if candidates:
             return {"candidates": candidates, "source": kind}
 

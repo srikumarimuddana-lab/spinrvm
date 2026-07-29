@@ -101,6 +101,41 @@ def test_fill_vehicle_details_form_rejects_too_many_rows():
         pass
 
 
+def test_fill_driver_details_form_none_license_fields_render_blank():
+    """Regression: a NULL license_number/license_class (22/209 real drivers
+    predate the backfill, ACTION_ITEMS.md B14) means the mapped row dict has
+    the key present with value None, not missing — `.get(key, "")`'s default
+    only applies to a MISSING key, so None flowed straight into the PDF and
+    rendered as the literal text "None"."""
+    row = sgi_field_maps.driver_to_driver_details_row({"name": "Jane Doe", "license_number": None, "license_class": None})
+    fields = _read_back(sgi_form_filler.fill_driver_details_form([row]))
+    assert fields["Licence number"].get("/V") == ""
+    assert fields["Licence class"].get("/V") == ""
+
+
+def test_fill_driver_details_form_blanks_unused_rows():
+    """Regression: the real D00032 template ships with stale baked-in /V
+    defaults on every row slot (e.g. AddOrRemove_2/_3/_4 pre-selected
+    "Add", Date2/3/4_af_date pre-filled to a leftover date from whatever
+    real filled-out form the template was captured from) — a submission
+    with fewer than MAX_DRIVER_ROWS drivers left those unused rows showing
+    the template's stale data instead of coming out blank."""
+    rows = [sgi_field_maps.driver_to_driver_details_row({"name": "Jane Doe", "license_number": "D1"})]
+    fields = _read_back(sgi_form_filler.fill_driver_details_form(rows))
+    assert fields["Full name_2"].get("/V") in (None, "")
+    assert fields["Date2_af_date"].get("/V") in (None, "")
+    assert fields["AddOrRemove_2"].get("/V") in (None, "/Off")
+
+
+def test_fill_vehicle_details_form_blanks_unused_rows():
+    """Same stale-template-default problem as the driver form above —
+    VechicleDateN_af_date defaults to a leftover date on every row."""
+    rows = [{"licence_plate_number": "PLT1", "action": "add"}]
+    fields = _read_back(sgi_form_filler.fill_vehicle_details_form(rows))
+    assert fields["VechicleDate2_af_date"].get("/V") in (None, "")
+    assert fields["VechicleDate4_af_date"].get("/V") in (None, "")
+
+
 def test_driver_to_vehicle_details_row_inspection_defaults_true():
     """`valid_inspection` defaults to Yes regardless of expiry data — see
     the docstring on driver_to_vehicle_details_row for why."""

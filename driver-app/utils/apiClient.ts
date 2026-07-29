@@ -40,7 +40,8 @@ apiClient.interceptors.response.use(
         return apiClient.request(originalRequest)
       } catch (refreshError) {
         // Refresh failed: token invalid, force logout
-        await useAuthStore.getState().logout()
+        // Refresh already failed — the credential is dead, nothing to revoke.
+        await useAuthStore.getState().logout({ revokeServerSession: false })
         // Redirect to login will happen via auth state change
         return Promise.reject(refreshError)
       }

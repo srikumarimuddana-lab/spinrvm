@@ -40,9 +40,15 @@ def driver_to_driver_details_row(driver: dict[str, Any], action: str = "add") ->
     per-row override UI yet — see the Data Transfer module's ACTION_ITEMS).
     """
     return {
-        "full_name": driver.get("name", ""),
-        "licence_number": driver.get("license_number", ""),
-        "licence_class": driver.get("license_class", ""),
+        # `.get(key, "")`'s default only applies when the key is MISSING —
+        # a NULL column (22/209 real drivers predate the license backfill,
+        # see ACTION_ITEMS.md B14) still has the key present with value
+        # `None`, so the default never kicked in and the generated PDF
+        # showed the literal text "None" in these two fields. `or ""`
+        # catches both cases.
+        "full_name": driver.get("name") or "",
+        "licence_number": driver.get("license_number") or "",
+        "licence_class": driver.get("license_class") or "",
         "effective_date": _today_iso(),
         "action": action,
         "verified_driver_history": True,
@@ -62,14 +68,14 @@ def driver_to_vehicle_details_row(driver: dict[str, Any], action: str = "add") -
     into this subtask. Flagged as a known gap, not silently worked around.
     """
     year = driver.get("vehicle_year")
-    make = driver.get("vehicle_make", "")
-    model = driver.get("vehicle_model", "")
+    make = driver.get("vehicle_make") or ""
+    model = driver.get("vehicle_model") or ""
     year_make_model = " ".join(str(p) for p in (year, make, model) if p)
     return {
-        "licence_plate_number": driver.get("license_plate", ""),
-        "vin": driver.get("vehicle_vin", "") or "",
+        "licence_plate_number": driver.get("license_plate") or "",
+        "vin": driver.get("vehicle_vin") or "",
         "year_make_model": year_make_model,
-        "registered_owners_name": driver.get("name", ""),
+        "registered_owners_name": driver.get("name") or "",
         "vehicle_date": _today_iso(),
         # Defaults to Yes for the same reason as driver_details' two
         # attestation fields above — see that docstring.

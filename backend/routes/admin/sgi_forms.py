@@ -111,6 +111,13 @@ async def generate_sgi_form(
     # needs the real licence number on the form, not the encrypted token.
     driver_rows = [await _decrypt_driver_pii(d) for d in driver_rows]
 
+    # `get_rows(..., {"$in": ...})` does not preserve `body.driver_ids`'
+    # order, and that order isn't otherwise meaningful (it's whatever
+    # sequence the admin happened to click rows in Search & Select) — sort
+    # by name so the generated regulator form reads predictably rather than
+    # in arbitrary DB row order.
+    driver_rows.sort(key=lambda d: (d.get("name") or "").lower())
+
     try:
         if body.form_type == "driver_details":
             row_dicts = [sgi_field_maps.driver_to_driver_details_row(d, action=body.action) for d in driver_rows]

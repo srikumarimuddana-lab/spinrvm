@@ -49,6 +49,13 @@ function Hint({ text }: { text: string }) {
     );
 }
 
+/** Splits `items` into consecutive chunks of at most `size`. */
+function chunk<T>(items: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+    return chunks;
+}
+
 function triggerDownload(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -128,18 +135,23 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                 });
             }
 
-            // Each checked form is generated as its own download; one form
-            // exceeding its row limit or failing doesn't block the other.
+            // Each checked form is generated as its own download. A
+            // selection larger than the form's row limit is split into
+            // consecutive documents (D00032_Driver_Details_1.pdf,
+            // _2.pdf, …) rather than refused outright — the real SGI form
+            // only has a fixed number of repeating rows per page set, but
+            // there's nothing stopping an admin from submitting several
+            // documents for one batch.
             const results = await Promise.allSettled(
                 selectedFormTypes.map(async (formType) => {
                     const rowLimit = FORM_ROW_LIMITS[formType];
-                    if (driverIds.length > rowLimit) {
-                        throw new Error(
-                            `${driverIds.length} drivers selected; the ${FORM_LABELS[formType]} form has ${rowLimit} rows — select ${rowLimit} or fewer, or uncheck this form.`,
-                        );
+                    const batches = chunk(driverIds, rowLimit);
+                    const baseFilename = FORM_FILENAMES[formType].replace(/\.pdf$/, "");
+                    for (let i = 0; i < batches.length; i++) {
+                        const blob = await generateSgiForm(formType, batches[i], action);
+                        const filename = batches.length > 1 ? `${baseFilename}_${i + 1}.pdf` : `${baseFilename}.pdf`;
+                        triggerDownload(blob, filename);
                     }
-                    const blob = await generateSgiForm(formType, driverIds, action);
-                    triggerDownload(blob, FORM_FILENAMES[formType]);
                     return formType;
                 }),
             );

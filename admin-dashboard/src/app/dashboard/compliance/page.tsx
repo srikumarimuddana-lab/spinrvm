@@ -114,8 +114,15 @@ export default function CompliancePage() {
 
     if (!allowed) return null;
 
+    // `onEmailError` used the same "Could not generate report" title as
+    // download failures, which is misleading when the report generated
+    // fine and only the send step failed (e.g. SES/Resend misconfigured) —
+    // an admin reading "generate" would assume the report itself is broken
+    // and go looking in the wrong place.
     const onError = (e: any) =>
         toast({ title: "Could not generate report", description: e?.message || "Unknown error", variant: "destructive" });
+    const onEmailError = (e: any) =>
+        toast({ title: "Could not email report", description: e?.message || "Unknown error", variant: "destructive" });
     const onEmailed = (email: string) => toast({ title: "Report sent", description: `Emailed to ${email}.` });
 
     const onDownloadGstPst = async () => {
@@ -135,7 +142,7 @@ export default function CompliancePage() {
             await emailGstPstRemittance(gstPstRange, gstPstFormat, email);
             onEmailed(email);
         } catch (e: any) {
-            onError(e);
+            onEmailError(e);
         } finally {
             setGstPstEmailLoading(false);
         }
@@ -162,7 +169,7 @@ export default function CompliancePage() {
             await emailInsurancePeriodAudit(auditRange, auditFormat, email, auditDriverId.trim() || undefined);
             onEmailed(email);
         } catch (e: any) {
-            onError(e);
+            onEmailError(e);
         } finally {
             setAuditEmailLoading(false);
         }
@@ -188,7 +195,7 @@ export default function CompliancePage() {
             await emailKnightArcherDriverOnboarding(kaFormat, email, kaStatus === "all" ? undefined : kaStatus);
             onEmailed(email);
         } catch (e: any) {
-            onError(e);
+            onEmailError(e);
         } finally {
             setKaEmailLoading(false);
         }

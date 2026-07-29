@@ -132,6 +132,23 @@ async def lifespan(app: FastAPI):
         if settings.ENV.lower() == "production":
             raise
 
+    # Verify the real SGI regulator PDF templates (D00032/D00033) haven't
+    # been swapped or corrupted since this codebase was built and tested —
+    # see services/data_transfer/sgi_template_versions.py's docstring for
+    # why this is a startup check and not a per-request one. Fail the
+    # deploy in production (a wrong/tampered regulator form is a
+    # compliance incident, not a soft degradation); log and continue in
+    # dev/staging so an intentional local template swap-in-progress
+    # doesn't block the server from starting.
+    try:
+        from services.data_transfer.sgi_template_versions import startup_verify_sgi_templates
+
+        startup_verify_sgi_templates()
+    except Exception as e:
+        logger.error(f"SGI template checksum verification failed: {e}", exc_info=True)
+        if settings.ENV.lower() == "production":
+            raise
+
     # Start background tasks
     import asyncio
 

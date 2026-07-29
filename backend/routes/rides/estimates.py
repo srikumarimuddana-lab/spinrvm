@@ -49,10 +49,14 @@ from ._shared import (  # noqa: F401
 # 12.12 km → 16.46 km, $30.92 → $39.44 between quote and confirm card).
 #
 # Derived, never hardcoded: the invariant is wait > timeout, so the ONLY way
-# to buy latency back is to lower DIRECTIONS_TIMEOUT_S — which is why that
-# constant now sits at 1.5 s, keeping this bound at 2.0 s instead of the 3.5 s
-# a 3.0 s timeout implied. CLAUDE.md pins fare estimate P95 at 300 ms, so the
-# worst case here is a real trade and belongs on the low side of it.
+# to buy latency back is to lower DIRECTIONS_TIMEOUT_S. That constant was
+# raised 1.5 s -> 3.0 s on 2026-07-29, putting this bound at 3.5 s: the road
+# route is the billing basis and every timeout bills the shorter straight
+# line, a one-directional loss that lands on the driver's fare under 0%
+# commission. CLAUDE.md pins fare estimate P95 at 300 ms, so this worst case
+# is a real trade — taken deliberately toward correct pricing, and it costs
+# nothing on a warm call (the route task runs concurrently). Lowering it
+# again resumes the undercharge; fix upstream latency instead.
 # Haversine mode skips the wait entirely; the fare_distance_basis app
 # setting remains the kill switch if Directions latency ever hurts.
 _PRICING_ROUTE_WAIT_S = DIRECTIONS_TIMEOUT_S + 0.5
@@ -468,6 +472,15 @@ async def compute_ride_estimates(
     # (whenever a road distance is known) the km delta vs haversine — the
     # systematic-undercharge signal, which should be strongly one-sided.
     _deps._metric_inc("spinr_fare_distance_basis_total", {"basis": distance_basis})
+    if distance_basis == "haversine_fallback":
+        # Billing the straight line in road mode is a revenue loss, not a
+        # neutral degrade: haversine <= road always, so every one of these
+        # undercharges. Loud enough to alert on — a metric alone let this run
+        # unnoticed (incident: 16.6 km road billed as 15.5 km straight-line).
+        logger.error(
+            "[estimate] road distance unavailable — billing haversine (undercharge)",
+            extra={"haversine_km": round(float(haversine_km), 3), "fare_mode": _fare_mode},
+        )
     if road_km is not None:
         _deps._metric_observe(
             "spinr_fare_distance_delta_km",

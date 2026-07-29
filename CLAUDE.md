@@ -187,6 +187,11 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **Settings in DB** — Stripe keys, Twilio credentials, and Google Maps API keys live in the `app_settings` Supabase table (managed via admin dashboard), not in `.env`. This allows rotation without redeployment.
 
+**Query filters — the layer owns escaping, callers pass raw input.** The filter dicts accepted by `db_supabase.get_rows`/`update_one`/`delete_many` are Mongo-shaped but compile to PostgREST, and `$regex` compiles to a SQL `ILIKE '%term%'` — **not** to a regex. Rules:
+- Never `re.escape()` a search term before putting it in a `$regex`. It leaks regex escapes into the LIKE pattern (`re.escape("Nighil Kumar")` → `Nighil\ Kumar`, which matches a literal backslash and so matches nothing). `repositories/_base.py` handles LIKE-wildcard escaping (`_escape_like`) and PostgREST quoting (`_postgrest_or_value`) for both the `$or` and non-`$or` paths.
+- A predicate the OR builder cannot express **raises**; it is never dropped. A dropped leaf widens the OR, and because `_apply_filters` is shared with update/delete, an `$or` whose leaves all vanished would have matched the whole table. Add the operator to `_build_or_clause_term` rather than working around it.
+- A name/email lookup that spans two tables (e.g. drivers ← users) must resolve IDs in a first query and pass them as `{"col": {"$in": ids}}` — PostgREST cannot filter a parent by an embedded child. Guard the empty-ID case in the caller; an all-empty `$or` raises rather than issuing an unfiltered query.
+
 **Corporate billing layer** — sits on top of the consumer ride product without modifying ride/driver logic. Payment source selection (rider wallet / card / company allowance / master wallet fallback) happens at fare settlement. All wallet deltas go through the `corporate_wallet_apply_delta` Postgres function for row-level locking and idempotency.
 
 **Surge pricing rules** (source: `backend/utils/surge_engine.py`):

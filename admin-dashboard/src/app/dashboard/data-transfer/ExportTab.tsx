@@ -20,6 +20,7 @@ import {
     searchDataTransferEntities,
     type DataTransferExportEntityRef,
     type DataTransferExportFormat,
+    type DataTransferExportQueuedResult,
 } from "@/lib/api";
 import { inferEntityType, type EntitySelectionState } from "@/components/data-transfer/useEntitySelection";
 
@@ -147,12 +148,26 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
                 includeRideGps,
                 includeDocumentBytes,
             });
+
+            // ACTION_ITEMS.md B10 dual-approval gate: with the flag on, a
+            // large export doesn't start a job at all until a different
+            // admin approves it from the Export Approvals queue.
+            if ("approval_required" in queued) {
+                toast({
+                    title: "Approval required",
+                    description:
+                        "This export needs a different admin's approval before it can run — it's been added to the Export Approvals queue.",
+                });
+                return;
+            }
+            const job: DataTransferExportQueuedResult = queued;
+
             toast({
                 title: "Export queued",
-                description: `Preparing ${queued.requested_count} record(s)… this may take a moment for large batches.`,
+                description: `Preparing ${job.requested_count} record(s)… this may take a moment for large batches.`,
             });
 
-            const outcome = await pollJobUntilDone(queued.job_id);
+            const outcome = await pollJobUntilDone(job.job_id);
             if (outcome.status === "failed") {
                 toast({
                     title: "Export failed",

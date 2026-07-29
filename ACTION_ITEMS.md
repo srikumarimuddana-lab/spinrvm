@@ -333,7 +333,28 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   3. Auth/RLS-adjacent code: JWT handling, OTP verification
      (`backend/utils/crypto.py` is already tracked at ≥90% target per
      CLAUDE.md but should be re-verified), refresh-token rotation
-     (`backend/utils/refresh_tokens.py`).
+     (`backend/utils/refresh_tokens.py`). **In progress (2026-07-29):**
+     - `backend/utils/crypto.py` — re-verified: **100%**, already exceeds
+       the ≥90% target, no work needed.
+     - `backend/utils/refresh_tokens.py` — **done, 99%** (was 62%; the
+       existing test file only pinned the reuse-detection cascade —
+       `issue_refresh_token`, `lookup_refresh_token`'s remaining branches
+       (empty input, DB error, expiry parsing), `revoke_refresh_token`,
+       and `revoke_all_for_user` had zero coverage). Added 25 new tests
+       across two files: `tests/test_refresh_tokens_lifecycle.py` (mint/
+       lookup/revoke lifecycle) and one Sentry-capture-failure test added
+       to the existing `tests/test_refresh_token_reuse_detection.py`.
+       Remaining 1 line is the dual-import fallback. Test-only, no bugs
+       found. See `docs/change-log/2026-07-29-a1b-refresh-tokens-coverage.md`.
+     - `repositories/auth_repo.py` — **done, 96%** (was 67%; had zero
+       dedicated test file). Added `tests/test_auth_repo.py` (18 tests)
+       covering the "Supabase client not configured" branch and the happy
+       path for all 8 functions (user lookup/creation, OTP CRUD).
+       Remaining 2 lines are the dual-import fallback. Test-only, no bugs
+       found. See `docs/change-log/2026-07-29-a1b-refresh-tokens-coverage.md`.
+     - Still open: `routes/auth.py` (51%), `routes/admin/auth.py` (64-70%),
+       `core/middleware.py` (60%), `dependencies/__init__.py` (62%) —
+       larger files, not started.
   4. `backend/routes/admin/` (15+ admin-only endpoints) — admin actions are
      audited but not necessarily tested; a broken admin endpoint can corrupt
      production data at scale (e.g. bulk driver approval, wallet

@@ -168,6 +168,79 @@ class TestHappyPaths:
         assert assistant_call.kwargs["provider"] == "fake"
 
 
+# Rule 6c in the system prompt mentions the block by name, so the test
+# sentinel must be text only the INJECTED block carries.
+_PIN_MARKER = "(you priced this trip"
+
+
+class TestPinnedQuoteContext:
+    """The trip most recently priced must reach the next turn's prompt.
+
+    Tool results are never persisted, so a rider who types "book it" instead
+    of tapping the quote card leaves the model with no coordinates; it
+    re-resolves the destination and can price a different point than the one
+    it quoted (incident: CA$37.53 quote → CA$40.78 booking card).
+    """
+
+    class _SystemCapturingAdapter:
+        provider = "fake"
+        model = "fake-model"
+
+        def __init__(self):
+            self.system = None
+
+        async def stream_turn(self, *, system, messages, tools):
+            self.system = system
+            yield _text("ok")
+            yield _end()
+
+    def _patch_pin(self, pinned):
+        import backend.ai.tools_booking as tb
+
+        return patch.object(tb, "load_pinned_quote", AsyncMock(return_value=pinned))
+
+    @pytest.mark.anyio
+    async def test_pinned_quote_is_injected_into_system_prompt(self):
+        adapter = self._SystemCapturingAdapter()
+        pinned = {
+            "pickup_lat": 50.4501,
+            "pickup_lng": -104.6178,
+            "pickup_address": "4325 Wakeling St, Regina",
+            "dropoff_lat": 50.4079,
+            "dropoff_lng": -104.6501,
+            "dropoff_address": "Costco, Regina",
+            "vehicle_type_id": "vt-economy",
+            "vehicle_type": "Economy",
+            "total": "37.53",
+        }
+        with self._patch_pin(pinned):
+            await _run(adapter)
+
+        assert _PIN_MARKER in adapter.system
+        # Coordinates must arrive at full precision — a rounded pin is a
+        # different point, which is the whole bug.
+        assert "[50.40790,-104.65010]" in adapter.system
+        assert "Costco, Regina" in adapter.system
+        assert "vt-economy" in adapter.system
+        assert "37.53" in adapter.system
+
+    @pytest.mark.anyio
+    async def test_no_pin_leaves_the_prompt_untouched(self):
+        adapter = self._SystemCapturingAdapter()
+        with self._patch_pin(None):
+            await _run(adapter)
+        assert _PIN_MARKER not in adapter.system
+
+    @pytest.mark.anyio
+    async def test_pin_without_usable_coordinates_is_ignored(self):
+        """A malformed pin must not emit a half-built block the model could
+        try to book from."""
+        adapter = self._SystemCapturingAdapter()
+        with self._patch_pin({"dropoff_address": "Costco", "total": "37.53"}):
+            await _run(adapter)
+        assert _PIN_MARKER not in adapter.system
+
+
 class TestGuards:
     @pytest.mark.anyio
     async def test_kill_switch(self):

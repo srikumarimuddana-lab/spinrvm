@@ -21,6 +21,7 @@ a rich card instead of re-reading numbers from model prose.
 """
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -47,6 +48,7 @@ try:
         places_new_headers,
     )
     from ..utils.maps_budget import check_budget, record_call
+    from ..utils.redis_client import redis_get, redis_set
 except ImportError:
     import db_supabase
     from settings_loader import get_app_settings
@@ -58,6 +60,7 @@ except ImportError:
         places_new_headers,
     )
     from utils.maps_budget import check_budget, record_call
+    from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -180,10 +183,125 @@ def _match_quality(result: Dict[str, Any]) -> str:
     return ((result.get("geometry") or {}).get("location_type")) or "UNKNOWN"
 
 
+# Two POIs this close are the same building for drop-off purposes — a store's
+# departments (Walmart Vision Centre, Walmart Wireless) each get their own
+# Google listing and their own pin metres apart. Only applied to named-place
+# results: street-address geocodes must NOT collapse, neighbouring houses are
+# well inside this radius.
+_COLOCATED_MAX_KM = 0.075
+
+
+def _leading_token(name: Optional[str]) -> Optional[str]:
+    """First word of a place name, normalized — the brand token shared by a
+    store and its in-store departments."""
+    tokens = [token for token in re.split(r"[^a-z0-9]+", (name or "").casefold()) if token]
+    return tokens[0] if tokens else None
+
+
+def _collapse_colocated(items: list) -> list:
+    """Collapse same-brand POIs sharing one building into one choice.
+
+    Address-string dedupe alone misses these: Google hands a department its
+    own listing whose formatted_address can carry a unit/suite token, so the
+    keys differ and the rider is offered "Walmart Wireless" and "Walmart
+    Vision & Glasses" as if they were two destinations. Requires BOTH
+    proximity and a shared leading brand token, so two genuinely different
+    businesses sharing a plaza are never merged.
+
+    Keeps the nearest member as the representative, but prefers a name that
+    is a prefix of the others ("Walmart" over "Walmart Wireless"). Never
+    invents a name that Google did not return.
+    """
+    groups: list = []
+    for item in items:
+        _distance, result, lat, lng = item
+        token = _leading_token(result.get("name"))
+        for group in groups:
+            head = group[0]
+            if (
+                token is not None
+                and token == _leading_token(head[1].get("name"))
+                and _trip_distance_km(head[2], head[3], lat, lng) <= _COLOCATED_MAX_KM
+            ):
+                group.append(item)
+                break
+        else:
+            groups.append([item])
+
+    collapsed = []
+    for group in groups:
+        representative = group[0]  # nearest — ordering is preserved from the caller
+        if len(group) > 1:
+            names = [str(member[1].get("name") or "") for member in group]
+            parent = min(
+                (
+                    name
+                    for name in names
+                    if name and all(other.casefold().startswith(name.casefold()) for other in names)
+                ),
+                key=len,
+                default=None,
+            )
+            if parent and parent != representative[1].get("name"):
+                representative = (
+                    representative[0],
+                    {**representative[1], "name": parent},
+                    representative[2],
+                    representative[3],
+                )
+        collapsed.append(representative)
+    return collapsed
+
+
+# How long a quoted trip stays replayable into the next turn. Long enough to
+# cover a rider reading the quote and typing "book it"; short enough that a
+# stale trip cannot resurface in an unrelated later conversation.
+_QUOTE_PIN_TTL_SECONDS = 900
+
+
+def _quote_pin_key(conversation_id: str) -> str:
+    return f"ai:quote:{conversation_id}"
+
+
+async def _pin_quote(conversation_id: Optional[str], quote: Dict[str, Any]) -> None:
+    """Remember the trip we just priced, keyed by conversation.
+
+    Best-effort: a pin failure must never break a working quote, so this
+    logs and returns rather than raising. Losing the pin degrades to the old
+    re-resolve behaviour, not to a broken quote.
+    """
+    if not conversation_id:
+        return
+    try:
+        await redis_set(_quote_pin_key(conversation_id), json.dumps(quote), ttl=_QUOTE_PIN_TTL_SECONDS)
+    except Exception:
+        logger.error("ai quote pin write failed", exc_info=True, extra={"conversation_id": conversation_id})
+
+
+async def load_pinned_quote(conversation_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The most recent quote priced in this conversation, if still fresh."""
+    if not conversation_id:
+        return None
+    try:
+        raw = await redis_get(_quote_pin_key(conversation_id))
+    except Exception:
+        logger.error("ai quote pin read failed", exc_info=True, extra={"conversation_id": conversation_id})
+        return None
+    if not raw:
+        return None
+    try:
+        pinned = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.error("ai quote pin was not valid JSON", extra={"conversation_id": conversation_id})
+        return None
+    return pinned if isinstance(pinned, dict) else None
+
+
 async def _candidates_from_results(
     results,
     near_lat: Optional[float] = None,
     near_lng: Optional[float] = None,
+    collapse_colocated: bool = False,
 ) -> list:
     biased = near_lat is not None and near_lng is not None
     parsed = []
@@ -212,6 +330,12 @@ async def _candidates_from_results(
             continue
         seen_addresses.add(dedupe_key)
         unique.append(item)
+
+    # Address-string dedupe only catches departments whose formatted_address
+    # matches exactly; same-building listings that differ by a unit token
+    # survive it, so named-place results get a second pass on proximity.
+    if collapse_colocated:
+        unique = _collapse_colocated(unique)
 
     areas = await _resolve_candidate_areas([(lat, lng) for _distance, _result, lat, lng in unique])
     candidates = []
@@ -336,7 +460,9 @@ async def _lookup_place_candidates(
             logger.error("ai find_place maps request failed", exc_info=True)
             return {"error": "place lookup failed — try again or pick the location in the app"}
 
-        candidates = await _candidates_from_results(results, near_lat=near_lat, near_lng=near_lng)
+        candidates = await _candidates_from_results(
+            results, near_lat=near_lat, near_lng=near_lng, collapse_colocated=(kind == "places")
+        )
         if candidates:
             return {"candidates": candidates, "source": kind}
 
@@ -1107,6 +1233,29 @@ async def get_fare_quote(
         return no_drivers
 
     recommended = min(quotes, key=lambda q: Decimal(q["final_total"]))
+    # Pin the priced trip for this conversation. Tool results never survive
+    # into the next turn, so a rider who TYPES "book it" (instead of tapping
+    # the card, whose message carries [lat,lng]) leaves the model with no
+    # coordinates — rule 6 then makes it re-resolve the destination, and a
+    # fresh Places lookup can land on a different point. Incident: a 15.1 km
+    # CA$37.53 Costco quote became CA$40.78 on the booking card, ~1.95 km of
+    # drift at the per-km rate. The orchestrator replays this pin into the
+    # next turn's prompt so the model books the trip it actually priced.
+    await _pin_quote(
+        user.get("_conversation_id"),
+        {
+            "pickup_lat": pickup_lat,
+            "pickup_lng": pickup_lng,
+            "pickup_address": shared.get("pickup_address") or pickup_address,
+            "dropoff_lat": dropoff_lat,
+            "dropoff_lng": dropoff_lng,
+            "dropoff_address": shared.get("dropoff_address") or dropoff_address,
+            "vehicle_type_id": recommended["vehicle_type_id"],
+            "vehicle_type": recommended.get("vehicle_type"),
+            "total": recommended["final_total"],
+            "promo_code": recommended.get("promo_code"),
+        },
+    )
     result = {
         **shared,
         "quotes": quotes,

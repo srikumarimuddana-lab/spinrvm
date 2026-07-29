@@ -1,6 +1,16 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+
+// Loaded unconditionally (cheap — a variable font, no visual effect until a
+// `.theme-v2` ancestor is present) so the epic #2785 Phase 3 restyle can be
+// toggled purely in CSS via the `admin_theme_v2_enabled` flag, with no
+// server-side re-render needed when a client toggles it.
+const plusJakartaSans = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  variable: "--font-plus-jakarta-sans",
+});
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/toaster";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -22,7 +32,7 @@ export default async function RootLayout({
 
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="font-sans antialiased">
+      <body className={`font-sans antialiased ${plusJakartaSans.variable}`}>
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"

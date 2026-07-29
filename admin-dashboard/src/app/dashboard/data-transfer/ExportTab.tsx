@@ -283,10 +283,24 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
                       : "No records selected — go to Search & Select first."}
             </div>
 
-            <Button onClick={onExport} disabled={!hasSelection || !reasonValid || loading}>
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                Export
-            </Button>
+            <div className="flex flex-col items-start gap-1.5">
+                <Button onClick={onExport} disabled={!hasSelection || !reasonValid || loading}>
+                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    Export
+                </Button>
+                {/* Explains exactly why the button is disabled instead of
+                    leaving it a silent no-op — the two prerequisites (a
+                    selection, a 10+ character reason) were previously only
+                    documented in a hover tooltip / helper text elsewhere on
+                    the page, which admins kept missing. */}
+                {(!hasSelection || !reasonValid) && !loading && (
+                    <p className="text-xs text-muted-foreground">
+                        {!hasSelection
+                            ? "Select records in Search & Select to enable Export."
+                            : "Add a reason (10+ characters) above to enable Export."}
+                    </p>
+                )}
+            </div>
         </div>
     );
 }

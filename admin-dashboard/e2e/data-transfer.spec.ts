@@ -33,7 +33,11 @@ const JOB_ROW = {
 };
 
 async function mockDataTransfer(page: any) {
+  // The page now gates on strict role === "super_admin" (useRequireSuperAdmin,
+  // see admin-dashboard/src/hooks/useRequireSuperAdmin.ts) rather than the
+  // "bulk_operations" module flag — plain role "admin" no longer passes.
   await setupAdminMocks(page, {
+    user: { role: 'super_admin' },
     extra: async (route, url, method, json) => {
       if (url.includes('/api/admin/data-transfer/search') && method === 'GET') {
         return json(200, SEARCH_RESULT);

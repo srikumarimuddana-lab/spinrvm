@@ -1,0 +1,70 @@
+name: Update admin-dashboard visual regression baselines
+
+# Manual, on-demand: generates Playwright screenshot baselines for
+# admin-dashboard/e2e/visual-regression.spec.ts and uploads them as a build
+# artifact for review — it does NOT commit anything automatically.
+#
+# Baselines must come from CI's own Chromium build (the exact revision
+# `npx playwright install --with-deps chromium` resolves for this repo's
+# pinned @playwright/test version), not a developer's local machine — font
+# rendering and anti-aliasing differ enough between OSes/Chromium builds
+# that a locally-generated baseline would fail on every real CI run. See
+# docs/change-log/2026-07-29-admin-dashboard-visual-regression-baselines.md.
+#
+# To seed or update baselines:
+#   1. Run this workflow (Actions tab → this workflow → "Run workflow").
+#   2. Download the `visual-regression-baselines` artifact from the run.
+#   3. Extract it into admin-dashboard/e2e/, review the PNGs, commit them.
+#   4. Flip `continue-on-error` to `false` on the `visual-regression-test`
+#      job in .github/workflows/ci.yml once baselines are committed — until
+#      then that job fails "no baseline found" on every run, by design.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  update-baselines:
+    name: Generate visual regression baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: admin-dashboard
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: admin-dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Next.js app
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          BACKEND_URL: http://localhost:8000
+
+      - name: Start Next.js and generate baselines
+        run: |
+          npx next start &
+          npx wait-on http://localhost:3000 --timeout 30000
+          npx playwright test --project=setup --project=visual-regression --update-snapshots
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          BACKEND_URL: http://localhost:8000
+          CI: true
+
+      - name: Upload generated baselines
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-regression-baselines
+          path: admin-dashboard/e2e/visual-regression.spec.ts-snapshots/
+          retention-days: 14

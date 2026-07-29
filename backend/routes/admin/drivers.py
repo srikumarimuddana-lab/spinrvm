@@ -212,7 +212,18 @@ _DRIVER_SEARCH_USER_COLUMNS = ("first_name", "last_name", "email", "phone")
 # single-token identifiers, plus `name` — the denormalized display-name mirror,
 # which lets a name search still hit a driver whose users row is missing or
 # stale (e.g. a legacy import).
-_DRIVER_SEARCH_DRIVER_COLUMNS = ("id", "user_id", "name", "phone", "license_plate", "driver_code")
+_DRIVER_SEARCH_DRIVER_COLUMNS = ("name", "phone", "license_plate", "driver_code")
+# `id` and `user_id` hold long opaque IDs, so a short term substring-matches a
+# large fraction of them purely by chance — searching "ab" returned an arbitrary
+# set of drivers whose UUID happened to contain "ab", burying any real match.
+# They are only searched when the term is plausibly an ID someone pasted.
+_DRIVER_SEARCH_ID_COLUMNS = ("id", "user_id")
+_DRIVER_SEARCH_ID_MIN_LEN = 8
+
+
+def _looks_like_id(term: str) -> bool:
+    """True when a term is long enough and shaped like a pasted identifier."""
+    return len(term) >= _DRIVER_SEARCH_ID_MIN_LEN and not any(ch.isspace() for ch in term)
 
 
 def _driver_search_tokens(term: str) -> List[str]:
@@ -322,11 +333,16 @@ async def admin_get_drivers(
 
             # 2. Match `drivers` on its own columns OR the user IDs from step 1.
             #    Driver-side columns are matched against the whole term: they are
-            #    single-token identifiers (plate, code, UUIDs) plus the `name`
-            #    mirror, which holds the full display name in one column.
+            #    single-token identifiers (plate, code) plus the `name` mirror,
+            #    which holds the full display name in one column.
             or_clauses: List[Dict[str, Any]] = [
                 {col: {"$regex": term, "$options": "i"}} for col in _DRIVER_SEARCH_DRIVER_COLUMNS
             ]
+            # Only search the opaque ID columns for a term shaped like a pasted
+            # ID — a short term matches them by coincidence and drowns out the
+            # real match.
+            if _looks_like_id(term):
+                or_clauses += [{col: {"$regex": term, "$options": "i"}} for col in _DRIVER_SEARCH_ID_COLUMNS]
             # "(306) 555-1234" never substring-matches the stored "+13065551234".
             digits = _phone_digits(term)
             if digits:

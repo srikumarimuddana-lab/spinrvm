@@ -76,7 +76,9 @@ signal; and a formatted phone never substring-matched the stored E.164 value.
 - **Driver search**: AND whitespace tokens (each ORed across the user columns) so
   full names match; search the `drivers.name` mirror; digits-only fallback for
   formatted phones; users pre-query cap 100 → 500 with a warning on truncation;
-  term length and token count bounded.
+  term length and token count bounded; `id`/`user_id` only searched for a term
+  shaped like a pasted ID (≥ 8 chars, no whitespace) so a short term stops
+  coincidence-matching UUID substrings.
 
 ## 4. Risk & impact on existing functionality
 
@@ -126,10 +128,15 @@ search. No migration, no schema change, no table written.
   notification or copy is touched.
 - **Mid-session visibility**: none. Nothing here is reachable by a rider mid-ride
   or a driver online.
-- **One behavior change to flag**: a `%` or `_` typed into an admin search box
-  previously acted as a SQL wildcard (matching everything, or any character).
-  It now matches literally. That was unintended over-matching, but an admin who
-  had learned to lean on it would see fewer results.
+- **Two behavior changes to flag**, both narrowing results that were previously
+  over-broad. Neither is a new feature, but an admin who had adapted to the old
+  behavior would notice:
+  1. A `%` or `_` typed into an admin search box previously acted as a SQL
+     wildcard (matching everything, or any character). It now matches literally.
+  2. A term shorter than 8 characters (or containing a space) no longer
+     substring-matches the `drivers.id` / `drivers.user_id` columns. Previously
+     searching "ab" returned every driver whose UUID happened to contain "ab".
+     Pasting a full ID still works.
 
 ## 6. Files modified
 
@@ -142,7 +149,7 @@ search. No migration, no schema change, no table written.
 | `backend/routes/admin/safety.py` | Dropped `re.escape()` | Root cause (b) |
 | `backend/routes/admin/maintenance.py` | Dropped `re.escape()` | Root cause (b) |
 | `backend/tests/test_db_supabase_helpers.py` | 8 new query-layer cases; `test_unknown_dict_returns_none` → `test_unknown_dict_raises` | Layer-level regression guard |
-| `backend/tests/test_admin_driver_search.py` | New — 19 cases | Route-level regression guard |
+| `backend/tests/test_admin_driver_search.py` | New — 22 cases | Route-level regression guard |
 | `backend/tests/test_admin_users_search.py`, `test_admin_safety_incidents.py`, `test_admin_extended.py` | 3 assertions updated from the escaped to the raw term | They asserted the `re.escape` output and had frozen bug (b) in place |
 
 ## 7. Before / after

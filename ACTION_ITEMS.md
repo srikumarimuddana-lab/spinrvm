@@ -294,8 +294,16 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        branches, domain auto-match edge cases, `join_via_domain` fallback,
        `_uuid_or_none` actor-id coercion, and both `bootstrap_owner` modes
        — test-only change, see `docs/change-log/2026-07-28-corporate-membership-service-coverage-80.md`),
-       `services/corporate_policy_service.py` — 68% (already close)
-     No work started on closing this gap yet — scoping/measurement only.
+       `services/corporate_policy_service.py` — **98%** (was 68%, closed
+       2026-07-28: 13 unit tests added for `evaluate_policy_for_ride` —
+       previously entirely untested (0 of its 52 lines) — covering the
+       happy path, no-matching-membership, policy-fetch-failure fail-open,
+       membership-lookup-failure graceful-degradation, and member-level vs
+       caller-level `policy_override` precedence; plus 2 pure-function
+       branch tests for datetime-object and tz-aware `pickup_time` in
+       `evaluate_policy`'s time-window rule — test-only change, see
+       `docs/change-log/2026-07-28-corporate-policy-service-coverage-80.md`)
+     All items in this track are now at or above the 80% target.
   2. `backend/utils/insurance_periods.py`, safety check-in / SOS-related
      routes (see `.claude/context/domain-safety.md`) — regulatory +
      rider/driver safety consequence if untested code has a latent bug.

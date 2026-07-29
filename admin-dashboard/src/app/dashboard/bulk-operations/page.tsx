@@ -44,6 +44,7 @@ import {
     type RiderImportReportItem,
     type RiderImportDuplicate,
 } from "@/lib/api";
+import { LegacyBookingImport } from "./_components/LegacyBookingImport";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -695,6 +696,13 @@ export default function BulkOperationsPage() {
                     </Button>
                 </CardContent>
             </Card>
+
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <Upload className="h-4 w-4" />
+                Legacy Booking Import — bring completed rides from the previous app into rider
+                and driver trip history
+            </div>
+            <LegacyBookingImport />
         </div>
     );
 }

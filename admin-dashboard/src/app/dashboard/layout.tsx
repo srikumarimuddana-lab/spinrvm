@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore } from "@/store/authStore";
 import { Sidebar } from "@/components/sidebar";
+import { FeatureFlagsProvider } from "@/hooks/useFeatureFlag";
 
 export default function DashboardLayout({
     children,
@@ -37,11 +38,13 @@ export default function DashboardLayout({
     }
 
     return (
-        <div className="min-h-screen bg-background">
-            <Sidebar />
-            <main className="transition-all duration-200 md:ml-[var(--sidebar-width,240px)]">
-                <div className="p-4 pt-14 md:pt-6 md:p-8">{children}</div>
-            </main>
-        </div>
+        <FeatureFlagsProvider>
+            <div className="min-h-screen bg-background">
+                <Sidebar />
+                <main className="transition-all duration-200 md:ml-[var(--sidebar-width,240px)]">
+                    <div className="p-4 pt-14 md:pt-6 md:p-8">{children}</div>
+                </main>
+            </div>
+        </FeatureFlagsProvider>
     );
 }

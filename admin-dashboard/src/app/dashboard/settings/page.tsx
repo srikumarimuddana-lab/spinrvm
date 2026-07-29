@@ -943,6 +943,33 @@ export default function SettingsPage() {
                             </div>
                         </CardContent>
                     </Card>
+
+                    {/* admin-dashboard visual-refresh epic (#2785 Phase 3+) —
+                        canary flag for the shared shell/typography/radius
+                        restyle. Off by default; effective within 60s via the
+                        existing settings cache, no redeploy needed. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Admin Dashboard Appearance (Beta)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="admin_theme_v2_enabled">Enable refreshed admin theme</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Canary flag for the in-progress visual refresh (shared nav/shell, typography, spacing).
+                                        Off by default — takes effect for all staff within about a minute of toggling, no redeploy.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="admin_theme_v2_enabled"
+                                    checked={settings.admin_theme_v2_enabled ?? false}
+                                    onCheckedChange={(v) => update("admin_theme_v2_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
                 </TabsContent>
                 <TabsContent value="company" className="mt-0 grid gap-6 lg:grid-cols-2 items-start">
                     {/* Company Info — surfaced in rider & driver apps

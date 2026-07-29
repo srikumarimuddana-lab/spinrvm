@@ -313,6 +313,52 @@ export type {
     SafetyIncidentListResponse,
     SafetyIncidentDetail,
 } from "./api/safety-disputes";
+export {
+    getFaqs,
+    createFaq,
+    updateFaq,
+    deleteFaq,
+    getLegalDocuments,
+    upsertLegalDocument,
+    getAreaFees,
+    createAreaFee,
+    updateAreaFee,
+    deleteAreaFee,
+    getAreaTax,
+    updateAreaTax,
+    getVehiclePricing,
+    assignDriverArea,
+    driverAction,
+    getDriverVehicleHistory,
+    reviewDriverPhoto,
+    uploadDriverPhoto,
+    overrideDriverStatus,
+    exportDrivers,
+} from "./api/content-area";
+export { getHeatMapData, getHeatMapSettings, updateHeatMapSettings } from "./api/heatmap";
+export type { HeatMapData, HeatMapSettings } from "./api/heatmap";
+export {
+    getStaff,
+    createStaff,
+    updateStaff,
+    deleteStaff,
+    resetStaffMfa,
+    getStaffModules,
+    getSubscriptionPlans,
+    createSubscriptionPlan,
+    updateSubscriptionPlan,
+    deleteSubscriptionPlan,
+    getDriverSubscriptions,
+    getAdminSubscriptionPayments,
+    downloadSubscriptionInvoice,
+    resendAdminSubscriptionInvoice,
+    updateSubscriptionTaxConfig,
+    getAuditLogs,
+    getQuests,
+    createQuest,
+    updateQuest,
+    getQuestParticipants,
+} from "./api/staff-subscriptions";
 import { request } from "./api/client";
 import { useAuthStore } from "@/store/authStore";
 import type { EarningsPeriod, MetricWithDelta } from "./api/earnings";
@@ -429,303 +475,15 @@ export const nudgeDriverExpiry = (
 /* ── Cloud messaging, marketing suppression, promo usage/stats ── moved to lib/api/marketing.ts, re-exported above. */
 /* ── Users + admin wallet credit/debit ── moved to lib/api/users-wallet.ts, re-exported above. */
 /* ── Promotions, disputes, safety incident queue, support tickets ── moved to lib/api/safety-disputes.ts, re-exported above. */
-/* ── FAQs ───────────────────────────────────── */
-export const getFaqs = () =>
-    request<any[]>("/api/admin/faqs");
-
-export const createFaq = (data: any) =>
-    request<any>("/api/admin/faqs", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updateFaq = (id: string, data: any) =>
-    request<any>(`/api/admin/faqs/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-export const deleteFaq = (id: string) =>
-    request<any>(`/api/admin/faqs/${id}`, { method: "DELETE" });
-
-/* ── Legal Documents (per-audience ToS / Privacy) ─────────────── */
-export const getLegalDocuments = () =>
-    request<any[]>("/api/admin/legal-documents");
-
-export const upsertLegalDocument = (data: {
-    audience: "rider" | "driver";
-    type: "tos" | "privacy";
-    content: string;
-}) =>
-    request<any>("/api/admin/legal-documents", {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-/* ── Notifications (uses sendNotification defined above) ── */
-
-/* ── Area Management (Pricing, Tax, Vehicle Pricing) ─────────────────── */
-export const getAreaFees = (areaId: string) =>
-    request<any[]>(`/api/admin/areas/${areaId}/fees`);
-
-export const createAreaFee = (areaId: string, data: any) =>
-    request<any>(`/api/admin/areas/${areaId}/fees`, {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updateAreaFee = (areaId: string, feeId: string, data: any) =>
-    request<any>(`/api/admin/areas/${areaId}/fees/${feeId}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-export const deleteAreaFee = (areaId: string, feeId: string) =>
-    request<any>(`/api/admin/areas/${areaId}/fees/${feeId}`, { method: "DELETE" });
-
-export const getAreaTax = (areaId: string) =>
-    request<any>(`/api/admin/areas/${areaId}/tax`);
-
-export const updateAreaTax = (areaId: string, data: any) =>
-    request<any>(`/api/admin/areas/${areaId}/tax`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-export const getVehiclePricing = (areaId: string) =>
-    request<any>(`/api/admin/areas/${areaId}/vehicle-pricing`);
-
-/* ── Driver Area Assignment ──────────────────── */
-export const assignDriverArea = (driverId: string, serviceAreaId: string) =>
-    request<any>(`/api/admin/drivers/${driverId}/area?service_area_id=${serviceAreaId}`, {
-        method: "PUT",
-    });
-
-export const driverAction = (driverId: string, action: string, reason?: string) =>
-    request<{ message: string; new_status: string; audit_log_id?: string }>(`/api/admin/drivers/${driverId}/action`, {
-        method: "POST",
-        body: JSON.stringify({ action, reason }),
-    });
-
-export const getDriverVehicleHistory = (driverId: string) =>
-    request<{ history: Array<{ id: string; field: string; old_value: string | null; new_value: string | null; changed_by_role: string; created_at: string }> }>(
-        `/api/admin/drivers/${driverId}/vehicle-history`,
-    );
-
-export const reviewDriverPhoto = (driverId: string, action: "approve" | "reject") =>
-    request<{ message: string; profile_image_status: string }>(`/api/admin/drivers/${driverId}/photo-review`, {
-        method: "POST",
-        body: JSON.stringify({ action }),
-    });
-
-/** Upload a driver's profile photo on their behalf (stored approved). */
-export const uploadDriverPhoto = (driverId: string, file: File) => {
-    const fd = new FormData();
-    fd.append("file", file);
-    return request<{ message: string; profile_image: string; profile_image_status: string }>(
-        `/api/admin/drivers/${driverId}/photo`,
-        { method: "POST", body: fd },
-    );
-};
-
-export const overrideDriverStatus = (driverId: string, status: string, reason?: string) =>
-    request<any>(`/api/admin/drivers/${driverId}/status-override`, {
-        method: "PUT",
-        body: JSON.stringify({ status, reason }),
-    });
-
-export const exportDrivers = () =>
-    request<{ drivers: any[]; count: number }>("/api/admin/export/drivers");
-
+/* ── FAQs, legal documents, area fees/tax, driver area assignment ── moved to lib/api/content-area.ts, re-exported above. */
 /* Driver notes moved to lib/api/driver-documents.ts, re-exported above. */
 
 export const getDriverActivity = (driverId: string) =>
     request<any[]>(`/api/admin/drivers/${driverId}/activity`);
 
 
-/* ── Heat Map Data ─────────────────────────── */
-export interface HeatMapData {
-    pickup_points: [number, number, number][];
-    dropoff_points: [number, number, number][];
-    stats: {
-        total_rides: number;
-        corporate_rides: number;
-        regular_rides: number;
-    };
-}
-
-export const getHeatMapData = (params: {
-    filter?: string;
-    start_date?: string;
-    end_date?: string;
-    service_area_id?: string;
-    group_by?: string;
-}) => {
-    const searchParams = new URLSearchParams();
-    if (params.filter) searchParams.set('filter', params.filter);
-    if (params.start_date) searchParams.set('start_date', params.start_date);
-    if (params.end_date) searchParams.set('end_date', params.end_date);
-    if (params.service_area_id) searchParams.set('service_area_id', params.service_area_id);
-    if (params.group_by) searchParams.set('group_by', params.group_by);
-
-    return request<HeatMapData>(`/api/admin/rides/heatmap-data?${searchParams.toString()}`);
-};
-
-/* ── Heat Map Settings ─────────────────────── */
-export interface HeatMapSettings {
-    heat_map_enabled: boolean;
-    heat_map_default_range: string;
-    heat_map_intensity: string;
-    heat_map_radius: number;
-    heat_map_blur: number;
-    heat_map_gradient_start: string;
-    heat_map_gradient_mid: string;
-    heat_map_gradient_end: string;
-    heat_map_show_pickups: boolean;
-    heat_map_show_dropoffs: boolean;
-    corporate_heat_map_enabled: boolean;
-    regular_rider_heat_map_enabled: boolean;
-}
-
-export const getHeatMapSettings = () =>
-    request<HeatMapSettings>("/api/admin/settings/heatmap");
-
-export const updateHeatMapSettings = (data: Partial<HeatMapSettings>) =>
-    request<any>("/api/admin/settings/heatmap", {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-/* ── Staff Management ──────────────────────── */
-export const getStaff = () =>
-    request<any[]>("/api/admin/staff");
-
-export const createStaff = (data: { email: string; password: string; first_name: string; last_name: string; role: string; modules?: string[] }) =>
-    request<any>("/api/admin/staff", { method: "POST", body: JSON.stringify(data) });
-
-export const updateStaff = (id: string, data: any) =>
-    request<any>(`/api/admin/staff/${id}`, { method: "PUT", body: JSON.stringify(data) });
-
-export const deleteStaff = (id: string) =>
-    request<any>(`/api/admin/staff/${id}`, { method: "DELETE" });
-
-// Lost-phone recovery: super_admin clears a staff member's MFA so they can
-// re-enroll. Backend revokes the target's sessions and audit-logs the action.
-export const resetStaffMfa = (id: string) =>
-    request<{ success: boolean }>(`/api/admin/staff/${id}/mfa-reset`, { method: "POST" });
-
-export const getStaffModules = () =>
-    request<{ modules: string[]; role_presets: Record<string, string[]> }>("/api/admin/staff/modules/list");
-
-/* ── Spinr Pass — Subscription Plans ──────── */
-export const getSubscriptionPlans = () =>
-    request<any[]>("/api/admin/subscription-plans");
-
-export const createSubscriptionPlan = (data: any) =>
-    request<any>("/api/admin/subscription-plans", { method: "POST", body: JSON.stringify(data) });
-
-export const updateSubscriptionPlan = (id: string, data: any) =>
-    request<any>(`/api/admin/subscription-plans/${id}`, { method: "PUT", body: JSON.stringify(data) });
-
-export const deleteSubscriptionPlan = (id: string) =>
-    request<any>(`/api/admin/subscription-plans/${id}`, { method: "DELETE" });
-
-export const getDriverSubscriptions = (status?: string) =>
-    request<any[]>(`/api/admin/driver-subscriptions${status ? `?status=${status}` : ''}`);
-
-export const getAdminSubscriptionPayments = (opts: {
-    limit?: number;
-    offset?: number;
-    driver_id?: string;
-    plan_id?: string;
-    billing_reason?: string;
-    start_date?: string;
-    end_date?: string;
-} = {}) => {
-    const sp = new URLSearchParams();
-    if (opts.limit) sp.set("limit", String(opts.limit));
-    if (opts.offset) sp.set("offset", String(opts.offset));
-    if (opts.driver_id) sp.set("driver_id", opts.driver_id);
-    if (opts.plan_id) sp.set("plan_id", opts.plan_id);
-    if (opts.billing_reason) sp.set("billing_reason", opts.billing_reason);
-    if (opts.start_date) sp.set("start_date", opts.start_date);
-    if (opts.end_date) sp.set("end_date", opts.end_date);
-    return request<any>(`/api/admin/subscription/payments?${sp.toString()}`);
-};
-
-/** Download the Spinr Pass invoice PDF for one subscription payment and trigger
- *  a browser save. Returns true on success. The request<T> helper assumes JSON,
- *  so use a raw authed fetch like getRideRouteMapDataUrl. */
-export const downloadSubscriptionInvoice = async (paymentId: string): Promise<boolean> => {
-    const token = useAuthStore.getState().token;
-    try {
-        const res = await fetch(`/api/admin/subscription/payments/${paymentId}/invoice.pdf`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!res.ok) return false;
-        const blob = await res.blob();
-        const cd = res.headers.get("content-disposition") || "";
-        const filename = cd.match(/filename="?([^"]+)"?/)?.[1] || `SpinrPass_Invoice_${paymentId}.pdf`;
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        return true;
-    } catch (e) {
-        if (process.env.NODE_ENV === "development") console.log("Invoice download failed:", e);
-        return false;
-    }
-};
-
-/** Email the Spinr Pass invoice to the driver's address on file (admin-triggered). */
-export const resendAdminSubscriptionInvoice = (paymentId: string) =>
-    request<{ success: boolean }>(`/api/admin/subscription/payments/${paymentId}/resend-invoice`, {
-        method: "POST",
-    });
-
-export const updateSubscriptionTaxConfig = (
-    areaId: string,
-    config: { enabled: boolean; province: string; gst_rate: number; pst_rate: number; hst_rate: number },
-) =>
-    request<any>(`/api/admin/service-areas/${areaId}/subscription-tax`, {
-        method: "PUT",
-        body: JSON.stringify(config),
-    });
-
-/* ── Audit Logs ──────────────────────────── */
-export const getAuditLogs = (opts: {
-    limit?: number;
-    offset?: number;
-    action?: string;
-    entity_type?: string;
-    search?: string;
-} = {}) => {
-    const sp = new URLSearchParams();
-    sp.set("limit", String(opts.limit ?? 50));
-    sp.set("offset", String(opts.offset ?? 0));
-    if (opts.action) sp.set("action", opts.action);
-    if (opts.entity_type) sp.set("entity_type", opts.entity_type);
-    if (opts.search) sp.set("search", opts.search);
-    return request<any[]>(`/api/admin/audit-logs?${sp.toString()}`);
-};
-
-/* ── Quests / Bonus Challenges ──────────── */
-export const getQuests = (isActive?: boolean) =>
-    request<any[]>(`/api/v1/quests/admin/list${isActive !== undefined ? `?is_active=${isActive}` : ''}`);
-
-export const createQuest = (data: any) =>
-    request<any>("/api/v1/quests/admin/create", { method: "POST", body: JSON.stringify(data) });
-
-export const updateQuest = (id: string, data: any) =>
-    request<any>(`/api/v1/quests/admin/${id}`, { method: "PATCH", body: JSON.stringify(data) });
-
-export const getQuestParticipants = (questId: string) =>
-    request<any[]>(`/api/v1/quests/admin/${questId}/participants`);
-
+/* ── Heat map data + settings ── moved to lib/api/heatmap.ts, re-exported above. */
+/* ── Staff, subscription plans/payments, audit logs, quests ── moved to lib/api/staff-subscriptions.ts, re-exported above. */
 /* ── Analytics ──────────────────────────── */
 export const getAnalyticsOverview = (dateRange = "30d") =>
     request<any>(`/api/admin/analytics/overview?date_range=${dateRange}`);

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -46,6 +47,8 @@ try:
 except ImportError:
     from utils.earnings_snapshot import build_earnings_snapshot  # type: ignore
     from utils.money import to_decimal  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 IMPORT_SOURCE = "legacy_mongo_booking_import"
 PAYOUT_TYPE = "legacy_import"
@@ -655,7 +658,31 @@ def recount_drivers(driver_ids: list[str]) -> None:
 
     Recomputing rather than incrementing keeps a re-run idempotent and matches
     how migration 74 defines the column.
+
+    Prefers the set-based ``recount_driver_total_rides`` RPC (migration 269):
+    one statement that either fully applies or fully rolls back. The per-driver
+    fallback below costs two round-trips per driver, which is why the RPC
+    exists — a 64-driver import is 128 sequential calls, long enough for an
+    HTTP caller to time out part-way and leave counters half-updated.
+
+    The fallback is kept so the CLI still works against a database where
+    migration 269 has not been applied yet.
     """
+    if not driver_ids:
+        return
+    try:
+        supabase.rpc("recount_driver_total_rides", {"p_driver_ids": driver_ids}).execute()
+        return
+    except Exception as e:
+        # Not swallowed: log loudly and fall back. A missing function (the
+        # migration has not run) is recoverable; anything else still surfaces
+        # here rather than silently skipping the recount entirely.
+        logger.warning(
+            "recount_driver_total_rides RPC unavailable, falling back to per-driver recount for %d driver(s): %s",
+            len(driver_ids),
+            e,
+        )
+
     for driver_id in driver_ids:
         res = (
             supabase.table("rides")

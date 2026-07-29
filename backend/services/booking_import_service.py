@@ -659,14 +659,14 @@ def recount_drivers(driver_ids: list[str]) -> None:
     Recomputing rather than incrementing keeps a re-run idempotent and matches
     how migration 74 defines the column.
 
-    Prefers the set-based ``recount_driver_total_rides`` RPC (migration 269):
+    Prefers the set-based ``recount_driver_total_rides`` RPC (migration 271):
     one statement that either fully applies or fully rolls back. The per-driver
     fallback below costs two round-trips per driver, which is why the RPC
     exists — a 64-driver import is 128 sequential calls, long enough for an
     HTTP caller to time out part-way and leave counters half-updated.
 
     The fallback is kept so the CLI still works against a database where
-    migration 269 has not been applied yet.
+    migration 271 has not been applied yet.
     """
     if not driver_ids:
         return

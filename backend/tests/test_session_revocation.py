@@ -65,13 +65,40 @@ async def test_revoking_empty_session_id_is_a_noop(mock_redis):
 
 
 @pytest.mark.anyio
-async def test_tombstone_ttl_matches_access_token_lifetime(mock_redis, monkeypatch):
+async def test_tombstone_ttl_is_derived_from_the_configured_token_lifetime(mock_redis, monkeypatch):
     """The tombstone only needs to outlive the longest-lived access token that
-    could still carry the session_id — no longer, so it can't grow unbounded."""
+    could still carry the session_id — no longer, so it can't grow unbounded.
+
+    Uses a value that is deliberately NOT the 15-minute default: patching to 15
+    would pass against a hardcoded constant and prove nothing.
+    """
     from core.config import settings
 
-    monkeypatch.setattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 15, raising=False)
-    assert session_revocation._tombstone_ttl_seconds() == 15 * 60 + 60
+    monkeypatch.setattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 7, raising=False)
+    assert session_revocation._tombstone_ttl_seconds() == 7 * 60 + 60
+
+    monkeypatch.setattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 45, raising=False)
+    assert session_revocation._tombstone_ttl_seconds() == 45 * 60 + 60
+
+
+@pytest.mark.anyio
+async def test_tombstone_is_written_with_that_ttl(mock_redis, monkeypatch):
+    """Pin that revoke_session actually applies the TTL rather than writing a
+    key that never expires — an unbounded keyspace would be the failure mode."""
+    captured: dict = {}
+
+    async def _capture(key, value, ttl=None):
+        captured.update({"key": key, "value": value, "ttl": ttl})
+
+    monkeypatch.setattr(session_revocation, "redis_set", _capture)
+    monkeypatch.setattr(
+        session_revocation.settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 7, raising=False
+    )
+
+    await session_revocation.revoke_session("sess-a")
+
+    assert captured["key"] == "revoked_session:sess-a"
+    assert captured["ttl"] == 7 * 60 + 60
 
 
 # ── fail-open behaviour ─────────────────────────────────────────────────────

@@ -11,10 +11,12 @@ try:
     from ..utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs
     from ..utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached
     from ..utils.location_integrity import check_location_integrity
+    from ..utils.session_revocation import is_session_revoked
 except ImportError:
     from utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs  # type: ignore
     from utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached  # type: ignore
     from utils.location_integrity import check_location_integrity  # type: ignore
+    from utils.session_revocation import is_session_revoked  # type: ignore
 
 try:
     from .. import db_supabase
@@ -560,6 +562,9 @@ async def websocket_endpoint(
         # watermark the HTTP path uses; keep the token_version check for JWTs.
         claim_token_version = 0
         firebase_auth_time: int | None = None
+        # Only JWTs carry session_id; Firebase sessions are revoked via the
+        # sessions_invalid_before watermark handled below.
+        ws_session_id = (payload or {}).get("session_id")
         if (payload or {}).get("auth_time") is not None:
             try:
                 firebase_auth_time = int(payload.get("auth_time"))
@@ -576,6 +581,12 @@ async def websocket_endpoint(
             except (TypeError, ValueError):
                 stored_token_version = 0
             session_revoked = claim_token_version < stored_token_version
+        # Explicit sign-out tombstone (utils/session_revocation). token_version
+        # only moves on logout-all, so an ordinary POST /auth/logout leaves the
+        # access token usable until its exp — which is exactly what let a
+        # signed-out driver app keep streaming GPS over this socket.
+        if not session_revoked:
+            session_revoked = await is_session_revoked(ws_session_id)
         if session_revoked:
             await websocket.send_json({"type": "error", "message": "session_revoked"})
             await websocket.close()
@@ -673,6 +684,40 @@ async def websocket_endpoint(
                 firebase_auth_time=firebase_auth_time,
             )
         )
+
+        # ── Mid-connection sign-out detection ───────────────────────────────
+        # The handshake check above only covers sockets opened *after* a logout.
+        # A socket already open when the driver signs out stays authenticated, so
+        # the durable-persist paths below re-check before writing breadcrumbs.
+        #
+        # Tombstones are only written on an explicit logout and are never
+        # un-set, so a positive result is cached for the life of the socket.
+        # Negatives are re-checked on an interval instead of per message: a trip
+        # streams a durable fix every ~3-4s, and a Redis GET on each one would
+        # add avoidable load to the WS fan-out path (<100ms P95 target). The
+        # window means a signed-out socket can persist at most
+        # _WS_REVOKE_RECHECK_SECONDS of extra points rather than the token's
+        # full remaining ~15 minutes.
+        _WS_REVOKE_RECHECK_SECONDS = 30
+        ws_revoked = False
+        ws_revoked_checked_at: float | None = None
+
+        async def _ws_session_revoked() -> bool:
+            """Whether this socket's session has been signed out. Fails open."""
+            nonlocal ws_revoked, ws_revoked_checked_at
+            if ws_revoked:
+                return True
+            if not ws_session_id:
+                return False
+            now_mono = asyncio.get_event_loop().time()
+            if (
+                ws_revoked_checked_at is not None
+                and now_mono - ws_revoked_checked_at < _WS_REVOKE_RECHECK_SECONDS
+            ):
+                return False
+            ws_revoked_checked_at = now_mono
+            ws_revoked = await is_session_revoked(ws_session_id)
+            return ws_revoked
 
         # Main message loop
         while True:
@@ -792,7 +837,10 @@ async def websocket_endpoint(
                     # acknowledged outbox. WebSocket messages marked ephemeral
                     # still update/fan out the live marker, but must not create
                     # a second breadcrumb trail or inflate billed distance.
-                    if data.get("durable", True):
+                    # A signed-out session must not add to the durable trail.
+                    # The live-marker fan-out above is ephemeral and harmless;
+                    # this is the write that persists coordinates.
+                    if data.get("durable", True) and not await _ws_session_revoked():
                         await buffer_ride_breadcrumb(driver_id, data, active_ride=active_ride)
 
                     # Refresh the Maps API key from DB at most every 60 s.
@@ -936,6 +984,12 @@ async def websocket_endpoint(
                 if driver_id and isinstance(points, list) and points:
                     dict_points = [p for p in points if isinstance(p, dict)]
                     if not dict_points:
+                        await websocket.send_json({"type": "location_batch_ack", "count": 0})
+                        continue
+                    # Same gate as the REST /drivers/location-batch path: a
+                    # signed-out session cannot persist breadcrumbs. Ack with 0
+                    # rather than erroring so a stale client stops retrying.
+                    if await _ws_session_revoked():
                         await websocket.send_json({"type": "location_batch_ack", "count": 0})
                         continue
                     # Shared persistence with the REST path: server-derived phase

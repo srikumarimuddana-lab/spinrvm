@@ -154,6 +154,29 @@
   --sidebar-ring: #ff453a;
 }
 
+/* ── Theme v2 (epic #2785 Phase 3) ── */
+/* Typography (Geist → Plus Jakarta Sans) and radius (10px → 16px) port from
+   shared/theme/index.ts, scoped to this class rather than :root/.dark so it
+   stays fully inert until a `.theme-v2` ancestor is present — gated behind
+   the `admin_theme_v2_enabled` flag (see useFeatureFlag, PR #2837) rather
+   than applied globally, given the blast radius (every shared primitive on
+   all 34 routes reads --radius, and every use of the `font-sans` utility
+   reads --font-geist-sans).
+   Overrides --font-geist-sans itself, NOT the --font-sans alias: Tailwind
+   v4's `@theme inline` inlines the alias's *source* variable directly into
+   generated utilities at build time (`.font-sans { font-family:
+   var(--font-geist-sans) }`), so overriding --font-sans at runtime has no
+   effect — verified with a live browser check before relying on it.
+   Aside: --font-geist-sans was never actually defined anywhere in this app
+   (no next/font call loaded it) until this same PR added the Plus Jakarta
+   Sans next/font/google call to the root layout — so today's *actual*
+   rendered font is already just the browser default sans-serif, not
+   literally Geist, regardless of this flag. */
+.theme-v2 {
+  --font-geist-sans: var(--font-plus-jakarta-sans);
+  --radius: 1rem;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

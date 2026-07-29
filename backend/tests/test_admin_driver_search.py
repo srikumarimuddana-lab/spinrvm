@@ -141,8 +141,30 @@ def test_drivers_name_mirror_is_searched():
 
 def test_identifier_columns_still_match_the_whole_term():
     filters = _run_search("ABC-123")
-    for col in ("id", "user_id", "license_plate", "driver_code"):
+    for col in ("license_plate", "driver_code"):
         assert "ABC-123" in _regex_for(filters, col), f"{col} no longer searched"
+
+
+def test_pasted_id_still_matches_the_id_columns():
+    """A pasted driver-row or user UUID must resolve the driver even when it
+    matches nothing else — codex review r3548013237."""
+    filters = _run_search("uid-driver-target")
+    for col in ("id", "user_id"):
+        assert "uid-driver-target" in _regex_for(filters, col), f"{col} no longer searched"
+
+
+def test_short_terms_do_not_substring_match_opaque_ids():
+    """`id`/`user_id` hold long opaque IDs, so a short term matches a large
+    share of them by coincidence and buries the real result."""
+    filters = _run_search("ab")
+    assert _regex_for(filters, "id") == []
+    assert not any("$regex" in c.get("user_id", {}) for c in _or_clauses(filters))
+
+
+def test_multi_token_terms_do_not_search_id_columns():
+    """A name with a space is never a pasted ID."""
+    filters = _run_search("Nighil Kumar")
+    assert _regex_for(filters, "id") == []
 
 
 def test_no_user_match_still_searches_driver_columns():

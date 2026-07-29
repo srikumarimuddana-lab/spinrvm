@@ -1,5 +1,4 @@
 import logging
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -299,7 +298,7 @@ async def get_audit_logs(
     if entity_type:
         filters["entity_type"] = entity_type
     if search:
-        term = re.escape(search.strip())
+        term = search.strip()
         if term:
             filters["$or"] = [
                 {"actor_id": {"$regex": term, "$options": "i"}},

@@ -184,6 +184,101 @@ _DRIVER_SORT_COLUMNS = {
 }
 
 
+# ── Driver search ───────────────────────────────────────────────────────────
+#
+# Search runs as two queries because a driver's display name does not live on
+# the `drivers` table — it lives on the joined `users` row, and PostgREST cannot
+# filter a parent by an embedded child without a foreign-table filter:
+#
+#   1. Resolve the term against `users` (name / email / phone) -> user IDs.
+#   2. Match `drivers` on its own identifier columns OR user_id IN (those IDs).
+#
+# Step 2's `$in` leaf is why a name search returns anything at all — it was
+# silently dropped by the query layer before, which is what made searching a
+# driver by name return nothing.
+
+# Whitespace-separated tokens are ANDed, so "Nighil Kumar" matches a driver
+# whose first_name is Nighil and last_name is Kumar (neither column contains
+# the full string, so a single ILIKE over the whole term never matched).
+_DRIVER_SEARCH_MAX_TOKENS = 5
+# Bound the term so a pasted wall of text can't build a huge OR clause.
+_DRIVER_SEARCH_MAX_TERM = 128
+# Cap on the users pre-query. A common surname can exceed this; when it does we
+# log it rather than silently returning a truncated driver list.
+_DRIVER_SEARCH_USER_LIMIT = 500
+# Columns on `users` each token is matched against.
+_DRIVER_SEARCH_USER_COLUMNS = ("first_name", "last_name", "email", "phone")
+# Columns on `drivers` matched against the FULL term (not per token). These are
+# single-token identifiers, plus `name` — the denormalized display-name mirror,
+# which lets a name search still hit a driver whose users row is missing or
+# stale (e.g. a legacy import).
+_DRIVER_SEARCH_DRIVER_COLUMNS = ("name", "phone", "license_plate", "driver_code")
+# `id` and `user_id` hold long opaque IDs, so a short term substring-matches a
+# large fraction of them purely by chance — searching "ab" returned an arbitrary
+# set of drivers whose UUID happened to contain "ab", burying any real match.
+# They are only searched when the term is plausibly an ID someone pasted.
+_DRIVER_SEARCH_ID_COLUMNS = ("id", "user_id")
+_DRIVER_SEARCH_ID_MIN_LEN = 8
+
+
+def _looks_like_id(term: str) -> bool:
+    """True when a term is long enough and shaped like a pasted identifier."""
+    return len(term) >= _DRIVER_SEARCH_ID_MIN_LEN and not any(ch.isspace() for ch in term)
+
+
+def _driver_search_tokens(term: str) -> List[str]:
+    """Split a search-box value into the tokens that must ALL match."""
+    return [t for t in term.split() if t][:_DRIVER_SEARCH_MAX_TOKENS]
+
+
+def _phone_digits(term: str) -> Optional[str]:
+    """Digits-only form of a term that looks like a phone number, else None.
+
+    Admins paste phone numbers as "(306) 555-1234" but they are stored E.164 as
+    "+13065551234", so the literal term never substring-matches. Only applied
+    when the term is mostly digits, so a name is never mangled into one.
+    """
+    digits = "".join(ch for ch in term if ch.isdigit())
+    if len(digits) < 4:
+        return None
+    non_digits = sum(1 for ch in term if not ch.isdigit() and not ch.isspace())
+    # Allow the usual separators (+, -, (, ), .) but reject anything wordy.
+    if non_digits > 4 or any(ch.isalpha() for ch in term):
+        return None
+    return digits if digits != term else None
+
+
+async def _resolve_driver_search_user_ids(tokens: List[str]) -> List[str]:
+    """User IDs whose name/email/phone matches EVERY token.
+
+    Each token is ORed across the user columns and the per-token clauses are
+    ANDed, which is what makes multi-word name search work. `_apply_filters`
+    renders each `$or` as its own PostgREST `or=(...)` param, and repeated
+    `or=` params are ANDed server-side.
+    """
+    per_token = [
+        {"$or": [{col: {"$regex": tok, "$options": "i"}} for col in _DRIVER_SEARCH_USER_COLUMNS]} for tok in tokens
+    ]
+
+    # Project only `id` so a name search never pulls base64 profile_image rows.
+    matching_users = await db_supabase.get_rows(
+        "users",
+        {"$and": per_token} if len(per_token) > 1 else per_token[0],
+        columns="id",
+        limit=_DRIVER_SEARCH_USER_LIMIT,
+    )
+    uids = [u["id"] for u in matching_users if u.get("id")]
+    if len(uids) >= _DRIVER_SEARCH_USER_LIMIT:
+        # Loud, because the driver the admin is looking for may be the one that
+        # got cut. No PII in the log — token count only, never the term itself.
+        logger.warning(
+            "admin driver search: users pre-query hit the %d-row cap; results may be truncated",
+            _DRIVER_SEARCH_USER_LIMIT,
+            extra={"domain": "admin", "surface": "backend", "token_count": len(tokens)},
+        )
+    return uids
+
+
 @router.get("/drivers")
 async def admin_get_drivers(
     limit: int = 50,
@@ -211,7 +306,6 @@ async def admin_get_drivers(
     We still collapse by phone/user_id here so that if a legacy snapshot
     ever restores old state, the admin UI won't show duplicate rows.
     """
-    import re
 
     filters = {}
     if is_verified is not None:
@@ -227,38 +321,36 @@ async def admin_get_drivers(
     if vehicle_type_id:
         filters["vehicle_type_id"] = vehicle_type_id
 
-    # Find matching user IDs first if search is provided
+    # See the "Driver search" block above the route for the two-query design.
     if search:
-        term = search.strip()
-        if term:
-            user_filters = {
-                "$or": [
-                    {"phone": {"$regex": re.escape(term), "$options": "i"}},
-                    {"email": {"$regex": re.escape(term), "$options": "i"}},
-                    {"first_name": {"$regex": re.escape(term), "$options": "i"}},
-                    {"last_name": {"$regex": re.escape(term), "$options": "i"}},
-                ]
-            }
-            # Only the matched ids feed the driver $or filter below — project
-            # id so the name search doesn't pull base64 profile_image rows.
-            matching_users = await db_supabase.get_rows("users", user_filters, columns="id", limit=100)
-            matching_uids = [u["id"] for u in matching_users if u.get("id")]
+        term = search.strip()[:_DRIVER_SEARCH_MAX_TERM]
+        tokens = _driver_search_tokens(term)
+        if tokens:
+            # 1. Name/email/phone live on `users`, so resolve them to user IDs
+            #    first. Tokens are ANDed here, which is what makes a full name
+            #    like "Nighil Kumar" match (first_name and last_name each hold
+            #    only one of the tokens).
+            matching_uids = await _resolve_driver_search_user_ids(tokens)
 
-            # Match driver rows by phone/plate directly OR by user_id from user search above.
-            # `name` is not a column on drivers — it's derived from the joined users row.
-            # Both the driver row `id` and `user_id` are matched directly (not just via
-            # the users $or above) so pasting either UUID finds the driver even when it
-            # doesn't substring-match phone/email/name. `id` preserves the parity the
-            # old client-side search had (it matched the driver row id too).
-            filters["$or"] = [
-                {"id": {"$regex": re.escape(term), "$options": "i"}},
-                {"phone": {"$regex": re.escape(term), "$options": "i"}},
-                {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
-                {"driver_code": {"$regex": re.escape(term), "$options": "i"}},
-                {"user_id": {"$regex": re.escape(term), "$options": "i"}},
+            # 2. Match `drivers` on its own columns OR the user IDs from step 1.
+            #    Driver-side columns are matched against the whole term: they are
+            #    single-token identifiers (plate, code) plus the `name` mirror,
+            #    which holds the full display name in one column.
+            or_clauses: List[Dict[str, Any]] = [
+                {col: {"$regex": term, "$options": "i"}} for col in _DRIVER_SEARCH_DRIVER_COLUMNS
             ]
+            # Only search the opaque ID columns for a term shaped like a pasted
+            # ID — a short term matches them by coincidence and drowns out the
+            # real match.
+            if _looks_like_id(term):
+                or_clauses += [{col: {"$regex": term, "$options": "i"}} for col in _DRIVER_SEARCH_ID_COLUMNS]
+            # "(306) 555-1234" never substring-matches the stored "+13065551234".
+            digits = _phone_digits(term)
+            if digits:
+                or_clauses.append({"phone": {"$regex": digits, "$options": "i"}})
             if matching_uids:
-                filters["$or"].append({"user_id": {"$in": matching_uids}})
+                or_clauses.append({"user_id": {"$in": matching_uids}})
+            filters["$or"] = or_clauses
 
     # Filter to drivers missing licence_number or licence_class (ACTION_ITEMS.md
     # B14 backfill queue — the SGI D00032 form renders these fields blank for

@@ -149,6 +149,46 @@ class TestAdminDriverActions:
         assert resp.status_code in (200, 404)
 
 
+class TestAdminUpdateDriverEncryptsLicenseNumber:
+    """Regression: admin_update_driver previously wrote license_number as
+    plaintext -- the self-serve profile-update and bulk-import paths both
+    encrypt it via _encrypt_driver_pii before writing, but this admin route
+    did not. license_number is Vault-encrypted at rest
+    (_VAULT_PII_FIELDS, routes/drivers/_shared.py); storing it unencrypted
+    is a PIPEDA violation per that module's own docstring."""
+
+    def test_license_number_encrypted_before_write(self, client):
+        captured = {}
+
+        async def _capture_update(table, filt, updates):
+            if table == "drivers":
+                captured["driver_updates"] = updates
+            return updates
+
+        async def _fake_encrypt(payload):
+            out = dict(payload)
+            if "license_number" in out:
+                out["license_number"] = f"vault:{out['license_number']}"
+            return out
+
+        with (
+            patch("routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=_FAKE_DRIVER)),
+            patch("routes.admin.drivers.db_supabase.update_one", AsyncMock(side_effect=_capture_update)),
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=_fake_encrypt)),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="a1")),
+        ):
+            resp = client.put(
+                "/api/admin/drivers/drv-1",
+                json={"license_number": "SK1234567", "license_class": "5"},
+            )
+
+        assert resp.status_code == 200
+        # The raw plaintext value must never reach db_supabase.update_one --
+        # only the encrypted form _encrypt_driver_pii returns.
+        assert captured["driver_updates"]["license_number"] == "vault:SK1234567"
+        assert captured["driver_updates"]["license_number"] != "SK1234567"
+
+
 # ---------------------------------------------------------------------------
 # Wallet credit / debit
 # ---------------------------------------------------------------------------
@@ -759,4 +799,3 @@ class TestAdminUserModeration:
         # Reactivating also withdraws a pending DSAR deletion.
         assert captured["deletion_requested_at"] is None
         assert captured["deletion_scheduled_at"] is None
-

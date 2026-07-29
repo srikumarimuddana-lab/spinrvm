@@ -11,6 +11,7 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...routes.drivers._shared import _encrypt_driver_pii
     from ...routes.users import store_profile_image
     from ...services import lms_service
     from ...utils.audit_logger import log_admin_action
@@ -21,6 +22,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
+    from routes.drivers._shared import _encrypt_driver_pii  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
@@ -1197,7 +1199,11 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         if user_updates and user_id:
             await db_supabase.update_one("users", {"id": user_id}, user_updates)
         if driver_updates:
-            await db_supabase.update_one("drivers", {"id": driver_id}, driver_updates)
+            # license_number is Vault-encrypted at rest (_VAULT_PII_FIELDS,
+            # routes/drivers/_shared.py) -- must be encrypted before every
+            # write, same as the self-serve profile-update and bulk-import
+            # paths. This admin route previously wrote it as plaintext.
+            await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(driver_updates))
     except HTTPException:
         raise
     except Exception as e:

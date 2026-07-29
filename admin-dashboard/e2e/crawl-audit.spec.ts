@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { setAdminAuthCookie, TEST_ADMIN_JWT } from './auth-fixture';
+import a11yBaseline from './a11y-baseline.json';
 
 const ROUTES = [
   '/dashboard',
@@ -99,7 +100,16 @@ for (const route of ROUTES) {
       { type: 'looks-404', description: String(has404) },
     );
 
-    // Don't fail the run — this is an audit pass, not a gate.
-    expect(true).toBe(true);
+    // WCAG 2.1 AA a11y ratchet (ACTION_ITEMS.md E11): fail only if THIS route
+    // regresses past its recorded baseline in e2e/a11y-baseline.json — 64
+    // pre-existing violations across 41 routes as of 2026-07-29 are tracked
+    // debt, not blocked here (see docs/change-log for the remediation
+    // backlog), but no route may get worse without updating the baseline
+    // deliberately. A route with no baseline entry defaults to 0 tolerance.
+    const allowed = (a11yBaseline as Record<string, number>)[route] ?? 0;
+    expect(
+      axeViolations.length,
+      `New a11y violations on ${route} (baseline ${allowed}): ${JSON.stringify(axeViolations.map(v => v.id))}`
+    ).toBeLessThanOrEqual(allowed);
   });
 }

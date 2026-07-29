@@ -81,10 +81,20 @@ def _decode_polyline(encoded: str) -> list:
 #
 # It also bounds the worst-case fare estimate, because _PRICING_ROUTE_WAIT_S
 # is derived from it: raising this raises the P95 the rider feels on "tap →
-# price shown", which CLAUDE.md pins at 300 ms. 1.5 s already sits well past
-# the p99 for a warm Directions call; anything slower is a degraded upstream
-# we would rather fall back on than wait for.
-DIRECTIONS_TIMEOUT_S = 1.5
+# price shown", which CLAUDE.md pins at 300 ms.
+#
+# Raised 1.5s -> 3.0s deliberately. The road route is the BILLING basis;
+# haversine is a guardrail for a genuinely dead upstream, not a second
+# pricing mode. Every timeout here bills the straight line instead of the
+# road, and because haversine is always <= road distance that loss is
+# one-directional — under 0% commission it comes out of the driver's fare.
+# The wait costs nothing on a warm call (the task runs concurrently and
+# usually resolves with ~no added latency); it only extends the slow tail,
+# which is exactly the population that was silently undercharging. Watch
+# spinr_fare_distance_basis_total{basis="haversine_fallback"} — it should be
+# near zero. If it is not, the answer is to fix the upstream latency, not to
+# lower this back and resume mispricing.
+DIRECTIONS_TIMEOUT_S = 3.0
 
 
 async def _fetch_directions_route(
@@ -106,7 +116,7 @@ async def _fetch_directions_route(
     route accumulates the full road path (pickup → stop → … → dropoff), not
     just the final leg. This is the authoritative road distance the fare is
     priced on (see ``estimates.py``); haversine is only the fallback when this
-    is unavailable. Timeout is 3 s, well within the ride-creation SLA.
+    is unavailable. Timeout is ``DIRECTIONS_TIMEOUT_S``.
     waypoints is an optional list of {lat, lng} stop dicts (multi-stop rides).
     """
     if not api_key:
@@ -132,12 +142,17 @@ async def _fetch_directions_route(
             )
             return None
         route = data["routes"][0]
+        # The overview polyline only draws the map line. It must NEVER gate the
+        # road distance: this used to `return None` when the polyline was
+        # missing or degenerate, throwing away a perfectly good
+        # legs[].distance and dropping the fare to straight-line haversine —
+        # a silent, one-directional undercharge whenever Google answered OK
+        # but omitted the overview geometry. Pricing needs the legs; rendering
+        # can cope with no line.
         encoded = route.get("overview_polyline", {}).get("points", "")
-        if not encoded:
-            return None
-        pts = _decode_polyline(encoded)
+        pts = _decode_polyline(encoded) if encoded else []
         if len(pts) < 2:
-            return None
+            pts = []
         # Sum distance/duration across every leg so multi-stop rides accumulate
         # the whole road path. Guard each field: for status=OK legs are always
         # present, but a malformed leg must degrade to the haversine fallback
@@ -148,13 +163,20 @@ async def _fetch_directions_route(
         for leg in legs:
             distance_m += int((leg.get("distance") or {}).get("value") or 0)
             duration_s += int((leg.get("duration") or {}).get("value") or 0)
+        distance_km = round(distance_m / 1000.0, 3) if distance_m > 0 else None
+        if distance_km is None and not pts:
+            # Neither a billable distance nor a drawable line — nothing useful.
+            return None
         return {
             "polyline": pts,
-            "distance_km": round(distance_m / 1000.0, 3) if distance_m > 0 else None,
+            "distance_km": distance_km,
             "duration_s": duration_s if duration_s > 0 else None,
         }
     except Exception as exc:
-        logger.warning("_fetch_directions_route failed (non-fatal): %s", exc)
+        # Money path: this decides whether the ride bills on the road route or
+        # on the shorter straight line, so it must not disappear into a
+        # warning. Callers fall back to haversine and undercharge.
+        logger.error("_fetch_directions_route failed — fare will fall back to haversine: %s", exc, exc_info=True)
         return None
 
 

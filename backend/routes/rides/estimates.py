@@ -468,6 +468,15 @@ async def compute_ride_estimates(
     # (whenever a road distance is known) the km delta vs haversine — the
     # systematic-undercharge signal, which should be strongly one-sided.
     _deps._metric_inc("spinr_fare_distance_basis_total", {"basis": distance_basis})
+    if distance_basis == "haversine_fallback":
+        # Billing the straight line in road mode is a revenue loss, not a
+        # neutral degrade: haversine <= road always, so every one of these
+        # undercharges. Loud enough to alert on — a metric alone let this run
+        # unnoticed (incident: 16.6 km road billed as 15.5 km straight-line).
+        logger.error(
+            "[estimate] road distance unavailable — billing haversine (undercharge)",
+            extra={"haversine_km": round(float(haversine_km), 3), "fare_mode": _fare_mode},
+        )
     if road_km is not None:
         _deps._metric_observe(
             "spinr_fare_distance_delta_km",

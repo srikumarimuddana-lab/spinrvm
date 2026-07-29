@@ -156,6 +156,13 @@ const NAV_GROUPS: NavGroup[] = [
                 href: "/dashboard/bulk-operations", label: "Bulk Operations", icon: Upload,
                 module: "bulk_operations", superAdminOnly: true,
             },
+            // ACTION_ITEMS.md B10 dual-approval gate queue — backend gates
+            // approve/deny on require_super_admin (same posture as Data
+            // Transfer above), so this nav entry matches exactly.
+            {
+                href: "/dashboard/export-approvals", label: "Export Approvals", icon: Inbox,
+                module: "bulk_operations", superAdminOnly: true,
+            },
             // GST/PST remittance + insurance-period audit exports. Granted
             // via admin management, same pattern as every other module here
             // — see backend routes/admin/compliance.py's require_module("compliance").

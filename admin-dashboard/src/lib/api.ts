@@ -1240,6 +1240,33 @@ export const updateSurge = (areaId: string, data: any) =>
         body: JSON.stringify(data),
     });
 
+/* ── Export Approvals (ACTION_ITEMS.md B10 dual-approval gate) ────────── */
+export interface ExportApprovalRequest {
+    id: string;
+    requested_by: string;
+    route_key: string;
+    params: Record<string, any>;
+    row_count: number | null;
+    reason: string | null;
+    status: "pending" | "approved" | "denied" | "expired" | "consumed";
+    created_at: string;
+}
+
+export const getPendingExportApprovals = () =>
+    request<ExportApprovalRequest[]>("/api/admin/export-approvals/pending");
+
+export const approveExportRequest = (requestId: string, decisionNote = "") =>
+    request<ExportApprovalRequest>(`/api/admin/export-approvals/${requestId}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ decision_note: decisionNote }),
+    });
+
+export const denyExportRequest = (requestId: string, decisionNote = "") =>
+    request<ExportApprovalRequest>(`/api/admin/export-approvals/${requestId}/deny`, {
+        method: "POST",
+        body: JSON.stringify({ decision_note: decisionNote }),
+    });
+
 /* ── Driver Document Verification ────────── */
 export const getDriverDocuments = (driverId: string) =>
     request<any[]>(`/api/admin/documents/drivers/${driverId}`);
@@ -3427,6 +3454,16 @@ export interface DataTransferExportQueuedResult {
     status: "pending";
     requested_count: number;
 }
+/** ACTION_ITEMS.md B10 dual-approval gate — returned instead of
+ * DataTransferExportQueuedResult when settings.dual_approval_exports_enabled
+ * is on and this export needs a second admin's sign-off before the job
+ * even starts. Check `"approval_required" in result` to distinguish. */
+export interface ExportApprovalRequiredResult {
+    approval_required: true;
+    request_id: string;
+    status: "pending" | "approved" | "denied" | "expired" | "consumed";
+    row_count: number;
+}
 export interface DataTransferExportScopeOptions {
     docTypes?: string[];
     // PIA recommendation R-B (ACTION_ITEMS.md B11) — default true (current
@@ -3441,7 +3478,7 @@ export const exportDataTransferEntities = (
     reason: string,
     options?: DataTransferExportScopeOptions,
 ) =>
-    request<DataTransferExportQueuedResult>("/api/admin/data-transfer/export", {
+    request<DataTransferExportQueuedResult | ExportApprovalRequiredResult>("/api/admin/data-transfer/export", {
         method: "POST",
         body: JSON.stringify({
             entities,
@@ -3536,6 +3573,16 @@ async function downloadComplianceReport(path: string, fallbackFilename: string):
     const headers: Record<string, string> = {};
     if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
     const res = await fetch(path, { headers });
+    // ACTION_ITEMS.md B10 dual-approval gate: a 202 is in fetch's `ok`
+    // range, so without this check the JSON {"approval_required": true,
+    // ...} body would silently be treated as file bytes and downloaded as
+    // a corrupt "report". Check the content-type, not just status, since a
+    // 202 is otherwise indistinguishable from a real (2xx) file response.
+    if (res.status === 202 && (res.headers.get("content-type") || "").includes("application/json")) {
+        throw new Error(
+            "This report needs a different admin's approval before it can be generated — it's been added to the Export Approvals queue.",
+        );
+    }
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || `Could not generate report (${res.status})`);
@@ -3596,7 +3643,17 @@ async function emailComplianceReport(path: string, emailTo: string): Promise<{ e
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || `Could not email report (${res.status})`);
     }
-    return res.json();
+    const body = await res.json();
+    // ACTION_ITEMS.md B10: a 202 approval-required body is also `res.ok`
+    // and JSON-shaped like a real {"emailed_to": ...} success response --
+    // without this check, an admin would be told the report was emailed
+    // when nothing was sent.
+    if (body?.approval_required) {
+        throw new Error(
+            "This report needs a different admin's approval before it can be generated or emailed — it's been added to the Export Approvals queue.",
+        );
+    }
+    return body;
 }
 
 export const emailGstPstRemittance = (dateRange: string, format: ComplianceReportFormat, emailTo: string) =>

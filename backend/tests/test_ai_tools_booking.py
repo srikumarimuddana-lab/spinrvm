@@ -189,6 +189,34 @@ class TestFindPlaceHardRestriction:
         assert restriction["low"]["longitude"] < -104.65 < restriction["high"]["longitude"]
 
     @pytest.mark.anyio
+    async def test_restriction_and_bias_are_never_both_sent(self):
+        """searchText rejects a payload carrying both locationRestriction and
+        locationBias with 400 INVALID_ARGUMENT ("Location_restriction and
+        location_bias cannot be set at the same time"), which killed every
+        named-place lookup for riders with a known location. The mocks return
+        200 regardless of payload, so only an explicit assertion catches it."""
+        captured = {}
+
+        async def maps_post(url, headers, json_body):
+            captured["json"] = json_body
+            return 200, PLACES_OK
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_area(),
+            patch.object(tools_booking, "_maps_post", AsyncMock(side_effect=maps_post)),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            _, ok = await execute_tool(
+                "find_place", {"query": "canadian tire", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
+            )
+
+        assert ok
+        assert "locationRestriction" in captured["json"]
+        assert "locationBias" not in captured["json"]
+
+    @pytest.mark.anyio
     async def test_no_bias_point_sends_no_restriction(self):
         """Without a near_lat/near_lng, there is nothing to build a hard box
         around — matches the legacy branch's behaviour of searching

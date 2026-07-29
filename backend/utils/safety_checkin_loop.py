@@ -39,7 +39,8 @@ try:
     from .audit_logger import log_admin_action as _log_audit
 except ImportError:
     from db import db as _supabase_db  # type: ignore
-    from features import send_push_notification  # type: ignore
+    from features import notify_safety_team, send_push_notification  # type: ignore
+    from socket_manager import manager as _ws_manager  # type: ignore # noqa: F401
     from utils.audit_logger import log_admin_action as _log_audit  # type: ignore
 
 try:

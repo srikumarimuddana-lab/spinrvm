@@ -454,3 +454,23 @@ async def test_escalate_audit_log_failure_does_not_prevent_escalation():
 
     rset.assert_awaited_once()
     assert "escalated:r1" in rset.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_escalate_calls_notify_safety_team():
+    """Regression: the fallback (non-relative) import branch must bind
+    notify_safety_team, or this call silently NameErrors and the safety
+    team is never paged for an auto-escalated incident."""
+    notify = AsyncMock()
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.notify_safety_team", notify),
+    ):
+        db.insert_one = AsyncMock(return_value={"id": "inc1"})
+        from utils.safety_checkin_loop import _escalate
+
+        await _escalate(_ride(), datetime.now(timezone.utc))
+
+    notify.assert_awaited_once()

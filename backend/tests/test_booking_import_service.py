@@ -523,3 +523,35 @@ def test_read_csv_leaves_short_rows_for_validation(tmp_path):
     p.write_text("_id,booking_id,total_amount\nbk-1,CB1\n", encoding="utf-8")
     (row,) = svc.read_csv(p)
     assert row["total_amount"] == ""
+
+
+def test_read_csv_text_matches_read_csv_exactly(tmp_path):
+    """The upload path must parse identically to the CLI path.
+
+    An HTTP upload hands us bytes, not a path. If read_csv_text ever drifts
+    from read_csv (e.g. by copying rider_import's header-normalizing version,
+    which has no None-key guard) the legacy export's trailing unnamed column
+    would crash the import or silently shift columns.
+    """
+    content = "_id,booking_id,total_amount\nbk-1,CB1,20.53,69c1c0365fc1dc6d1e3e530f\nbk-2,CB2,3.50,\nbk-3,CB3,7.25\n"
+    p = tmp_path / "bookings.csv"
+    p.write_text(content, encoding="utf-8")
+
+    assert svc.read_csv_text(content) == svc.read_csv(p)
+
+
+def test_read_csv_text_does_not_normalize_headers():
+    """Legacy headers are matched verbatim; normalizing them breaks the map."""
+    rows = svc.read_csv_text("_id,booking_id,total_amount\nbk-1,CB1,20.53\n")
+    assert set(rows[0]) == {"_id", "booking_id", "total_amount"}
+
+
+def test_read_csv_text_handles_crlf_and_bom():
+    """Windows-exported CSVs carry CRLF line endings and often a UTF-8 BOM."""
+    rows = svc.read_csv_text("﻿_id,booking_id,total_amount\r\nbk-1,CB1,20.53\r\n")
+    assert rows == [{"_id": "bk-1", "booking_id": "CB1", "total_amount": "20.53"}]
+
+
+def test_read_csv_text_rejects_empty_content():
+    with pytest.raises(ValueError, match="no header row"):
+        svc.read_csv_text("")

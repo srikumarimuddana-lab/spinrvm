@@ -125,15 +125,18 @@ total_paid_out displayed  += $223.39
 Batch-scoped, data-level, no redeploy required. Every imported artifact is tagged with the batch ID the CLI prints on commit:
 
 ```sql
+-- Order matters. Run the rides delete FIRST (see note below).
+DELETE FROM rides   WHERE legacy_import_metadata->>'batch' = '<batch>';
 DELETE FROM payouts WHERE id LIKE 'legacy-import-<batch>-%';
-DELETE FROM rides  WHERE legacy_import_metadata->>'batch' = '<batch>';
 UPDATE drivers d
    SET total_rides = (SELECT count(*) FROM rides r
                        WHERE r.driver_id = d.id AND r.status = 'completed')
  WHERE d.id IN (<affected driver ids>);
 ```
 
-Delete payouts **before** rides so payable balance never transiently rises. No Stripe charge, wallet delta, or ride-state transition is created by this import, so there is nothing external to unwind. Migration 268 is additive and inert if unused; its own rollback is in the file header.
+**Delete rides *before* payouts.** `payable_balance = earnings − payouts`, so removing the offset payouts first would strip a deduction and raise every affected driver's withdrawable balance by their full imported amount — the exact double-withdraw the offset exists to prevent. Removing the rides first lowers the balance instead, which is temporarily understated but recoverable, matching the preference already stated in `routes/drivers/earnings.py:68-75` ("worst case a driver is temporarily under-paid (recoverable), NEVER a double-withdraw of platform money"). Run both statements in one transaction where possible so no window exists at all.
+
+No Stripe charge, wallet delta, or ride-state transition is created by this import, so there is nothing external to unwind. Migration 268 is additive and inert if unused; its own rollback is in the file header.
 
 The rating-guard code change is independently revertable by `git revert` (pure code, no data effect).
 

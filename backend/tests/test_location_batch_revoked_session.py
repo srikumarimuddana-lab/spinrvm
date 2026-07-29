@@ -95,6 +95,36 @@ async def test_guard_defaults_on_when_flag_absent(mock_redis, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_explicit_null_flag_is_treated_as_enabled(mock_redis, monkeypatch):
+    """A NULL app_settings column means "unset → default", not "disabled".
+    `.get(key, True)` returns None for a NULL and bool(None) is False, which
+    would have shipped the guard dark on any row that has the key set to null."""
+
+    async def _settings():
+        return {"location_reject_revoked_sessions_enabled": None}
+
+    monkeypatch.setattr("settings_loader.get_app_settings", _settings)
+    await session_revocation.revoke_session("sess-dead")
+
+    with pytest.raises(HTTPException) as exc:
+        await location._guard_revoked_session("sess-dead")
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_falsy_but_explicit_flag_values_disable_the_guard(mock_redis, monkeypatch):
+    """0 / "" / False are deliberate opt-outs, unlike None."""
+    await session_revocation.revoke_session("sess-dead")
+
+    for value in (False, 0, ""):
+        async def _settings(_v=value):
+            return {"location_reject_revoked_sessions_enabled": _v}
+
+        monkeypatch.setattr("settings_loader.get_app_settings", _settings)
+        assert await location._guard_revoked_session("sess-dead") is None, value
+
+
+@pytest.mark.anyio
 async def test_unreadable_settings_fails_open(mock_redis, monkeypatch):
     async def _boom():
         raise RuntimeError("settings table unreachable")

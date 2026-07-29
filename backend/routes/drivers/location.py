@@ -352,7 +352,11 @@ async def _guard_revoked_session(token_session_id: str | None) -> None:
             from ...settings_loader import get_app_settings
         except ImportError:
             from settings_loader import get_app_settings  # type: ignore
-        enabled = bool((await get_app_settings() or {}).get("location_reject_revoked_sessions_enabled", True))
+        # An explicit NULL in app_settings must mean "unset → use the default",
+        # not "disabled". `.get(key, True)` alone returns None for a NULL column
+        # and bool(None) is False, which would silently ship the guard dark.
+        _flag = (await get_app_settings() or {}).get("location_reject_revoked_sessions_enabled")
+        enabled = True if _flag is None else bool(_flag)
     except Exception:
         logger.warning("could not read location_reject_revoked_sessions_enabled; allowing batch", exc_info=True)
         return

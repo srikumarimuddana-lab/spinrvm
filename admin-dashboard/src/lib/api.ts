@@ -260,6 +260,59 @@ export type {
     RiderImportReport,
     RiderImportCommitResult,
 } from "./api/imports";
+export {
+    getCloudMessages,
+    sendCloudMessage,
+    getCloudMessageStats,
+    deleteCloudMessage,
+    getCloudMessageAudiencePreview,
+    getMarketingSuppressions,
+    addMarketingSuppression,
+    deleteMarketingSuppression,
+    getPromoUsage,
+    getPromoStats,
+} from "./api/marketing";
+export {
+    getUsers,
+    getUsersPaginated,
+    getUserDetails,
+    updateUserStatus,
+    updateUserFlags,
+    exportUsers,
+    logPiiReveal,
+    getUserWallet,
+    creditUserWallet,
+    debitUserWallet,
+} from "./api/users-wallet";
+export {
+    getPromotions,
+    createPromotion,
+    updatePromotion,
+    deletePromotion,
+    getDisputes,
+    getDisputeStats,
+    getDisputeDetails,
+    createDispute,
+    updateDispute,
+    getSafetyIncidents,
+    getSafetyIncident,
+    updateSafetyIncident,
+    getTickets,
+    getTicketDetails,
+    createTicket,
+    updateTicket,
+    replyToTicket,
+    closeTicket,
+    deleteTicket,
+} from "./api/safety-disputes";
+export type {
+    SafetyStatus,
+    SafetySeverity,
+    SafetyRole,
+    SafetyIncident,
+    SafetyIncidentListResponse,
+    SafetyIncidentDetail,
+} from "./api/safety-disputes";
 import { request } from "./api/client";
 import { useAuthStore } from "@/store/authStore";
 import type { EarningsPeriod, MetricWithDelta } from "./api/earnings";
@@ -373,358 +426,9 @@ export const nudgeDriverExpiry = (
     });
 
 /* ── Corporate accounts/wallet/members/policy/domains/billing ── moved to lib/api/corporate.ts, re-exported above. */
-/* ── Cloud Messaging (merged with Notifications) ── */
-export const getCloudMessages = (status?: string, audience?: string) => {
-    const params = new URLSearchParams();
-    if (status) params.set('status', status);
-    if (audience) params.set('audience', audience);
-    return request<any[]>(`/api/admin/cloud-messaging?${params.toString()}`);
-};
-
-export const sendCloudMessage = (data: {
-    title: string;
-    description: string;
-    audience: string;
-    channels: string[];
-    type?: string;
-    particular_ids?: string[];
-    scheduled_at?: string;
-    is_marketing?: boolean;
-    service_area_id?: string;
-}) =>
-    request<any>("/api/admin/cloud-messaging/send", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const getCloudMessageStats = () =>
-    request<any>("/api/admin/cloud-messaging/stats");
-
-export const deleteCloudMessage = (id: string) =>
-    request<any>(`/api/admin/cloud-messaging/${id}`, { method: "DELETE" });
-
-/* ── Marketing audience preview + suppression list ──────────────────── */
-
-export const getCloudMessageAudiencePreview = (audience: string, serviceAreaId?: string) => {
-    const params = new URLSearchParams({ audience });
-    if (serviceAreaId) params.set("service_area_id", serviceAreaId);
-    return request<{
-        audience: string;
-        audience_total: number;
-        email_opted_in: number | null;
-        sms_opted_in: number | null;
-        push_opted_in: number | null;
-    }>(`/api/admin/cloud-messaging/audience-preview?${params.toString()}`);
-};
-
-export const getMarketingSuppressions = (channel?: string) => {
-    const params = new URLSearchParams();
-    if (channel) params.set("channel", channel);
-    return request<any[]>(`/api/admin/marketing/suppressions?${params.toString()}`);
-};
-
-export const addMarketingSuppression = (data: { channel: string; target: string; reason?: string }) =>
-    request<any>("/api/admin/marketing/suppressions", { method: "POST", body: JSON.stringify(data) });
-
-export const deleteMarketingSuppression = (id: string) =>
-    request<any>(`/api/admin/marketing/suppressions/${id}`, { method: "DELETE" });
-
-/* ── Promotions Usage & Stats ──────────────────── */
-export const getPromoUsage = (params?: { promo_id?: string; date_from?: string; date_to?: string; limit?: number; offset?: number }) => {
-    const sp = new URLSearchParams();
-    if (params?.promo_id) sp.set('promo_id', params.promo_id);
-    if (params?.date_from) sp.set('date_from', params.date_from);
-    if (params?.date_to) sp.set('date_to', params.date_to);
-    if (params?.limit) sp.set('limit', params.limit.toString());
-    if (params?.offset) sp.set('offset', params.offset.toString());
-    return request<any[]>(`/api/admin/promotions/usage?${sp.toString()}`);
-};
-
-export const getPromoStats = (range?: string) => {
-    const sp = new URLSearchParams();
-    if (range) sp.set('range', range);
-    return request<any>(`/api/admin/promotions/stats?${sp.toString()}`);
-};
-
-/* ── Users (Riders + Drivers + Admins) ───────── */
-// NOTE: no `search` param here on purpose — search terms can be phone
-// numbers/emails and GET query strings land in browser history and proxy
-// logs. Use the POST-based adminSearchUsers for user search.
-export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all") =>
-    request<any[]>(`/api/admin/users?role=${role}`);
-
-export const getUsersPaginated = (opts: {
-    role?: "all" | "rider" | "driver" | "both" | "admin";
-    search?: string;
-    limit?: number;
-    offset?: number;
-} = {}) => {
-    const sp = new URLSearchParams();
-    sp.set("role", opts.role ?? "all");
-    if (opts.search) sp.set("search", opts.search);
-    if (opts.limit != null) sp.set("limit", String(opts.limit));
-    if (opts.offset != null) sp.set("offset", String(opts.offset));
-    return request<any[]>(`/api/admin/users?${sp.toString()}`);
-};
-
-export const getUserDetails = (id: string) =>
-    request<any>(`/api/admin/users/${id}`);
-
-export const updateUserStatus = (id: string, statusData: any) =>
-    request<any>(`/api/admin/users/${id}/status`, {
-        method: "PUT",
-        body: JSON.stringify(statusData),
-    });
-
-export const updateUserFlags = (id: string, flags: { is_rider?: boolean; is_driver?: boolean }) =>
-    request<any>(`/api/admin/users/${id}/role`, {
-        method: "PATCH",
-        body: JSON.stringify(flags),
-    });
-
-export const exportUsers = (limit = 1000) =>
-    request<{ users: any[]; count: number }>(`/api/admin/export/users?limit=${limit}`);
-
-export const logPiiReveal = (entityType: string, entityId: string) =>
-    request<{ ok: boolean }>("/api/admin/audit/pii-reveal", {
-        method: "POST",
-        body: JSON.stringify({ entity_type: entityType, entity_id: entityId }),
-    });
-
-/* ── Wallet (admin) ─────────────────────────── */
-export const getUserWallet = (userId: string, limit = 50) =>
-    request<{
-        user: { id: string; name: string; phone: string; email: string };
-        wallet: { id: string; balance: number; currency: string; is_active: boolean };
-        transactions: Array<{
-            id: string;
-            type: string;
-            amount: number;
-            balance_after: number;
-            description: string | null;
-            reference_id: string | null;
-            metadata: Record<string, any>;
-            created_at: string;
-        }>;
-    }>(`/api/admin/wallet/${userId}?limit=${limit}`);
-
-export const creditUserWallet = (userId: string, amount: number, reason: string) =>
-    request<{ balance: number; transaction_id: string; audit_log_id?: string }>(`/api/admin/wallet/credit`, {
-        method: "POST",
-        body: JSON.stringify({ user_id: userId, amount, reason }),
-    });
-
-export const debitUserWallet = (userId: string, amount: number, reason: string) =>
-    request<{ balance: number; transaction_id: string; audit_log_id?: string }>(`/api/admin/wallet/debit`, {
-        method: "POST",
-        body: JSON.stringify({ user_id: userId, amount, reason }),
-    });
-
-/* ── Promotions ─────────────────────────────── */
-export const getPromotions = (opts: {
-    limit?: number;
-    offset?: number;
-    promo_type?: "public" | "private";
-    status?: "active" | "inactive" | "not_expired" | "expired";
-    search?: string;
-} = {}) => {
-    const sp = new URLSearchParams();
-    if (opts.limit != null) sp.set("limit", String(opts.limit));
-    if (opts.offset != null) sp.set("offset", String(opts.offset));
-    if (opts.promo_type) sp.set("promo_type", opts.promo_type);
-    if (opts.status) sp.set("status", opts.status);
-    if (opts.search) sp.set("search", opts.search);
-    const qs = sp.toString();
-    return request<any[]>(`/api/admin/promotions${qs ? `?${qs}` : ""}`);
-};
-
-export const createPromotion = (data: any) =>
-    request<any>("/api/admin/promotions", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updatePromotion = (id: string, data: any) =>
-    request<any>(`/api/admin/promotions/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-export const deletePromotion = (id: string) =>
-    request<any>(`/api/admin/promotions/${id}`, { method: "DELETE" });
-
-/* ── Disputes ───────────────────────────────── */
-export const getDisputes = (opts: { limit?: number; offset?: number; status?: string } = {}) => {
-    const sp = new URLSearchParams();
-    if (opts.limit != null) sp.set("limit", String(opts.limit));
-    if (opts.offset != null) sp.set("offset", String(opts.offset));
-    if (opts.status && opts.status !== "all") sp.set("status", opts.status);
-    const qs = sp.toString();
-    return request<any[]>(`/api/admin/disputes${qs ? `?${qs}` : ""}`);
-};
-
-export const getDisputeStats = () =>
-    request<{ open: number; under_review: number; resolved: number; rejected: number; total_refunded: number }>(
-        "/api/admin/disputes/stats"
-    );
-
-export const getDisputeDetails = (id: string) =>
-    request<any>(`/api/admin/disputes/${id}`);
-
-export const createDispute = (data: any) =>
-    request<any>("/api/admin/disputes", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updateDispute = (id: string, data: any) =>
-    request<any>(`/api/admin/disputes/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-/* ── Safety Queue ───────────────────────────── */
-export type SafetyStatus = "open" | "in_progress" | "resolved" | "closed" | "duplicate";
-export type SafetySeverity = "sev1" | "sev2" | "sev3";
-export type SafetyRole = "rider" | "driver" | "system";
-
-export interface SafetyIncident {
-    id: string;
-    reported_by_user_id: string | null;
-    role: SafetyRole;
-    category: string;
-    description: string;
-    status: SafetyStatus;
-    severity: SafetySeverity | null;
-    ride_id: string | null;
-    latitude: number | null;
-    longitude: number | null;
-    location_accuracy: number | null;
-    assigned_to_admin_id: string | null;
-    resolved_at: string | null;
-    resolved_by: string | null;
-    resolution_notes: string | null;
-    reported_at: string;
-    created_at: string;
-    updated_at: string;
-    reporter_name?: string | null;
-}
-
-export interface SafetyIncidentListResponse {
-    items: SafetyIncident[];
-    total: number;
-    offset: number;
-    limit: number;
-    open_count: number | null;
-}
-
-export interface SafetyIncidentDetail {
-    incident: SafetyIncident;
-    reporter: {
-        id: string | null;
-        name: string | null;
-        email: string | null;
-        phone: string | null;
-        role: string | null;
-    } | null;
-    ride: {
-        id: string | null;
-        ride_code: string | null;
-        status: string | null;
-        rider_id: string | null;
-        driver_id: string | null;
-        pickup_address: string | null;
-        dropoff_address: string | null;
-        total_fare: number | null;
-        started_at: string | null;
-        completed_at: string | null;
-    } | null;
-}
-
-export const getSafetyIncidents = (params?: {
-    status?: SafetyStatus;
-    severity?: SafetySeverity;
-    role?: SafetyRole;
-    category?: string;
-    ride_id?: string;
-    search?: string;
-    limit?: number;
-    offset?: number;
-}) => {
-    const sp = new URLSearchParams();
-    if (params?.status) sp.set("status", params.status);
-    if (params?.severity) sp.set("severity", params.severity);
-    if (params?.role) sp.set("role", params.role);
-    if (params?.category) sp.set("category", params.category);
-    if (params?.ride_id) sp.set("ride_id", params.ride_id);
-    if (params?.search) sp.set("search", params.search);
-    if (params?.limit != null) sp.set("limit", String(params.limit));
-    if (params?.offset != null) sp.set("offset", String(params.offset));
-    const qs = sp.toString();
-    return request<SafetyIncidentListResponse>(`/api/admin/safety/incidents${qs ? `?${qs}` : ""}`);
-};
-
-export const getSafetyIncident = (id: string) =>
-    request<SafetyIncidentDetail>(`/api/admin/safety/incidents/${id}`);
-
-export const updateSafetyIncident = (
-    id: string,
-    body: Partial<{
-        status: SafetyStatus;
-        severity: SafetySeverity;
-        assigned_to_admin_id: string;
-        resolution_notes: string;
-    }>,
-) =>
-    request<{ updated: boolean; incident: SafetyIncident }>(
-        `/api/admin/safety/incidents/${id}`,
-        { method: "PATCH", body: JSON.stringify(body) },
-    );
-
-
-/* ── Support Tickets ────────────────────────── */
-export const getTickets = (opts: {
-    limit?: number;
-    offset?: number;
-    status?: string;
-    service_area_id?: string;
-} = {}) => {
-    const sp = new URLSearchParams();
-    if (opts.limit != null) sp.set("limit", String(opts.limit));
-    if (opts.offset != null) sp.set("offset", String(opts.offset));
-    if (opts.status) sp.set("status", opts.status);
-    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
-    const qs = sp.toString();
-    return request<any[]>(`/api/admin/tickets${qs ? `?${qs}` : ""}`);
-};
-
-export const getTicketDetails = (id: string) =>
-    request<any>(`/api/admin/tickets/${id}`);
-
-export const createTicket = (data: any) =>
-    request<any>("/api/admin/tickets", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updateTicket = (id: string, data: any) =>
-    request<any>(`/api/admin/tickets/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-export const replyToTicket = (id: string, message: string) =>
-    request<any>(`/api/admin/tickets/${id}/reply`, {
-        method: "POST",
-        body: JSON.stringify({ message }),
-    });
-
-export const closeTicket = (id: string) =>
-    request<any>(`/api/admin/tickets/${id}/close`, { method: "POST" });
-
-export const deleteTicket = (id: string) =>
-    request<any>(`/api/admin/tickets/${id}`, { method: "DELETE" });
-
+/* ── Cloud messaging, marketing suppression, promo usage/stats ── moved to lib/api/marketing.ts, re-exported above. */
+/* ── Users + admin wallet credit/debit ── moved to lib/api/users-wallet.ts, re-exported above. */
+/* ── Promotions, disputes, safety incident queue, support tickets ── moved to lib/api/safety-disputes.ts, re-exported above. */
 /* ── FAQs ───────────────────────────────────── */
 export const getFaqs = () =>
     request<any[]>("/api/admin/faqs");

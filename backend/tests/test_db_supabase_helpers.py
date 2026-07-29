@@ -253,11 +253,66 @@ class TestBuildOrClauseTerm:
         assert "eq" in term
         assert "completed" in term
 
-    def test_unknown_dict_returns_none(self):
+    def test_unknown_dict_raises(self):
+        """An inexpressible predicate must raise, not be silently dropped.
+
+        Dropping the term widens the OR (and for an $or used as an
+        update/delete filter, widens it to the whole table).
+        """
+        import pytest
+
         from backend.db_supabase import _build_or_clause_term
 
-        term = _build_or_clause_term("field", {"$unknown": "val"})
-        assert term is None
+        with pytest.raises(ValueError, match="unsupported predicate"):
+            _build_or_clause_term("field", {"$unknown": "val"})
+
+    def test_in_operator(self):
+        """Regression: $in inside $or was dropped, so admin name search — which
+        resolves user IDs first and matches drivers by user_id $in — silently
+        returned zero rows for every driver."""
+        from backend.db_supabase import _build_or_clause_term
+
+        term = _build_or_clause_term("user_id", {"$in": ["u1", "u2"]})
+        assert term == "user_id.in.(u1,u2)"
+
+    def test_in_empty_list_returns_none(self):
+        """An empty IN matches nothing, so it contributes nothing to an OR."""
+        from backend.db_supabase import _build_or_clause_term
+
+        assert _build_or_clause_term("user_id", {"$in": []}) is None
+
+    def test_in_non_list_raises(self):
+        import pytest
+
+        from backend.db_supabase import _build_or_clause_term
+
+        with pytest.raises(ValueError, match=r"\$in expects a list"):
+            _build_or_clause_term("user_id", {"$in": "u1"})
+
+    def test_in_quotes_reserved_characters(self):
+        """A value containing `,` or `)` would otherwise split/close the group."""
+        from backend.db_supabase import _build_or_clause_term
+
+        term = _build_or_clause_term("id", {"$in": ["a,b", "c)d", "plain"]})
+        assert term == 'id.in.("a,b","c)d",plain)'
+
+    def test_regex_escapes_like_wildcards(self):
+        """`%` typed into a search box must match a literal percent, not every row."""
+        from backend.db_supabase import _build_or_clause_term
+
+        term = _build_or_clause_term("email", {"$regex": "100%", "$options": "i"})
+        assert term == r"email.ilike.*100\%*"
+
+    def test_eq_quotes_reserved_characters(self):
+        from backend.db_supabase import _build_or_clause_term
+
+        assert _build_or_clause_term("name", "Kumar, N") == 'name.eq."Kumar, N"'
+
+    def test_notnull_operator(self):
+        from backend.db_supabase import _build_or_clause_term
+
+        assert _build_or_clause_term("email", {"$notnull": True}) == "email.not.is.null"
+        assert _build_or_clause_term("email", {"$notnull": False}) == "email.is.null"
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +335,34 @@ class TestBuildOrClause:
 
         result = _build_or_clause([])
         assert result == ""
+
+    def test_driver_name_search_shape(self):
+        """The exact clause admin driver search builds once the users pre-query
+        has resolved a name to user IDs. Before the fix the `user_id.in.(...)`
+        leaf was missing entirely, so searching a driver by name matched nothing.
+        """
+        from backend.db_supabase import _build_or_clause
+
+        result = _build_or_clause(
+            [
+                {"phone": {"$regex": "Nighil", "$options": "i"}},
+                {"license_plate": {"$regex": "Nighil", "$options": "i"}},
+                {"user_id": {"$in": ["uid-nighil"]}},
+            ]
+        )
+        assert "user_id.in.(uid-nighil)" in result
+
+
+class TestApplyFiltersOr:
+    def test_all_leaves_empty_raises_rather_than_matching_everything(self):
+        """A $or whose every leaf matches nothing must not degrade into an
+        unfiltered query — _apply_filters is shared by update/delete."""
+        import pytest
+
+        from backend.db_supabase import _apply_filters
+
+        with pytest.raises(ValueError, match="produced no PostgREST terms"):
+            _apply_filters(object(), {"$or": [{"user_id": {"$in": []}}]})
 
 
 # ---------------------------------------------------------------------------

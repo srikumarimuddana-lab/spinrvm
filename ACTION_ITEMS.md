@@ -382,8 +382,25 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        these need `TestClient`-level request testing, not unit-testable
        in isolation; lower priority, diminishing returns for this pass.
        See `docs/change-log/2026-07-29-a1b-dependencies-middleware-coverage.md`.
-     - Still open: `routes/auth.py` (51%), `routes/admin/auth.py` (64-70%)
-       — largest remaining files in this track, not started.
+     - `routes/auth.py` — **55%→69%** (`verify_otp` — the core rider/driver
+       login/signup endpoint, 382 lines — had zero direct coverage of its
+       success path; existing tests only pinned the lockout helpers and
+       the "DB error is not a wrong code" 503 case). Added 13 tests
+       (`tests/test_verify_otp_login_flow.py`) covering existing-user
+       login, guest-account claim-on-verify (`is_guest` cleared),
+       session-update-failure-doesn't-block-login, the PIPEDA
+       `pending_deletion` reactivation handoff, the fully-deleted-account
+       410, new-user creation (+ `create_user` DB-failure → 503, never
+       mints a token for an unpersisted row), and 4 OTP-record validation
+       branches (wrong code, expired, malformed/missing `expires_at`).
+       Still open in this file: the company-email-OTP flow
+       (`send_company_email_otp`/`verify_company_email_otp`),
+       `firebase_auth_login`, `refresh_access_token`,
+       `logout`/`logout_all`, and `reactivate_account` — none of these
+       endpoints have direct tests yet; large remaining scope, not
+       pursued further in this pass. See
+       `docs/change-log/2026-07-29-a1b-verify-otp-coverage.md`.
+     - Still open: `routes/admin/auth.py` (64-70%) — not started.
   4. `backend/routes/admin/` (15+ admin-only endpoints) — admin actions are
      audited but not necessarily tested; a broken admin endpoint can corrupt
      production data at scale (e.g. bulk driver approval, wallet

@@ -1014,34 +1014,50 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   still open — see deferred above).
 
 ### B10. Compliance-module exports have no dual-approval gate (extends open AI-3)
-- [ ] **Status:** not started — tracked, not fixed. Documentation-only pass
-  done this session to fold the new surface into the existing open finding
-  rather than let it go unscoped.
+- [x] **Status:** DONE (2026-07-29) — shipped across PR #2819 (schema,
+  `services/admin_export_approvals.py`, `routes/admin/export_approvals.py`
+  queue endpoints, Compliance + Data Transfer server-side gate wiring,
+  backend tests) and PR #2820 (admin-dashboard Export Approvals queue page,
+  sidebar entry, `202 approval_required` handling in `ExportTab.tsx` and
+  `compliance/page.tsx`'s download/email flows). AI-3's shared dual-approval
+  mechanism now exists: `settings.dual_approval_exports_enabled` (default
+  `false`, dark-launched), a `1,000`-row threshold
+  (`_APPROVAL_GATE_ROW_THRESHOLD`), self-approval blocked server-side
+  (`require_super_admin` + a distinct-approver check), and both the
+  Compliance (`gst-pst-remittance`, `insurance-period-audit`) and Data
+  Transfer export endpoints wired through it.
 - **Why:** `docs/threat-model/admin-panel.md`'s AI-3 ("Admin exports all
-  users → offline PII leak") has been an OPEN P1 finding since the threat
-  model was written — no dual-approval workflow exists for large exports
+  users → offline PII leak") had been an OPEN P1 finding since the threat
+  model was written — no dual-approval workflow existed for large exports
   anywhere in the admin panel. The Compliance & Tax Reporting module
   (`routes/admin/compliance.py`, shipped PR #2650) added two more export
   endpoints — `gst-pst-remittance` and `insurance-period-audit` — that
   return up to `_ROW_LIMIT = 10000` rows each with no gate, silently
   extending the same open risk. Flagged as gap G2 in
   `reports/audits/2026-07-28-compliance-reporting-module-lifecycle-audit-v1.md`.
-- **Action:** when AI-3's shared dual-approval mechanism is built, wire
-  both compliance endpoints through it. Do not build a compliance-specific
-  one-off gate — that would fragment the control across the admin panel
-  instead of fixing it once.
-- **Files:** `backend/routes/admin/compliance.py` (endpoints to wire once
-  AI-3 ships), `docs/threat-model/admin-panel.md` (AI-3 row updated to
-  reference this scope).
-- **Acceptance:** not gating this item — acceptance is AI-3's own, once
-  implemented: any export > 1,000 rows (across the whole admin panel,
-  compliance included) requires a second admin's approval before the file
-  is generated.
+- **Files:** `backend/migrations/268_admin_export_approvals.sql`,
+  `backend/services/admin_export_approvals.py`,
+  `backend/routes/admin/export_approvals.py`,
+  `backend/routes/admin/compliance.py`,
+  `backend/routes/admin/data_transfer_export.py`,
+  `admin-dashboard/src/app/dashboard/export-approvals/page.tsx`,
+  `admin-dashboard/src/app/dashboard/data-transfer/ExportTab.tsx`,
+  `admin-dashboard/src/lib/api.ts`, `admin-dashboard/src/components/sidebar.tsx`.
+- **Acceptance:** met — any export > 1,000 rows (Compliance or Data
+  Transfer) does not run until a *different* admin approves it from the
+  Export Approvals queue; the flag is still off by default, zero behavior
+  change until explicitly flipped.
+- **Not yet done:** the flag has not been flipped on anywhere (dark-launch
+  by design — flip is a separate, deliberate rollout decision, not part of
+  this item's acceptance).
 
 ### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
-- [ ] **Status:** in progress (2026-07-28) — R-A through R-F all DONE/resolved.
-  Only R-G remains open, and only because it genuinely requires a human
-  privacy/legal determination — a self-contained request package for that
+- [ ] **Status:** in progress (2026-07-29) — R-A through R-F all DONE/resolved.
+  The dual-approval gate itself is now DONE (shipped as part of B10 above,
+  PRs #2819/#2820 — Data Transfer's `export_entities` route is wired through
+  the same shared gate as Compliance). Only R-G remains open, and only
+  because it genuinely requires a human privacy/legal determination — a
+  self-contained request package for that
   review has been prepared at `reports/legal/data-transfer-implied-consent-review.md`
   (2026-07-28), but the actual determination is still pending a named
   reviewer. Plus the still-open AI-3 dual-approval wiring (shared with B10,

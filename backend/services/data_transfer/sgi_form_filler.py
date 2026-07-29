@@ -153,15 +153,33 @@ def fill_driver_details_form(drivers: list[dict[str, Any]]) -> bytes:
     field_values: dict[str, Any] = dict(_DRIVER_COMPANY_FIELDS)
     for i, driver in enumerate(drivers, start=1):
         slots = _driver_row_fields(i)
-        field_values[slots["full_name"]] = driver.get("full_name", "")
-        field_values[slots["licence_number"]] = driver.get("licence_number", "")
-        field_values[slots["licence_class"]] = driver.get("licence_class", "")
-        field_values[slots["effective_date"]] = driver.get("effective_date", "")
+        field_values[slots["full_name"]] = driver.get("full_name") or ""
+        field_values[slots["licence_number"]] = driver.get("licence_number") or ""
+        field_values[slots["licence_class"]] = driver.get("licence_class") or ""
+        field_values[slots["effective_date"]] = driver.get("effective_date") or ""
         field_values[slots["add_or_remove"]] = _ADD_REMOVE_CHANGE_INDEX.get(driver.get("action", "add"), "/0")
         field_values[slots["verified_driver_history"]] = "/Yes" if driver.get("verified_driver_history") else "/No"
         field_values[slots["criminal_record_check_attached"]] = (
             "/Yes" if driver.get("criminal_record_check_attached") else "/No"
         )
+
+    # The real template PDF ships with stale baked-in /V values on EVERY
+    # row slot (confirmed via PdfReader.get_fields() — e.g. AddOrRemove_2/
+    # _3/_4 all default to "Add" selected, Date_af_date defaults to a
+    # leftover "Feb-20-2026" from whatever real filled-out form the
+    # template was captured from). Rows beyond len(drivers) were never
+    # written above, so they'd silently keep showing that stale
+    # data/selection on the generated PDF. Explicitly blank every unused
+    # row rather than leaving the template's leftover values in place.
+    for i in range(len(drivers) + 1, MAX_DRIVER_ROWS + 1):
+        slots = _driver_row_fields(i)
+        field_values[slots["full_name"]] = ""
+        field_values[slots["licence_number"]] = ""
+        field_values[slots["licence_class"]] = ""
+        field_values[slots["effective_date"]] = ""
+        field_values[slots["add_or_remove"]] = "/Off"
+        field_values[slots["verified_driver_history"]] = "/Off"
+        field_values[slots["criminal_record_check_attached"]] = "/Off"
 
     return _fill(DRIVER_TEMPLATE, field_values)
 
@@ -177,13 +195,27 @@ def fill_vehicle_details_form(vehicles: list[dict[str, Any]]) -> bytes:
     field_values: dict[str, Any] = dict(_VEHICLE_COMPANY_FIELDS)
     for i, vehicle in enumerate(vehicles, start=1):
         slots = _vehicle_row_fields(i)
-        field_values[slots["licence_plate_number"]] = vehicle.get("licence_plate_number", "")
-        field_values[slots["vin"]] = vehicle.get("vin", "")
-        field_values[slots["year_make_model"]] = vehicle.get("year_make_model", "")
-        field_values[slots["registered_owners_name"]] = vehicle.get("registered_owners_name", "")
-        field_values[slots["vehicle_date"]] = vehicle.get("vehicle_date", "")
+        field_values[slots["licence_plate_number"]] = vehicle.get("licence_plate_number") or ""
+        field_values[slots["vin"]] = vehicle.get("vin") or ""
+        field_values[slots["year_make_model"]] = vehicle.get("year_make_model") or ""
+        field_values[slots["registered_owners_name"]] = vehicle.get("registered_owners_name") or ""
+        field_values[slots["vehicle_date"]] = vehicle.get("vehicle_date") or ""
         field_values[slots["valid_inspection"]] = "/Yes" if vehicle.get("valid_inspection") else "/No"
         field_values[slots["vehicle_action"]] = _VEHICLE_ACTION_STATE.get(vehicle.get("action", "add"), "/Add")
+
+    # Same stale-template-default problem as fill_driver_details_form above
+    # — every VechicleDateN_af_date field ships baked to a leftover
+    # "Feb-20-2026", and Vehicle1/ValidInspection1 ship pre-selected.
+    # Blank every row beyond len(vehicles) explicitly.
+    for i in range(len(vehicles) + 1, MAX_VEHICLE_ROWS + 1):
+        slots = _vehicle_row_fields(i)
+        field_values[slots["licence_plate_number"]] = ""
+        field_values[slots["vin"]] = ""
+        field_values[slots["year_make_model"]] = ""
+        field_values[slots["registered_owners_name"]] = ""
+        field_values[slots["vehicle_date"]] = ""
+        field_values[slots["valid_inspection"]] = "/Off"
+        field_values[slots["vehicle_action"]] = "/Off"
 
     return _fill(VEHICLE_TEMPLATE, field_values)
 

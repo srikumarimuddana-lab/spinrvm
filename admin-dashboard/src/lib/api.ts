@@ -1355,6 +1355,106 @@ export const adminCommitDriverImport = (file: File, opts?: DriverImportOptions) 
         body: driverImportFormData(file, opts),
     });
 
+/* ── Legacy Booking Import (4 CSVs) ───────── */
+// Super-admin-only (backend/routes/admin/booking_import.py). Imports completed
+// rides from the previous app into `rides`, plus one offsetting `payouts` row
+// per driver so already-settled earnings never become withdrawable again.
+// Takes four files in one request — customers/drivers supply the phone numbers
+// used to match Spinr accounts, and driverearnings supplies each booking's
+// actual payout, which is what the offset must cancel.
+export interface BookingImportReportItem {
+    row_num: number;
+    booking_code: string;
+    field: string;
+    message: string;
+}
+/** Mirrors BookingImportPlan.stats — all ints except the sum_* money fields. */
+export interface BookingImportCounts {
+    bookings_read: number;
+    skipped_not_completed: number;
+    skipped_test_account: number;
+    target_rows: number;
+    skipped_already_imported: number;
+    skipped_unmatched_both: number;
+    rides_planned: number;
+    unmatched_riders: number;
+    unmatched_drivers: number;
+    earnings_fallback_rows: number;
+    missing_start_rows: number;
+    payouts_planned: number;
+    payouts_skipped_existing: number;
+    drivers_to_recount: number;
+    sum_rider_paid: number;
+    sum_driver_total: number;
+    sum_offset_payouts: number;
+    sum_tips: number;
+    sum_tax: number;
+}
+export interface BookingImportReport {
+    batch: string;
+    can_commit: boolean;
+    counts: BookingImportCounts;
+    warnings: BookingImportReportItem[];
+    errors: BookingImportReportItem[];
+}
+export interface BookingImportCommitResult {
+    batch: string;
+    committed: boolean;
+    imported_rides?: number;
+    offset_payouts?: number;
+    drivers_recounted?: number;
+    counts?: BookingImportCounts;
+    warnings?: BookingImportReportItem[];
+    // Present (with can_commit=false) when the commit was refused.
+    can_commit?: boolean;
+    errors?: BookingImportReportItem[];
+}
+export interface BookingImportFiles {
+    bookings: File;
+    customers: File;
+    drivers: File;
+    earnings: File;
+}
+export interface BookingImportOptions {
+    serviceAreaId?: string;
+    serviceAreaName?: string;
+    vehicleTypeId?: string;
+    vehicleTypeName?: string;
+    batch?: string;
+}
+
+function bookingImportFormData(files: BookingImportFiles, opts?: BookingImportOptions): FormData {
+    const fd = new FormData();
+    fd.append("bookings_csv", files.bookings);
+    fd.append("customers_csv", files.customers);
+    fd.append("drivers_csv", files.drivers);
+    fd.append("earnings_csv", files.earnings);
+    if (opts?.serviceAreaId) fd.append("service_area_id", opts.serviceAreaId);
+    if (opts?.serviceAreaName) fd.append("service_area_name", opts.serviceAreaName);
+    if (opts?.vehicleTypeId) fd.append("vehicle_type_id", opts.vehicleTypeId);
+    if (opts?.vehicleTypeName) fd.append("vehicle_type_name", opts.vehicleTypeName);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: parse + validate the four CSVs and return the report (no writes). */
+export const adminValidateBookingImport = (files: BookingImportFiles, opts?: BookingImportOptions) =>
+    request<BookingImportReport>("/api/admin/bookings/import/validate", {
+        method: "POST",
+        body: bookingImportFormData(files, opts),
+    });
+
+/**
+ * Commit the import. Returns committed=false + errors if the CSVs no longer
+ * validate, or if there is nothing left to import (a completed re-run).
+ * Pass the batch from the validate response so payout IDs stay deterministic.
+ */
+export const adminCommitBookingImport = (files: BookingImportFiles, opts?: BookingImportOptions) =>
+    request<BookingImportCommitResult>("/api/admin/bookings/import/commit", {
+        method: "POST",
+        body: bookingImportFormData(files, opts),
+    });
+
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
 // Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
 // old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout

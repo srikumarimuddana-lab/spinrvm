@@ -523,3 +523,123 @@ def test_read_csv_leaves_short_rows_for_validation(tmp_path):
     p.write_text("_id,booking_id,total_amount\nbk-1,CB1\n", encoding="utf-8")
     (row,) = svc.read_csv(p)
     assert row["total_amount"] == ""
+
+
+def test_read_csv_text_matches_read_csv_exactly(tmp_path):
+    """The upload path must parse identically to the CLI path.
+
+    An HTTP upload hands us bytes, not a path. If read_csv_text ever drifts
+    from read_csv (e.g. by copying rider_import's header-normalizing version,
+    which has no None-key guard) the legacy export's trailing unnamed column
+    would crash the import or silently shift columns.
+    """
+    content = "_id,booking_id,total_amount\nbk-1,CB1,20.53,69c1c0365fc1dc6d1e3e530f\nbk-2,CB2,3.50,\nbk-3,CB3,7.25\n"
+    p = tmp_path / "bookings.csv"
+    p.write_text(content, encoding="utf-8")
+
+    assert svc.read_csv_text(content) == svc.read_csv(p)
+
+
+def test_read_csv_text_does_not_normalize_headers():
+    """Legacy headers are matched verbatim; normalizing them breaks the map."""
+    rows = svc.read_csv_text("_id,booking_id,total_amount\nbk-1,CB1,20.53\n")
+    assert set(rows[0]) == {"_id", "booking_id", "total_amount"}
+
+
+def test_read_csv_text_handles_crlf_and_bom():
+    """Windows-exported CSVs carry CRLF line endings and often a UTF-8 BOM."""
+    rows = svc.read_csv_text("﻿_id,booking_id,total_amount\r\nbk-1,CB1,20.53\r\n")
+    assert rows == [{"_id": "bk-1", "booking_id": "CB1", "total_amount": "20.53"}]
+
+
+def test_read_csv_text_rejects_empty_content():
+    with pytest.raises(ValueError, match="no header row"):
+        svc.read_csv_text("")
+
+
+# --- driver total_rides recount (RPC + fallback) ---------------------------
+
+
+class _FakeRpcSupabase(_FakeSupabase):
+    """Fake that supports the migration-269 set-based recount RPC."""
+
+    def __init__(self, store):
+        super().__init__(store)
+        self.rpc_calls = []
+
+    def rpc(self, name, params):
+        self.rpc_calls.append((name, params))
+        if name != "recount_driver_total_rides":
+            raise AssertionError(f"unexpected rpc: {name}")
+        ids = set(params["p_driver_ids"])
+        for drv in self.store["drivers"]:
+            if drv["id"] in ids:
+                drv["total_rides"] = sum(
+                    1 for r in self.store["rides"] if r.get("driver_id") == drv["id"] and r.get("status") == "completed"
+                )
+        return _FakeExecute([])
+
+
+def test_recount_prefers_single_rpc_call_over_per_driver_loop(monkeypatch):
+    """One set-based call, not two round-trips per driver.
+
+    A 64-driver import through the per-driver loop is 128 sequential calls —
+    long enough for the admin endpoint to time out mid-loop and leave counters
+    updated for only some drivers.
+    """
+    store = {
+        "users": [],
+        "drivers": [
+            {"id": "drv-1", "phone": "+13065552222", "total_rides": 0},
+            {"id": "drv-2", "phone": "+13065553333", "total_rides": 0},
+        ],
+        "rides": [
+            {"driver_id": "drv-1", "status": "completed"},
+            {"driver_id": "drv-1", "status": "completed"},
+            {"driver_id": "drv-2", "status": "completed"},
+            {"driver_id": "drv-2", "status": "cancelled"},
+        ],
+        "payouts": [],
+        "service_areas": [SERVICE_AREA],
+        "vehicle_types": [VEHICLE_TYPE],
+    }
+    fake = _FakeRpcSupabase(store)
+    monkeypatch.setattr(svc, "supabase", fake)
+
+    svc.recount_drivers(["drv-1", "drv-2"])
+
+    assert len(fake.rpc_calls) == 1
+    assert fake.rpc_calls[0][1] == {"p_driver_ids": ["drv-1", "drv-2"]}
+    assert store["drivers"][0]["total_rides"] == 2
+    assert store["drivers"][1]["total_rides"] == 1  # cancelled ride excluded
+
+
+def test_recount_falls_back_when_rpc_missing(monkeypatch):
+    """The CLI must still work against a DB without migration 269 applied."""
+    store = _install_fake(
+        monkeypatch,
+        drivers=[{"id": "drv-1", "phone": "+13065552222", "total_rides": 0}],
+        rides=[
+            {"driver_id": "drv-1", "status": "completed"},
+            {"driver_id": "drv-1", "status": "completed"},
+        ],
+    )
+    # _FakeSupabase has no .rpc at all — the same shape as a database where the
+    # function does not exist.
+    svc.recount_drivers(["drv-1"])
+    assert store["drivers"][0]["total_rides"] == 2
+
+
+def test_recount_with_no_drivers_makes_no_calls(monkeypatch):
+    store = {
+        "users": [],
+        "drivers": [],
+        "rides": [],
+        "payouts": [],
+        "service_areas": [SERVICE_AREA],
+        "vehicle_types": [VEHICLE_TYPE],
+    }
+    fake = _FakeRpcSupabase(store)
+    monkeypatch.setattr(svc, "supabase", fake)
+    svc.recount_drivers([])
+    assert fake.rpc_calls == []

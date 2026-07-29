@@ -272,6 +272,15 @@ data_transfer_export_limit = default_limiter.limit("10/hour")
 data_transfer_import_validate_limit = default_limiter.limit("30/hour")
 data_transfer_import_commit_limit = default_limiter.limit("10/hour")
 
+# Admin legacy booking import — /validate is a read-only dry-run over four
+# CSVs; /commit inserts rides plus offsetting payouts and recounts
+# drivers.total_rides. commit is the write path into the two tables that feed
+# driver payable balance, so it gets the tighter limit. Both are looser on
+# parse cost than they look: the work runs in a worker thread, and the import
+# is a one-time operation run a handful of times at most.
+booking_import_validate_limit = default_limiter.limit("30/hour")
+booking_import_commit_limit = default_limiter.limit("10/hour")
+
 # Admin Data Transfer jobs (list/detail/download-link) — read-only status
 # polling, but download-link regeneration mints a fresh signed Storage URL
 # each call; bound it the same as other admin list/detail endpoints.

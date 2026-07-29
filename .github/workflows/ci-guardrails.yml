@@ -410,11 +410,26 @@ jobs:
 
           print(f"New migration files: {new_migrations}")
 
+          # `[\w.]+` (not `\w+`) so a schema-qualified name is captured whole.
+          # With `\w+` the capture stopped at the dot, so every
+          # `CREATE OR REPLACE FUNCTION public.foo` reported its target as
+          # "public" — 18 migrations in this repo claim that name, so ANY PR
+          # adding a schema-qualified function collided with all of them and
+          # the gate failed unconditionally. It could also never detect a real
+          # collision, since every target compared equal.
           COR = re.compile(
-              r'CREATE\s+OR\s+REPLACE\s+(?:FUNCTION|VIEW|TRIGGER|PROCEDURE)\s+(\w+)',
+              r'CREATE\s+OR\s+REPLACE\s+(?:FUNCTION|VIEW|TRIGGER|PROCEDURE)\s+([\w.]+)',
               re.IGNORECASE,
           )
           OVERRIDE = re.compile(r'--\s*migration-override-ok\s*:', re.IGNORECASE)
+
+          def target_name(raw: str) -> str:
+              """Bare object name, schema-insensitive.
+
+              `public.foo` and `foo` are the same object when search_path
+              includes public, so they must compare equal.
+              """
+              return raw.rsplit('.', 1)[-1].lower()
 
           # Collect targets defined by this PR's new migrations
           pr_targets: dict[str, list[str]] = {}
@@ -427,7 +442,7 @@ jobs:
                   print(f"  Skipping {fpath}: migration-override-ok annotation found.")
                   continue
               for name in COR.findall(content):
-                  pr_targets.setdefault(name.lower(), []).append(fpath)
+                  pr_targets.setdefault(target_name(name), []).append(fpath)
 
           if not pr_targets:
               print("PASS: No CREATE OR REPLACE targets in new migrations.")
@@ -450,11 +465,11 @@ jobs:
                   except OSError:
                       continue
                   for name in COR.findall(content):
-                      if name.lower() in pr_targets:
+                      if target_name(name) in pr_targets:
                           conflicts.append({
                               'target': name,
                               'existing': fpath,
-                              'pr_files': pr_targets[name.lower()],
+                              'pr_files': pr_targets[target_name(name)],
                           })
 
           if conflicts:

@@ -147,10 +147,18 @@ def main() -> int:
         print(
             f"Committed {len(plan.rides_to_insert)} ride(s) and {len(plan.payouts_to_insert)} offset payout(s)."
         )
+        # Rides first: payable_balance = earnings - payouts, so dropping the
+        # offset payouts first would raise every affected driver's withdrawable
+        # balance by their imported total. Removing the rides first lowers it
+        # instead — understated but recoverable.
+        print("\nRollback (run in this order, ideally in one transaction):")
+        print("  BEGIN;")
         print(
-            f"Rollback: DELETE FROM payouts WHERE id LIKE 'legacy-import-{args.batch}-%'; "
-            f"DELETE FROM rides WHERE legacy_import_metadata->>'batch' = '{args.batch}';"
+            f"  DELETE FROM rides   WHERE legacy_import_metadata->>'batch' = '{args.batch}';"
         )
+        print(f"  DELETE FROM payouts WHERE id LIKE 'legacy-import-{args.batch}-%';")
+        print("  COMMIT;")
+        print("  -- then recompute drivers.total_rides for the affected drivers")
     return 0
 
 

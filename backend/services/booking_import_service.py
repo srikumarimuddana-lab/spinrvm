@@ -27,6 +27,8 @@ resuming so payout IDs line up.
 from __future__ import annotations
 
 import csv
+import io
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -45,6 +47,8 @@ try:
 except ImportError:
     from utils.earnings_snapshot import build_earnings_snapshot  # type: ignore
     from utils.money import to_decimal  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 IMPORT_SOURCE = "legacy_mongo_booking_import"
 PAYOUT_TYPE = "legacy_import"
@@ -119,10 +123,39 @@ def read_csv(path: Path) -> list[dict[str, str]]:
     ``build_plan`` rather than being silently treated as zero.
     """
     with Path(path).open(newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            raise ValueError(f"CSV has no header row: {path}")
-        return [{k.strip(): (v or "").strip() for k, v in row.items() if k is not None} for row in reader]
+        try:
+            return _rows_from_reader(csv.DictReader(f))
+        except ValueError as e:
+            raise ValueError(f"{e}: {path}") from e
+
+
+def read_csv_text(text: str) -> list[dict[str, str]]:
+    """Parse legacy CSV *content* into name-keyed rows.
+
+    Sibling of :func:`read_csv` for callers that hold the content rather than a
+    path — the admin upload endpoint receives bytes, not a filesystem path.
+
+    Deliberately NOT a copy of ``rider_import_service.read_csv_text``: that one
+    applies ``normalize_header`` and has no ``None``-key guard. Legacy booking
+    exports need the opposite on both counts (see :func:`read_csv`), so both
+    entry points share ``_rows_from_reader`` rather than reimplementing the
+    parse and drifting apart.
+
+    A leading BOM is stripped here as well as at decode time. ``read_csv``
+    gets this free from ``encoding="utf-8-sig"``, but this function receives
+    an already-decoded string: a caller that decoded as plain ``utf-8`` would
+    otherwise leave the BOM glued to the first header, turning ``_id`` into
+    ``﻿_id`` and failing every row's ID lookup. Windows-exported CSVs
+    routinely carry one.
+    """
+    return _rows_from_reader(csv.DictReader(io.StringIO(text.lstrip("﻿"), newline="")))
+
+
+def _rows_from_reader(reader: csv.DictReader) -> list[dict[str, str]]:
+    """Shared row normalization for both CSV entry points."""
+    if not reader.fieldnames:
+        raise ValueError("CSV has no header row")
+    return [{k.strip(): (v or "").strip() for k, v in row.items() if k is not None} for row in reader]
 
 
 def normalize_phone(phone: str) -> str:
@@ -625,7 +658,31 @@ def recount_drivers(driver_ids: list[str]) -> None:
 
     Recomputing rather than incrementing keeps a re-run idempotent and matches
     how migration 74 defines the column.
+
+    Prefers the set-based ``recount_driver_total_rides`` RPC (migration 271):
+    one statement that either fully applies or fully rolls back. The per-driver
+    fallback below costs two round-trips per driver, which is why the RPC
+    exists — a 64-driver import is 128 sequential calls, long enough for an
+    HTTP caller to time out part-way and leave counters half-updated.
+
+    The fallback is kept so the CLI still works against a database where
+    migration 271 has not been applied yet.
     """
+    if not driver_ids:
+        return
+    try:
+        supabase.rpc("recount_driver_total_rides", {"p_driver_ids": driver_ids}).execute()
+        return
+    except Exception as e:
+        # Not swallowed: log loudly and fall back. A missing function (the
+        # migration has not run) is recoverable; anything else still surfaces
+        # here rather than silently skipping the recount entirely.
+        logger.warning(
+            "recount_driver_total_rides RPC unavailable, falling back to per-driver recount for %d driver(s): %s",
+            len(driver_ids),
+            e,
+        )
+
     for driver_id in driver_ids:
         res = (
             supabase.table("rides")

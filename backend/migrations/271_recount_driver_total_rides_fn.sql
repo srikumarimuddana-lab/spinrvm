@@ -1,4 +1,4 @@
--- 269_recount_driver_total_rides_fn.sql
+-- 271_recount_driver_total_rides_fn.sql
 --
 -- Purpose:
 --   The legacy booking importer resets drivers.total_rides to its invariant

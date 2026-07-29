@@ -8,7 +8,7 @@
 | Author | Claude Code (session `01TBFFJWqVUq5LQyomyWepKM`) |
 | Surface(s) | driver-app, backend, shared (rider-app affected transitively) |
 | Domain (Sentry tag) | `drivers`, `auth` |
-| PR / commit link | `aafafc1`, `9525d9a`, `ecd8057`, `bf99e18`, `b7f5e84` on `claude/driver-location-logout-issue-26c9pu` |
+| PR / commit link | `aafafc1`, `9525d9a`, `ecd8057`, `bf99e18`, `b7f5e84`, `9b004eb`, `dcd11a6` on `claude/driver-location-logout-issue-26c9pu` |
 | Related issue or gap ID | Reported in live app testing: "app is taking the location even after logout" |
 
 ## 1. Issue / gap identified
@@ -50,6 +50,16 @@ Additionally, `spinr_trip_location_active_ride` was never cleared, so a sign-out
 mid-ride left the SQLite outbox accumulating fixes tagged with the old `ride_id`,
 to be uploaded under whichever account signed in next.
 
+**Second root cause, found on self-review (`9b004eb`).** The four mechanisms above
+describe the *explicit sign-out* path. A session can also end by **expiry**, via
+the "No valid stored token" branch of `initialize()` → `clearAuthStorage()`. That
+function's docstring claims it wipes "every auth artifact", but it deleted only
+`auth_token`, `refresh_token`, and `token_expires_at` — leaving `fg_access_token`,
+`bg_access_token`, and `bg_access_token_expires` on disk. It also never ran the
+logout callbacks. So on that path the background task still had a usable cached
+credential (`getBackgroundAuthToken` step 1) *and* still read as signed-in, and the
+original bug was fully intact. The first round of fixes did not cover it.
+
 ## 3. Fix / remediation
 
 1. **Driver-app session teardown** (`utils/sessionTeardown.ts`) registers a logout
@@ -68,7 +78,16 @@ to be uploaded under whichever account signed in next.
 4. **Server-side session end** — `logout()` calls `POST /auth/logout`, which now
    also writes a session-revocation tombstone.
 5. **Ingest guard** — `/drivers/location-batch` rejects a tombstoned session
-   ahead of both the v1 and v2 writers.
+   ahead of both the v1 and v2 writers, and the two WebSocket writers
+   (`buffer_ride_breadcrumb` for a single durable ping, `persist_ride_breadcrumbs`
+   for `location_batch`) do the same. The WS handshake also rejects a tombstoned
+   session outright.
+6. **Explicit session-ended marker** (`shared/auth/sessionMarker.ts`) replaces the
+   original token-absence inference. Written by `logout()` **and** by
+   `clearAuthStorage()`, cleared by `setTokens()`. `clearAuthStorage()` now also
+   deletes the three token keys it was missing. This is what closes the expiry
+   path, and it makes the client use the same positive-evidence rule as the
+   backend tombstone.
 
 ## 4. Risk & impact on existing functionality
 
@@ -124,11 +143,31 @@ known-dead opts out.
   driver's coordinates on a shared device is the worse outcome.
 - **One extra network call on every sign-out**, both apps. Swallowed and
   non-blocking on failure.
-- **`hasLiveSession()` treats an unreadable SecureStore as no session.** A
-  keystore hiccup during a headless wake skips that re-arm. Self-heals via the
-  foreground online-reconcile effect (`useDriverDashboard.ts:1542-1555`).
-  `startBackgroundLocation` is deliberately **not** gated, so a SecureStore
-  failure can never block a driver from going online.
+- **WS sign-out detection lags by up to 30s.** The durable WS writers cache a
+  negative revocation result for `_WS_REVOKE_RECHECK_SECONDS` so a trip streaming
+  a fix every ~3-4s does not add a Redis GET per fix to the WS fan-out path
+  (<100 ms P95 target). A socket already open at sign-out can therefore persist up
+  to 30s of extra points — versus the token's full remaining ~15 minutes before
+  this change. Positives are cached permanently, since tombstones are never unset.
+- **`clearAuthStorage()` now deletes three more keys.** It is called only from the
+  no-valid-token branch of `initialize()`, where the session is already gone, so
+  there is no path on which those tokens were still wanted. Reaches the rider app
+  too; `bg_access_token*` simply never exist there.
+- **~~`hasLiveSession()` treats an unreadable SecureStore as no session.~~
+  Corrected — this understated the cost and the behaviour has changed
+  (`9b004eb`).** The original text claimed a false negative merely "skips that
+  re-arm". In the *location-task* path it also dropped the trip samples and
+  stopped the task, so a driver whose SecureStore write silently failed
+  (`storage.setItem` swallows errors) or whose keystore was momentarily locked
+  lost the backgrounded portion of the trip permanently — undercounted billed km
+  and a hole in the SGI per-period audit. Before this feature those samples
+  stayed in SQLite and the foreground flushed them later, so it was a regression
+  in a degraded state, not merely a missed optimisation.
+
+  The gate is now `isSessionEnded()`, which acts on the presence of an explicit
+  marker instead. Every ambiguous state — no marker, unreadable store — resolves
+  to "session live, keep tracking". `startBackgroundLocation` remains ungated, so
+  a SecureStore failure still cannot block a driver from going online.
 
 ### Not touched
 
@@ -177,6 +216,14 @@ map no longer shows a stale moving marker for a signed-out driver.
 | `driver-app/utils/__tests__/backgroundLocation.test.ts` | +11 session-gating tests; session-aware SecureStore mock | Regression cover |
 | `driver-app/utils/__tests__/tripLocationOutbox.test.ts` | +3 purge tests; unqualified-DELETE handling in the memory DB | Regression cover |
 | `driver-app/utils/__tests__/tripLocationRecorder.test.ts` | +2 purge tests | Regression cover |
+| `shared/auth/sessionMarker.ts` | **New** — `SESSION_ENDED_KEY` + rationale | Leaf module the headless task can read without pulling zustand/API/Firebase |
+| `shared/store/authStore.ts` | `clearAuthStorage` deletes `fg_access_token`/`bg_access_token*` and writes the marker; `setTokens` clears it; `logout` writes it | Closes the expiry path (finding 1) |
+| `driver-app/utils/backgroundLocation.ts` | `hasLiveSession()` → `isSessionEnded()` | Positive evidence, no false sign-out (finding 2) |
+| `backend/routes/websocket.py` | Handshake rejects a tombstoned session; both durable writers re-check with a cached/throttled helper | WS ingest was ungated (finding 3) |
+| `backend/routes/drivers/location.py` | Explicit `None` flag → enabled | A NULL column shipped the guard dark (finding 5) |
+| `backend/tests/test_websocket_live_location.py` | Rewritten: guard-condition + ordering assertions, behavioural cache test | My WS change broke its whitespace-exact source assertion |
+| `backend/tests/test_session_revocation.py` | TTL test uses 7/45 instead of the 15 default; new test pins the TTL is applied | Was tautological (finding 4) |
+| `driver-app/__tests__/store/authStore.initialize.test.ts` | +3 marker/token-wipe tests | Regression cover for finding 1 |
 
 ## 7. Before / after
 
@@ -248,6 +295,52 @@ if (options?.revokeServerSession !== false && token) {
 setInMemoryToken(null);
 ```
 
+### The gate inferred sign-out from missing tokens (review finding 2)
+
+```ts
+// Before — absence of a token read as "signed out"; a locked keystore or an
+// unpersisted write therefore dropped a working driver's trip samples
+const SESSION_TOKEN_KEYS = ['refresh_token', 'fg_access_token'] as const;
+export async function hasLiveSession(): Promise<boolean> {
+  for (const key of SESSION_TOKEN_KEYS) {
+    try { if (await SecureStore.getItemAsync(key)) return true; } catch {}
+  }
+  return false;   // <-- also the answer when the store simply could not be read
+}
+```
+
+```ts
+// After — only an explicit marker means "signed out"; everything else keeps
+// tracking, matching the backend tombstone's positive-evidence rule
+export async function isSessionEnded(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(SESSION_ENDED_KEY)) !== null;
+  } catch {
+    return false;   // unreadable store is not evidence of a sign-out
+  }
+}
+```
+
+### `clearAuthStorage` left the background credentials behind (review finding 1)
+
+```ts
+// Before — "every auth artifact" minus the three keys that actually mattered
+await SecureStore.deleteItemAsync('auth_token');
+await SecureStore.deleteItemAsync('refresh_token');
+await SecureStore.deleteItemAsync('token_expires_at');
+```
+
+```ts
+// After — plus the headless task's credentials, plus the marker
+await SecureStore.deleteItemAsync('auth_token');
+await SecureStore.deleteItemAsync('refresh_token');
+await SecureStore.deleteItemAsync('token_expires_at');
+await SecureStore.deleteItemAsync('fg_access_token');
+await SecureStore.deleteItemAsync('bg_access_token');
+await SecureStore.deleteItemAsync('bg_access_token_expires');
+await SecureStore.setItemAsync(SESSION_ENDED_KEY, '1');
+```
+
 ## 8. Rollback plan
 
 **Server-side ingest guard (highest-risk piece) — flag, no deploy.** Set
@@ -261,6 +354,12 @@ keyspace on its own. `redis-cli --scan --pattern 'revoked_session:*' | xargs red
 clears them immediately if needed. Nothing durable is written — no table, no
 migration, no data-level remediation.
 
+**WebSocket guard:** *not* covered by the `app_settings` flag — it calls
+`is_session_revoked` directly. Turning off the REST flag does not disable it. To
+neutralise it without a deploy, clear the tombstone keyspace (below); with no
+tombstones the check always returns False. Flagging it alongside the REST guard is
+a reasonable follow-up if the WS path ever needs an independent kill switch.
+
 **Client-side pieces:** require an app release (OTA for the JS-only changes) to
 revert. No feature flag, and deliberately so — the flagged alternative would be
 "keep tracking signed-out drivers," which is not a state worth being able to
@@ -272,17 +371,26 @@ had not yet uploaded.
 
 ## 9. Verification performed
 
-- [x] **Automated tests.** Backend: 20 new (12 tombstone + 8 ingest guard); unit
-      tier **523 passed, 1 skipped**; every affected existing suite re-run
-      (`test_location_batch`, `test_p3_background_location`,
+- [x] **Automated tests.** Backend unit tier **534 passed, 1 skipped** (up from
+      523 — 11 added across the review fixes). Every affected existing suite
+      re-run (`test_location_batch`, `test_p3_background_location`,
       `test_period1_accumulation_endpoint`, `test_auth`, `test_logout_all`,
-      `test_driver_location_redis_resilience`) — **75 passed, 1 pre-existing
-      xfail**. Driver-app: **45 suites / 339 tests pass** (25 new).
-      Rider-app: **51 suites / 434 tests pass** — the shared-`logout()`
-      regression check.
-- [x] **Real production build.** `npx expo export --platform web` for
-      **driver-app** (exit 0) and **rider-app** — not just `tsc --noEmit`, per the
-      CLAUDE.md gate. Both apps also pass `tsc --noEmit` cleanly.
+      `test_driver_location_redis_resilience`, plus all four `test_websocket_*`).
+      Driver-app: **45 suites / 343 tests pass**. Rider-app: **51 suites / 434
+      tests pass** — the shared-`logout()` / `clearAuthStorage()` regression check.
+- [x] **Real production build, re-run after the review fixes.** `npx expo export
+      --platform web` exit 0 for **both** driver-app and rider-app — not just
+      `tsc --noEmit`, per the CLAUDE.md gate. Both also pass `tsc --noEmit`.
+- [x] **Adversarial self-review of the first five commits**, which found six
+      issues: the expiry-path hole (finding 1, high — the reported bug was still
+      reachable), the inverted client gate (2), ungated WS ingest (3), a
+      tautological TTL test (4), a NULL-flag default that shipped the guard dark
+      (5), and a redundant keychain read (6). All six are fixed in `9b004eb` and
+      `dcd11a6`. Also checked and cleared: `driver-app/node_modules/@spinr/shared`
+      is a stale vendored copy of `shared/` that does **not** contain these
+      changes, but nothing resolves to it (`@shared` → `../shared` in tsconfig,
+      babel, and metro; no bare `@spinr/shared` imports anywhere). Worth knowing
+      it exists — it is a live landmine for any future `shared/` edit.
 - [x] **Blast-radius grep.** `location-batch` (all callers, listed in §4);
       `logout|signOut` across both apps and shared; `registerLogoutCallback`
       (confirmed the driver app had none); `stopBackgroundLocation` /
@@ -328,6 +436,18 @@ had not yet uploaded.
   purge's atomicity is verified against `MemorySqliteDatabase`, which serialises
   transactions by construction. Real WAL-mode behaviour under a concurrent
   headless enqueue was not tested.
+- **The 30s WS re-check window is not exercised end to end.** The caching
+  contract is tested behaviourally against a reimplementation of the helper, not
+  against a live socket — the endpoint is ~1500 lines with no seam to drive, so
+  the in-endpoint version is pinned structurally instead. A refactor that moved
+  the helper's logic could pass both tests and still regress.
+- **`clearAuthStorage()` still does not run the logout callbacks.** The marker
+  makes that unnecessary for *collection* (a headless task that fires afterwards
+  sees it and tears itself down), but the native task keeps running until its next
+  fire — so on the expiry path the Android notification can linger for up to one
+  idle cadence (~30s) rather than clearing immediately. Deliberate: calling
+  `_runLogoutCallbacks()` from `initialize()` would reach into the rider app's
+  callback set for a marginal gain.
 - **No visual regression tooling for the driver app.** Consistent with the
   standing gap already recorded for the admin dashboard. Nothing here changes
   driver-app layout, so this is a stated limit, not a suspected risk.
@@ -342,12 +462,40 @@ had not yet uploaded.
   bump, since forcing that version change has its own unverified blast radius
   across every lint target. **Worth a `[CR]` issue.**
 
-## 11. Sign-off
+## 11. Self-review round (`9b004eb`, `dcd11a6`)
 
-- [x] Rollback plan is concrete and testable — `app_settings` flag for the
-      server guard; self-expiring tombstones; nothing durable written.
+An adversarial pass over the first five commits found six issues. Recorded here
+because two of them meant the originally-claimed fix was incomplete.
+
+| # | Severity | Finding | Resolution |
+|---|---|---|---|
+| 1 | High | `clearAuthStorage()` left `fg_access_token` / `bg_access_token*` and never ran the logout callbacks, so a session ending by **expiry** still recorded and uploaded. The reported bug was still reachable. | `9b004eb` — delete all three keys, write the marker |
+| 2 | Medium | The client gate inferred sign-out from *missing* tokens, the opposite of the backend's positive-evidence rule. An unpersisted SecureStore write or locked keystore dropped a signed-in driver's trip samples and stopped tracking mid-trip. | `9b004eb` — `isSessionEnded()` on an explicit marker |
+| 3 | Medium | "Server-side enforcement" was REST-only; the two WebSocket writers were ungated. | `dcd11a6` — handshake rejection + re-check on both writers |
+| 4 | Low | TTL test patched `ACCESS_TOKEN_EXPIRE_MINUTES` to 15, already the default → passed against a hardcoded constant. | `dcd11a6` — 7 and 45, plus a test that the TTL is applied |
+| 5 | Low | `.get(flag, True)` returns `None` for a NULL column and `bool(None)` is False, so a null flag shipped the guard dark. | `dcd11a6` — `None` means default-on |
+| 6 | Nit | Gate cost two keychain reads per background callback. | `9b004eb` — one, as a side effect of the marker |
+
+Checked and cleared: `driver-app/node_modules/@spinr/shared` is a stale vendored
+copy of `shared/` without these changes, but nothing resolves to it — `@shared` →
+`../shared` in tsconfig, babel, and metro, and there are no bare `@spinr/shared`
+imports. A latent trap for future `shared/` work.
+
+Also corrected in this document: the §4 risk bullet that described the client
+gate's failure mode as "skips that re-arm" understated it. See the struck-through
+entry.
+
+## 12. Sign-off
+
+- [x] Rollback plan is concrete and testable — `app_settings` flag for the REST
+      guard; tombstone-keyspace clear for the WS guard (which the flag does not
+      cover, stated explicitly in §8); self-expiring tombstones; nothing durable
+      written.
 - [x] Blast radius is stated, not assumed — every caller of
       `/drivers/location-batch` and of `logout()` is enumerated in §4, including
-      the rider-app surface the shared change reaches.
+      the rider-app surface the shared change reaches, and both WebSocket writers.
 - [x] No silent behavior change to an already-shipped flow — the one visible
       change (notification/indicator stopping at sign-out) is in §5.
+- [x] Claims in this document match the code as merged. The one that did not
+      (§4's understated client-gate risk) is corrected in place rather than
+      quietly reworded.

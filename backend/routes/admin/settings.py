@@ -260,6 +260,10 @@ class SettingsUpdateRequest(BaseModel):
     meta_driver_dataset_id: Optional[str] = Field(default=None, max_length=64)
     meta_capi_access_token: Optional[str] = None
     meta_test_event_code: Optional[str] = Field(default=None, max_length=64)
+    # admin-dashboard visual refresh (epic #2785 Phase 3+) — canary flag for
+    # the shared shell/typography/radius restyle. Not a credential, no
+    # special masking/super-admin gate needed.
+    admin_theme_v2_enabled: Optional[bool] = None
 
     @field_validator("lms_api_base_url")
     @classmethod

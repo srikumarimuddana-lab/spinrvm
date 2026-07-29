@@ -121,6 +121,34 @@ def pdf_safe(text: str) -> str:
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
+def format_report_timestamp(value: "str | None", *, empty: str = "") -> str:
+    """Render a DB timestamp column (raw ISO 8601, e.g.
+    ``2026-07-29T14:32:10.123456+00:00``) as ``2026-07-29 14:32 UTC`` for a
+    report cell — human-readable with a real space between date and time,
+    no sub-second precision, and the offset collapsed to a fixed "UTC"
+    label (every value in this codebase is already UTC per CLAUDE.md's
+    observability conventions; a raw ``+00:00`` reads as visual noise next
+    to a plain date).
+
+    Several compliance reports (insurance-period audit's started_at/
+    ended_at, Knight Archer's onboarded_at) previously passed the raw ISO
+    string straight into the report cell — displaying as one unbroken
+    run of digits/punctuation with no date/time separation, which is what
+    prompted this helper. Falls back to the raw string for a value that
+    isn't ISO-parseable, rather than hiding a real data problem behind a
+    blank cell.
+    """
+    if not value:
+        return empty
+    try:
+        from datetime import datetime as _datetime
+
+        dt = _datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)
+    return dt.strftime("%Y-%m-%d %H:%M") + " UTC"
+
+
 def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
     """Return an fpdf2 FPDF instance (A4, portrait unless landscape=True)
     with the standard Spinr branded header already drawn: a thin red accent
@@ -150,14 +178,18 @@ def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
     pdf.set_fill_color(*BRAND_RGB)
     pdf.rect(0, 0, page_w, 3, "F")
 
-    pdf.set_xy(left, 10)
+    # Logo height matched to the title's cap-height (17pt bold ≈ 6mm caps)
+    # plus headroom, rather than the earlier 11mm, which rendered visibly
+    # smaller than the title text next to it. 14mm keeps the header block
+    # inside the same ~30mm reserved height (divider rule is still at y=30).
+    pdf.set_xy(left, 8)
     if has_logo_asset():
-        pdf.image(str(LOGO_PATH), x=left, y=10, h=11)
-        pdf.set_xy(left + 32, 11)
+        pdf.image(str(LOGO_PATH), x=left, y=8, h=14)
+        pdf.set_xy(left + 36, 11)
     pdf.set_text_color(*INK_RGB)
     pdf.set_font(BRAND_FONT, "B", 17)
     pdf.cell(0, 8, pdf_safe(title), ln=True)
-    pdf.set_x(left + (32 if has_logo_asset() else 0))
+    pdf.set_x(left + (36 if has_logo_asset() else 0))
     if subtitle:
         pdf.set_text_color(*MUTED_RGB)
         pdf.set_font(BRAND_FONT, "", 10)
@@ -200,15 +232,16 @@ def new_branded_workbook(title: str, subtitle: str = ""):
         from openpyxl.drawing.image import Image as XLImage
 
         img = XLImage(str(LOGO_PATH))
-        # Scale to a compact header height (~40px tall) preserving aspect ratio.
-        target_h = 40
+        # 48px (was 40px) to match the title's visual weight — the smaller
+        # size read as an afterthought next to 14pt bold title text.
+        target_h = 48
         scale = target_h / img.height
         img.height = target_h
         img.width = int(img.width * scale)
         img.anchor = "A1"
         ws.add_image(img)
-        ws.row_dimensions[1].height = 32
-        ws.row_dimensions[2].height = 32
+        ws.row_dimensions[1].height = 36
+        ws.row_dimensions[2].height = 36
         title_col = "C"  # leave room beside the logo image
 
     ws[f"{title_col}1"] = title
@@ -270,7 +303,8 @@ def new_branded_document(title: str, subtitle: str = ""):
 
     if has_logo_asset():
         logo_para = doc.add_paragraph()
-        logo_para.add_run().add_picture(str(LOGO_PATH), height=Inches(0.35))
+        # 0.42in (was 0.35in) to match the heading's visual weight.
+        logo_para.add_run().add_picture(str(LOGO_PATH), height=Inches(0.42))
 
     heading = doc.add_heading(title, level=1)
     for run in heading.runs:

@@ -466,8 +466,8 @@ async def _insurance_period_rows(
         {
             "driver_name": driver_names.get(p["driver_id"], p["driver_id"]),
             "period": _PERIOD_LABELS.get(p.get("period"), str(p.get("period"))),
-            "started_at": p.get("started_at") or "",
-            "ended_at": p.get("ended_at") or "(open)",
+            "started_at": report_branding.format_report_timestamp(p.get("started_at")),
+            "ended_at": report_branding.format_report_timestamp(p.get("ended_at"), empty="(open)"),
         }
         for p in periods
     ]
@@ -593,7 +593,7 @@ async def _knight_archer_driver_rows(status: Optional[str]) -> tuple[list[dict],
             "license_number": d.get("license_number") or "",
             "license_class": d.get("license_class") or "",
             "status": d.get("status") or "",
-            "onboarded_at": d.get("created_at") or "",
+            "onboarded_at": report_branding.format_report_timestamp(d.get("created_at")),
         }
         for d in drivers
     ]

@@ -80,6 +80,28 @@ class TestPdfSafe:
         assert isinstance(result, str)
 
 
+class TestFormatReportTimestamp:
+    def test_formats_with_space_between_date_and_time(self):
+        # Regression: insurance-period audit's started_at/ended_at and
+        # Knight Archer's onboarded_at previously passed the raw DB ISO
+        # string straight into the report cell, rendering as one unbroken
+        # run of digits/punctuation ("continuous", per the reported bug) —
+        # no space between the date and time.
+        assert report_branding.format_report_timestamp("2026-07-29T14:32:10.123456+00:00") == "2026-07-29 14:32 UTC"
+
+    def test_handles_z_suffix(self):
+        assert report_branding.format_report_timestamp("2026-07-29T14:32:10Z") == "2026-07-29 14:32 UTC"
+
+    def test_none_uses_empty_default(self):
+        assert report_branding.format_report_timestamp(None) == ""
+        assert report_branding.format_report_timestamp(None, empty="(open)") == "(open)"
+
+    def test_unparseable_value_falls_back_to_raw_string(self):
+        # Degrade gracefully rather than hide a real data problem behind a
+        # blank cell.
+        assert report_branding.format_report_timestamp("not-a-real-date") == "not-a-real-date"
+
+
 class TestBrandedPdf:
     def test_new_branded_pdf_renders(self):
         pytest.importorskip("fpdf")

@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback, setSuppressRefreshSignOut } from '../api/client';
 import { appCache, CACHE_KEYS } from '../cache';
+import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
 // their photo, name, phone, and vehicle after a long idle period or when the
@@ -71,6 +72,20 @@ async function clearAuthStorage(): Promise<void> {
     await SecureStore.deleteItemAsync('auth_token');
     await SecureStore.deleteItemAsync('refresh_token');
     await SecureStore.deleteItemAsync('token_expires_at');
+    // The docstring above promises "every auth artifact", and these four were
+    // missing. fg_access_token / bg_access_token* are live driver JWTs that the
+    // headless background-location task reads directly
+    // (driver-app/utils/backgroundLocation.ts getBackgroundAuthToken). Leaving
+    // them meant a session that ended by *expiry* — this path, which never runs
+    // the logout callbacks — kept uploading a signed-out driver's GPS for the
+    // rest of the cached token's life.
+    await SecureStore.deleteItemAsync('fg_access_token');
+    await SecureStore.deleteItemAsync('bg_access_token');
+    await SecureStore.deleteItemAsync('bg_access_token_expires');
+    // Record the end of the session so the headless contexts can see it. They
+    // have no access to this store, and cannot infer it from missing tokens —
+    // see shared/auth/sessionMarker.ts.
+    await SecureStore.setItemAsync(SESSION_ENDED_KEY, '1');
   } catch (e) {
     // Best-effort — never let a storage error block the login screen.
     if (__DEV__) console.log('[Auth] clearAuthStorage failed:', e);
@@ -246,6 +261,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const expiresAt = Date.now() + expiresIn * 1000;
     setInMemoryToken(token);
     if (csrfToken !== undefined) setCsrfToken(csrfToken);
+    // A live session exists again — clear the end-of-session marker before
+    // writing tokens, so a headless task that fires mid-write can never see
+    // fresh tokens alongside a stale "signed out" marker and tear itself down.
+    await storage.deleteItem(SESSION_ENDED_KEY);
     await storage.setItem('refresh_token', refreshToken);
     await storage.setItem('token_expires_at', String(expiresAt));
     // Persist the access token so the background location task (which runs
@@ -664,6 +683,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await storage.deleteItem('fg_access_token');
     await storage.deleteItem('refresh_token');
     await storage.deleteItem('token_expires_at');
+    // Positive evidence that this session ended, for the headless contexts that
+    // cannot read this store (see shared/auth/sessionMarker.ts). Written before
+    // the logout callbacks below so the driver-app teardown — and any headless
+    // task that fires while it runs — both observe it.
+    await storage.setItem(SESSION_ENDED_KEY, '1');
     // Clear user cache on logout
     await appCache.clearUserCache();
     set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });

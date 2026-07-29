@@ -29,16 +29,17 @@ jest.mock('expo-task-manager', () => ({
   isTaskRegisteredAsync: jest.fn(() => Promise.resolve(false)),
 }));
 
-// Session-liveness is read straight off the persisted auth tokens, so the
-// default mock has to look signed-in or every gated path would short-circuit.
-// `mockSignedIn = false` simulates a post-logout device.
+// The gate reads an explicit end-of-session marker, not the absence of tokens.
+// `mockSignedIn = false` simulates a device where the marker has been written.
 let mockSignedIn = true;
+
+jest.mock('@shared/auth/sessionMarker', () => ({
+  SESSION_ENDED_KEY: 'spinr_session_ended',
+}));
 
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn((key: string) => {
-    if (key === 'refresh_token' || key === 'fg_access_token') {
-      return Promise.resolve(mockSignedIn ? 'session-token' : null);
-    }
+    if (key === 'spinr_session_ended') return Promise.resolve(mockSignedIn ? null : '1');
     if (key === 'bg_access_token') return Promise.resolve('access-token');
     if (key === 'bg_access_token_expires') return Promise.resolve(String(Date.now() + 120_000));
     return Promise.resolve(null);
@@ -95,7 +96,7 @@ import {
   startGeofenceRecovery,
   stopGeofenceRecovery,
   stopBackgroundLocation,
-  hasLiveSession,
+  isSessionEnded,
   _resetGeofenceDebounce,
   TRIP_CADENCE,
   IDLE_CADENCE,
@@ -616,9 +617,7 @@ describe('session gating', () => {
     (Location.stopGeofencingAsync as jest.Mock).mockImplementation(() => Promise.resolve());
     (Location.stopLocationUpdatesAsync as jest.Mock).mockImplementation(() => Promise.resolve());
     (SecureStore.getItemAsync as jest.Mock).mockImplementation((key: string) => {
-      if (key === 'refresh_token' || key === 'fg_access_token') {
-        return Promise.resolve(mockSignedIn ? 'session-token' : null);
-      }
+      if (key === 'spinr_session_ended') return Promise.resolve(mockSignedIn ? null : '1');
       if (key === 'bg_access_token') return Promise.resolve('access-token');
       if (key === 'bg_access_token_expires') return Promise.resolve(String(Date.now() + 120_000));
       return Promise.resolve(null);
@@ -633,15 +632,30 @@ describe('session gating', () => {
 
   afterAll(() => { mockSignedIn = true; });
 
-  it('hasLiveSession reflects the stored auth tokens', async () => {
-    expect(await hasLiveSession()).toBe(true);
+  it('isSessionEnded reflects the explicit marker', async () => {
+    expect(await isSessionEnded()).toBe(false);
     mockSignedIn = false;
-    expect(await hasLiveSession()).toBe(false);
+    expect(await isSessionEnded()).toBe(true);
   });
 
-  it('treats an unreadable SecureStore as no session (fail closed on tracking)', async () => {
+  it('treats an unreadable SecureStore as a live session, not a sign-out', async () => {
+    // A locked keystore must not read as "signed out": that would drop a
+    // working driver's trip samples and stop tracking mid-trip, costing billed
+    // distance and leaving a gap in the SGI per-period audit trail.
     (SecureStore.getItemAsync as jest.Mock).mockRejectedValue(new Error('keystore locked'));
-    expect(await hasLiveSession()).toBe(false);
+    expect(await isSessionEnded()).toBe(false);
+  });
+
+  it('keeps recording when tokens are missing but no sign-out was recorded', async () => {
+    // Regression: the gate used to infer sign-out from absent tokens, so an
+    // unpersisted SecureStore write (which the auth store swallows) silently
+    // killed background tracking for a signed-in driver.
+    (SecureStore.getItemAsync as jest.Mock).mockImplementation(() => Promise.resolve(null));
+
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any, error: null });
+
+    expect(mockedOutbox.enqueue).toHaveBeenCalled();
+    expect(Location.stopLocationUpdatesAsync).not.toHaveBeenCalled();
   });
 
   it('drops background samples without persisting them once signed out', async () => {

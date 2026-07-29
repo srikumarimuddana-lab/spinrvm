@@ -6,6 +6,7 @@ import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebas
 import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
 import { checkLocationIntegrity, haversineKm } from './locationIntegrity';
 import { recordNonFatal } from './crashlytics';
+import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
 
 // Use the same backend-URL resolver as the shared API client — it carries the
 // production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
@@ -116,6 +117,33 @@ type LocationTaskData = {
 };
 
 /**
+ * Whether the session on this device has ended.
+ *
+ * Reads the explicit marker the auth store writes on logout and on the
+ * no-valid-token path, rather than inferring from absent tokens. Same
+ * positive-evidence rule as the backend tombstone, and for the same reason: an
+ * unreadable SecureStore or a partially-cleared token set must not read as
+ * "signed out". A false "signed out" here would drop a working driver's trip
+ * samples and stop tracking mid-trip, costing billed distance and leaving a gap
+ * in the SGI per-insurance-period audit trail. See shared/auth/sessionMarker.ts
+ * for the full rationale.
+ *
+ * Every ambiguous state resolves to false ("session still live, keep tracking").
+ *
+ * Deliberately NOT consulted by startBackgroundLocation: that runs from the
+ * foreground where the auth store already knows the session, and gating it here
+ * would let a transient SecureStore hiccup block a driver from going online.
+ */
+export async function isSessionEnded(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(SESSION_ENDED_KEY)) !== null;
+  } catch {
+    // Unreadable store is not evidence of a sign-out.
+    return false;
+  }
+}
+
+/**
  * Get a valid access token for the background task.
  *
  * Strategy: read the foreground-persisted access token from SecureStore.
@@ -130,38 +158,6 @@ type LocationTaskData = {
  * especially right after ride completion when both contexts fire
  * concurrently during the completion burst.
  */
-// Keys the foreground writes on every setTokens() and deletes on logout
-// (shared/store/authStore.ts — setTokens ~:244/:249, logout ~:630/:631).
-// Reusing them as the session-liveness signal means there is no new piece of
-// state to keep in sync: whatever the auth store considers "signed in" is
-// exactly what the headless task sees.
-const SESSION_TOKEN_KEYS = ['refresh_token', 'fg_access_token'] as const;
-
-/**
- * Whether a signed-in session still exists on this device.
- *
- * Returns true only on *positive* evidence of a stored token. An absent token
- * and an unreadable SecureStore both resolve to false, because the cost of the
- * two mistakes is asymmetric: a false negative skips one headless geofence
- * re-arm (the foreground online-reconcile effect in useDriverDashboard repairs
- * it on next app open), whereas a false positive keeps recording a signed-out
- * driver's GPS — the PIPEDA problem this exists to close.
- *
- * Deliberately NOT consulted by startBackgroundLocation: that runs from the
- * foreground where the auth store already knows the session, and gating it here
- * would let a transient SecureStore hiccup block a driver from going online.
- */
-export async function hasLiveSession(): Promise<boolean> {
-  for (const key of SESSION_TOKEN_KEYS) {
-    try {
-      if (await SecureStore.getItemAsync(key)) return true;
-    } catch {
-      // Treat as "no evidence" and keep checking the remaining key.
-    }
-  }
-  return false;
-}
-
 export async function getBackgroundAuthToken(): Promise<string | null> {
   if (!API_URL) return null;
 
@@ -213,10 +209,11 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
   // must not reach the durable outbox at all — recordNativeFix below writes raw
   // lat/lng to SQLite before any auth work happens, so gating only the upload
   // would still leave PII at rest on the device. Self-heal by stopping the task:
-  // if we are here without a session, the logout teardown did not run (stale
-  // build, killed mid-logout), so nothing else is going to stop it.
-  if (!(await hasLiveSession())) {
-    console.log('[BgLocation] No signed-in session — dropping samples and stopping');
+  // reaching here after a sign-out means no teardown ran (session ended by
+  // expiry via clearAuthStorage, stale build, or killed mid-logout), so nothing
+  // else is going to stop it.
+  if (await isSessionEnded()) {
+    console.log('[BgLocation] Session ended — dropping samples and stopping');
     await stopBackgroundLocation().catch(() => {});
     await stopGeofenceRecovery().catch(() => {});
     return;
@@ -457,10 +454,10 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
     //    so it cannot see the auth store — which is precisely how a signed-out
     //    driver kept getting tracked: the exit handler re-armed location updates
     //    and re-centred the fence indefinitely, resurrecting tracking even after
-    //    the OS killed the app. Check the persisted session tokens directly and
-    //    tear down instead of re-arming when the session is gone.
-    if (!(await hasLiveSession())) {
-      console.log('[Geofence] No signed-in session — tearing down instead of re-arming');
+    //    the OS killed the app. Read the persisted end-of-session marker and
+    //    tear down instead of re-arming.
+    if (await isSessionEnded()) {
+      console.log('[Geofence] Session ended — tearing down instead of re-arming');
       await stopBackgroundLocation().catch(() => {});
       await stopGeofenceRecovery().catch(() => {});
       return;

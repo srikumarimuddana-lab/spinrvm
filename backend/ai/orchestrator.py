@@ -69,6 +69,47 @@ def _capture(exc: Exception, user: Dict[str, Any]) -> None:
         logger.debug("sentry capture skipped: %s", _sentry_exc)
 
 
+def _coord(value: Any) -> Optional[str]:
+    try:
+        return f"{float(value):.5f}"
+    except (TypeError, ValueError):
+        return None
+
+
+async def _pinned_quote_context(conversation_id: str) -> str:
+    """Prompt tail naming the trip most recently priced in this conversation.
+
+    Sits after the stable instruction block so provider prompt caching keeps
+    working (same placement rule as the support-contact tail). Imported
+    lazily to preserve tools_booking's lazy registration.
+    """
+    try:
+        from .tools_booking import load_pinned_quote
+    except ImportError:  # pragma: no cover — top-level run
+        from ai.tools_booking import load_pinned_quote
+
+    pinned = await load_pinned_quote(conversation_id)
+    if not pinned:
+        return ""
+    pickup_lat, pickup_lng = _coord(pinned.get("pickup_lat")), _coord(pinned.get("pickup_lng"))
+    dropoff_lat, dropoff_lng = _coord(pinned.get("dropoff_lat")), _coord(pinned.get("dropoff_lng"))
+    if not all((pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)):
+        return ""
+    bits = [
+        "\n\nLAST QUOTE IN THIS CONVERSATION (you priced this trip — reuse it, "
+        "do NOT re-resolve it):",
+        f"- pickup: {pinned.get('pickup_address') or 'unnamed'} [{pickup_lat},{pickup_lng}]",
+        f"- dropoff: {pinned.get('dropoff_address') or 'unnamed'} [{dropoff_lat},{dropoff_lng}]",
+    ]
+    if pinned.get("vehicle_type_id"):
+        bits.append(f"- vehicle_type_id: {pinned['vehicle_type_id']} ({pinned.get('vehicle_type') or 'recommended'})")
+    if pinned.get("total"):
+        bits.append(f"- quoted_total: {pinned['total']}")
+    if pinned.get("promo_code"):
+        bits.append(f"- promo_code: {pinned['promo_code']}")
+    return "\n".join(bits)
+
+
 async def _over_daily_cap(user_id: str, cap: int) -> bool:
     """Per-user daily message cap via Redis INCR. Fails OPEN with a loud log
     (mirrors the non-OTP rate-limit policy) — the kill switch remains the
@@ -189,6 +230,12 @@ async def run_chat_turn(
         return
 
     system = build_system_prompt(settings, audience)
+    # Replay the trip most recently priced in this conversation. Tool results
+    # are never persisted, so without this a rider who types "book it" instead
+    # of tapping the quote card leaves the model with no coordinates — it
+    # re-resolves the destination and can price a different point than the one
+    # it quoted (incident: CA$37.53 quote → CA$40.78 booking card).
+    system += await _pinned_quote_context(conversation["id"])
     tools = tool_defs_for(audience)
     messages: List[Dict[str, Any]] = list(history)
 

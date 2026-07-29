@@ -189,6 +189,56 @@ class TestFindPlaceHardRestriction:
         assert restriction["low"]["longitude"] < -104.65 < restriction["high"]["longitude"]
 
     @pytest.mark.anyio
+    async def test_quote_pin_round_trips_the_priced_trip(self):
+        """A quote must survive into the next turn. Tool results are never
+        persisted, so a rider who types "book it" (rather than tapping the
+        card, whose message carries [lat,lng]) would otherwise leave the
+        model with nothing to book but a re-resolved guess — incident: a
+        15.1 km CA$37.53 quote came back as CA$40.78 on the booking card."""
+        store: dict = {}
+
+        async def fake_set(key, value, ttl=None):
+            store[key] = value
+
+        async def fake_get(key):
+            return store.get(key)
+
+        with (
+            patch.object(tools_booking, "redis_set", fake_set),
+            patch.object(tools_booking, "redis_get", fake_get),
+        ):
+            await tools_booking._pin_quote(
+                "conv-1",
+                {
+                    "pickup_lat": 50.4501,
+                    "pickup_lng": -104.6178,
+                    "dropoff_lat": 50.4079,
+                    "dropoff_lng": -104.6501,
+                    "dropoff_address": "Costco, Regina",
+                    "vehicle_type_id": "vt-economy",
+                    "total": "37.53",
+                },
+            )
+            pinned = await tools_booking.load_pinned_quote("conv-1")
+
+        assert pinned["dropoff_address"] == "Costco, Regina"
+        assert pinned["total"] == "37.53"
+        assert pinned["vehicle_type_id"] == "vt-economy"
+        assert await tools_booking.load_pinned_quote("other-conv") is None
+        assert await tools_booking.load_pinned_quote(None) is None
+
+    @pytest.mark.anyio
+    async def test_quote_pin_failures_never_break_the_quote(self):
+        """Best-effort: losing the pin degrades to the old re-resolve
+        behaviour, it must not take the quote down with it."""
+        with patch.object(tools_booking, "redis_set", AsyncMock(side_effect=RuntimeError("redis down"))):
+            await tools_booking._pin_quote("conv-1", {"total": "1.00"})  # must not raise
+        with patch.object(tools_booking, "redis_get", AsyncMock(side_effect=RuntimeError("redis down"))):
+            assert await tools_booking.load_pinned_quote("conv-1") is None
+        with patch.object(tools_booking, "redis_get", AsyncMock(return_value="not json")):
+            assert await tools_booking.load_pinned_quote("conv-1") is None
+
+    @pytest.mark.anyio
     async def test_store_departments_collapse_to_one_choice(self):
         """Google lists a store's departments separately, each with its own
         pin metres away and an address that can carry a unit token — so the

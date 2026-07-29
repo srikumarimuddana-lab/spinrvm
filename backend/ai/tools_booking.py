@@ -21,6 +21,7 @@ a rich card instead of re-reading numbers from model prose.
 """
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -47,6 +48,7 @@ try:
         places_new_headers,
     )
     from ..utils.maps_budget import check_budget, record_call
+    from ..utils.redis_client import redis_get, redis_set
 except ImportError:
     import db_supabase
     from settings_loader import get_app_settings
@@ -58,6 +60,7 @@ except ImportError:
         places_new_headers,
     )
     from utils.maps_budget import check_budget, record_call
+    from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +251,50 @@ def _collapse_colocated(items: list) -> list:
                 )
         collapsed.append(representative)
     return collapsed
+
+
+# How long a quoted trip stays replayable into the next turn. Long enough to
+# cover a rider reading the quote and typing "book it"; short enough that a
+# stale trip cannot resurface in an unrelated later conversation.
+_QUOTE_PIN_TTL_SECONDS = 900
+
+
+def _quote_pin_key(conversation_id: str) -> str:
+    return f"ai:quote:{conversation_id}"
+
+
+async def _pin_quote(conversation_id: Optional[str], quote: Dict[str, Any]) -> None:
+    """Remember the trip we just priced, keyed by conversation.
+
+    Best-effort: a pin failure must never break a working quote, so this
+    logs and returns rather than raising. Losing the pin degrades to the old
+    re-resolve behaviour, not to a broken quote.
+    """
+    if not conversation_id:
+        return
+    try:
+        await redis_set(_quote_pin_key(conversation_id), json.dumps(quote), ttl=_QUOTE_PIN_TTL_SECONDS)
+    except Exception:
+        logger.error("ai quote pin write failed", exc_info=True, extra={"conversation_id": conversation_id})
+
+
+async def load_pinned_quote(conversation_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The most recent quote priced in this conversation, if still fresh."""
+    if not conversation_id:
+        return None
+    try:
+        raw = await redis_get(_quote_pin_key(conversation_id))
+    except Exception:
+        logger.error("ai quote pin read failed", exc_info=True, extra={"conversation_id": conversation_id})
+        return None
+    if not raw:
+        return None
+    try:
+        pinned = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.error("ai quote pin was not valid JSON", extra={"conversation_id": conversation_id})
+        return None
+    return pinned if isinstance(pinned, dict) else None
 
 
 async def _candidates_from_results(
@@ -1186,6 +1233,29 @@ async def get_fare_quote(
         return no_drivers
 
     recommended = min(quotes, key=lambda q: Decimal(q["final_total"]))
+    # Pin the priced trip for this conversation. Tool results never survive
+    # into the next turn, so a rider who TYPES "book it" (instead of tapping
+    # the card, whose message carries [lat,lng]) leaves the model with no
+    # coordinates — rule 6 then makes it re-resolve the destination, and a
+    # fresh Places lookup can land on a different point. Incident: a 15.1 km
+    # CA$37.53 Costco quote became CA$40.78 on the booking card, ~1.95 km of
+    # drift at the per-km rate. The orchestrator replays this pin into the
+    # next turn's prompt so the model books the trip it actually priced.
+    await _pin_quote(
+        user.get("_conversation_id"),
+        {
+            "pickup_lat": pickup_lat,
+            "pickup_lng": pickup_lng,
+            "pickup_address": shared.get("pickup_address") or pickup_address,
+            "dropoff_lat": dropoff_lat,
+            "dropoff_lng": dropoff_lng,
+            "dropoff_address": shared.get("dropoff_address") or dropoff_address,
+            "vehicle_type_id": recommended["vehicle_type_id"],
+            "vehicle_type": recommended.get("vehicle_type"),
+            "total": recommended["final_total"],
+            "promo_code": recommended.get("promo_code"),
+        },
+    )
     result = {
         **shared,
         "quotes": quotes,

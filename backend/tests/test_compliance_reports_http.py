@@ -146,6 +146,131 @@ def test_gst_pst_remittance_503_on_db_failure(admin_client):
     assert resp.status_code == 503
 
 
+# ── dual-approval gate (ACTION_ITEMS.md B10) ─────────────────────────────────
+# The gate is dark-launched behind settings.dual_approval_exports_enabled
+# (migration 268, default false); all the tests above run with the flag
+# unset (falsy) and confirm the report is generated exactly as before this
+# gate existed. These tests exercise the gate itself with the flag mocked on.
+
+
+def test_gst_pst_remittance_gate_off_ignores_row_count(admin_client):
+    """Flag off (the real default): even with row_count above the
+    threshold, the report generates normally -- zero behavior change."""
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": False})),
+        patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"%PDF")
+
+
+def test_gst_pst_remittance_gate_under_threshold_ignores_flag(admin_client):
+    """Flag on, but row_count is under threshold: still generates normally."""
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"%PDF")
+
+
+def test_gst_pst_remittance_gate_blocks_without_approval(admin_client):
+    """Flag on, over threshold, no existing approved/pending request:
+    returns 202 approval_required and creates a pending request instead of
+    generating the file."""
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
+        patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.find_approved_grant", AsyncMock(return_value=None)
+        ),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.find_pending_request", AsyncMock(return_value=None)
+        ),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.create_request",
+            AsyncMock(return_value={"id": "req-1", "status": "pending"}),
+        ) as create,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["approval_required"] is True
+    assert body["request_id"] == "req-1"
+    create.assert_awaited_once()
+    assert create.call_args.kwargs["route_key"] == "compliance.gst_pst_remittance"
+
+
+def test_gst_pst_remittance_gate_reuses_existing_pending_request(admin_client):
+    """A second call while a request is still pending must not create a
+    duplicate pending row."""
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
+        patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.find_approved_grant", AsyncMock(return_value=None)
+        ),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.find_pending_request",
+            AsyncMock(return_value={"id": "req-existing", "status": "pending"}),
+        ),
+        patch("routes.admin.compliance.admin_export_approvals.create_request", AsyncMock()) as create,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 202
+    assert resp.json()["request_id"] == "req-existing"
+    create.assert_not_awaited()
+
+
+def test_gst_pst_remittance_gate_consumes_approved_grant_and_proceeds(admin_client):
+    """An approved grant matching the exact request params lets the export
+    through, and consumes the grant (single-use)."""
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
+        patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.find_approved_grant",
+            AsyncMock(return_value={"id": "req-approved", "status": "approved"}),
+        ),
+        patch("routes.admin.compliance.admin_export_approvals.consume", AsyncMock()) as consume,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"%PDF")
+    consume.assert_awaited_once_with("req-approved")
+
+
+def test_insurance_period_audit_gate_blocks_without_approval(admin_client):
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
+        patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.find_approved_grant", AsyncMock(return_value=None)
+        ),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.find_pending_request", AsyncMock(return_value=None)
+        ),
+        patch(
+            "routes.admin.compliance.admin_export_approvals.create_request",
+            AsyncMock(return_value={"id": "req-2", "status": "pending"}),
+        ) as create,
+    ):
+        resp = admin_client.get("/api/admin/compliance/insurance-period-audit")
+    assert resp.status_code == 202
+    assert resp.json()["request_id"] == "req-2"
+    assert create.call_args.kwargs["route_key"] == "compliance.insurance_period_audit"
+
+
 # ── insurance-period-audit ──────────────────────────────────────────────────
 
 

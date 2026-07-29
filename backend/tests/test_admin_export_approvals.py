@@ -65,6 +65,21 @@ async def test_find_approved_grant_skips_expired():
 
 
 @pytest.mark.asyncio
+async def test_find_pending_request_matches_exact_params():
+    rows = [{"id": "p1", "params": {"x": 1}}, {"id": "p2", "params": {"x": 2}}]
+    with patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+        found = await svc.find_pending_request(requested_by="admin-1", route_key="rk", params={"x": 2})
+    assert found["id"] == "p2"
+
+
+@pytest.mark.asyncio
+async def test_find_pending_request_returns_none_when_no_match():
+    with patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=[])):
+        found = await svc.find_pending_request(requested_by="admin-1", route_key="rk", params={"x": 1})
+    assert found is None
+
+
+@pytest.mark.asyncio
 async def test_approve_rejects_self_approval():
     existing = {"id": "r1", "status": "pending", "requested_by": "admin-1"}
     with patch.object(svc.db_supabase, "find_one", AsyncMock(return_value=existing)):

@@ -96,6 +96,24 @@ async def find_approved_grant(*, requested_by: str, route_key: str, params: Dict
     return None
 
 
+async def find_pending_request(*, requested_by: str, route_key: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return an existing pending request matching this exact requester/
+    route/params, or None. A gated route should call this before
+    create_request so that repeatedly hitting the same export while it's
+    awaiting approval doesn't spawn a new pending row every time."""
+    candidates = await db_supabase.get_rows(
+        "admin_export_approval_requests",
+        {"requested_by": requested_by, "route_key": route_key, "status": "pending"},
+        order="created_at",
+        desc=True,
+        limit=20,
+    )
+    for row in candidates or []:
+        if row.get("params") == params:
+            return row
+    return None
+
+
 async def consume(request_id: str) -> Dict[str, Any]:
     """Mark an approved request as consumed -- the gated export actually
     ran. Idempotency is the caller's job (call this once, right before

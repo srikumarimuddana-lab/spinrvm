@@ -168,6 +168,15 @@ def build_text_search_payload(
     only accepts a rectangle, not a circle — so the bias box below IS the
     hard filter (no candidate outside it can be returned at all), not a soft
     hint like the legacy Geocoding/Text-Search APIs' ``bounds`` parameter.
+
+    ``locationRestriction`` and ``locationBias`` are mutually exclusive:
+    sending both makes searchText reject the whole request with 400
+    INVALID_ARGUMENT ("Location_restriction and location_bias cannot be set
+    at the same time"), which took out every named-place lookup for riders
+    whose location was known. Only the hard restriction is sent. Nothing is
+    lost by dropping the soft bias — the shortlist is re-ordered by real
+    driving distance afterwards in
+    ``tools_booking._rank_named_place_candidates_by_route``.
     """
     payload: dict[str, Any] = {
         "textQuery": text_query,
@@ -181,15 +190,6 @@ def build_text_search_payload(
             "rectangle": {
                 "low": {"latitude": near_lat - dlat, "longitude": near_lng - dlng},
                 "high": {"latitude": near_lat + dlat, "longitude": near_lng + dlng},
-            }
-        }
-        # Soft ranking signal on top of the hard restriction above — Text
-        # Search (New) sorts by relevance by default; origin nudges ties
-        # toward the nearer result, matching the Autocomplete (New) path.
-        payload["locationBias"] = {
-            "circle": {
-                "center": {"latitude": near_lat, "longitude": near_lng},
-                "radius": min(radius_meters, 50000.0),
             }
         }
     return payload

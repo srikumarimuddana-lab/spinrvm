@@ -48,6 +48,11 @@
 }
 
 /* ── Light Theme ── */
+/* Brand tokens ported from shared/theme/index.ts (lightColors). --primary
+   uses the brand's own `primaryDark` (#D32F2F), not the vibrant `primary`
+   (#FF3B30) — #FF3B30 with white button text is 3.55:1, below WCAG AA's
+   4.5:1 for normal text. #D32F2F reaches 4.98:1. The vibrant hue is used
+   instead for --ring/--chart-1, which only need the 3:1 non-text threshold. */
 :root {
   --radius: 0.625rem;
   --background: #f9fafb;
@@ -56,7 +61,7 @@
   --card-foreground: #111827;
   --popover: #ffffff;
   --popover-foreground: #111827;
-  --primary: #dc2626;
+  --primary: #d32f2f;
   --primary-foreground: #ffffff;
   --secondary: #f3f4f6;
   --secondary-foreground: #1f2937;
@@ -67,23 +72,30 @@
   --destructive: #dc2626;
   --border: #e5e7eb;
   --input: #e5e7eb;
-  --ring: #dc2626;
-  --chart-1: #dc2626;
-  --chart-2: #059669;
-  --chart-3: #2563eb;
+  --ring: #ff3b30;
+  --chart-1: #ff3b30;
+  --chart-2: #34c759;
+  --chart-3: #3b82f6;
   --chart-4: #d97706;
   --chart-5: #7c3aed;
   --sidebar: #ffffff;
   --sidebar-foreground: #1f2937;
-  --sidebar-primary: #dc2626;
+  --sidebar-primary: #d32f2f;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #f3f4f6;
   --sidebar-accent-foreground: #1f2937;
   --sidebar-border: #e5e7eb;
-  --sidebar-ring: #dc2626;
+  --sidebar-ring: #ff3b30;
 }
 
 /* ── Dark Theme ── */
+/* Brand tokens ported from shared/theme/index.ts (darkColors). --primary
+   stays on the brand's theme-invariant `primaryDark` (#D32F2F) for the same
+   AA-contrast reason as light mode — the brand's dark `primary` (#FF453A) is
+   3.41:1 with white button text, still below 4.5:1. --destructive uses the
+   AA-safe #dc2626 (4.83:1) rather than the previous Tailwind red-500
+   (#ef4444, 3.76:1) — that was a pre-existing contrast failure, fixed here
+   since it's the same token family already under review. */
 .dark {
   --background: #09090b;
   --foreground: #fafafa;
@@ -91,7 +103,7 @@
   --card-foreground: #fafafa;
   --popover: #0a0a0c;
   --popover-foreground: #fafafa;
-  --primary: #ef4444;
+  --primary: #d32f2f;
   --primary-foreground: #ffffff;
   --secondary: #18181b;
   --secondary-foreground: #fafafa;
@@ -99,23 +111,23 @@
   --muted-foreground: #a1a1aa;
   --accent: #18181b;
   --accent-foreground: #fafafa;
-  --destructive: #ef4444;
+  --destructive: #dc2626;
   --border: #27272a;
   --input: #27272a;
-  --ring: #ef4444;
-  --chart-1: #ef4444;
-  --chart-2: #10b981;
-  --chart-3: #3b82f6;
+  --ring: #ff453a;
+  --chart-1: #ff453a;
+  --chart-2: #30d158;
+  --chart-3: #0a84ff;
   --chart-4: #f59e0b;
   --chart-5: #8b5cf6;
   --sidebar: #0a0a0c;
   --sidebar-foreground: #fafafa;
-  --sidebar-primary: #ef4444;
+  --sidebar-primary: #d32f2f;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #18181b;
   --sidebar-accent-foreground: #fafafa;
   --sidebar-border: #27272a;
-  --sidebar-ring: #ef4444;
+  --sidebar-ring: #ff453a;
 }
 
 @layer base {

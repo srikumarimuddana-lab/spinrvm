@@ -307,6 +307,29 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   2. `backend/utils/insurance_periods.py`, safety check-in / SOS-related
      routes (see `.claude/context/domain-safety.md`) — regulatory +
      rider/driver safety consequence if untested code has a latent bug.
+     Closed 2026-07-29:
+     - `backend/utils/insurance_periods.py` — see
+       `docs/change-log/2026-07-29-a1b-insurance-periods-coverage.md`.
+     - `backend/routes/safety.py` — see
+       `docs/change-log/2026-07-29-a1b-routes-safety-coverage.md`.
+     - `backend/routes/rides/safety.py` — see
+       `docs/change-log/2026-07-29-a1b-rides-safety-coverage.md`.
+     - `backend/routes/admin/safety.py` — see
+       `docs/change-log/2026-07-29-a1b-admin-safety-coverage.md`.
+     - `backend/utils/safety_checkin_loop.py` — coverage raised 85%→87%,
+       see `docs/change-log/2026-07-29-a1b-safety-checkin-loop-coverage.md`.
+       Writing the coverage tests surfaced a **real production bug**, since
+       fixed: the module's `except ImportError` fallback (the branch
+       actually active in production) never imported `notify_safety_team`,
+       so every auto-escalated no-response safety check-in silently
+       NameError'd inside `_escalate`'s broad exception handler — the
+       incident row and audit log were written, but the safety team was
+       never actually paged (no WS broadcast, no email, no PagerDuty log
+       line). Fixed by adding `notify_safety_team` to the fallback import
+       list to mirror the `try` branch, plus a regression test
+       (`test_escalate_calls_notify_safety_team`) that fails against the
+       pre-fix code and passes now. See
+       `docs/change-log/2026-07-29-safety-checkin-notify-fix.md`.
   3. Auth/RLS-adjacent code: JWT handling, OTP verification
      (`backend/utils/crypto.py` is already tracked at ≥90% target per
      CLAUDE.md but should be re-verified), refresh-token rotation

@@ -158,6 +158,40 @@ def test_list_query_failure_maps_to_503(admin_client):
     assert resp.status_code == 503
 
 
+def test_list_filters_by_severity_role_category_ride_id(admin_client):
+    """Each optional filter param (severity, role, category, ride_id) must
+    actually reach the DB filter dict — previously only status and search
+    were exercised."""
+    fake_get_rows = _get_rows_by_table(safety_incidents=[_INCIDENT], users=[])
+    with (
+        patch("backend.db_supabase.get_rows", new=fake_get_rows),
+        patch("backend.db_supabase.count_documents", new=AsyncMock(return_value=1)),
+        patch(
+            "routes.admin.safety._batch_fetch_drivers_and_users",
+            new=AsyncMock(return_value=({}, {})),
+        ),
+    ):
+        resp = admin_client.get(
+            "/api/admin/safety/incidents",
+            params={
+                "status": "resolved",
+                "severity": "sev1",
+                "role": "driver",
+                "category": "unsafe_driving",
+                "ride_id": "ride-1",
+            },
+        )
+    assert resp.status_code == 200
+    incidents_calls = [c for c in fake_get_rows.calls if c[0] == "safety_incidents"]
+    filters = incidents_calls[0][1]
+    # An explicit status overrides the default open+in_progress scope.
+    assert filters["status"] == "resolved"
+    assert filters["severity"] == "sev1"
+    assert filters["role"] == "driver"
+    assert filters["category"] == "unsafe_driving"
+    assert filters["ride_id"] == "ride-1"
+
+
 def test_list_count_failure_falls_back_without_500(admin_client):
     """Count queries are best-effort for pagination UI — a count failure must
     not take down the whole list response."""
@@ -221,6 +255,26 @@ def test_detail_survives_reporter_lookup_failure(admin_client):
     assert body["ride"]["ride_code"] == "SPX-1"
 
 
+def test_detail_survives_ride_snapshot_lookup_failure(admin_client):
+    """A broken ride-snapshot lookup must not 500 the whole detail view —
+    mirrors test_detail_survives_reporter_lookup_failure but for the `rides`
+    table specifically, which has its own independent try/except."""
+    with patch(
+        "backend.db_supabase.get_rows",
+        new=_get_rows_by_table(
+            safety_incidents=[_INCIDENT],
+            users=[_USER],
+            rides=RuntimeError("rides lookup down"),
+        ),
+    ):
+        resp = admin_client.get("/api/admin/safety/incidents/inc-1")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["incident"]["id"] == "inc-1"
+    assert body["reporter"]["email"] == "jane@example.com"
+    assert body["ride"] is None
+
+
 # ── update ────────────────────────────────────────────────────────────────
 
 
@@ -267,6 +321,55 @@ def test_update_does_not_restamp_already_resolved_incident(admin_client):
     assert resp.status_code == 200
     updates = update_one.call_args.args[2]
     assert "resolved_at" not in updates
+
+
+def test_update_sets_assigned_to_admin_id(admin_client):
+    with (
+        patch(
+            "backend.db_supabase.get_rows",
+            new=_get_rows_by_table(safety_incidents=[_INCIDENT]),
+        ),
+        patch("backend.db_supabase.update_one", new=AsyncMock(return_value=None)) as update_one,
+        patch("routes.admin.safety.log_admin_action", new=AsyncMock(return_value="aud-1")),
+    ):
+        resp = admin_client.patch("/api/admin/safety/incidents/inc-1", json={"assigned_to_admin_id": "admin-2"})
+    assert resp.status_code == 200
+    updates = update_one.call_args.args[2]
+    assert updates["assigned_to_admin_id"] == "admin-2"
+
+
+def test_update_clears_assigned_to_admin_id_with_empty_string(admin_client):
+    """Caller can pass an empty string to explicitly clear the assignment —
+    the route coerces '' to None rather than storing the empty string."""
+    with (
+        patch(
+            "backend.db_supabase.get_rows",
+            new=_get_rows_by_table(safety_incidents=[{**_INCIDENT, "assigned_to_admin_id": "admin-2"}]),
+        ),
+        patch("backend.db_supabase.update_one", new=AsyncMock(return_value=None)) as update_one,
+        patch("routes.admin.safety.log_admin_action", new=AsyncMock(return_value="aud-1")),
+    ):
+        resp = admin_client.patch("/api/admin/safety/incidents/inc-1", json={"assigned_to_admin_id": ""})
+    assert resp.status_code == 200
+    updates = update_one.call_args.args[2]
+    assert updates["assigned_to_admin_id"] is None
+
+
+def test_update_sets_resolution_notes(admin_client):
+    with (
+        patch(
+            "backend.db_supabase.get_rows",
+            new=_get_rows_by_table(safety_incidents=[_INCIDENT]),
+        ),
+        patch("backend.db_supabase.update_one", new=AsyncMock(return_value=None)) as update_one,
+        patch("routes.admin.safety.log_admin_action", new=AsyncMock(return_value="aud-1")),
+    ):
+        resp = admin_client.patch(
+            "/api/admin/safety/incidents/inc-1", json={"resolution_notes": "Spoke to both parties, resolved."}
+        )
+    assert resp.status_code == 200
+    updates = update_one.call_args.args[2]
+    assert updates["resolution_notes"] == "Spoke to both parties, resolved."
 
 
 def test_update_with_empty_body_is_a_noop(admin_client):

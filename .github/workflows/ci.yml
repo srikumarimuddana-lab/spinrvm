@@ -598,6 +598,9 @@ jobs:
   # Security Scan — filesystem (dependency CVEs) + secrets
   security-scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - uses: actions/checkout@v6
@@ -641,6 +644,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [backend-test]
+    permissions:
+      contents: read
+      security-events: write
+      packages: write    # GHCR push (main only, see "Push image to GHCR" step)
+      id-token: write    # cosign keyless OIDC signing (main only)
 
     steps:
       - uses: actions/checkout@v6

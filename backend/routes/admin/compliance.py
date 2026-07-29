@@ -20,11 +20,14 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...routes.drivers._shared import _decrypt_driver_pii
+    from ...services import admin_export_approvals
+    from ...settings_loader import get_app_settings
     from ...utils import metrics, report_branding
     from ...utils.email_provider import send_transactional_email
     from ...utils.rate_limiter import default_limiter as limiter
@@ -32,6 +35,8 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from routes.drivers._shared import _decrypt_driver_pii
+    from services import admin_export_approvals  # type: ignore
+    from settings_loader import get_app_settings
     from utils import metrics, report_branding
     from utils.email_provider import send_transactional_email
     from utils.rate_limiter import default_limiter as limiter
@@ -107,6 +112,54 @@ _KNOWN_TAX_LABELS = ("GST", "PST", "QST", "HST")
 # visible signal — _check_truncated() below turns that into a loud error
 # log plus a visible "(TRUNCATED)" marker on the exported report instead.
 _ROW_LIMIT = 10000
+
+
+# AI-3's stated acceptance criterion (docs/threat-model/admin-panel.md;
+# ACTION_ITEMS.md B10): "any export > 1,000 rows requires a second admin's
+# approval." Dark-launched behind settings.dual_approval_exports_enabled
+# (migration 268, default false) -- until an admin explicitly flips it on,
+# _check_export_gate always returns None (ungated) and every report here
+# behaves exactly as it did before this gate existed.
+_APPROVAL_GATE_ROW_THRESHOLD = 1000
+
+
+async def _check_export_gate(
+    admin: dict, route_key: str, gate_params: dict, row_count: int
+) -> Optional[JSONResponse]:
+    """Returns a 202 JSONResponse if this export needs (and doesn't yet
+    have) a second admin's approval; returns None if the caller should
+    proceed with generating the report as normal -- either the gate is
+    off, the export is under threshold, or an approved grant exists (in
+    which case it's consumed here, single-use)."""
+    settings = await get_app_settings()
+    if not settings.get("dual_approval_exports_enabled"):
+        return None
+    if row_count <= _APPROVAL_GATE_ROW_THRESHOLD:
+        return None
+
+    grant = await admin_export_approvals.find_approved_grant(
+        requested_by=admin["id"], route_key=route_key, params=gate_params
+    )
+    if grant:
+        await admin_export_approvals.consume(grant["id"])
+        return None
+
+    pending = await admin_export_approvals.find_pending_request(
+        requested_by=admin["id"], route_key=route_key, params=gate_params
+    )
+    if not pending:
+        pending = await admin_export_approvals.create_request(
+            requested_by=admin["id"], route_key=route_key, params=gate_params, row_count=row_count
+        )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "approval_required": True,
+            "request_id": pending["id"],
+            "status": pending["status"],
+            "row_count": row_count,
+        },
+    )
 
 
 def _check_truncated(fetched_count: int, report_type: str) -> bool:
@@ -316,6 +369,15 @@ async def get_gst_pst_remittance(
         metrics.inc("spinr_admin_compliance_export_total", {"report_type": "gst_pst_remittance", "outcome": "error"})
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
 
+    gate_response = await _check_export_gate(
+        admin,
+        "compliance.gst_pst_remittance",
+        {"date_range": date_range, "format": format, "email_to": email_to},
+        len(rows),
+    )
+    if gate_response is not None:
+        return gate_response
+
     fieldnames = ["month", "gst", "pst", "hst", "unrecognized_tax", "total_tax"]
     subtitle = (
         f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — "
@@ -429,6 +491,15 @@ async def get_insurance_period_audit(
             "spinr_admin_compliance_export_total", {"report_type": "insurance_period_audit", "outcome": "error"}
         )
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
+
+    gate_response = await _check_export_gate(
+        admin,
+        "compliance.insurance_period_audit",
+        {"date_range": date_range, "driver_id": driver_id, "format": format, "email_to": email_to},
+        len(rows),
+    )
+    if gate_response is not None:
+        return gate_response
 
     # driver_id and ride_id are intentionally excluded from the rendered
     # report (product decision) — driver_id filtering still works via the

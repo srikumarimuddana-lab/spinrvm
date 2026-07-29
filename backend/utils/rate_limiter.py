@@ -283,6 +283,13 @@ data_transfer_jobs_limit = default_limiter.limit("60/minute")
 # in routes/admin/rides.py).
 data_transfer_search_limit = default_limiter.limit("60/minute")
 
+# Admin export-approval gate (ACTION_ITEMS.md B10) — listing the pending
+# queue is read-only/cheap (60/minute, matches data_transfer_jobs_limit);
+# approve/deny are decisions a human makes rarely, tightened to discourage
+# scripted rubber-stamping.
+export_approvals_list_limit = default_limiter.limit("60/minute")
+export_approvals_decide_limit = default_limiter.limit("20/minute")
+
 # Tax-document email (T4A PDF / earnings CSV) — each call reads up to 10k rides,
 # renders/builds a document, and sends an email to the driver. Cap prevents
 # inbox-bombing + SES quota / sender-reputation abuse (cf. dsar_export_limit).

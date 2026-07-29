@@ -1075,6 +1075,62 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   still pending), `backend/migrations/265_drivers_regulatory_authority_backfill.sql`
   (new, applied).
 
+### B14. SGI form company address split across dedicated fields + driver licence-number/class data gap
+- [x] **Status:** address bug DONE (2026-07-29) — the licence-number/class
+  half is confirmed as a genuine **data gap**, not a code bug; the larger
+  OCR/automated-onboarding proposal is written up but **not started**,
+  pending a scope/vendor decision.
+- **Why (address):** both real SGI templates (`D00032`/`D00033`) ship
+  dedicated `Street address`/`City/town`/`Provincestate`/`Postalzip code`
+  fields (confirmed via `PdfReader.get_fields()`), but
+  `sgi_form_filler.py` was setting only the street-address field to one
+  combined `"STREET, CITY, PROVINCE, COUNTRY, POSTAL"` string, leaving the
+  template's own dedicated city/province/postal fields at their stale
+  placeholder values — every generated form showed two disagreeing
+  addresses across its own fields. Fixed: address split into
+  street/city/province/postal constants, each mapped to its correct
+  field; country dropped (neither template has a field for it). Two
+  regression tests assert no city/province/postal/country string leaks
+  into the street field.
+- **Why (licence number/class):** traced field-mapping, PDF-slot naming,
+  and Vault decryption end-to-end — all correct. Checked the real
+  `drivers` table directly: 22 of 209 drivers (some already
+  `is_verified: true`) have `NULL` `license_number`/`license_class`. Root
+  cause: these are optional self-serve profile fields, never required at
+  signup or at document-review approval, and the driver's-license photo
+  each of these drivers *did* upload during onboarding is never OCR'd to
+  populate the structured columns — an admin has to manually retype it,
+  and nothing prompts that. Full analysis, immediate-remediation steps,
+  and a reasoned automated-onboarding (OCR + capture-guidance +
+  dual-approval) proposal in
+  `docs/proposals/2026-07-29-driver-document-ocr-onboarding-automation.md`.
+- **Immediate remediation (not yet done, small, unblocked):** (1)
+  one-time manual backfill — read the licence number/class off the 22
+  drivers' already-uploaded documents and enter via the existing
+  profile-edit path; (2) make licence-number/class entry a required part
+  of the admin document-review "approve" action going forward, so this
+  gap can't grow — small scoped change, own PR + Change Impact Log (it
+  changes an existing live admin workflow).
+- **Larger proposal (not started, needs a decision):** OCR-assisted
+  document intake with client-side capture guidance (Expo camera +
+  quality gate), a purpose-built ID-OCR vendor (buy, not build — see
+  proposal's reasoning), and a human dual-approval queue reusing the same
+  state-machine shape as B10's export-approval gate. Recommends
+  email/SMS notification-channel parity (today: push-only on document
+  rejection, no channel at all on upload-received) as the fastest,
+  vendor-independent first slice. See the proposal doc for full reasoning,
+  PIPEDA precautions, and sizing.
+- **Files:** `backend/services/data_transfer/sgi_form_filler.py` (address
+  fix), `backend/tests/test_sgi_form_filler.py` (2 new regression tests),
+  `docs/proposals/2026-07-29-driver-document-ocr-onboarding-automation.md`
+  (new).
+- **Acceptance (address, done):** generated D00032/D00033 PDFs have each
+  address component in its correct dedicated field, verified by
+  regenerating both forms and reading every field back. **Acceptance
+  (licence data, pending):** not gating — tracked here until the
+  immediate-remediation backfill closes the 22-driver gap and a decision
+  is made on the larger proposal.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

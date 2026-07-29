@@ -236,3 +236,62 @@ async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
         )
         return None
     return sin_str
+
+
+async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the driver's Stripe-verified legal name and mailing address,
+    for handoff to a third-party tax filer (T4A / Reportable Platform
+    Operator reporting) — never the SIN.
+
+    Unlike ``reveal_sin_from_stripe``, this does NOT expand
+    ``individual.id_number`` — ``individual.first_name``/``last_name``/
+    ``address`` are already present on an ordinary ``Account.retrieve()``
+    response for the platform owner, no special expand permission needed.
+    Deliberately kept as a separate function from the SIN reveal (not a
+    shared "get everything" helper) so a future caller can never
+    accidentally pull the SIN into a bulk export path by using the wrong
+    function — see ACTION_ITEMS.md's SIN-collection decision: SIN stays
+    entirely on Stripe's side and is only ever surfaced one driver at a
+    time via the audited reveal-sin admin endpoint, never in a bulk
+    export.
+
+    Returns None if the driver has no Stripe account, Stripe isn't
+    configured, or the API call fails — callers should treat that as
+    "address unavailable" for this driver, not fail the whole export.
+    """
+    account_id = driver.get("stripe_account_id")
+    if not account_id:
+        return None
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        return None
+
+    import stripe
+
+    try:
+        account = stripe.Account.retrieve(account_id, api_key=stripe_secret)
+    except Exception:
+        logger.error(
+            "[STRIPE-KYC] legal-name-address: Account.retrieve failed for %s",
+            account_id,
+            exc_info=True,
+        )
+        return None
+
+    individual = account.get("individual") or {}
+    address = individual.get("address") or {}
+    legal_name = f"{individual.get('first_name', '') or ''} {individual.get('last_name', '') or ''}".strip()
+    if not legal_name and not address:
+        return None
+
+    return {
+        "legal_name": legal_name or None,
+        "address_line1": address.get("line1"),
+        "address_line2": address.get("line2"),
+        "city": address.get("city"),
+        "province": address.get("state"),
+        "postal_code": address.get("postal_code"),
+        "country": address.get("country"),
+    }

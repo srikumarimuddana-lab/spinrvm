@@ -149,6 +149,27 @@ class TestBrandedPdf:
         pdf = report_branding.new_branded_pdf("Test Report")
         assert pdf.h > pdf.w  # portrait: taller than wide
 
+    def test_multiline_subtitle_renders_without_error(self):
+        # Regression: GST/PST remittance's subtitle previously crammed a
+        # date range and three dollar totals onto one line — reported as
+        # reading unprofessionally. subtitle now accepts a list of lines.
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf(
+            "GST/PST Remittance Summary",
+            ["2026-06-29 to 2026-07-29", "GST: $17.91    PST: $0.00    HST: $0.00"],
+        )
+        out = bytes(pdf.output())
+        assert out.startswith(b"%PDF")
+
+    def test_multiline_subtitle_grows_header_block(self):
+        # The divider rule (and content start y) must move down to fit a
+        # 2-line subtitle instead of overlapping it — same y as a 1-line
+        # subtitle would clip the second line.
+        pytest.importorskip("fpdf")
+        pdf_one_line = report_branding.new_branded_pdf("Test Report", "one line")
+        pdf_two_lines = report_branding.new_branded_pdf("Test Report", ["line one", "line two"])
+        assert pdf_two_lines.y > pdf_one_line.y
+
 
 class TestRenderPdfTable:
     def test_wraps_long_cell_content_without_error(self):

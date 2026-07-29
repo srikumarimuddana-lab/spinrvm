@@ -99,6 +99,27 @@ def test_gst_pst_remittance_returns_pdf_by_default(admin_client):
     assert log.call_args[0][1]["report_type"] == "gst_pst_remittance"
 
 
+def test_gst_pst_remittance_subtitle_splits_date_range_and_totals(admin_client):
+    # Regression: the subtitle previously crammed the date range and three
+    # dollar totals onto one line ("2026-06-29 to 2026-07-29 — Total GST
+    # $17.91, Total PST $0.00, Total HST $0.00"), reported as reading
+    # unprofessionally. Now passed as 2 separate lines to report_branding.
+    from backend.utils import report_branding as rb
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("backend.routes.admin.compliance.report_branding.new_branded_pdf", wraps=rb.new_branded_pdf) as new_pdf,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 200
+    subtitle_arg = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
+    assert isinstance(subtitle_arg, list)
+    assert len(subtitle_arg) == 2
+    assert "to" in subtitle_arg[0]  # date range line
+    assert "GST" in subtitle_arg[1] and "PST" in subtitle_arg[1] and "HST" in subtitle_arg[1]
+
+
 def test_gst_pst_remittance_csv_format(admin_client):
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
@@ -421,3 +442,115 @@ def test_email_to_send_failure_returns_502(admin_client):
     ):
         resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?email_to=ops@spinr.ca")
     assert resp.status_code == 502
+
+
+# ── T4A filer handoff — SIN-free export ─────────────────────────────────────
+
+_T4A_RIDE_ROW = {
+    "driver_id": "d1",
+    "driver_earnings": 750.00,
+    "base_fare": None,
+    "distance_fare": None,
+    "time_fare": None,
+    "tip_amount": None,
+}
+_T4A_DRIVER_ROW = {
+    "id": "d1",
+    "name": "Jane Doe",
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "stripe_account_id": "acct_123",
+    "stripe_id_number_provided": True,
+}
+_STRIPE_ADDRESS = {
+    "legal_name": "Jane A. Doe",
+    "address_line1": "123 Main St",
+    "address_line2": None,
+    "city": "Regina",
+    "province": "SK",
+    "postal_code": "S4P 1A1",
+    "country": "CA",
+}
+
+
+def _t4a_get_rows_side(table, filters=None, **kw):
+    if table == "rides":
+        return [_T4A_RIDE_ROW]
+    if table == "drivers":
+        return [_T4A_DRIVER_ROW]
+    return []
+
+
+def test_t4a_filer_handoff_requires_admin_auth(test_client):
+    resp = test_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026")
+    assert resp.status_code in (401, 403)
+
+
+def test_t4a_filer_handoff_requires_super_admin(test_client):
+    from backend.server import app
+    from dependencies import get_admin_user
+
+    app.dependency_overrides[get_admin_user] = lambda: {"id": "a1", "role": "admin", "email": "a@spinr.app"}
+    try:
+        resp = test_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026")
+    finally:
+        app.dependency_overrides.pop(get_admin_user, None)
+    assert resp.status_code == 403
+
+
+def test_t4a_filer_handoff_never_includes_sin(admin_client):
+    # The whole point of this export: earnings + Stripe-verified legal
+    # name/address for the filer, but the SIN itself must never appear —
+    # not the real value, not any field even named "sin".
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_t4a_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch(
+            "backend.routes.admin.compliance.get_legal_name_and_address_from_stripe",
+            AsyncMock(return_value=dict(_STRIPE_ADDRESS)),
+        ),
+    ):
+        resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026&format=csv")
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8")
+    assert "Jane A. Doe" in body
+    assert "123 Main St" in body
+    assert "750.00" in body
+    # sin_on_file_at_stripe is a Yes/No flag, never the number itself.
+    assert "sin" not in body.lower().replace("sin_on_file", "").replace("sinstatus", "")
+
+
+def test_t4a_filer_handoff_filters_by_500_threshold(admin_client):
+    under_threshold_ride = dict(_T4A_RIDE_ROW, driver_id="d2", driver_earnings=200.00)
+
+    async def get_rows_side(table, filters=None, **kw):
+        if table == "rides":
+            return [_T4A_RIDE_ROW, under_threshold_ride]
+        if table == "drivers":
+            return [_T4A_DRIVER_ROW]  # only d1 queried — d2 never crosses the threshold
+        return []
+
+    captured_ids = {}
+
+    async def get_rows_capture(table, filters=None, **kw):
+        if table == "drivers" and filters:
+            captured_ids["ids"] = filters.get("id", {}).get("$in")
+        return await get_rows_side(table, filters, **kw)
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_capture)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch(
+            "backend.routes.admin.compliance.get_legal_name_and_address_from_stripe",
+            AsyncMock(return_value=dict(_STRIPE_ADDRESS)),
+        ),
+    ):
+        resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026&format=csv")
+    assert resp.status_code == 200
+    assert captured_ids["ids"] == ["d1"]  # d2 (under $500) never queried
+
+
+def test_t4a_filer_handoff_503_on_db_failure(admin_client):
+    with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
+        resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026")
+    assert resp.status_code == 503

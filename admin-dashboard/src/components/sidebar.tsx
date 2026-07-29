@@ -38,6 +38,12 @@ interface NavItem {
      *  nav entry, clicks it, and gets 403'd on every API call. `module` is
      *  still required by the type but ignored when this is set. */
     superAdminOnly?: boolean;
+    /** Gives the icon a distinct (amber) color even when not the active
+     *  route, instead of the default muted grey every other item shares.
+     *  Reserved for genuinely higher-severity destinations (currently just
+     *  Safety) that shouldn't visually blend into an otherwise flat list
+     *  of same-weight items like FAQs/Disputes in the same group. */
+    emphasize?: boolean;
 }
 
 interface NavGroup {
@@ -113,7 +119,10 @@ const NAV_GROUPS: NavGroup[] = [
                     { href: "/dashboard/support-tickets/trends", label: "Trends", icon: BarChart3, module: "support_tickets" },
                 ],
             },
-            { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support" },
+            // emphasize: Safety (SOS, insurance-period audit trail) is the
+            // one P0-severity destination in this group — visually flat
+            // next to FAQs/Disputes previously undersold what it's for.
+            { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support", emphasize: true },
             { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
             { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Notifications", icon: Cloud, module: "notifications" },
@@ -311,7 +320,13 @@ export function Sidebar() {
                                                         : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                                 )}
                                             >
-                                                <item.icon className={cn("shrink-0", collapsed ? "h-[18px] w-[18px]" : "h-4 w-4")} />
+                                                <item.icon
+                                                    className={cn(
+                                                        "shrink-0",
+                                                        collapsed ? "h-[18px] w-[18px]" : "h-4 w-4",
+                                                        item.emphasize && !active && "text-amber-600 dark:text-amber-500",
+                                                    )}
+                                                />
                                                 {!collapsed && item.label}
                                             </Link>
                                             {/* Children. In expanded mode they're indented under

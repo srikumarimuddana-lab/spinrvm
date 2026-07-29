@@ -22,6 +22,7 @@ try:
         create_reactivation_token,
         generate_otp,
         get_current_user,
+        get_token_session_id,
         verify_reactivation_token,
     )
     from ..schemas import (
@@ -56,6 +57,7 @@ try:
         revoke_all_for_user,
         revoke_refresh_token,
     )
+    from ..utils.session_revocation import revoke_session, should_tombstone
     from ..validators import validate_phone
 except ImportError:
     import db_supabase
@@ -69,6 +71,7 @@ except ImportError:
         create_reactivation_token,
         generate_otp,
         get_current_user,
+        get_token_session_id,
         verify_reactivation_token,
     )
     from schemas import (
@@ -103,6 +106,7 @@ except ImportError:
         revoke_all_for_user,
         revoke_refresh_token,
     )
+    from utils.session_revocation import revoke_session, should_tombstone
     from validators import validate_phone
 
 db = db_supabase  # legacy alias
@@ -1638,6 +1642,7 @@ async def logout(
     response: Response,
     body: Optional[LogoutRequest] = None,
     current_user: dict = Depends(get_current_user),
+    token_session_id: Optional[str] = Depends(get_token_session_id),
 ):
     """Revoke the presented refresh token.
 
@@ -1667,6 +1672,15 @@ async def logout(
     # to all replicas rather than waiting for the access-token TTL.
     if current_user:
         await redis_delete(f"session:{current_user['id']}")
+        # Tombstone the signed-out session so opt-in ingest paths can reject the
+        # still-valid access token instead of trusting it for the rest of its
+        # exp. Absence of the key above is NOT usable for this — it is also
+        # absent when it was never written or Redis restarted — so revocation
+        # needs positive evidence. Only tombstone when this token still owns
+        # users.current_session_id; otherwise another device has since logged in
+        # and revoking would take that device's traffic down with it.
+        if should_tombstone(token_session_id, current_user.get("current_session_id")):
+            await revoke_session(str(token_session_id))
         try:
             import asyncio
 

@@ -111,15 +111,14 @@ async def revoke_session(session_id: str) -> bool:
         return False
 
 
-async def is_session_revoked(payload: dict) -> bool:
-    """Whether this token's session has been explicitly signed out.
+async def is_session_revoked(session_id: Optional[str]) -> bool:
+    """Whether this session has been explicitly signed out.
 
-    Fail-open on every ambiguous input (no claim, Redis error) — see the module
-    docstring. ``payload`` is the decoded JWT, so a Firebase-authenticated
-    session (no ``session_id`` claim) is never rejected here; ``logout-all`` /
+    Fail-open on every ambiguous input (no session id, Redis error) — see the
+    module docstring. A Firebase-authenticated session carries no ``session_id``
+    claim and so is never rejected here; ``logout-all`` /
     ``sessions_invalid_before`` remains its revocation path.
     """
-    session_id = payload.get("session_id") if isinstance(payload, dict) else None
     if not session_id:
         return False
     try:

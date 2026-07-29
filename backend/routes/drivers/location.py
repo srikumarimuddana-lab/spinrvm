@@ -25,6 +25,7 @@ from ._deps import (  # noqa: F401
     generate_driver_code,
     get_admin_user,
     get_current_user,
+    get_token_session_id,
     intent_online,
     logger,
     parse_iso_utc,
@@ -325,11 +326,60 @@ async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_use
     return row
 
 
+async def _guard_revoked_session(token_session_id: str | None) -> None:
+    """Reject a location batch from a session that has been signed out.
+
+    Defense in depth behind the driver app's own logout teardown. A signed-out
+    app still holds an access token valid for the rest of its exp, and a stale
+    build — or one killed mid-logout before its teardown ran — will keep
+    uploading GPS with it. The client fix stops that at the source; this makes a
+    client-side regression non-silent instead of re-opening a PIPEDA hole.
+
+    Gated on an ``app_settings`` flag so it can be switched off without a
+    redeploy (the settings-in-DB pattern in CLAUDE.md). Defaults ON: the check
+    only fires on positive evidence of a logout, so leaving it dark would mean
+    shipping the guard without the protection.
+
+    Fails open on every ambiguity, including an unreadable settings row. Dropping
+    a legitimate batch loses breadcrumbs that settle billed distance and back the
+    SGI per-insurance-period audit, so a false 401 here is worse than a zombie
+    writer that the client fix already stopped.
+    """
+    if not token_session_id:
+        return
+    try:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        enabled = bool((await get_app_settings() or {}).get("location_reject_revoked_sessions_enabled", True))
+    except Exception:
+        logger.warning("could not read location_reject_revoked_sessions_enabled; allowing batch", exc_info=True)
+        return
+    if not enabled:
+        return
+
+    try:
+        from ...utils.session_revocation import is_session_revoked
+    except ImportError:
+        from utils.session_revocation import is_session_revoked  # type: ignore
+
+    if await is_session_revoked(token_session_id):
+        # 401 (not 403): the credential is dead, so the client should re-auth
+        # rather than retry. No session_id or driver_id in the message.
+        raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+
+
 @router.post("/location-batch")
 async def update_location_batch(
-    batch: Union[List[dict], dict, LocationBatchRequest], current_user: dict = Depends(get_current_user)
+    batch: Union[List[dict], dict, LocationBatchRequest],
+    current_user: dict = Depends(get_current_user),
+    token_session_id: str | None = Depends(get_token_session_id),
 ):
     """Update driver location in batch (from background tracking)."""
+    # Ahead of both the v1 and v2 paths so neither can persist a signed-out
+    # driver's coordinates.
+    await _guard_revoked_session(token_session_id)
     v2_request = _parse_v2_location_batch(batch)
     if v2_request is not None:
         return await _persist_v2_location_batch(v2_request, current_user)

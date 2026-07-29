@@ -30,7 +30,14 @@ const PAGE_SIZE = 50;
 
 const CATEGORIES = ["general", "rides", "payments", "account", "safety", "driver", "technical"];
 const PRIORITIES = ["low", "medium", "high", "urgent"];
-const P_COLORS: Record<string, string> = { low: "bg-zinc-500/15 text-zinc-600", medium: "bg-blue-500/15 text-blue-600", high: "bg-amber-500/15 text-amber-600", urgent: "bg-red-500/15 text-red-600" };
+// Verified against real rendered badges via axe, not just token math (this
+// map had no dark: variants at all before — 3 of 4 failed WCAG AA in dark
+// mode, 3 of 4 also failed in light mode once actually rendered with data,
+// since the crawl-audit's empty-mocked pages never exercise this). Light
+// shades darkened where needed; dark shades added to match the proven-safe
+// pattern already used by the sibling statusColor() above. "high" (amber)
+// already passed in dark mode as-is (text-amber-600, no override needed).
+const P_COLORS: Record<string, string> = { low: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400", medium: "bg-blue-500/15 text-blue-700 dark:text-blue-400", high: "bg-amber-500/15 text-amber-800 dark:text-amber-600", urgent: "bg-red-500/15 text-red-700 dark:text-red-400" };
 
 export default function TicketsTab() {
     const [sub, setSub] = useState<"tickets" | "faqs">("tickets");

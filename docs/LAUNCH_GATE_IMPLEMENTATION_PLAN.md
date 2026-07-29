@@ -96,8 +96,12 @@ platform log aggregators. `backend/utils/sentry_scrub.py` scrubs the Sentry path
 `area_only()` — **none of which this code path calls.** The redaction helpers exist; this
 block bypasses all of them.
 
+**Why no guard caught it.** `.claude/hooks/pre-commit` step 3 nominally checks for "PII in
+logs" but is a six-pattern source-text denylist that cannot match a runtime-interpolated
+payload. Details and consequences in T2.
+
 **Severity:** P0, and per CLAUDE.md's breach protocol this is a suspected PII exposure
-event requiring a scope assessment inside 24h, not just a code fix. See §3.1 T4.
+event requiring a scope assessment inside 24h, not just a code fix. See T4.
 
 ---
 
@@ -236,6 +240,30 @@ from `backend/utils/pii.py` when the payload carries coordinates. Never `res_dat
 `backend/tests/test_log_guard.py` (new) · **Effort:** M · **Depends on:** T1
 
 T1 fixes the one known leak. T2 makes the *next* one impossible to ship silently.
+
+**Why the existing guard did not catch this.** `.claude/hooks/pre-commit` step 3 ("Checking
+for PII in logs") is a **denylist of six source-text regexes** matched against the staged
+diff:
+
+```
+print.*lat.*lng  ·  print.*latitude  ·  print.*phone
+console\.log.*lat.*lng  ·  console\.log.*phoneNumber
+logger\.(info|debug).*coordinates
+```
+
+None of them match the actual leak. The leaking line is
+`logger.info(f"… payload={update_data} …")` — the words `lat`, `lng`, and `coordinates` never
+appear in the source; the coordinates arrive at runtime inside an interpolated dict. This is
+not a gap in the pattern list that a seventh regex would close: **source-text matching cannot
+determine what a variable will contain at runtime**, and payload/row-shaped leaks are exactly
+the dangerous case. The hook printed `✅ Clean` while committing this very plan, and would
+print it again for a reintroduced `payload={update_data}`.
+
+That makes the hook worse than absent — it supplies false assurance on the category of bug
+that shipped. T2's runtime sink-level check is the only structurally sound place to enforce
+this, because it inspects the **formatted** record rather than the source that produced it.
+Keep the hook (it is a cheap catch for the naive `print(lat, lng)` case) but stop treating a
+green step 3 as evidence of anything, and say so in its own output.
 
 `backend/server.py:420` is the single loguru sink — one chokepoint. Add a `filter=` callable
 that scans the formatted record for coordinate-shaped floats, E.164 phone numbers, email

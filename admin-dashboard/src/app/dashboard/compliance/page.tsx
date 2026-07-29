@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Download, Loader2, FileText, Mail, HelpCircle } from "lucide-react";
+import { Download, Loader2, FileText, Mail } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,8 +10,8 @@ import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
+import { InfoHint as Hint } from "@/components/info-hint";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useAuthStore } from "@/store/authStore";
 import {
@@ -41,17 +41,6 @@ const FORMATS: { value: ComplianceReportFormat; label: string }[] = [
 ];
 
 const DRIVER_STATUSES = ["active", "pending", "needs_review", "suspended", "banned"];
-
-function Hint({ text }: { text: string }) {
-    return (
-        <Tooltip>
-            <TooltipTrigger asChild>
-                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0 cursor-help" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-[260px]">{text}</TooltipContent>
-        </Tooltip>
-    );
-}
 
 /** Inline "email to @spinr.ca" control shared by all three report cards —
  * a small text input + send button next to the existing Download button,

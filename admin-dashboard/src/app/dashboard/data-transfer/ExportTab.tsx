@@ -11,8 +11,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { HelpCircle } from "lucide-react";
+import { InfoHint as Hint } from "@/components/info-hint";
 import {
     exportDataTransferEntities,
     getDataTransferJob,
@@ -35,17 +34,6 @@ const MAX_ENTITIES_PER_EXPORT = 100;
 // feedback instead of a round-trip 422.
 const REASON_MIN_LENGTH = 10;
 const REASON_MAX_LENGTH = 200;
-
-function Hint({ text }: { text: string }) {
-    return (
-        <Tooltip>
-            <TooltipTrigger asChild>
-                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0 cursor-help" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-[260px]">{text}</TooltipContent>
-        </Tooltip>
-    );
-}
 
 const DOC_TYPE_OPTIONS = [
     "drivers_license",

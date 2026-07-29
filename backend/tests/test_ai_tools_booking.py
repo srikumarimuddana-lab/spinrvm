@@ -189,6 +189,118 @@ class TestFindPlaceHardRestriction:
         assert restriction["low"]["longitude"] < -104.65 < restriction["high"]["longitude"]
 
     @pytest.mark.anyio
+    async def test_store_departments_collapse_to_one_choice(self):
+        """Google lists a store's departments separately, each with its own
+        pin metres away and an address that can carry a unit token — so the
+        exact-address dedupe misses them and the rider was offered "Walmart
+        Wireless" and "Walmart Vision & Glasses" as two destinations. They
+        are one drop-off, and the parent name wins."""
+        departments = {
+            "places": [
+                {
+                    "displayName": {"text": "Walmart Wireless"},
+                    "formattedAddress": "3939 Rochdale Blvd Unit 2, Regina, SK, Canada",
+                    "location": {"latitude": 50.49661, "longitude": -104.64012},
+                },
+                {
+                    "displayName": {"text": "Walmart"},
+                    "formattedAddress": "3939 Rochdale Blvd, Regina, SK, Canada",
+                    "location": {"latitude": 50.4966, "longitude": -104.6401},
+                },
+                {
+                    "displayName": {"text": "Walmart Vision & Glasses"},
+                    "formattedAddress": "3939 Rochdale Blvd Suite 1, Regina, SK, Canada",
+                    "location": {"latitude": 50.49658, "longitude": -104.64008},
+                },
+            ]
+        }
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_area(),
+            patch.object(tools_booking, "_maps_post", AsyncMock(return_value=(200, departments))),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
+            )
+
+        assert ok
+        candidates = result["candidates"]
+        assert len(candidates) == 1, [c["name"] for c in candidates]
+        assert candidates[0]["name"] == "Walmart"
+
+    @pytest.mark.anyio
+    async def test_distinct_nearby_brands_are_not_collapsed(self):
+        """Proximity alone must not merge two real destinations — a shared
+        leading brand token is also required."""
+        plaza = {
+            "places": [
+                {
+                    "displayName": {"text": "Walmart"},
+                    "formattedAddress": "3939 Rochdale Blvd, Regina, SK, Canada",
+                    "location": {"latitude": 50.4966, "longitude": -104.6401},
+                },
+                {
+                    "displayName": {"text": "Tim Hortons"},
+                    "formattedAddress": "3941 Rochdale Blvd, Regina, SK, Canada",
+                    "location": {"latitude": 50.49662, "longitude": -104.64013},
+                },
+            ]
+        }
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_area(),
+            patch.object(tools_booking, "_maps_post", AsyncMock(return_value=(200, plaza))),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(
+                tools_booking, "_rank_named_place_candidates_by_route", AsyncMock(side_effect=lambda c, *a: (c, False))
+            ),
+        ):
+            result, ok = await execute_tool(
+                "find_place", {"query": "rochdale", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
+            )
+
+        assert ok
+        assert {c["name"] for c in result["candidates"]} == {"Walmart", "Tim Hortons"}
+
+    @pytest.mark.anyio
+    async def test_street_address_geocodes_never_collapse(self):
+        """Neighbouring houses sit well inside the co-location radius. The
+        collapse is named-place only — geocoded street addresses must all
+        survive or the rider loses the house they asked for."""
+        neighbours = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "4325 Wakeling St, Regina, SK, Canada",
+                    "geometry": {"location": {"lat": 50.4501, "lng": -104.6178}, "location_type": "ROOFTOP"},
+                },
+                {
+                    "formatted_address": "4327 Wakeling St, Regina, SK, Canada",
+                    "geometry": {"location": {"lat": 50.45012, "lng": -104.61782}, "location_type": "ROOFTOP"},
+                },
+            ],
+        }
+
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_area(),
+            patch.object(tools_booking, "_maps_get", AsyncMock(return_value=neighbours)),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place", {"query": "4325 wakeling st", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
+            )
+
+        assert ok
+        assert len(result["candidates"]) == 2
+
+    @pytest.mark.anyio
     async def test_restriction_and_bias_are_never_both_sent(self):
         """searchText rejects a payload carrying both locationRestriction and
         locationBias with 400 INVALID_ARGUMENT ("Location_restriction and

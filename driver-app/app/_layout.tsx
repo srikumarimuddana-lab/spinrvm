@@ -1,4 +1,10 @@
 import '../utils/backgroundLocation';
+import { registerDriverSessionTeardown } from '../utils/sessionTeardown';
+
+// Arm the sign-out location teardown at module scope, before any screen mounts:
+// the API client's 401 interceptor can trigger a logout before the dashboard
+// ever renders, and a hook-based registration would miss it.
+registerDriverSessionTeardown();
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';

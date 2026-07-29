@@ -65,6 +65,7 @@ from .data_transfer_search import router as data_transfer_search_router
 from .documents import router as documents_router
 from .driver_import import router as driver_import_router
 from .drivers import router as drivers_router
+from .export_approvals import router as export_approvals_router
 from .faqs import router as faqs_router
 from .incentives import router as incentives_router
 from .legal_documents import router as legal_documents_router
@@ -135,6 +136,9 @@ admin_router.include_router(data_transfer_import_router, dependencies=[Depends(r
 admin_router.include_router(data_transfer_search_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(data_transfer_jobs_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(sgi_forms_router, dependencies=[Depends(require_super_admin)])
+# ACTION_ITEMS.md B10 -- approving/denying an export request is at least as
+# sensitive as the export routes it gates; same require_super_admin posture.
+admin_router.include_router(export_approvals_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])

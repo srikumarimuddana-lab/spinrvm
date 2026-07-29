@@ -28,14 +28,18 @@ from pydantic import BaseModel, Field
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...services import admin_export_approvals
     from ...services.data_transfer import bundle_zip_builder, entity_export_service, observability, tabular_writer
+    from ...settings_loader import get_app_settings
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
     from ...utils.rate_limiter import data_transfer_export_limit
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
+    from services import admin_export_approvals  # type: ignore
     from services.data_transfer import bundle_zip_builder, entity_export_service, observability, tabular_writer
+    from settings_loader import get_app_settings
     from supabase_client import supabase
     from utils.audit_logger import log_admin_action
     from utils.rate_limiter import data_transfer_export_limit
@@ -94,6 +98,56 @@ class ExportRequest(BaseModel):
 def _entity_type_summary(entities: list[ExportEntityRef]) -> str:
     types = {e.entity_type for e in entities}
     return types.pop() if len(types) == 1 else "mixed"
+
+
+def _gate_params(body: "ExportRequest") -> dict:
+    """JSON-safe, order-independent representation of the request this
+    approval is bound to -- selecting the same entities in a different
+    order must still match an existing grant/pending request."""
+    return {
+        "entities": sorted([[e.entity_type, e.entity_id] for e in body.entities]),
+        "doc_types": sorted(body.doc_types) if body.doc_types else None,
+        "format": body.format,
+        "include_ride_gps": body.include_ride_gps,
+        "include_document_bytes": body.include_document_bytes,
+    }
+
+
+# ACTION_ITEMS.md B10/AI-3: unlike Compliance's row-count threshold, every
+# Data Transfer export already moves full-fidelity PII (documents, exact
+# GPS) for real people and is capped at MAX_ENTITIES_PER_EXPORT=100 -- there
+# is no meaningfully "small, low-risk" case within this endpoint to carve
+# out. When the flag is on, every export with at least one entity is
+# gated; the flag itself (default off) is what keeps this a no-op today.
+async def _check_export_gate(admin: dict, gate_params: dict, entity_count: int) -> Optional[dict]:
+    """Returns a 202 response body if this export needs (and doesn't yet
+    have) a second admin's approval; returns None if the caller should
+    proceed -- either the gate is off, or an approved grant exists (in
+    which case it's consumed here, single-use)."""
+    settings = await get_app_settings()
+    if not settings.get("dual_approval_exports_enabled") or entity_count == 0:
+        return None
+
+    grant = await admin_export_approvals.find_approved_grant(
+        requested_by=admin["id"], route_key="data_transfer.export", params=gate_params
+    )
+    if grant:
+        await admin_export_approvals.consume(grant["id"])
+        return None
+
+    pending = await admin_export_approvals.find_pending_request(
+        requested_by=admin["id"], route_key="data_transfer.export", params=gate_params
+    )
+    if not pending:
+        pending = await admin_export_approvals.create_request(
+            requested_by=admin["id"], route_key="data_transfer.export", params=gate_params, row_count=entity_count
+        )
+    return {
+        "approval_required": True,
+        "request_id": pending["id"],
+        "status": pending["status"],
+        "row_count": entity_count,
+    }
 
 
 async def _upload_bundle(admin_id: str, file_bytes: bytes, ext: str, content_type: str) -> str:
@@ -234,6 +288,10 @@ async def export_entities(
             status_code=422,
             detail=f"{len(body.entities)} entities requested; the limit is {MAX_ENTITIES_PER_EXPORT} per export",
         )
+
+    gate_response = await _check_export_gate(admin, _gate_params(body), len(body.entities))
+    if gate_response is not None:
+        return gate_response
 
     pairs = [(e.entity_type, e.entity_id) for e in body.entities]
     job_id = str(uuid.uuid4())

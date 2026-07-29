@@ -121,6 +121,102 @@ def test_export_202_and_creates_pending_job(admin_client):
     assert captured["doc"]["reason"] == _VALID_REASON
 
 
+def test_export_gate_off_creates_job_normally(admin_client):
+    """Flag off (the real default): behaves exactly as before the gate
+    existed -- confirms zero behavior change."""
+    with (
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="job-1")),
+        patch(
+            "backend.services.data_transfer.entity_export_service.gather_entity_bundles",
+            AsyncMock(return_value=[_BUNDLE]),
+        ),
+        patch("backend.services.data_transfer.bundle_zip_builder.build_export_zip", lambda bundles: b"PK\x03\x04zip"),
+        patch("backend.db_supabase.update_one", AsyncMock(return_value=None)),
+        patch("backend.routes.admin.data_transfer_export.log_admin_action", AsyncMock(return_value="aud-1")),
+        patch("backend.routes.admin.data_transfer_export.supabase") as mock_supabase,
+        patch(
+            "backend.routes.admin.data_transfer_export.get_app_settings",
+            AsyncMock(return_value={"dual_approval_exports_enabled": False}),
+        ),
+    ):
+        mock_supabase.storage.from_.return_value.upload.return_value = None
+        resp = admin_client.post(
+            "/api/admin/data-transfer/export",
+            json={"entities": [{"entity_type": "driver", "entity_id": "d1"}], "reason": _VALID_REASON},
+        )
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "pending"
+    assert "approval_required" not in resp.json()
+
+
+def test_export_gate_blocks_without_approval(admin_client):
+    with (
+        patch(
+            "backend.routes.admin.data_transfer_export.get_app_settings",
+            AsyncMock(return_value={"dual_approval_exports_enabled": True}),
+        ),
+        patch(
+            "backend.routes.admin.data_transfer_export.admin_export_approvals.find_approved_grant",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.routes.admin.data_transfer_export.admin_export_approvals.find_pending_request",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.routes.admin.data_transfer_export.admin_export_approvals.create_request",
+            AsyncMock(return_value={"id": "req-1", "status": "pending"}),
+        ) as create,
+        patch("backend.db_supabase.insert_one", AsyncMock()) as insert_job,
+    ):
+        resp = admin_client.post(
+            "/api/admin/data-transfer/export",
+            json={"entities": [{"entity_type": "driver", "entity_id": "d1"}], "reason": _VALID_REASON},
+        )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["approval_required"] is True
+    assert body["request_id"] == "req-1"
+    create.assert_awaited_once()
+    assert create.call_args.kwargs["route_key"] == "data_transfer.export"
+    # The gate short-circuits before any job row is written.
+    insert_job.assert_not_awaited()
+
+
+def test_export_gate_consumes_approved_grant_and_proceeds(admin_client):
+    with (
+        patch(
+            "backend.routes.admin.data_transfer_export.get_app_settings",
+            AsyncMock(return_value={"dual_approval_exports_enabled": True}),
+        ),
+        patch(
+            "backend.routes.admin.data_transfer_export.admin_export_approvals.find_approved_grant",
+            AsyncMock(return_value={"id": "req-approved", "status": "approved"}),
+        ),
+        patch(
+            "backend.routes.admin.data_transfer_export.admin_export_approvals.consume", AsyncMock()
+        ) as consume,
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="job-1")),
+        patch(
+            "backend.services.data_transfer.entity_export_service.gather_entity_bundles",
+            AsyncMock(return_value=[_BUNDLE]),
+        ),
+        patch("backend.services.data_transfer.bundle_zip_builder.build_export_zip", lambda bundles: b"PK\x03\x04zip"),
+        patch("backend.db_supabase.update_one", AsyncMock(return_value=None)),
+        patch("backend.routes.admin.data_transfer_export.log_admin_action", AsyncMock(return_value="aud-1")),
+        patch("backend.routes.admin.data_transfer_export.supabase") as mock_supabase,
+    ):
+        mock_supabase.storage.from_.return_value.upload.return_value = None
+        resp = admin_client.post(
+            "/api/admin/data-transfer/export",
+            json={"entities": [{"entity_type": "driver", "entity_id": "d1"}], "reason": _VALID_REASON},
+        )
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "pending"
+    assert "approval_required" not in resp.json()
+    consume.assert_awaited_once_with("req-approved")
+
+
 def test_export_job_row_write_failure_returns_503(admin_client):
     with patch("backend.db_supabase.insert_one", AsyncMock(side_effect=RuntimeError("db down"))):
         resp = admin_client.post(

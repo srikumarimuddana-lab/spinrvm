@@ -13,7 +13,6 @@ import pytest
 
 from utils import session_revocation
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -50,13 +49,13 @@ def test_no_tombstone_when_current_session_is_unknown():
 @pytest.mark.anyio
 async def test_revoked_session_is_reported_as_revoked(mock_redis):
     assert await session_revocation.revoke_session("sess-a") is True
-    assert await session_revocation.is_session_revoked({"session_id": "sess-a"}) is True
+    assert await session_revocation.is_session_revoked("sess-a") is True
 
 
 @pytest.mark.anyio
 async def test_untouched_session_is_not_revoked(mock_redis):
     await session_revocation.revoke_session("sess-a")
-    assert await session_revocation.is_session_revoked({"session_id": "sess-b"}) is False
+    assert await session_revocation.is_session_revoked("sess-b") is False
 
 
 @pytest.mark.anyio
@@ -79,14 +78,10 @@ async def test_tombstone_ttl_matches_access_token_lifetime(mock_redis, monkeypat
 
 
 @pytest.mark.anyio
-async def test_missing_session_id_claim_is_allowed(mock_redis):
-    assert await session_revocation.is_session_revoked({}) is False
-    assert await session_revocation.is_session_revoked({"session_id": None}) is False
-
-
-@pytest.mark.anyio
-async def test_non_dict_payload_is_allowed(mock_redis):
-    assert await session_revocation.is_session_revoked(None) is False  # type: ignore[arg-type]
+async def test_missing_session_id_is_allowed(mock_redis):
+    """A Firebase-authenticated token carries no session_id claim."""
+    assert await session_revocation.is_session_revoked(None) is False
+    assert await session_revocation.is_session_revoked("") is False
 
 
 @pytest.mark.anyio
@@ -98,7 +93,7 @@ async def test_redis_read_failure_allows_the_request(monkeypatch):
         raise RuntimeError("redis unreachable")
 
     monkeypatch.setattr(session_revocation, "redis_get", _boom)
-    assert await session_revocation.is_session_revoked({"session_id": "sess-a"}) is False
+    assert await session_revocation.is_session_revoked("sess-a") is False
 
 
 @pytest.mark.anyio

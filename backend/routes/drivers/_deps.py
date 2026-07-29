@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
-    from ...dependencies import get_admin_user, get_current_user
+    from ...dependencies import get_admin_user, get_current_user, get_token_session_id
     from ...features import send_email, send_push_notification
     from ...geo_utils import calculate_distance, get_service_area_polygon
     from ...logging_utils import diag_logger
@@ -85,7 +85,7 @@ try:
     from ...utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
-    from dependencies import get_admin_user, get_current_user
+    from dependencies import get_admin_user, get_current_user, get_token_session_id
     from features import send_email, send_push_notification
     from geo_utils import calculate_distance, get_service_area_polygon
     from logging_utils import diag_logger

@@ -99,6 +99,27 @@ def test_gst_pst_remittance_returns_pdf_by_default(admin_client):
     assert log.call_args[0][1]["report_type"] == "gst_pst_remittance"
 
 
+def test_gst_pst_remittance_subtitle_splits_date_range_and_totals(admin_client):
+    # Regression: the subtitle previously crammed the date range and three
+    # dollar totals onto one line ("2026-06-29 to 2026-07-29 — Total GST
+    # $17.91, Total PST $0.00, Total HST $0.00"), reported as reading
+    # unprofessionally. Now passed as 2 separate lines to report_branding.
+    from backend.utils import report_branding as rb
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("backend.routes.admin.compliance.report_branding.new_branded_pdf", wraps=rb.new_branded_pdf) as new_pdf,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 200
+    subtitle_arg = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
+    assert isinstance(subtitle_arg, list)
+    assert len(subtitle_arg) == 2
+    assert "to" in subtitle_arg[0]  # date range line
+    assert "GST" in subtitle_arg[1] and "PST" in subtitle_arg[1] and "HST" in subtitle_arg[1]
+
+
 def test_gst_pst_remittance_csv_format(admin_client):
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),

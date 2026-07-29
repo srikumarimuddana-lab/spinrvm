@@ -257,7 +257,7 @@ def _render_tabular_report(
     filename_base: str,
     fieldnames: list[str],
     rows: list[dict],
-    subtitle: str,
+    subtitle: "str | list[str]",
     format: str,
     pdf_landscape: bool = False,
     pdf_col_widths: list[float] | None = None,
@@ -399,12 +399,18 @@ async def get_gst_pst_remittance(
         return gate_response
 
     fieldnames = ["month", "gst", "pst", "hst", "unrecognized_tax", "total_tax"]
-    subtitle = (
-        f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — "
-        f"Total GST ${gst_total:.2f}, Total PST ${pst_total:.2f}, Total HST ${hst_total:.2f}"
-    )
+    # Two lines instead of one crammed sentence — date range/scope on its
+    # own line, tax totals on a second with even spacing (report_branding
+    # supports subtitle as list[str] specifically for this). Previously:
+    # "2026-06-29 to 2026-07-29 — Total GST $17.91, Total PST $0.00, Total
+    # HST $0.00" all run together, reported as reading unprofessionally.
+    totals_line = f"GST: ${gst_total:.2f}    PST: ${pst_total:.2f}    HST: ${hst_total:.2f}"
     if truncated:
-        subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
+        # Appended to the totals line, not a 3rd line — new_branded_workbook
+        # only renders the first 2 subtitle lines, and truncation is too
+        # important to risk dropping from the Excel format specifically.
+        totals_line += f"  — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
+    subtitle = [f"{start_date.date().isoformat()} to {end_date.date().isoformat()}", totals_line]
 
     await _log_compliance_export(
         admin,

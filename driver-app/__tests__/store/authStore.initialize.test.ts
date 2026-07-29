@@ -225,3 +225,48 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
     expect(mockSecureStoreBacking['refresh_token']).toBeUndefined();
   });
 });
+
+describe('session-ended marker + full token wipe', () => {
+  it('clearAuthStorage removes the background task credentials and records the sign-out', async () => {
+    // Regression: clearAuthStorage() claimed to wipe "every auth artifact" but
+    // left fg_access_token / bg_access_token* behind, and never ran the logout
+    // callbacks. A session that ended by *expiry* therefore kept the headless
+    // background-location task both recording and uploading — the reported bug,
+    // on a different trigger than explicit sign-out.
+    mockSecureStoreBacking['auth_token'] = 'stale-access';
+    mockSecureStoreBacking['fg_access_token'] = 'stale-fg-access';
+    mockSecureStoreBacking['bg_access_token'] = 'stale-bg-access';
+    mockSecureStoreBacking['bg_access_token_expires'] = String(Date.now() + 600_000);
+    mockSecureStoreBacking['token_expires_at'] = String(Date.now() + 600_000);
+    // No refresh_token → initialize() takes the "no valid stored token" branch.
+
+    await useAuthStore.getState().initialize();
+
+    expect(mockSecureStoreBacking['auth_token']).toBeUndefined();
+    expect(mockSecureStoreBacking['fg_access_token']).toBeUndefined();
+    expect(mockSecureStoreBacking['bg_access_token']).toBeUndefined();
+    expect(mockSecureStoreBacking['bg_access_token_expires']).toBeUndefined();
+    expect(mockSecureStoreBacking['token_expires_at']).toBeUndefined();
+    // Positive evidence for the headless contexts, which cannot read this store.
+    expect(mockSecureStoreBacking['spinr_session_ended']).toBe('1');
+  });
+
+  it('logout records the marker so headless tasks can observe the sign-out', async () => {
+    useAuthStore.setState({ token: 'live-access', user: { id: 'u1' } as never });
+    mockPost.mockResolvedValue({ data: { success: true }, status: 200 });
+
+    await useAuthStore.getState().logout();
+
+    expect(mockSecureStoreBacking['spinr_session_ended']).toBe('1');
+  });
+
+  it('setTokens clears the marker so a new sign-in resumes tracking', async () => {
+    mockSecureStoreBacking['spinr_session_ended'] = '1';
+
+    await useAuthStore.getState().setTokens('access', 'refresh', 900);
+
+    expect(mockSecureStoreBacking['spinr_session_ended']).toBeUndefined();
+    expect(mockSecureStoreBacking['refresh_token']).toBe('refresh');
+    expect(mockSecureStoreBacking['fg_access_token']).toBe('access');
+  });
+});

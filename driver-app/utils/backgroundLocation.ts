@@ -6,6 +6,7 @@ import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebas
 import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
 import { checkLocationIntegrity, haversineKm } from './locationIntegrity';
 import { recordNonFatal } from './crashlytics';
+import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
 
 // Use the same backend-URL resolver as the shared API client — it carries the
 // production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
@@ -116,6 +117,33 @@ type LocationTaskData = {
 };
 
 /**
+ * Whether the session on this device has ended.
+ *
+ * Reads the explicit marker the auth store writes on logout and on the
+ * no-valid-token path, rather than inferring from absent tokens. Same
+ * positive-evidence rule as the backend tombstone, and for the same reason: an
+ * unreadable SecureStore or a partially-cleared token set must not read as
+ * "signed out". A false "signed out" here would drop a working driver's trip
+ * samples and stop tracking mid-trip, costing billed distance and leaving a gap
+ * in the SGI per-insurance-period audit trail. See shared/auth/sessionMarker.ts
+ * for the full rationale.
+ *
+ * Every ambiguous state resolves to false ("session still live, keep tracking").
+ *
+ * Deliberately NOT consulted by startBackgroundLocation: that runs from the
+ * foreground where the auth store already knows the session, and gating it here
+ * would let a transient SecureStore hiccup block a driver from going online.
+ */
+export async function isSessionEnded(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(SESSION_ENDED_KEY)) !== null;
+  } catch {
+    // Unreadable store is not evidence of a sign-out.
+    return false;
+  }
+}
+
+/**
  * Get a valid access token for the background task.
  *
  * Strategy: read the foreground-persisted access token from SecureStore.
@@ -177,6 +205,20 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     recordNonFatal(new Error(`BgLocation task error: ${error.message}`), { domain: 'drivers', surface: 'driver-app' });
     return;
   }
+  // Session gate, ahead of any persistence. A signed-out driver's coordinates
+  // must not reach the durable outbox at all — recordNativeFix below writes raw
+  // lat/lng to SQLite before any auth work happens, so gating only the upload
+  // would still leave PII at rest on the device. Self-heal by stopping the task:
+  // reaching here after a sign-out means no teardown ran (session ended by
+  // expiry via clearAuthStorage, stale build, or killed mid-logout), so nothing
+  // else is going to stop it.
+  if (await isSessionEnded()) {
+    console.log('[BgLocation] Session ended — dropping samples and stopping');
+    await stopBackgroundLocation().catch(() => {});
+    await stopGeofenceRecovery().catch(() => {});
+    return;
+  }
+
   for (const location of data?.locations ?? []) {
     // Same trust gate as the foreground watcher (useDriverDashboard): a
     // mocked/teleporting/impossibly-fast sample must not enter the durable
@@ -339,11 +381,36 @@ export async function recoverTripLocation(): Promise<boolean> {
 }
 
 export async function stopBackgroundLocation(): Promise<void> {
-  const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
-  if (!isRunning) return;
+  // The native stop is conditional (stopLocationUpdatesAsync throws when the
+  // task was never started) but the key cleanup is NOT. It used to sit behind
+  // the same early return, so a stop that ran while the task happened to be
+  // down — the exact state after an OS kill, or on the logout path — left
+  // bg_access_token behind. That cached token is a live driver JWT: the
+  // headless task kept using it to upload a signed-out driver's GPS for the
+  // remainder of its 15-minute lifetime.
+  let isRunning = false;
+  try {
+    isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
+  } catch (e) {
+    // Probe failed — attempt the stop anyway rather than skipping cleanup.
+    recordNonFatal(e, {
+      domain: 'drivers', surface: 'driver-app', location: 'stop_liveness_probe_failed',
+    });
+    isRunning = true;
+  }
+  if (isRunning) {
+    try {
+      await Location.stopLocationUpdatesAsync(TASK_NAME);
+    } catch (e) {
+      // Never let a native stop failure strand the credential cleanup below.
+      recordNonFatal(e, {
+        domain: 'drivers', surface: 'driver-app', location: 'stop_updates_failed',
+      });
+    }
+  }
 
-  await Location.stopLocationUpdatesAsync(TASK_NAME);
-  // Clear cached background token so a new sign-in starts fresh
+  // Clear cached background credentials + operational state unconditionally so
+  // a new sign-in starts fresh and a signed-out one retains nothing usable.
   await SecureStore.deleteItemAsync('bg_access_token').catch(() => {});
   await SecureStore.deleteItemAsync('bg_access_token_expires').catch(() => {});
   await SecureStore.deleteItemAsync(TRIP_ACTIVE_KEY).catch(() => {});
@@ -383,6 +450,19 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
   if (!payload || !('eventType' in payload) || payload.eventType !== Location.GeofencingEventType.Exit) return;
 
   try {
+    // 0. Session gate. This handler runs headless, with no React and no zustand,
+    //    so it cannot see the auth store — which is precisely how a signed-out
+    //    driver kept getting tracked: the exit handler re-armed location updates
+    //    and re-centred the fence indefinitely, resurrecting tracking even after
+    //    the OS killed the app. Read the persisted end-of-session marker and
+    //    tear down instead of re-arming.
+    if (await isSessionEnded()) {
+      console.log('[Geofence] Session ended — tearing down instead of re-arming');
+      await stopBackgroundLocation().catch(() => {});
+      await stopGeofenceRecovery().catch(() => {});
+      return;
+    }
+
     // 1. Re-arm future background tracking if it is no longer running.
     //    startBackgroundLocation short-circuits if it is already running.
     const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);

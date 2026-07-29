@@ -142,6 +142,20 @@ class MemorySqliteDatabase {
       if (point) this.quarantine.set(`${sessionId}:${sequence}`, { ...point, rejection_reason: rejectionReason });
       return;
     }
+    // Unqualified purge deletes (sign-out). Checked before the acknowledged-
+    // through branch below so a bare DELETE can't be mistaken for a partial one.
+    if (sql.trim() === 'DELETE FROM trip_location_outbox') {
+      this.outbox.clear();
+      return;
+    }
+    if (sql.trim() === 'DELETE FROM trip_location_quarantine') {
+      this.quarantine.clear();
+      return;
+    }
+    if (sql.trim() === 'DELETE FROM trip_location_sessions') {
+      this.sessions.clear();
+      return;
+    }
     if (sql.includes('DELETE FROM trip_location_outbox') && sql.includes('sequence_number <= ?')) {
       const [sessionId, acknowledgedThrough] = params as [string, number];
       for (const [key, point] of this.outbox) {
@@ -302,5 +316,63 @@ describe('TripLocationOutbox', () => {
     expect(await outbox.listPendingSessions()).toEqual([
       expect.objectContaining({ recording_session_id: point.recording_session_id, closed_at: '2026-07-17T22:46:00.000Z' }),
     ]);
+  });
+});
+
+describe('purgeAll (sign-out)', () => {
+  it('drops pending points, quarantine, and sessions', async () => {
+    const database = new MemorySqliteDatabase();
+    const outbox = createTripLocationOutbox({
+      openDatabase: async () => database as never,
+      randomUUID: () => 'session-purge',
+      now: () => '2026-07-29T10:00:00.000Z',
+    });
+
+    await outbox.startSession('ride-1');
+    await outbox.enqueue(makeFix());
+    await outbox.enqueue(makeFix({ monotonic_ms: 2345 }));
+    await outbox.acknowledge('session-purge', 0, [{ sequence_number: 1, reason: 'stale_capture' }]);
+    expect(database.outbox.size + database.quarantine.size + database.sessions.size).toBeGreaterThan(0);
+
+    await outbox.purgeAll();
+
+    // Raw coordinates must not survive sign-out anywhere in the file — a
+    // shared/rented vehicle would otherwise upload them under the next
+    // driver's session.
+    expect(database.outbox.size).toBe(0);
+    expect(database.quarantine.size).toBe(0);
+    expect(database.sessions.size).toBe(0);
+  });
+
+  it('is a no-op on an untouched outbox', async () => {
+    const database = new MemorySqliteDatabase();
+    const outbox = createTripLocationOutbox({
+      openDatabase: async () => database as never,
+      randomUUID: () => 'session-empty',
+      now: () => '2026-07-29T10:00:00.000Z',
+    });
+    await expect(outbox.purgeAll()).resolves.toBeUndefined();
+    expect(database.sessions.size).toBe(0);
+  });
+
+  it('leaves the outbox usable for a fresh session afterwards', async () => {
+    const database = new MemorySqliteDatabase();
+    let id = 0;
+    const outbox = createTripLocationOutbox({
+      openDatabase: async () => database as never,
+      randomUUID: () => `session-${++id}`,
+      now: () => '2026-07-29T10:00:00.000Z',
+    });
+
+    await outbox.startSession('ride-1');
+    await outbox.enqueue(makeFix());
+    await outbox.purgeAll();
+
+    // The unique "one open session per ride" index would reject a re-open if
+    // the purge had left the old session row behind.
+    await outbox.startSession('ride-1');
+    const queued = await outbox.enqueue(makeFix({ ride_id: 'ride-1' }));
+    expect(queued.sequence_number).toBe(0);
+    expect(database.outbox.size).toBe(1);
   });
 });

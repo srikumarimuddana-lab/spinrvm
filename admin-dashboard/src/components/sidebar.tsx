@@ -65,6 +65,7 @@ const NAV_GROUPS: NavGroup[] = [
                 children: [
                     { href: "/dashboard/drivers/queue", label: "Approvals", icon: Inbox, module: "drivers" },
                     { href: "/dashboard/drivers/expiring", label: "Expiring Docs", icon: Clock, module: "drivers" },
+                    { href: "/dashboard/driver-license-backfill", label: "Licence Backfill", icon: FileText, module: "drivers" },
                 ],
             },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },

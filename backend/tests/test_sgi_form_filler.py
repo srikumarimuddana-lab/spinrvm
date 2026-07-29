@@ -35,6 +35,35 @@ def test_fill_driver_details_form_row_one_and_two():
     assert fields["AddOrRemove_2"].get("/V") == "/1"
 
 
+def test_fill_driver_details_form_address_split_across_dedicated_fields():
+    # Regression: the company address was previously crammed as one
+    # "STREET, CITY, PROVINCE, COUNTRY, POSTAL" string into "Street
+    # address" only, leaving the template's own dedicated City/town,
+    # Provincestate, and Postalzip code fields at their stale placeholder
+    # values — a generated PDF with two disagreeing addresses across its
+    # own fields. Each component must now land in its own field, and the
+    # street-address value must contain no city/province/postal/country.
+    fields = _read_back(sgi_form_filler.fill_driver_details_form([]))
+    assert fields["Street address"].get("/V") == "#200, 1956 Broad Street"
+    assert fields["City/town"].get("/V") == "Regina"
+    assert fields["Provincestate"].get("/V") == "SK"
+    assert fields["Postalzip code"].get("/V") == "S4P 1Y1"
+    street = fields["Street address"].get("/V")
+    for leaked in ("Regina", "Saskatchewan", "SK", "Canada", "S4P"):
+        assert leaked.lower() not in street.lower(), f"{leaked!r} leaked into Street address: {street!r}"
+
+
+def test_fill_vehicle_details_form_address_split_across_dedicated_fields():
+    fields = _read_back(sgi_form_filler.fill_vehicle_details_form([]))
+    assert fields["StreetAddress"].get("/V") == "#200, 1956 Broad Street"
+    assert fields["Citytown"].get("/V") == "Regina"
+    assert fields["Provincestate"].get("/V") == "SK"
+    assert fields["Postalzipcode"].get("/V") == "S4P 1Y1"
+    street = fields["StreetAddress"].get("/V")
+    for leaked in ("Regina", "Saskatchewan", "SK", "Canada", "S4P"):
+        assert leaked.lower() not in street.lower(), f"{leaked!r} leaked into StreetAddress: {street!r}"
+
+
 def test_fill_driver_details_form_rejects_too_many_rows():
     rows = [{"full_name": f"Driver {i}"} for i in range(sgi_form_filler.MAX_DRIVER_ROWS + 1)]
     try:

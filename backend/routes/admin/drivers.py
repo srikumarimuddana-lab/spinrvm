@@ -11,6 +11,7 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...routes.drivers._shared import _encrypt_driver_pii
     from ...routes.users import store_profile_image
     from ...services import lms_service
     from ...utils.audit_logger import log_admin_action
@@ -21,6 +22,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
+    from routes.drivers._shared import _encrypt_driver_pii  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
@@ -194,6 +196,7 @@ async def admin_get_drivers(
     service_area_id: Optional[str] = None,
     vehicle_type_id: Optional[str] = None,
     photo_status: Optional[str] = None,
+    missing_license: bool = False,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = None,
 ):
@@ -256,6 +259,18 @@ async def admin_get_drivers(
             ]
             if matching_uids:
                 filters["$or"].append({"user_id": {"$in": matching_uids}})
+
+    # Filter to drivers missing licence_number or licence_class (ACTION_ITEMS.md
+    # B14 backfill queue — the SGI D00032 form renders these fields blank for
+    # any driver where they were never entered; see
+    # docs/proposals/2026-07-29-driver-document-ocr-onboarding-automation.md).
+    # $or would collide with the search block's own $or key above, so the two
+    # aren't supported together -- this filter is for the dedicated backfill
+    # review screen, not the general search UI.
+    if missing_license:
+        if search:
+            raise HTTPException(status_code=400, detail="missing_license cannot be combined with search")
+        filters["$or"] = [{"license_number": None}, {"license_class": None}]
 
     # Filter by profile-photo moderation status (photo lives on users). Used by
     # the admin "Pending photos" queue. No matching users → no drivers.
@@ -1197,7 +1212,11 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         if user_updates and user_id:
             await db_supabase.update_one("users", {"id": user_id}, user_updates)
         if driver_updates:
-            await db_supabase.update_one("drivers", {"id": driver_id}, driver_updates)
+            # license_number is Vault-encrypted at rest (_VAULT_PII_FIELDS,
+            # routes/drivers/_shared.py) -- must be encrypted before every
+            # write, same as the self-serve profile-update and bulk-import
+            # paths. This admin route previously wrote it as plaintext.
+            await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(driver_updates))
     except HTTPException:
         raise
     except Exception as e:

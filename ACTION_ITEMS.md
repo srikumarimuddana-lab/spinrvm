@@ -1076,10 +1076,16 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   (new, applied).
 
 ### B14. SGI form company address split across dedicated fields + driver licence-number/class data gap
-- [x] **Status:** address bug DONE (2026-07-29) — the licence-number/class
-  half is confirmed as a genuine **data gap**, not a code bug; the larger
-  OCR/automated-onboarding proposal is written up but **not started**,
-  pending a scope/vendor decision.
+- [x] **Status:** address bug DONE (2026-07-29). Licence-number/class
+  confirmed as a genuine **data gap**; a third, independent bug was found
+  and fixed while building the remediation tool (admin driver-edit route
+  wrote `license_number` as plaintext instead of Vault-encrypting it —
+  see below). The backfill **queue/tooling is now built and live**
+  (`/dashboard/driver-license-backfill`); the actual 22-driver data entry
+  is a manual step for an admin to do in that screen, not something this
+  session can perform (requires reading real government ID photos). The
+  larger OCR/automated-onboarding proposal is written up but **not
+  started**, pending a scope/vendor decision.
 - **Why (address):** both real SGI templates (`D00032`/`D00033`) ship
   dedicated `Street address`/`City/town`/`Provincestate`/`Postalzip code`
   fields (confirmed via `PdfReader.get_fields()`), but
@@ -1104,12 +1110,25 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   and a reasoned automated-onboarding (OCR + capture-guidance +
   dual-approval) proposal in
   `docs/proposals/2026-07-29-driver-document-ocr-onboarding-automation.md`.
-- **Immediate remediation (not yet done, small, unblocked):** (1)
-  one-time manual backfill — read the licence number/class off the 22
-  drivers' already-uploaded documents and enter via the existing
-  profile-edit path; (2) make licence-number/class entry a required part
-  of the admin document-review "approve" action going forward, so this
-  gap can't grow — small scoped change, own PR + Change Impact Log (it
+- **Third bug found + fixed while building remediation:** `routes/admin/
+  drivers.py`'s `PUT /admin/drivers/{id}` (the exact endpoint the backfill
+  tool needed to write through) wrote `license_number` as plaintext —
+  unlike the self-serve profile-update and bulk-import paths, which both
+  correctly call `_encrypt_driver_pii()` first. Any admin editing a
+  driver's licence number via the dashboard was storing it unencrypted, a
+  PIPEDA violation per that module's own docstring. Fixed before building
+  anything on top of that endpoint, with a regression test asserting the
+  raw value never reaches the DB write.
+- **Immediate remediation — tooling DONE, data entry still open:** (1)
+  `/dashboard/driver-license-backfill` (new admin page) lists exactly the
+  drivers missing licence data via a new `missing_license` filter on
+  `GET /admin/drivers`, lets an admin open the existing `DocumentReviewer`
+  to view each driver's already-uploaded licence photo, and save via the
+  now-fixed encrypting update path — an admin still needs to actually work
+  through the queue (this session cannot reliably read government ID
+  photos); (2) make licence-number/class entry a required part of the
+  admin document-review "approve" action going forward, so this gap can't
+  grow — small scoped change, still open, own PR + Change Impact Log (it
   changes an existing live admin workflow).
 - **Larger proposal (not started, needs a decision):** OCR-assisted
   document intake with client-side capture guidance (Expo camera +
@@ -1122,14 +1141,21 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   PIPEDA precautions, and sizing.
 - **Files:** `backend/services/data_transfer/sgi_form_filler.py` (address
   fix), `backend/tests/test_sgi_form_filler.py` (2 new regression tests),
+  `backend/routes/admin/drivers.py` (encrypt-on-write fix + `missing_license`
+  filter), `backend/tests/test_admin_business_logic.py` (encryption
+  regression test), `backend/tests/test_admin_extended.py` (2 filter
+  tests), `admin-dashboard/src/app/dashboard/driver-license-backfill/page.tsx`
+  (new), `admin-dashboard/src/lib/api.ts`, `admin-dashboard/src/components/sidebar.tsx`,
   `docs/proposals/2026-07-29-driver-document-ocr-onboarding-automation.md`
   (new).
 - **Acceptance (address, done):** generated D00032/D00033 PDFs have each
   address component in its correct dedicated field, verified by
   regenerating both forms and reading every field back. **Acceptance
-  (licence data, pending):** not gating — tracked here until the
-  immediate-remediation backfill closes the 22-driver gap and a decision
-  is made on the larger proposal.
+  (encryption fix, done):** regression test confirms plaintext never
+  reaches the DB write. **Acceptance (licence data, pending):** not
+  gating — tracked here until an admin actually works through the
+  `/dashboard/driver-license-backfill` queue and a decision is made on
+  the larger proposal.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

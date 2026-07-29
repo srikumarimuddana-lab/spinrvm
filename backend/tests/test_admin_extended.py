@@ -103,7 +103,9 @@ class TestAdminGetRides:
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.admin.rides._batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
         ):
-            result = asyncio.run(admin_rides.admin_get_rides(limit=50, offset=0, status="completed", search=None, sort_dir=None))
+            result = asyncio.run(
+                admin_rides.admin_get_rides(limit=50, offset=0, status="completed", search=None, sort_dir=None)
+            )
 
         assert result["total_count"] == 0
 
@@ -117,7 +119,9 @@ class TestAdminGetRides:
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=scheduled)),
             patch("backend.routes.admin.rides._batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
         ):
-            result = asyncio.run(admin_rides.admin_get_rides(limit=50, offset=0, is_scheduled=True, search=None, sort_dir=None))
+            result = asyncio.run(
+                admin_rides.admin_get_rides(limit=50, offset=0, is_scheduled=True, search=None, sort_dir=None)
+            )
 
         assert result["total_count"] == 1
 
@@ -790,6 +794,33 @@ class TestAdminGetDrivers:
         # d3 (the later duplicate of u1) is dropped; d1 and d2 stay in the
         # DB-returned rating-desc order (d1 then d2) — NOT re-sorted by date.
         assert [r["id"] for r in result] == ["d1", "d2"]
+
+    def test_missing_license_filter(self):
+        """ACTION_ITEMS.md B14 backfill queue: missing_license=True must
+        filter drivers whose license_number OR license_class is NULL."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        captured_filters = {}
+
+        def get_rows_side(table, filters=None, **kw):
+            if table == "drivers":
+                captured_filters.update(filters or {})
+                return []
+            return []
+
+        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+            asyncio.run(admin_drivers.admin_get_drivers(missing_license=True))
+
+        assert captured_filters.get("$or") == [{"license_number": None}, {"license_class": None}]
+
+    def test_missing_license_rejects_combination_with_search(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin import drivers as admin_drivers
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(admin_drivers.admin_get_drivers(missing_license=True, search="Bob"))
+        assert exc_info.value.status_code == 400
 
 
 class TestAdminSearchDrivers:

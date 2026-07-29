@@ -38,28 +38,49 @@ MAX_VEHICLE_ROWS = 16
 # with an independent company-name/customer-number field per page
 # (CompanyName/CompanyName2/CompanyName3); the template only ships page 1
 # filled in, so pages 2-3 rendered blank on every generated form until this
-# was set explicitly here. Update these two constants (not the PDF
-# templates) if Spinr's registered company name, SGI customer number, or
-# address changes.
+# was set explicitly here. Update these constants (not the PDF templates)
+# if Spinr's registered company name, SGI customer number, or address
+# changes.
+#
+# Address is split into its own street/city/province/postal parts rather
+# than one combined string: both real templates (confirmed via
+# PdfReader.get_fields()) already ship dedicated "Provincestate"/
+# "Postalzip[ ]code"/"Cit[y/town]" fields alongside the street-address
+# field. Previously this module set only the street-address field to the
+# full "STREET, CITY, PROVINCE, COUNTRY, POSTAL" string and left those
+# dedicated fields untouched at the template's own stale placeholder
+# values (a different address entirely) — producing a generated PDF with
+# two different, disagreeing addresses across its own fields. Neither
+# template has a "Country" field at all, so country is dropped rather than
+# crammed into a field that isn't meant to hold it.
 _COMPANY_NAME = "Spinr Mobility Inc."
-_COMPANY_ADDRESS = "#200, 1956 BROAD STREET, REGINA, SASKATCHEWAN, CANADA, S4P 1Y1"
+_COMPANY_STREET = "#200, 1956 Broad Street"
+_COMPANY_CITY = "Regina"
+_COMPANY_PROVINCE = "SK"
+_COMPANY_POSTAL = "S4P 1Y1"
 _SGI_CUSTOMER_NUMBER = "88816996"
 
 # D00032 has a single company-info section (one page's worth of fields).
 _DRIVER_COMPANY_FIELDS = {
     "Company name": _COMPANY_NAME,
-    "Street address": _COMPANY_ADDRESS,
+    "Street address": _COMPANY_STREET,
+    "City/town": _COMPANY_CITY,
+    "Provincestate": _COMPANY_PROVINCE,
+    "Postalzip code": _COMPANY_POSTAL,
     "SGI customer number": _SGI_CUSTOMER_NUMBER,
 }
-# D00033 repeats the company-info block once per page; confirmed via
-# PdfReader.get_fields() that CompanyName2/CompanyName3 and
-# SGICustomerNumber3 ship blank in the template (SGICustomerNumber2 happens
-# to be pre-filled, StreetAddress has no page-2/3 counterpart at all).
+# D00033 repeats the company-name/customer-number block once per page, but
+# confirmed via PdfReader.get_fields() the address block (StreetAddress/
+# Citytown/Provincestate/Postalzipcode) has no page-2/3 counterpart at all
+# — one address block covers the whole form.
 _VEHICLE_COMPANY_FIELDS = {
     "CompanyName": _COMPANY_NAME,
     "CompanyName2": _COMPANY_NAME,
     "CompanyName3": _COMPANY_NAME,
-    "StreetAddress": _COMPANY_ADDRESS,
+    "StreetAddress": _COMPANY_STREET,
+    "Citytown": _COMPANY_CITY,
+    "Provincestate": _COMPANY_PROVINCE,
+    "Postalzipcode": _COMPANY_POSTAL,
     "SGICustomerNumber": _SGI_CUSTOMER_NUMBER,
     "SGICustomerNumber2": _SGI_CUSTOMER_NUMBER,
     "SGICustomerNumber3": _SGI_CUSTOMER_NUMBER,

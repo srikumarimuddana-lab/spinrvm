@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { AlertEvent } from "./types";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronUp, Zap, X } from "lucide-react";
@@ -32,6 +33,7 @@ function formatTime(iso: string): string {
 export function AlertFeed({ events, onClear, onEventClick }: AlertFeedProps) {
     const [open, setOpen] = useState(false);
     const [lastSeenCount, setLastSeenCount] = useState(0);
+    const shouldReduceMotion = useReducedMotion();
 
     const unread = events.length - lastSeenCount;
 
@@ -82,19 +84,27 @@ export function AlertFeed({ events, onClear, onEventClick }: AlertFeedProps) {
                         </p>
                     ) : (
                         <div className="flex flex-col-reverse gap-0.5">
-                            {events.map((evt) => (
-                                <button
-                                    key={evt.id}
-                                    onClick={() => onEventClick(evt)}
-                                    className="flex items-center gap-2 rounded px-1 py-0.5 text-left text-xs hover:bg-muted"
-                                >
-                                    <span className="shrink-0 font-mono text-muted-foreground">
-                                        {formatTime(evt.timestamp)}
-                                    </span>
-                                    <span>{ICON_MAP[evt.icon]}</span>
-                                    <span className="truncate">{evt.message}</span>
-                                </button>
-                            ))}
+                            <AnimatePresence initial={false}>
+                                {events.map((evt) => (
+                                    <motion.button
+                                        key={evt.id}
+                                        onClick={() => onEventClick(evt)}
+                                        className="flex items-center gap-2 rounded px-1 py-0.5 text-left text-xs hover:bg-muted"
+                                        // A new row landing at the top of a live dispatch feed is the
+                                        // signal ("something just happened"), not decoration — skipped
+                                        // entirely under prefers-reduced-motion.
+                                        initial={shouldReduceMotion ? false : { opacity: 0, y: -6 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ duration: 0.15 }}
+                                    >
+                                        <span className="shrink-0 font-mono text-muted-foreground">
+                                            {formatTime(evt.timestamp)}
+                                        </span>
+                                        <span>{ICON_MAP[evt.icon]}</span>
+                                        <span className="truncate">{evt.message}</span>
+                                    </motion.button>
+                                ))}
+                            </AnimatePresence>
                         </div>
                     )}
                 </div>

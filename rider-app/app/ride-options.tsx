@@ -776,6 +776,8 @@ function RideOptionsScreenContent() {
                 onPress={(e) => { e.stopPropagation(); applyPromo(null); }}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 style={styles.promoRemoveBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Remove promo code"
               >
                 <Ionicons name="close-circle" size={20} color="#059669" />
               </TouchableOpacity>
@@ -927,7 +929,12 @@ function RideOptionsScreenContent() {
                   )}
                 </View>
                 {scheduledTime ? (
-                  <TouchableOpacity onPress={() => setScheduledTime(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => setScheduledTime(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear scheduled pickup time"
+                  >
                     <Ionicons name="close-circle" size={18} color="#9CA3AF" />
                   </TouchableOpacity>
                 ) : (
@@ -947,7 +954,7 @@ function RideOptionsScreenContent() {
                 {isBooking ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.confirmButtonText} allowFontScaling={false}>
+                  <Text style={styles.confirmButtonText}>
                     {scheduledTime ? 'Schedule' : 'Confirm'} {selectedEstimate.vehicle_type.name} · ${totalFare.toFixed(2)}
                   </Text>
                 )}
@@ -1317,7 +1324,7 @@ function AnimatedVehicleCard({
             {(estimate.surge_multiplier ?? 1) > 1.0 && (
               <View style={styles.surgeBadge}>
                 <Ionicons name="trending-up" size={10} color="#fff" />
-                <Text style={styles.surgeBadgeText} allowFontScaling={false}>{estimate.surge_multiplier}x</Text>
+                <Text style={styles.surgeBadgeText}>{estimate.surge_multiplier}x</Text>
               </View>
             )}
             <View style={styles.capacityBadge}>
@@ -1326,7 +1333,7 @@ function AnimatedVehicleCard({
             </View>
           </View>
           {isAvailable ? (
-            <Text style={styles.optionETA} allowFontScaling={false}>
+            <Text style={styles.optionETA}>
               {estimate.eta_minutes ? `${estimate.eta_minutes} min` : 'Nearby'}
               {estimate.driver_count > 0 && ` · ${estimate.driver_count} driver${estimate.driver_count > 1 ? 's' : ''}`}
             </Text>
@@ -1340,15 +1347,15 @@ function AnimatedVehicleCard({
         <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
           {cardDiscount > 0 ? (
             <View style={{ alignItems: 'flex-end' }}>
-              <Text style={styles.optionPriceStruck} allowFontScaling={false}>
+              <Text style={styles.optionPriceStruck}>
                 ${cardGrandTotal.toFixed(2)}
               </Text>
-              <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
+              <Text style={styles.optionPriceDiscounted}>
                 ${Math.max(0, cardGrandTotal - cardDiscount).toFixed(2)}
               </Text>
             </View>
           ) : (
-            <Text style={styles.optionPrice} allowFontScaling={false}>
+            <Text style={styles.optionPrice}>
               ${cardGrandTotal.toFixed(2)}
             </Text>
           )}

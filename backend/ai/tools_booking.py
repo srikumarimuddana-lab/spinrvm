@@ -1595,9 +1595,12 @@ register(
         handler=get_fare_quote,
         mcp_exposed=False,
         # Worst case: pickup/dropoff verification each chain two 4 s geocodes
-        # (concurrently), then the estimate engine waits 2 s for the road
-        # route, plus promo/DB reads — the 5 s global default timed out
-        # exactly when a full quote fan-out succeeded slowly.
+        # (concurrently), then the estimate engine waits up to 3.5 s for the
+        # road route (_PRICING_ROUTE_WAIT_S, raised with DIRECTIONS_TIMEOUT_S
+        # on 2026-07-29), plus promo/DB reads — the 5 s global default timed
+        # out exactly when a full quote fan-out succeeded slowly. ~12 s worst
+        # case leaves real but reduced headroom under this 15 s ceiling;
+        # raising the route wait again means raising this too.
         timeout_seconds=15.0,
     )
 )

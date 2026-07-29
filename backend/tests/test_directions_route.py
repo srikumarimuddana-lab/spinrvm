@@ -111,12 +111,54 @@ class TestSoftFailures:
         client_cls.assert_not_called()
 
     async def test_empty_polyline_returns_none(self):
+        # Neither a billable distance NOR a drawable line — nothing useful.
         payload = {
             "status": "OK",
             "routes": [{"overview_polyline": {"points": ""}, "legs": []}],
         }
         route = await _call_route(payload)
         assert route is None
+
+    async def test_missing_polyline_still_returns_road_distance(self):
+        """The overview polyline only draws the map line — it must never gate
+        the billable distance. This used to `return None`, throwing away a
+        valid legs[].distance and dropping the fare to straight-line
+        haversine. Haversine is always <= road, so that was a silent,
+        one-directional undercharge every time Google answered OK without
+        overview geometry.
+        """
+        payload = {
+            "status": "OK",
+            "routes": [
+                {
+                    "overview_polyline": {"points": ""},
+                    "legs": [{"distance": {"value": 16600}, "duration": {"value": 1500}}],
+                }
+            ],
+        }
+        route = await _call_route(payload)
+        assert route is not None, "a missing map line must not discard the road distance"
+        assert route["distance_km"] == 16.6
+        assert route["duration_s"] == 1500
+        assert route["polyline"] == []
+
+    async def test_degenerate_polyline_still_returns_road_distance(self):
+        """Same for a polyline that decodes to fewer than 2 points: unusable
+        for rendering, irrelevant to pricing."""
+        single_point = "_p~iF~ps|U"  # decodes to one coordinate
+        payload = {
+            "status": "OK",
+            "routes": [
+                {
+                    "overview_polyline": {"points": single_point},
+                    "legs": [{"distance": {"value": 16600}, "duration": {"value": 1500}}],
+                }
+            ],
+        }
+        route = await _call_route(payload)
+        assert route is not None
+        assert route["distance_km"] == 16.6
+        assert route["polyline"] == []
 
 
 class TestPolylineWrapper:

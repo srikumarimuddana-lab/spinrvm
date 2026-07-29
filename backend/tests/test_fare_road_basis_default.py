@@ -67,12 +67,22 @@ def test_pricing_wait_stays_within_the_estimate_latency_budget() -> None:
     """The determinism invariant above is satisfied by raising the wait, which
     makes it a one-way ratchet on rider-visible latency: CLAUDE.md pins fare
     estimate P95 at 300 ms, and the wait is the worst case a rider can feel on
-    "tap → price shown". Ceiling here so a future bump to DIRECTIONS_TIMEOUT_S
-    has to come with a deliberate decision rather than silently costing 2 s.
+    "tap → price shown". Ceiling here so a bump to DIRECTIONS_TIMEOUT_S has to
+    come with a deliberate decision rather than silently costing seconds.
+
+    Ceiling raised 2.0 s -> 3.5 s (DIRECTIONS_TIMEOUT_S 1.5 -> 3.0) as an
+    explicit product decision, 2026-07-29: the road route is the billing
+    basis and haversine is a guardrail for a dead upstream, not a second
+    pricing mode. Every timeout billed the straight line, which is always
+    <= the road distance, so the loss was one-directional and — under 0%
+    commission — came out of the driver's fare (reported: a 16.6 km road
+    trip billed as 15.5 km). The wait costs nothing on a warm call; it only
+    extends the slow tail that was mispricing. Raising it further should
+    again be a deliberate call, not a silent creep.
     """
     from routes.rides import estimates
 
-    assert estimates._PRICING_ROUTE_WAIT_S <= 2.0
+    assert estimates._PRICING_ROUTE_WAIT_S <= 3.5
 
 
 @pytest.mark.anyio

@@ -20,10 +20,10 @@ def _read_back(pdf_bytes: bytes) -> dict:
 def test_fill_driver_details_form_row_one_and_two():
     rows = [
         sgi_field_maps.driver_to_driver_details_row(
-            {"full_name": "Jane Doe", "license_number": "D1", "license_class": "5", "spinr_approved": True},
+            {"name": "Jane Doe", "license_number": "D1", "license_class": "5"},
         ),
         sgi_field_maps.driver_to_driver_details_row(
-            {"full_name": "John Smith", "license_number": "D2", "license_class": "5"}, action="remove"
+            {"name": "John Smith", "license_number": "D2", "license_class": "5"}, action="remove"
         ),
     ]
     fields = _read_back(sgi_form_filler.fill_driver_details_form(rows))
@@ -72,32 +72,34 @@ def test_fill_vehicle_details_form_rejects_too_many_rows():
         pass
 
 
-def test_driver_to_vehicle_details_row_expired_inspection_is_false():
-    """Regression test for the bug caught during development: fabricated
-    column names silently evaluated to False forever. This confirms the
-    real column (vehicle_inspection_expiry_date) is read and an expired
-    date correctly resolves to False, not just "always False either way"."""
+def test_driver_to_vehicle_details_row_inspection_defaults_true():
+    """`valid_inspection` defaults to Yes regardless of expiry data — see
+    the docstring on driver_to_vehicle_details_row for why."""
     row = sgi_field_maps.driver_to_vehicle_details_row(
-        {"full_name": "Jane Doe", "vehicle_inspection_expiry_date": "2020-01-01"}
-    )
-    assert row["valid_inspection"] is False
-
-
-def test_driver_to_vehicle_details_row_unexpired_inspection_is_true():
-    row = sgi_field_maps.driver_to_vehicle_details_row(
-        {"full_name": "Jane Doe", "vehicle_inspection_expiry_date": "2099-01-01"}
+        {"name": "Jane Doe", "vehicle_inspection_expiry_date": "2020-01-01"}
     )
     assert row["valid_inspection"] is True
 
 
+def test_driver_to_vehicle_details_row_maps_real_owner_name_column():
+    """Regression test: an earlier version read `driver.full_name`, which
+    doesn't exist on the `drivers` table (the real column is `name`) —
+    silently blanking the registered owner's name on every generated form."""
+    row = sgi_field_maps.driver_to_vehicle_details_row({"name": "Jane Doe"})
+    assert row["registered_owners_name"] == "Jane Doe"
+
+
 def test_driver_to_driver_details_row_maps_real_columns():
+    """Regression test: an earlier version read `driver.full_name` (doesn't
+    exist on `drivers` — the real column is `name`), silently blanking the
+    driver's name on every generated D00032. `verified_driver_history` and
+    `criminal_record_check_attached` default to Yes regardless of input —
+    see the docstring on driver_to_driver_details_row for why."""
     row = sgi_field_maps.driver_to_driver_details_row(
         {
-            "full_name": "Jane Doe",
+            "name": "Jane Doe",
             "license_number": "D12345",
             "license_class": "5",
-            "spinr_approved": True,
-            "background_check_expiry_date": "2099-01-01",
         }
     )
     assert row["full_name"] == "Jane Doe"

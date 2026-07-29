@@ -75,6 +75,14 @@ export async function setupAdminMocks(
       return json(200, { authenticated: true, user });
     }
 
+    // /api/admin/service-areas returns a bare array in production
+    // (backend/routes/admin/service_areas.py::admin_get_service_areas) —
+    // needs its own case since the generic object-shaped fallback below
+    // would make `serviceAreas.map()` in EntitySearchTable throw.
+    if (url.includes('/api/admin/service-areas') && method === 'GET') {
+      return json(200, []);
+    }
+
     // Generic fallback: empty-but-valid shapes so list pages render an
     // empty state instead of crashing on `undefined.map`.
     return json(200, { items: [], data: [], total: 0, page: 1, per_page: 20 });

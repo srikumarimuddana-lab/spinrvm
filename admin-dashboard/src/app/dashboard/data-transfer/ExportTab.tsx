@@ -11,6 +11,8 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HelpCircle } from "lucide-react";
 import {
     exportDataTransferEntities,
     getDataTransferJob,
@@ -32,6 +34,17 @@ const MAX_ENTITIES_PER_EXPORT = 100;
 // feedback instead of a round-trip 422.
 const REASON_MIN_LENGTH = 10;
 const REASON_MAX_LENGTH = 200;
+
+function Hint({ text }: { text: string }) {
+    return (
+        <Tooltip>
+            <TooltipTrigger asChild>
+                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0 cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-[260px]">{text}</TooltipContent>
+        </Tooltip>
+    );
+}
 
 const DOC_TYPE_OPTIONS = [
     "drivers_license",
@@ -92,8 +105,12 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
     // consistently needed for a regulator/insurer-facing transfer.
     const [docTypes, setDocTypes] = useState<Set<string>>(new Set(["background_check"]));
     const [reason, setReason] = useState("");
-    const [includeRideGps, setIncludeRideGps] = useState(true);
-    const [includeDocumentBytes, setIncludeDocumentBytes] = useState(true);
+    // Both default OFF (PIPEDA data-minimization) -- exact GPS traces and raw
+    // document bytes are the two most sensitive things this export can carry;
+    // an admin who genuinely needs them opts in deliberately per export
+    // rather than exporting them by default every time.
+    const [includeRideGps, setIncludeRideGps] = useState(false);
+    const [includeDocumentBytes, setIncludeDocumentBytes] = useState(false);
     const [loading, setLoading] = useState(false);
 
     const reasonValid = reason.trim().length >= REASON_MIN_LENGTH && reason.length <= REASON_MAX_LENGTH;
@@ -176,7 +193,10 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
 
             {format === "zip" && (
                 <div className="space-y-2">
-                    <span className="text-sm font-medium">Documents to include</span>
+                    <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium">Documents to include</span>
+                        <Hint text="Only Background Check is checked by default — check the specific document types you actually need for this export rather than everything." />
+                    </div>
                     <div className="flex flex-wrap gap-4">
                         {DOC_TYPE_OPTIONS.map((docType) => (
                             <label key={docType} className="flex items-center gap-2 text-sm">
@@ -212,7 +232,10 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             </div>
 
             <div className="space-y-2">
-                <span className="text-sm font-medium">Data to include</span>
+                <div className="flex items-center gap-1.5">
+                    <span className="text-sm font-medium">Data to include</span>
+                    <Hint text="Both are off by default (PIPEDA data minimization) — turn one on only when this specific export genuinely needs it." />
+                </div>
                 <div className="flex flex-col gap-2">
                     <label className="flex items-center gap-2 text-sm">
                         <input

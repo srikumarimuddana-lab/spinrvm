@@ -3390,6 +3390,10 @@ export interface DataTransferSearchParams {
     // enum, since the two tables' status vocabularies aren't identical (see
     // backend/routes/admin/data_transfer_search.py's status param comment).
     status?: string;
+    // Only meaningful when entityType is "driver" (or omitted/"all", where it
+    // still only narrows the driver rows) -- `users` has no service_area_id
+    // column, see data_transfer_search.py's driver-only branch.
+    serviceAreaId?: string;
     page?: number;
     pageSize?: number;
 }
@@ -3400,6 +3404,7 @@ export const searchDataTransferEntities = (params: DataTransferSearchParams) => 
     if (params.dateFrom) qs.set("date_from", params.dateFrom);
     if (params.dateTo) qs.set("date_to", params.dateTo);
     if (params.status) qs.set("status", params.status);
+    if (params.serviceAreaId) qs.set("service_area_id", params.serviceAreaId);
     qs.set("page", String(params.page ?? 1));
     qs.set("page_size", String(params.pageSize ?? 50));
     return request<DataTransferSearchResult>(`/api/admin/data-transfer/search?${qs.toString()}`);
@@ -3559,6 +3564,61 @@ export async function downloadInsurancePeriodAudit(
     );
     return { blob, filename: `insurance_period_audit.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
+
+export async function downloadKnightArcherDriverOnboarding(
+    format: ComplianceReportFormat,
+    status?: string,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ format });
+    if (status) sp.set("status", status);
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/knight-archer-driver-onboarding?${sp.toString()}`,
+        "knight_archer_driver_onboarding",
+    );
+    return { blob, filename: `knight_archer_driver_onboarding.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+/** Email a compliance report to a @spinr.ca address instead of downloading
+ * it — the backend hard-validates the domain, this just calls the same GET
+ * endpoint with `email_to` set, which returns a small JSON confirmation
+ * instead of a file. */
+async function emailComplianceReport(path: string, emailTo: string): Promise<{ emailed_to: string }> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = {};
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    const sep = path.includes("?") ? "&" : "?";
+    const res = await fetch(`${path}${sep}email_to=${encodeURIComponent(emailTo)}`, { headers });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not email report (${res.status})`);
+    }
+    return res.json();
+}
+
+export const emailGstPstRemittance = (dateRange: string, format: ComplianceReportFormat, emailTo: string) =>
+    emailComplianceReport(
+        `/api/admin/compliance/gst-pst-remittance?${new URLSearchParams({ date_range: dateRange, format }).toString()}`,
+        emailTo,
+    );
+export const emailInsurancePeriodAudit = (
+    dateRange: string,
+    format: ComplianceReportFormat,
+    emailTo: string,
+    driverId?: string,
+) => {
+    const sp = new URLSearchParams({ date_range: dateRange, format });
+    if (driverId) sp.set("driver_id", driverId);
+    return emailComplianceReport(`/api/admin/compliance/insurance-period-audit?${sp.toString()}`, emailTo);
+};
+export const emailKnightArcherDriverOnboarding = (
+    format: ComplianceReportFormat,
+    emailTo: string,
+    status?: string,
+) => {
+    const sp = new URLSearchParams({ format });
+    if (status) sp.set("status", status);
+    return emailComplianceReport(`/api/admin/compliance/knight-archer-driver-onboarding?${sp.toString()}`, emailTo);
+};
 
 export interface DataTransferJob {
     id: string;

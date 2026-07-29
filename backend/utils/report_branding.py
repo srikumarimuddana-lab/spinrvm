@@ -98,6 +98,10 @@ REPORT_FORMAT_REGISTRY: dict[str, ReportRegistration] = {
         "mode": "branded",
         "description": "Admin lookup of a rider/driver's self-service DSAR export status",
     },
+    "t4a_filer_handoff": {
+        "mode": "branded",
+        "description": "Per-driver annual earnings + Stripe-verified address for a third-party T4A filer (never includes SIN)",
+    },
 }
 
 

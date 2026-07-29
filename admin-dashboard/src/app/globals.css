@@ -15,6 +15,8 @@
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-destructive: var(--sidebar-destructive);
+  --color-sidebar-foreground-muted: var(--sidebar-foreground-muted);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
   --color-chart-5: var(--chart-5);
@@ -80,8 +82,19 @@
   --chart-5: #7c3aed;
   --sidebar: #ffffff;
   --sidebar-foreground: #1f2937;
-  --sidebar-primary: #d32f2f;
+  /* Sidebar-scoped accents, distinct from the app-wide --primary/--destructive:
+     the sidebar's active-nav-link renders its accent as TEXT over a 10%-tint
+     of itself, and Sign Out renders --destructive directly as text — both are
+     a different contrast pair than "white text on a solid fill" (what
+     --primary/--destructive above are tuned for). #c62828 here reaches
+     4.82:1 against its own self-generated 10%-tint-over-white background
+     (verified against the literal rendered bg, not just the token in
+     isolation) — #d32f2f (the app-wide --primary) only reaches ~4.29:1 in
+     this specific tint context. */
+  --sidebar-primary: #c62828;
   --sidebar-primary-foreground: #ffffff;
+  --sidebar-destructive: #dc2626;
+  --sidebar-foreground-muted: #6b7280;
   --sidebar-accent: #f3f4f6;
   --sidebar-accent-foreground: #1f2937;
   --sidebar-border: #e5e7eb;
@@ -122,8 +135,19 @@
   --chart-5: #8b5cf6;
   --sidebar: #0a0a0c;
   --sidebar-foreground: #fafafa;
-  --sidebar-primary: #d32f2f;
+  /* Same sidebar-scoped-accent reasoning as the light theme above, mirrored
+     for dark: the app-wide --primary (#d32f2f) drops to 3.74:1 as text
+     against its own 10%-tint here (verified via axe), because a muted dark
+     red has little separation from an already-near-black tinted bg. The
+     brand's own vibrant hue (#ff453a) — deliberately NOT used for
+     --primary's solid-fill role in Phase 0 (fails white-text-fill contrast)
+     — reaches 5.34:1 here specifically because it's brighter, not filled.
+     Same logic for --sidebar-destructive: --destructive (#dc2626) is 4.09:1
+     as plain text on the raw sidebar bg; #ff453a reaches 5.80:1. */
+  --sidebar-primary: #ff453a;
   --sidebar-primary-foreground: #ffffff;
+  --sidebar-destructive: #ff453a;
+  --sidebar-foreground-muted: #828283;
   --sidebar-accent: #18181b;
   --sidebar-accent-foreground: #fafafa;
   --sidebar-border: #27272a;

@@ -63,7 +63,15 @@ class TestTriggerEmergency:
     Code under test: backend/routes/rides.py::trigger_emergency (~line 1661).
     """
 
-    async def _trigger(self, sender_user_id: str, driver_row=None, ride=None, emergency_contacts=None):
+    async def _trigger(
+        self,
+        sender_user_id: str,
+        driver_row=None,
+        ride=None,
+        emergency_contacts=None,
+        send_sms_side_effect=None,
+        get_app_settings_side_effect=None,
+    ):
         from backend.routes import rides as rides_mod
 
         persisted = []
@@ -83,23 +91,31 @@ class TestTriggerEmergency:
                 return emergency_contacts or []
             return []
 
-        async def _send_sms(phone, body, **kwargs):
+        async def _default_send_sms(phone, body, **kwargs):
             sms_calls.append({"phone": phone, "body": body, **kwargs})
             return {"success": True, "provider": "mock"}
 
         active_ride = ride if ride is not None else _ride()
+        send_sms_mock = AsyncMock(side_effect=send_sms_side_effect or _default_send_sms)
+        settings_mock = (
+            AsyncMock(side_effect=get_app_settings_side_effect)
+            if get_app_settings_side_effect
+            else AsyncMock(return_value={})
+        )
 
         with (
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=active_ride)),
             patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
-            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock(side_effect=_broadcast_to_admins)),
+            patch(
+                "backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock(side_effect=_broadcast_to_admins)
+            ),
             patch(
                 "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
             ),
-            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(side_effect=_send_sms)),
+            patch("backend.routes.rides._deps.get_app_settings", settings_mock),
+            patch("backend.routes.rides._deps.send_sms", send_sms_mock),
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
@@ -216,3 +232,72 @@ class TestTriggerEmergency:
 
         assert result["contacts_notified"] == 0
         assert sms_calls == []
+
+    async def test_sms_exception_for_one_contact_does_not_block_the_others(self):
+        """A raised exception from send_sms for one contact is logged (type
+        name only — PIPEDA, never the exception text which may embed the
+        phone number) and does not stop the other contacts from being
+        notified. routes/rides/safety.py logs via loguru (imported through
+        _deps), which doesn't propagate to caplog — patch the module-level
+        `logger` name directly instead."""
+        contacts = [
+            {"id": "ec-1", "phone": "+13061112222", "name": "Mom"},
+            {"id": "ec-2", "phone": "+13063334444", "name": "Dad"},
+        ]
+
+        async def _flaky_send_sms(phone, body, **kwargs):
+            if phone == "+13061112222":
+                raise RuntimeError("Twilio exploded for +13061112222")
+            return {"success": True, "provider": "mock"}
+
+        with patch("backend.routes.rides.safety.logger") as mock_logger:
+            result, _, _, _sms = await self._trigger(
+                RIDER_ID, emergency_contacts=contacts, send_sms_side_effect=_flaky_send_sms
+            )
+
+        assert result["contacts_notified"] == 1
+        error_calls = [c.args[0] for c in mock_logger.error.call_args_list if "SOS SMS failed for contact ec-1" in c.args[0]]
+        assert error_calls, "expected an error log for the failing contact"
+        assert "RuntimeError" in error_calls[0]
+        assert "+13061112222" not in error_calls[0]  # PIPEDA: no raw phone number in the log
+
+    async def test_sms_failure_result_is_logged_and_not_counted(self):
+        """send_sms returning success=False (not raising) is logged via the
+        PII-free 'error' string send_sms guarantees, and that contact is not
+        counted as notified."""
+        contacts = [{"id": "ec-1", "phone": "+13061112222", "name": "Mom"}]
+
+        async def _failing_send_sms(phone, body, **kwargs):
+            return {"success": False, "error": "type=twilio_error status=400"}
+
+        with patch("backend.routes.rides.safety.logger") as mock_logger:
+            result, _, _, _sms = await self._trigger(
+                RIDER_ID, emergency_contacts=contacts, send_sms_side_effect=_failing_send_sms
+            )
+
+        assert result["contacts_notified"] == 0
+        assert any(
+            "type=twilio_error status=400" in c.args[0] for c in mock_logger.error.call_args_list
+        )
+
+    async def test_contact_notification_outer_failure_returns_warning(self):
+        """A failure anywhere in the contact-notification block (e.g.
+        get_app_settings blowing up) must not fail the whole request — the
+        incident is already persisted by this point. The response instead
+        carries a notification_warning telling the rider to call contacts
+        directly."""
+        with patch("backend.routes.rides.safety.logger") as mock_logger:
+            result, persisted, _, sms_calls = await self._trigger(
+                RIDER_ID,
+                emergency_contacts=[{"id": "ec-1", "phone": "+13061112222", "name": "Mom"}],
+                get_app_settings_side_effect=RuntimeError("settings service down"),
+            )
+
+        assert result["success"] is True
+        assert result["contacts_notified"] == 0
+        assert "notification_warning" in result
+        assert persisted, "the incident itself must still be persisted"
+        assert sms_calls == []
+        assert any(
+            "SOS emergency contact notification failed" in c.args[0] for c in mock_logger.error.call_args_list
+        )

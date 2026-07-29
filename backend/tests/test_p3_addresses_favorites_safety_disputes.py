@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 RIDER = {"id": "user_1", "role": "rider", "phone": "+13061234567"}
+DRIVER_USER = {"id": "driver_user_1", "role": "driver", "is_driver": True, "phone": "+13069998888"}
 
 
 @pytest.fixture
@@ -19,6 +20,22 @@ def client():
     from backend.server import app
 
     app.dependency_overrides[dependencies.get_current_user] = lambda: RIDER
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def driver_client():
+    """Same as `client` but authenticated as a driver (is_driver=True) —
+    needed to exercise routes.safety's driver-side ride-membership branch,
+    which `client`'s hardcoded RIDER can never reach."""
+    import dependencies
+    from backend.server import app
+
+    app.dependency_overrides[dependencies.get_current_user] = lambda: DRIVER_USER
     from fastapi.testclient import TestClient
 
     with TestClient(app) as c:
@@ -269,6 +286,78 @@ class TestSafety:
                 json={"category": "fraud", "description": "Fraudulent charge"},
             )
         assert r.status_code == 503
+
+    def test_submit_report_driver_party_to_ride_gets_verified_ride_id(self, driver_client):
+        """WS-18: a driver reporting on a ride they actually drove gets
+        verified_ride_id set on the incident — exercises the driver-side
+        (not rider-side) branch of the ride-membership check."""
+        driver_row = {"id": "driver_row_1", "user_id": DRIVER_USER["id"]}
+        ride = {"id": "ride_9", "rider_id": "some_other_rider", "driver_id": "driver_row_1"}
+        db = _mock_db(
+            get_ride=AsyncMock(return_value=ride),
+            get_rows=AsyncMock(return_value=[driver_row]),
+        )
+        captured = {}
+
+        async def _insert(table, row):
+            captured["row"] = row
+
+        db.insert_one = AsyncMock(side_effect=_insert)
+        with patch("routes.safety.db_supabase", db):
+            r = driver_client.post(
+                "/api/v1/safety/report",
+                json={
+                    "category": "unsafe_driving",
+                    "description": "Rider was aggressive",
+                    "ride_context": {"ride_id": "ride_9"},
+                },
+            )
+        assert r.status_code == 200
+        assert captured["row"]["ride_id"] == "ride_9"
+        assert captured["row"]["role"] == "driver"
+
+    def test_submit_report_non_party_ride_context_is_dropped(self, driver_client):
+        """A caller who isn't actually a party to the referenced ride gets
+        their report persisted, but ride_id is NOT attached (WS-18 anti-spoof)."""
+        driver_row = {"id": "driver_row_1", "user_id": DRIVER_USER["id"]}
+        ride = {"id": "ride_9", "rider_id": "some_rider", "driver_id": "a_different_driver_row"}
+        db = _mock_db(
+            get_ride=AsyncMock(return_value=ride),
+            get_rows=AsyncMock(return_value=[driver_row]),
+        )
+        captured = {}
+
+        async def _insert(table, row):
+            captured["row"] = row
+
+        db.insert_one = AsyncMock(side_effect=_insert)
+        with patch("routes.safety.db_supabase", db):
+            r = driver_client.post(
+                "/api/v1/safety/report",
+                json={
+                    "category": "unsafe_driving",
+                    "description": "Not actually my ride",
+                    "ride_context": {"ride_id": "ride_9"},
+                },
+            )
+        assert r.status_code == 200
+        assert captured["row"]["ride_id"] is None
+
+    def test_submit_report_notify_safety_team_failure_does_not_fail_request(self, client):
+        """notify_safety_team is best-effort — the report is already
+        persisted by the time it's called, so a notify failure must not
+        turn an otherwise-successful report into an error response."""
+        db = _mock_db()
+        with (
+            patch("routes.safety.db_supabase", db),
+            patch("routes.safety.notify_safety_team", AsyncMock(side_effect=RuntimeError("notify down"))),
+        ):
+            r = client.post(
+                "/api/v1/safety/report",
+                json={"category": "harassment", "description": "Verbal harassment"},
+            )
+        assert r.status_code == 200
+        assert r.json()["success"] is True
 
 
 # ──────────────────────────────── disputes ───────────────────────────────────

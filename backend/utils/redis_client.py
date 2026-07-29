@@ -254,6 +254,7 @@ KNOWN_KEY_PREFIXES = [
     "cache:driver:by_user:",  # get_driver_by_user_id_cached cache
     "idem:",  # idempotency-key response cache
     "session:",  # login session lookup
+    "revoked_session:",  # signed-out session tombstones (utils/session_revocation)
     "otp:",  # OTP records + lockout
     "ratelimit:",  # slowapi rate limiter
     "spinr:retry_budget:",  # per-second retry budget counter

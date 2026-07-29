@@ -98,6 +98,10 @@ REPORT_FORMAT_REGISTRY: dict[str, ReportRegistration] = {
         "mode": "branded",
         "description": "Admin lookup of a rider/driver's self-service DSAR export status",
     },
+    "t4a_filer_handoff": {
+        "mode": "branded",
+        "description": "Per-driver annual earnings + Stripe-verified address for a third-party T4A filer (never includes SIN)",
+    },
 }
 
 
@@ -149,13 +153,20 @@ def format_report_timestamp(value: "str | None", *, empty: str = "") -> str:
     return dt.strftime("%Y-%m-%d %H:%M") + " UTC"
 
 
-def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
+def new_branded_pdf(title: str, subtitle: "str | list[str]" = "", landscape: bool = False):
     """Return an fpdf2 FPDF instance (A4, portrait unless landscape=True)
     with the standard Spinr branded header already drawn: a thin red accent
     rule at the very top, the logo, dark title text, and a grey subtitle —
     not a full-bleed color block, which reads as an alert banner rather
     than a document header. Caller starts writing content at the current
-    cursor position (y ~34mm) after this returns.
+    cursor position (below the header block) after this returns.
+
+    `subtitle` may be a single string or a list of lines — e.g. a date
+    range on one line and per-tax-type totals on a second, rather than
+    cramming "2026-06-29 to 2026-07-29 — Total GST $17.91, Total PST
+    $0.00, Total HST $0.00" onto one crowded line (the original design,
+    reported as reading unprofessionally). Each line gets its own row;
+    the header block (and the divider rule under it) grows to fit.
 
     Pass landscape=True for tables with several columns or long cell
     values (e.g. UUIDs, ISO timestamps) — portrait's ~180mm usable width
@@ -166,6 +177,9 @@ def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
     this; they fill the regulator's own template via sgi_form_filler.
     """
     from fpdf import FPDF  # type: ignore[import-untyped]
+
+    subtitle_lines = [subtitle] if isinstance(subtitle, str) else list(subtitle)
+    subtitle_lines = [line for line in subtitle_lines if line]
 
     pdf = FPDF(orientation="L" if landscape else "P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -180,8 +194,7 @@ def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
 
     # Logo height matched to the title's cap-height (17pt bold ≈ 6mm caps)
     # plus headroom, rather than the earlier 11mm, which rendered visibly
-    # smaller than the title text next to it. 14mm keeps the header block
-    # inside the same ~30mm reserved height (divider rule is still at y=30).
+    # smaller than the title text next to it.
     pdf.set_xy(left, 8)
     if has_logo_asset():
         pdf.image(str(LOGO_PATH), x=left, y=8, h=14)
@@ -190,16 +203,20 @@ def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
     pdf.set_font(BRAND_FONT, "B", 17)
     pdf.cell(0, 8, pdf_safe(title), ln=True)
     pdf.set_x(left + (36 if has_logo_asset() else 0))
-    if subtitle:
-        pdf.set_text_color(*MUTED_RGB)
-        pdf.set_font(BRAND_FONT, "", 10)
-        pdf.cell(0, 6, pdf_safe(subtitle), ln=True)
+    pdf.set_text_color(*MUTED_RGB)
+    pdf.set_font(BRAND_FONT, "", 10)
+    for line in subtitle_lines:
+        pdf.set_x(left + (36 if has_logo_asset() else 0))
+        pdf.cell(0, 6, pdf_safe(line), ln=True)
 
-    # Divider rule under the header block.
+    # Divider rule under the header block — grows with the number of
+    # subtitle lines instead of a fixed y=30 that a 2-line subtitle would
+    # overrun into.
+    divider_y = 24 + max(1, len(subtitle_lines)) * 6
     pdf.set_draw_color(*RULE_RGB)
-    pdf.line(left, 30, page_w - left, 30)
+    pdf.line(left, divider_y, page_w - left, divider_y)
 
-    pdf.set_y(36)
+    pdf.set_y(divider_y + 6)
     pdf.set_text_color(*INK_RGB)
     # Reset fill from the top accent rule — otherwise fpdf2's Table API
     # (render_pdf_table) would inherit brand red as every cell's
@@ -208,13 +225,19 @@ def new_branded_pdf(title: str, subtitle: str = "", landscape: bool = False):
     return pdf
 
 
-def new_branded_workbook(title: str, subtitle: str = ""):
+def new_branded_workbook(title: str, subtitle: "str | list[str]" = ""):
     """Return (Workbook, Worksheet) with a Spinr-branded title block:
     the logo image (if the asset exists) anchored at A1, title (dark,
     bold) and subtitle (grey) in the columns beside it, then a thin
     brand-red rule under row 4. Caller starts writing its header row at
     DEFAULT_TABLE_START_ROW (row 6) — logo image height needs more
     vertical room than plain text did.
+
+    `subtitle` may be a single string or a list of lines (see
+    new_branded_pdf's docstring for why) — each line gets its own row
+    starting at row 2, so the accent rule (row 4) and table start
+    (DEFAULT_TABLE_START_ROW) still line up as long as at most 2 lines
+    are passed (the only caller today uses at most 2).
 
     Only for report_type entries registered as "branded" — fixed_format
     reports never go through openpyxl branding; they fill the regulator's
@@ -246,9 +269,12 @@ def new_branded_workbook(title: str, subtitle: str = ""):
 
     ws[f"{title_col}1"] = title
     ws[f"{title_col}1"].font = Font(name=BRAND_FONT, bold=True, size=14, color="212121")
-    if subtitle:
-        ws[f"{title_col}2"] = subtitle
-        ws[f"{title_col}2"].font = Font(name=BRAND_FONT, size=10, color=MUTED_HEX)
+    subtitle_lines = [subtitle] if isinstance(subtitle, str) else list(subtitle)
+    subtitle_lines = [line for line in subtitle_lines if line]
+    for i, line in enumerate(subtitle_lines[:2]):
+        cell = ws[f"{title_col}{2 + i}"]
+        cell.value = line
+        cell.font = Font(name=BRAND_FONT, size=10, color=MUTED_HEX)
 
     # Thin brand-red accent rule under the header block (row 4), matching
     # the PDF/Word header treatment — accent only, not a full color block.
@@ -283,11 +309,12 @@ def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: 
             ws.cell(row=r, column=col, value=_sanitize_csv_cell(row.get(name)))
 
 
-def new_branded_document(title: str, subtitle: str = ""):
+def new_branded_document(title: str, subtitle: "str | list[str]" = ""):
     """Return a python-docx Document with a Spinr-branded title block: the
     logo image (if the asset exists), a dark heading (not brand-red — a
     full-color heading read as an alert rather than a document title), an
-    optional grey subtitle line, a thin brand-red accent rule, then a blank
+    optional grey subtitle (one or more lines — see new_branded_pdf's
+    docstring for why), a thin brand-red accent rule, then a blank
     paragraph spacer. Caller appends its own content (paragraphs, tables)
     after this returns.
 
@@ -311,8 +338,11 @@ def new_branded_document(title: str, subtitle: str = ""):
         run.font.color.rgb = RGBColor(*INK_RGB)
         run.font.name = BRAND_FONT
 
-    if subtitle:
-        sub = doc.add_paragraph(subtitle)
+    subtitle_lines = [subtitle] if isinstance(subtitle, str) else list(subtitle)
+    for line in subtitle_lines:
+        if not line:
+            continue
+        sub = doc.add_paragraph(line)
         sub.runs[0].font.size = Pt(10)
         sub.runs[0].font.color.rgb = RGBColor(*MUTED_RGB)
 

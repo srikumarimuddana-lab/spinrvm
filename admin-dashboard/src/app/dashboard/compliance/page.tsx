@@ -13,10 +13,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useAuthStore } from "@/store/authStore";
 import {
     downloadGstPstRemittance,
     downloadInsurancePeriodAudit,
     downloadKnightArcherDriverOnboarding,
+    downloadT4aFilerHandoff,
     emailGstPstRemittance,
     emailInsurancePeriodAudit,
     emailKnightArcherDriverOnboarding,
@@ -112,6 +114,11 @@ export default function CompliancePage() {
     const [kaLoading, setKaLoading] = useState(false);
     const [kaEmailLoading, setKaEmailLoading] = useState(false);
 
+    const [t4aYear, setT4aYear] = useState(new Date().getFullYear() - 1);
+    const [t4aFormat, setT4aFormat] = useState<ComplianceReportFormat>("xlsx");
+    const [t4aLoading, setT4aLoading] = useState(false);
+    const isSuperAdmin = useAuthStore((s) => s.user?.role === "super_admin");
+
     if (!allowed) return null;
 
     // `onEmailError` used the same "Could not generate report" title as
@@ -201,6 +208,18 @@ export default function CompliancePage() {
         }
     };
 
+    const onDownloadT4a = async () => {
+        setT4aLoading(true);
+        try {
+            const { blob, filename } = await downloadT4aFilerHandoff(t4aYear, t4aFormat);
+            triggerBrowserDownload(blob, filename);
+        } catch (e: any) {
+            onError(e);
+        } finally {
+            setT4aLoading(false);
+        }
+    };
+
     return (
         <div className="p-6 space-y-6">
             <div>
@@ -219,6 +238,7 @@ export default function CompliancePage() {
                     <TabsTrigger value="gst-pst">GST/PST Remittance</TabsTrigger>
                     <TabsTrigger value="insurance-audit">Insurance-Period Audit</TabsTrigger>
                     <TabsTrigger value="knight-archer">Knight Archer Driver Onboarding</TabsTrigger>
+                    {isSuperAdmin && <TabsTrigger value="t4a-filer">T4A Filer Handoff</TabsTrigger>}
                 </TabsList>
 
                 <TabsContent value="gst-pst">
@@ -404,6 +424,72 @@ export default function CompliancePage() {
                         </CardContent>
                     </Card>
                 </TabsContent>
+
+                {isSuperAdmin && (
+                    <TabsContent value="t4a-filer">
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2">
+                                    <FileText className="h-5 w-5" />
+                                    T4A Filer Handoff
+                                </CardTitle>
+                                <CardDescription className="flex items-start gap-1.5">
+                                    <span>
+                                        Per-driver annual earnings plus Stripe-verified legal name and mailing
+                                        address, for every driver at or above the $500 CRA reporting threshold —
+                                        for handoff to a third-party tax filer (accountant or platform-reporting
+                                        vendor). Never includes the SIN itself: SIN stays on Stripe&apos;s side and
+                                        is retrieved per-driver only via the audited &quot;Reveal SIN&quot; action on a
+                                        driver&apos;s Payouts tab when actually filing.
+                                    </span>
+                                    <Hint text="Two CRA obligations can apply to Spinr: the traditional T4A (Box 048, $500 threshold) and the newer Reportable Platform Operator rules (Part XX.1, since Jan 2024). Which apply, and whether they overlap, is a determination for your tax filer — this export gives them everything except the SIN." />
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="flex flex-wrap items-end gap-4">
+                                    <div className="space-y-1.5">
+                                        <Label>Tax year</Label>
+                                        <Input
+                                            type="number"
+                                            className="w-28"
+                                            value={t4aYear}
+                                            onChange={(e) => setT4aYear(Number(e.target.value) || t4aYear)}
+                                            min={2020}
+                                            max={2100}
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label>Format</Label>
+                                        <Select value={t4aFormat} onValueChange={(v) => setT4aFormat(v as ComplianceReportFormat)}>
+                                            <SelectTrigger className="w-32">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {FORMATS.map((f) => (
+                                                    <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <Button onClick={onDownloadT4a} disabled={t4aLoading}>
+                                        {t4aLoading ? (
+                                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                        ) : (
+                                            <Download className="h-4 w-4 mr-2" />
+                                        )}
+                                        Download
+                                    </Button>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Super admin only — this export surfaces verified legal name and mailing
+                                    address in bulk, more sensitive than the aggregate totals in the other
+                                    reports on this page. No email option; download and hand off through your
+                                    own secure channel to the filer.
+                                </p>
+                            </CardContent>
+                        </Card>
+                    </TabsContent>
+                )}
             </Tabs>
         </div>
     );

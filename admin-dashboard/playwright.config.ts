@@ -11,7 +11,13 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? 'github' : 'html',
   timeout: 30_000,
-  expect: { timeout: 8_000 },
+  expect: {
+    timeout: 8_000,
+    // Small tolerance for anti-aliasing/font-rendering jitter between runs
+    // on the same CI runner — visual-regression.spec.ts is the only spec
+    // using toHaveScreenshot today.
+    toHaveScreenshot: { maxDiffPixelRatio: 0.01 },
+  },
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
     trace: 'on-first-retry',
@@ -25,6 +31,22 @@ export default defineConfig({
     },
     {
       name: 'chromium',
+      testIgnore: /visual-regression\.spec\.ts/,
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE,
+      },
+      dependencies: ['setup'],
+    },
+    // Kept as its own project (run explicitly via --project=visual-regression,
+    // never picked up by a bare `playwright test`/`npm run test:e2e`) because
+    // it has no committed baselines yet — see
+    // .github/workflows/update-visual-baselines.yml. Mixing it into the
+    // `chromium` project would make the already-meaningful e2e-test job
+    // fail on every run for a reason unrelated to what that job checks.
+    {
+      name: 'visual-regression',
+      testMatch: /visual-regression\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         storageState: STORAGE_STATE,

@@ -343,7 +343,7 @@ jobs:
         run: |
           npx next start &
           npx wait-on http://localhost:3000 --timeout 30000
-          npm run test:e2e
+          npx playwright test --project=setup --project=chromium
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_API_URL: http://localhost:8000
@@ -355,6 +355,64 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report
+          path: admin-dashboard/playwright-report/
+          retention-days: 7
+
+  # Visual regression — separate from e2e-test above and always
+  # continue-on-error: no baselines are committed yet (see
+  # .github/workflows/update-visual-baselines.yml), so every run currently
+  # fails "no baseline found" by design. Flip continue-on-error off once
+  # baselines are seeded and this should start actually gating. Runs the
+  # `visual-regression` Playwright project only — explicitly excluded from
+  # the e2e-test job above via playwright.config.ts's testIgnore, so it
+  # can't accidentally start failing that already-meaningful job.
+  visual-regression-test:
+    name: Visual regression (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [backend-test]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: admin-dashboard
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: admin-dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Next.js app
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          BACKEND_URL: http://localhost:8000
+
+      - name: Start Next.js and run visual regression tests
+        run: |
+          npx next start &
+          npx wait-on http://localhost:3000 --timeout 30000
+          npx playwright test --project=setup --project=visual-regression
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          BACKEND_URL: http://localhost:8000
+          CI: true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-regression-report
           path: admin-dashboard/playwright-report/
           retention-days: 7
 

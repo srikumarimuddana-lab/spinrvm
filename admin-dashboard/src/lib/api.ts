@@ -528,6 +528,9 @@ export const getDrivers = (opts: {
     vehicle_type_id?: string;
     search?: string;
     photo_status?: string;
+    /** ACTION_ITEMS.md B14 backfill queue — drivers missing license_number
+     * or license_class. Cannot be combined with `search` (backend 400s). */
+    missing_license?: boolean;
     sort_by?: string;
     sort_dir?: "asc" | "desc";
 } = {}) => {
@@ -542,6 +545,7 @@ export const getDrivers = (opts: {
     if (opts.vehicle_type_id) sp.set("vehicle_type_id", opts.vehicle_type_id);
     if (opts.search) sp.set("search", opts.search);
     if (opts.photo_status) sp.set("photo_status", opts.photo_status);
+    if (opts.missing_license != null) sp.set("missing_license", String(opts.missing_license));
     if (opts.sort_by) sp.set("sort_by", opts.sort_by);
     if (opts.sort_dir) sp.set("sort_dir", opts.sort_dir);
     const qs = sp.toString();

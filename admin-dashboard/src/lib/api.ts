@@ -4,6 +4,19 @@
 // migrated stay below unchanged; migrated ones are re-exported so existing
 // `import { ... } from "@/lib/api"` call sites are unaffected.
 export { API_BASE, RateLimitError, request } from "./api/client";
+export {
+    getDriverDocuments,
+    reviewDocument,
+    adminUploadDriverDocument,
+    getDriverNotes,
+    addDriverNote,
+    deleteDriverNote,
+} from "./api/driver-documents";
+export type {
+    RejectTemplate,
+    ReviewDocumentOptions,
+    AdminUploadDocumentInput,
+} from "./api/driver-documents";
 import { request } from "./api/client";
 import { useAuthStore } from "@/store/authStore";
 
@@ -1090,39 +1103,8 @@ export const denyExportRequest = (requestId: string, decisionNote = "") =>
         body: JSON.stringify({ decision_note: decisionNote }),
     });
 
-/* ── Driver Document Verification ────────── */
-export const getDriverDocuments = (driverId: string) =>
-    request<any[]>(`/api/admin/documents/drivers/${driverId}`);
-
-export type RejectTemplate =
-    | "blurry_image"
-    | "wrong_document_type"
-    | "expired"
-    | "information_unclear"
-    | "other";
-
-export interface ReviewDocumentOptions {
-    notify?: boolean;
-    notifyTemplate?: RejectTemplate;
-}
-
-export const reviewDocument = (
-    docId: string,
-    status: string,
-    reason?: string,
-    expiryDate?: string,
-    options?: ReviewDocumentOptions,
-) =>
-    request<any>(`/api/admin/documents/${docId}/review`, {
-        method: "POST",
-        body: JSON.stringify({
-            status,
-            rejection_reason: reason,
-            expiry_date: expiryDate,
-            ...(options?.notify !== undefined ? { notify: options.notify } : {}),
-            ...(options?.notifyTemplate ? { notify_template: options.notifyTemplate } : {}),
-        }),
-    });
+/* ── Driver Document Verification ─────────
+   Moved to lib/api/driver-documents.ts, re-exported above. */
 
 /* ── Bulk Driver Import (CSV) ─────────────── */
 export interface DriverImportReportItem {
@@ -1442,30 +1424,8 @@ export const adminCommitRiderImport = (file: File, batch?: string) =>
         body: riderImportFormData(file, batch),
     });
 
-/* ── Manual Admin Document Upload ─────────── */
-export interface AdminUploadDocumentInput {
-    driverId: string;
-    requirementKey: string;
-    file: File;
-    side?: "front" | "back";
-    expiryDate?: string;
-    status?: "pending" | "approved";
-}
-
-/** Upload a document on a driver's behalf (pending, or committed straight to approved). */
-export const adminUploadDriverDocument = (input: AdminUploadDocumentInput) => {
-    const fd = new FormData();
-    fd.append("file", input.file);
-    fd.append("driver_id", input.driverId);
-    fd.append("requirement_key", input.requirementKey);
-    if (input.side) fd.append("side", input.side);
-    if (input.expiryDate) fd.append("expiry_date", input.expiryDate);
-    fd.append("status", input.status ?? "pending");
-    return request<Record<string, unknown>>("/api/admin/documents/upload", {
-        method: "POST",
-        body: fd,
-    });
-};
+/* ── Manual Admin Document Upload ─────────
+   Moved to lib/api/driver-documents.ts, re-exported above. */
 
 export interface ApprovalQueueItem {
     driver_id: string;
@@ -2436,17 +2396,7 @@ export const overrideDriverStatus = (driverId: string, status: string, reason?: 
 export const exportDrivers = () =>
     request<{ drivers: any[]; count: number }>("/api/admin/export/drivers");
 
-export const getDriverNotes = (driverId: string) =>
-    request<any[]>(`/api/admin/drivers/${driverId}/notes`);
-
-export const addDriverNote = (driverId: string, note: string, category: string = "general") =>
-    request<any>(`/api/admin/drivers/${driverId}/notes`, {
-        method: "POST",
-        body: JSON.stringify({ note, category }),
-    });
-
-export const deleteDriverNote = (noteId: string) =>
-    request<any>(`/api/admin/drivers/notes/${noteId}`, { method: "DELETE" });
+/* Driver notes moved to lib/api/driver-documents.ts, re-exported above. */
 
 export const getDriverActivity = (driverId: string) =>
     request<any[]>(`/api/admin/drivers/${driverId}/activity`);

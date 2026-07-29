@@ -256,8 +256,9 @@ async def _resolve_driver_search_user_ids(tokens: List[str]) -> List[str]:
     renders each `$or` as its own PostgREST `or=(...)` param, and repeated
     `or=` params are ANDed server-side.
     """
-    ilike = lambda t: {"$regex": t, "$options": "i"}  # noqa: E731
-    per_token = [{"$or": [{col: ilike(tok)} for col in _DRIVER_SEARCH_USER_COLUMNS]} for tok in tokens]
+    per_token = [
+        {"$or": [{col: {"$regex": tok, "$options": "i"}} for col in _DRIVER_SEARCH_USER_COLUMNS]} for tok in tokens
+    ]
 
     # Project only `id` so a name search never pulls base64 profile_image rows.
     matching_users = await db_supabase.get_rows(

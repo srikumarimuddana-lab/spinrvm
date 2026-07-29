@@ -49,10 +49,14 @@ from ._shared import (  # noqa: F401
 # 12.12 km → 16.46 km, $30.92 → $39.44 between quote and confirm card).
 #
 # Derived, never hardcoded: the invariant is wait > timeout, so the ONLY way
-# to buy latency back is to lower DIRECTIONS_TIMEOUT_S — which is why that
-# constant now sits at 1.5 s, keeping this bound at 2.0 s instead of the 3.5 s
-# a 3.0 s timeout implied. CLAUDE.md pins fare estimate P95 at 300 ms, so the
-# worst case here is a real trade and belongs on the low side of it.
+# to buy latency back is to lower DIRECTIONS_TIMEOUT_S. That constant was
+# raised 1.5 s -> 3.0 s on 2026-07-29, putting this bound at 3.5 s: the road
+# route is the billing basis and every timeout bills the shorter straight
+# line, a one-directional loss that lands on the driver's fare under 0%
+# commission. CLAUDE.md pins fare estimate P95 at 300 ms, so this worst case
+# is a real trade — taken deliberately toward correct pricing, and it costs
+# nothing on a warm call (the route task runs concurrently). Lowering it
+# again resumes the undercharge; fix upstream latency instead.
 # Haversine mode skips the wait entirely; the fare_distance_basis app
 # setting remains the kill switch if Directions latency ever hurts.
 _PRICING_ROUTE_WAIT_S = DIRECTIONS_TIMEOUT_S + 0.5

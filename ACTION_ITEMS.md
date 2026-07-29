@@ -352,9 +352,38 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        path for all 8 functions (user lookup/creation, OTP CRUD).
        Remaining 2 lines are the dual-import fallback. Test-only, no bugs
        found. See `docs/change-log/2026-07-29-a1b-refresh-tokens-coverage.md`.
-     - Still open: `routes/auth.py` (51%), `routes/admin/auth.py` (64-70%),
-       `core/middleware.py` (60%), `dependencies/__init__.py` (62%) —
-       larger files, not started.
+     - `dependencies/__init__.py` — **done, 93%** (was 62%/77%; the JWT
+       auth-gate module's Firebase-token success path — uid lookup, phone
+       fallback, session-revocation via `sessions_invalid_before`, driver
+       caching, deleted-account enforcement — had **zero** direct
+       coverage; existing tests only exercised the "not a Firebase token,
+       fall through to JWT" branch. Also closed `_verify_admin_payload`'s
+       staff-inactive / stale-token-version / idle-timeout / malformed-
+       timestamp branches, JWT-path DB-error propagation (never silently
+       swallowed, per CLAUDE.md), and `get_current_user_allow_expired`'s
+       admin-audience-gets-no-grace and not-actually-expired branches.
+       Added `tests/test_dependencies_auth_gaps.py` (20 tests). Remaining
+       21 lines are the dual-import fallback plus a handful of
+       log-statement-only branches. Test-only, no bugs found.
+     - `core/middleware.py` — **done, 81%** (was 60%/69%;
+       `_validate_production_config` — the fail-fast guard that stops a
+       misconfigured deploy from ever serving traffic when
+       `ENV=production` — was only ever *patched away* (mocked out) in
+       `test_p1_cors.py`, never exercised directly. Added
+       `tests/test_middleware_production_config_guard.py` (16 tests)
+       covering every one of its 5 checks (JWT secret weak/short,
+       Supabase URL missing/placeholder, service-role key
+       missing/malformed/short, admin creds weak, rate-limit Redis URL
+       missing/non-redis-scheme) both individually and combined into one
+       `RuntimeError`, plus the Firebase-creds-missing warn-only path.
+       Remaining gap is four nested middleware classes defined inside
+       `init_middleware(app)` (App Check enforcement, CORS exception
+       handler, relative-redirect rewriting, deadline propagation) —
+       these need `TestClient`-level request testing, not unit-testable
+       in isolation; lower priority, diminishing returns for this pass.
+       See `docs/change-log/2026-07-29-a1b-dependencies-middleware-coverage.md`.
+     - Still open: `routes/auth.py` (51%), `routes/admin/auth.py` (64-70%)
+       — largest remaining files in this track, not started.
   4. `backend/routes/admin/` (15+ admin-only endpoints) — admin actions are
      audited but not necessarily tested; a broken admin endpoint can corrupt
      production data at scale (e.g. bulk driver approval, wallet

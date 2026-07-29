@@ -400,7 +400,29 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        endpoints have direct tests yet; large remaining scope, not
        pursued further in this pass. See
        `docs/change-log/2026-07-29-a1b-verify-otp-coverage.md`.
-     - Still open: `routes/admin/auth.py` (64-70%) — not started.
+     - `routes/admin/auth.py` — **done, 94%** (was 70%, re-measured fresh
+       against the full suite — the previously-tracked 64-70% figure was in
+       the right ballpark). The endpoint was well-covered for login/MFA/
+       refresh/logout flows by 9 pre-existing sibling test files
+       (`test_admin_mfa_enforcement.py`, `test_admin_mfa_totp_lockout.py`,
+       `test_admin_login_resets_idle_clock.py`, `test_admin_logout_revocation.py`,
+       `test_admin_token_aud_lockdown.py`, `test_admin_privilege_escalation.py`,
+       `test_admin_staff_mfa_reset.py`, `test_admin_security.py`,
+       `test_admin_routes_auth.py`) — the entire gap was two endpoints with
+       **zero** direct coverage: `/admin/auth/break-glass` (emergency
+       super-admin token mint — every guard branch: feature-gated-off,
+       short justification, Redis-unreadable/increment-failure/allowlist-
+       failure fail-closed paths, rate-limit-exceeded, invalid token, and
+       the happy path incl. audit-log-write-failure being logged but not
+       blocking) and `/admin/auth/unlock` (role guard, empty email,
+       target-not-found, idempotent not-locked path, Redis-read failure,
+       successful unlock) — plus `/mfa/status`, `/mfa/enroll`, `/session`'s
+       malformed-header shapes, `/refresh`'s admin-001 branch, and
+       `/logout-all`'s malformed-token branches. Added
+       `tests/test_admin_auth_coverage_gap.py` (33 tests). Remaining 6% is
+       the dual-import fallback plus a few log-only branches in
+       `_require_staff_from_token`. Test-only, no bugs found. See
+       `docs/change-log/2026-07-29-a1b-admin-auth-coverage.md`.
   4. `backend/routes/admin/` (15+ admin-only endpoints) — admin actions are
      audited but not necessarily tested; a broken admin endpoint can corrupt
      production data at scale (e.g. bulk driver approval, wallet

@@ -145,7 +145,10 @@ def test_list_search_is_pushed_into_db_filter_as_regex(admin_client):
     assert resp.status_code == 200
     incidents_calls = [c for c in fake_get_rows.calls if c[0] == "safety_incidents"]
     filters = incidents_calls[0][1]
-    assert filters["description"]["$regex"] == "red\\ light"
+    # Raw term — the query layer escapes for ILIKE. Previously re.escape() turned
+    # this into "red\\ light", which _escape_like then double-escaped into a
+    # pattern matching a literal backslash, so no multi-word search ever matched.
+    assert filters["description"]["$regex"] == "red light"
     assert filters["description"]["$options"] == "i"
 
 

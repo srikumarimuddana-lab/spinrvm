@@ -88,6 +88,47 @@ async def test_tick_skips_ride_newer_than_20_minutes():
 
 
 @pytest.mark.asyncio
+async def test_tick_skips_ride_with_no_id():
+    """Ride row missing 'id' entirely → skipped before any Redis/push work."""
+    push = AsyncMock()
+    ride = {"rider_id": "u1", "status": "in_progress", "ride_started_at": _now_iso()}
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
+        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.send_push_notification", push),
+    ):
+        db.get_rows = AsyncMock(return_value=[ride])
+        from utils.safety_checkin_loop import _tick
+
+        await _tick()
+
+    push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tick_skips_ride_with_unparseable_started_at():
+    """Garbage ride_started_at value → caught (ValueError/AttributeError),
+    ride skipped rather than crashing the whole tick."""
+    push = AsyncMock()
+    ride = {"id": "r1", "rider_id": "u1", "status": "in_progress", "ride_started_at": "not-a-timestamp"}
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
+        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.send_push_notification", push),
+    ):
+        db.get_rows = AsyncMock(return_value=[ride])
+        from utils.safety_checkin_loop import _tick
+
+        await _tick()  # must not raise
+
+    push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_tick_skips_ride_with_no_ride_started_at():
     """Ride missing ride_started_at (and updated_at) → skipped entirely."""
     push = AsyncMock()
@@ -300,6 +341,61 @@ async def test_tick_continues_after_fcm_failure():
     assert "u2" in push_calls
 
 
+@pytest.mark.asyncio
+async def test_tick_skips_ride_with_unparseable_sent_timestamp():
+    """sent_key exists but holds a garbage value (shouldn't happen in
+    practice — Redis only ever gets our own isoformat() writes — but the
+    parse is defensively caught rather than crashing the tick)."""
+    escalate = AsyncMock()
+
+    async def fake_get(key: str) -> str | None:
+        if "sent" in key:
+            return "not-a-timestamp"
+        return None
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_get", fake_get),
+        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.send_push_notification", AsyncMock()),
+        patch("utils.safety_checkin_loop._escalate", escalate),
+    ):
+        db.get_rows = AsyncMock(return_value=[_ride()])
+        from utils.safety_checkin_loop import _tick
+
+        await _tick()  # must not raise
+
+    escalate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tick_escalation_failure_is_logged_and_does_not_propagate():
+    """_escalate raising must not crash the tick — the escalated_key was
+    never set (see test_escalate_does_not_set_redis_key_on_db_failure), so
+    the next tick naturally retries."""
+    sent_ts = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+
+    async def fake_get(key: str) -> str | None:
+        if "sent" in key:
+            return sent_ts
+        return None
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_get", fake_get),
+        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.send_push_notification", AsyncMock()),
+        patch("utils.safety_checkin_loop._escalate", AsyncMock(side_effect=RuntimeError("escalation blew up"))),
+        patch("utils.safety_checkin_loop.logger") as mock_logger,
+    ):
+        db.get_rows = AsyncMock(return_value=[_ride()])
+        from utils.safety_checkin_loop import _tick
+
+        await _tick()  # must not raise
+
+    assert any("Escalation failed for ride r1" in c.args[0] for c in mock_logger.error.call_args_list)
+
+
 # ── _escalate: DB failure behaviour ──────────────────────────────────────
 
 
@@ -337,3 +433,24 @@ async def test_escalate_does_not_set_redis_key_on_db_failure():
             await _escalate(_ride(), datetime.now(timezone.utc))
 
     rset.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_escalate_audit_log_failure_does_not_prevent_escalation():
+    """The audit-log write is best-effort — a failure there must not undo
+    the escalation that already succeeded (incident inserted, escalated_key
+    set, safety team already notified by this point)."""
+    rset = AsyncMock()
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_set", rset),
+        patch("utils.safety_checkin_loop._log_audit", AsyncMock(side_effect=RuntimeError("audit down"))),
+    ):
+        db.insert_one = AsyncMock(return_value={"id": "inc1"})
+        from utils.safety_checkin_loop import _escalate
+
+        await _escalate(_ride(), datetime.now(timezone.utc))  # must not raise
+
+    rset.assert_awaited_once()
+    assert "escalated:r1" in rset.call_args[0][0]

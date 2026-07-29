@@ -122,6 +122,67 @@ async def test_unique_violation_with_no_close_is_noop(
     assert any("no-op transition" in r.message for r in caplog.records)
 
 
+@pytest.mark.anyio
+async def test_supabase_client_unavailable_drops_transition_and_logs_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """db_supabase.supabase is None (client not initialised) — the transition
+    is dropped (never raised, per the module's compliance trade-off) and an
+    ERROR is logged so it's Sentry-visible and backfillable from `rides`."""
+    with patch.object(insurance_periods.db_supabase, "supabase", None):
+        with caplog.at_level("ERROR"):
+            await insurance_periods.record_period_transition(
+                driver_id="d1",
+                new_period=1,
+            )
+    assert any("supabase client unavailable" in r.message for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_metric_inc_is_a_noop_when_metrics_module_unavailable() -> None:
+    """_metric_inc guards against _metrics being None (the module's own
+    dual-import fallback when utils.metrics can't be imported) — must not
+    raise, and the RPC call itself must still complete normally."""
+    sb = _fake_supabase(rpc_data={"status": "ok"})
+    with (
+        patch.object(insurance_periods.db_supabase, "supabase", sb),
+        patch.object(insurance_periods, "_metrics", None),
+    ):
+        await insurance_periods.record_period_transition(driver_id="d1", new_period=1)
+    sb.rpc.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_metric_inc_failure_is_swallowed() -> None:
+    """Metrics are explicitly best-effort (module docstring) — a broken
+    metrics backend must never fail the insurance-period write itself."""
+    sb = _fake_supabase(rpc_data={"status": "ok"})
+    broken_metrics = MagicMock()
+    broken_metrics.inc.side_effect = RuntimeError("metrics backend down")
+    with (
+        patch.object(insurance_periods.db_supabase, "supabase", sb),
+        patch.object(insurance_periods, "_metrics", broken_metrics),
+    ):
+        # Must not raise despite _metrics.inc blowing up internally.
+        await insurance_periods.record_period_transition(driver_id="d1", new_period=1)
+    sb.rpc.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_race_status_from_rpc_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """RPC reports status="race" (concurrent transition lost the partial
+    unique index race) — logged as a warning, never raised."""
+    sb = _fake_supabase(rpc_data={"status": "race"})
+    with patch.object(insurance_periods.db_supabase, "supabase", sb):
+        with caplog.at_level("WARNING"):
+            await insurance_periods.record_period_transition(
+                driver_id="d1",
+                new_period=2,
+                ride_id="r1",
+            )
+    assert any("concurrent transition" in r.message for r in caplog.records)
+
+
 # ── Edge-flow tests (M-5c) ─────────────────────────────────────────────────
 
 

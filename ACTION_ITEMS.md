@@ -704,6 +704,44 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   72 passed, 0 failed. Full local backend suite re-run to confirm no
   regressions elsewhere.
 
+### A8. Leaked un-awaited AsyncMock coroutines fail an arbitrary unrelated test under pytest 9
+- [ ] **Status:** open — diagnosed 2026-07-29 while verifying the admin driver
+  search fix (`claude/admin-driver-search-design-ryh7yc`). Not fixed there: the
+  leaks are in test files that change did not touch, and closing them is its own
+  scoped cleanup.
+- **Symptom:** a full-suite run fails one test that passes in isolation, and
+  *which* test fails changes between runs at the same commit. Observed:
+  `test_compliance_reports_http.py::test_knight_archer_report_filters_by_status`
+  failed one full-suite run and passed the next at an identical commit, while
+  passing 5/5 in isolation.
+- **Root cause:** several test files leave `AsyncMock` coroutines un-awaited
+  (`RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never
+  awaited`). The warning surfaces whenever the GC happens to collect the
+  coroutine — not where it was created. pytest 9's `_pytest/unraisableexception`
+  plugin **re-raises** collected unraisable errors (`raise errors[0]`), so the
+  test executing at that moment fails. Blame is therefore assigned by GC timing,
+  and *any* change to test count or ordering reshuffles the victim. Confirmed
+  present at baseline: `tests/test_ride_accept_flow.py` +
+  `tests/test_drivers_extended.py` alone emit 7 such warnings on an unmodified
+  checkout.
+- **Why it matters:** this makes the suite an unreliable merge gate — a green
+  run does not mean the leaks are gone, and a red run points at an innocent
+  test. It also burns review time re-diagnosing the same thing each session
+  (this entry exists so the next session doesn't).
+- **Fix (proposed):** find every `AsyncMock` whose call result is never awaited
+  (`grep` for `AsyncMock(` used as a sync `side_effect`/`return_value` on a
+  method the code under test calls synchronously — e.g. `supabase.rpc(...)`
+  chains inside `run_sync` lambdas) and make the mock synchronous
+  (`MagicMock`) where the production call site is synchronous. Add
+  `-W error::RuntimeWarning` for the leak class once clean so it cannot
+  regress silently.
+- **Files (known leak sources, non-exhaustive):**
+  `backend/tests/test_ride_accept_flow.py`, `backend/tests/test_drivers_extended.py`,
+  `backend/tests/test_e2e_ride_lifecycle.py`, `backend/tests/test_estimate_ghost_driver_filter.py`
+- **Acceptance:** full backend suite produces zero
+  "coroutine ... was never awaited" warnings, and 3 consecutive full-suite runs
+  at the same commit fail no tests.
+
 ## P1 — Fix before launch (code)
 
 ### B1. `track_driver_online` accepts raw GPS for third-party analytics

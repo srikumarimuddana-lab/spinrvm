@@ -27,6 +27,7 @@ resuming so payout IDs line up.
 from __future__ import annotations
 
 import csv
+import io
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -119,10 +120,39 @@ def read_csv(path: Path) -> list[dict[str, str]]:
     ``build_plan`` rather than being silently treated as zero.
     """
     with Path(path).open(newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            raise ValueError(f"CSV has no header row: {path}")
-        return [{k.strip(): (v or "").strip() for k, v in row.items() if k is not None} for row in reader]
+        try:
+            return _rows_from_reader(csv.DictReader(f))
+        except ValueError as e:
+            raise ValueError(f"{e}: {path}") from e
+
+
+def read_csv_text(text: str) -> list[dict[str, str]]:
+    """Parse legacy CSV *content* into name-keyed rows.
+
+    Sibling of :func:`read_csv` for callers that hold the content rather than a
+    path — the admin upload endpoint receives bytes, not a filesystem path.
+
+    Deliberately NOT a copy of ``rider_import_service.read_csv_text``: that one
+    applies ``normalize_header`` and has no ``None``-key guard. Legacy booking
+    exports need the opposite on both counts (see :func:`read_csv`), so both
+    entry points share ``_rows_from_reader`` rather than reimplementing the
+    parse and drifting apart.
+
+    A leading BOM is stripped here as well as at decode time. ``read_csv``
+    gets this free from ``encoding="utf-8-sig"``, but this function receives
+    an already-decoded string: a caller that decoded as plain ``utf-8`` would
+    otherwise leave the BOM glued to the first header, turning ``_id`` into
+    ``﻿_id`` and failing every row's ID lookup. Windows-exported CSVs
+    routinely carry one.
+    """
+    return _rows_from_reader(csv.DictReader(io.StringIO(text.lstrip("﻿"), newline="")))
+
+
+def _rows_from_reader(reader: csv.DictReader) -> list[dict[str, str]]:
+    """Shared row normalization for both CSV entry points."""
+    if not reader.fieldnames:
+        raise ValueError("CSV has no header row")
+    return [{k.strip(): (v or "").strip() for k, v in row.items() if k is not None} for row in reader]
 
 
 def normalize_phone(phone: str) -> str:

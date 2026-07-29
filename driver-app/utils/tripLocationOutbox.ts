@@ -362,6 +362,34 @@ export class TripLocationOutbox {
     );
   }
 
+  /**
+   * Drop every row from the outbox, including quarantined points.
+   *
+   * Only for sign-out. Everywhere else, an unacknowledged point is retained on
+   * purpose — a trip's billed distance and its SGI per-insurance-period audit
+   * trail are settled from these breadcrumbs, so the recorder never discards one
+   * that the server hasn't confirmed. Sign-out is the one case where retention
+   * is the wrong answer: these are raw coordinates in an unencrypted SQLite file
+   * belonging to a driver who is no longer using the device, and on a shared or
+   * rented vehicle the next sign-in would upload them under a different
+   * driver's session.
+   *
+   * Accepts the data loss that implies. Any points still pending at sign-out are
+   * gone; a driver signing out mid-trip loses that tail. The trade is
+   * deliberate — see the Change Impact Log for 2026-07-29.
+   *
+   * Runs in one exclusive transaction so a concurrent enqueue cannot interleave
+   * and leave orphan points behind a deleted session row.
+   */
+  async purgeAll(): Promise<void> {
+    const database = await this.getDatabase();
+    await database.withExclusiveTransactionAsync(async (transaction) => {
+      await transaction.runAsync('DELETE FROM trip_location_outbox');
+      await transaction.runAsync('DELETE FROM trip_location_quarantine');
+      await transaction.runAsync('DELETE FROM trip_location_sessions');
+    });
+  }
+
   private async getDatabase(): Promise<TripLocationOutboxDatabase> {
     if (!this.databasePromise) {
       const attempt = this.openDatabase().then(async (database) => {

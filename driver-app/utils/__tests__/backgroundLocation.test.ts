@@ -29,8 +29,17 @@ jest.mock('expo-task-manager', () => ({
   isTaskRegisteredAsync: jest.fn(() => Promise.resolve(false)),
 }));
 
+// The gate reads an explicit end-of-session marker, not the absence of tokens.
+// `mockSignedIn = false` simulates a device where the marker has been written.
+let mockSignedIn = true;
+
+jest.mock('@shared/auth/sessionMarker', () => ({
+  SESSION_ENDED_KEY: 'spinr_session_ended',
+}));
+
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn((key: string) => {
+    if (key === 'spinr_session_ended') return Promise.resolve(mockSignedIn ? null : '1');
     if (key === 'bg_access_token') return Promise.resolve('access-token');
     if (key === 'bg_access_token_expires') return Promise.resolve(String(Date.now() + 120_000));
     return Promise.resolve(null);
@@ -86,6 +95,8 @@ import {
   handleBackgroundLocationTask,
   startGeofenceRecovery,
   stopGeofenceRecovery,
+  stopBackgroundLocation,
+  isSessionEnded,
   _resetGeofenceDebounce,
   TRIP_CADENCE,
   IDLE_CADENCE,
@@ -574,5 +585,154 @@ describe('geofence re-arm gating (NSRangeException fix)', () => {
   it('stopGeofenceRecovery never throws when nothing is monitored', async () => {
     mockStopGeofencing.mockRejectedValueOnce(new Error('not monitoring'));
     await expect(stopGeofenceRecovery()).resolves.toBeUndefined();
+  });
+});
+
+// ── Signed-out device must not be tracked ──────────────────────────────────
+// Regression cover for the logout leak: location teardown used to live only in
+// toggleOnline(false), so signing out left the native task running, the geofence
+// armed, and bg_access_token (a live driver JWT) on disk.
+describe('session gating', () => {
+  let geofenceHandler: (body: { data: any; error: any }) => Promise<void>;
+
+  beforeAll(() => {
+    const defineTask = TaskManager.defineTask as jest.Mock;
+    geofenceHandler = defineTask.mock.calls.find(
+      (call: any[]) => call[0] === 'spinr-geofence-recovery',
+    )![1];
+  });
+
+  beforeEach(() => {
+    mockSignedIn = true;
+    mockQueuedPoints.length = 0;
+    _resetGeofenceDebounce();
+    [
+      Location.startLocationUpdatesAsync,
+      Location.stopLocationUpdatesAsync,
+      Location.startGeofencingAsync,
+      Location.stopGeofencingAsync,
+      Location.hasStartedLocationUpdatesAsync,
+      SecureStore.deleteItemAsync,
+    ].forEach((m) => (m as jest.Mock).mockClear());
+    (Location.stopGeofencingAsync as jest.Mock).mockImplementation(() => Promise.resolve());
+    (Location.stopLocationUpdatesAsync as jest.Mock).mockImplementation(() => Promise.resolve());
+    (SecureStore.getItemAsync as jest.Mock).mockImplementation((key: string) => {
+      if (key === 'spinr_session_ended') return Promise.resolve(mockSignedIn ? null : '1');
+      if (key === 'bg_access_token') return Promise.resolve('access-token');
+      if (key === 'bg_access_token_expires') return Promise.resolve(String(Date.now() + 120_000));
+      return Promise.resolve(null);
+    });
+    mockedOutbox.enqueue.mockClear();
+    mockedOutbox.enqueue.mockImplementation((point: any) => {
+      const queued = { ...point, recording_session_id: 'session-1', sequence_number: mockSequence++ };
+      mockQueuedPoints.push(queued);
+      return Promise.resolve(queued);
+    });
+  });
+
+  afterAll(() => { mockSignedIn = true; });
+
+  it('isSessionEnded reflects the explicit marker', async () => {
+    expect(await isSessionEnded()).toBe(false);
+    mockSignedIn = false;
+    expect(await isSessionEnded()).toBe(true);
+  });
+
+  it('treats an unreadable SecureStore as a live session, not a sign-out', async () => {
+    // A locked keystore must not read as "signed out": that would drop a
+    // working driver's trip samples and stop tracking mid-trip, costing billed
+    // distance and leaving a gap in the SGI per-period audit trail.
+    (SecureStore.getItemAsync as jest.Mock).mockRejectedValue(new Error('keystore locked'));
+    expect(await isSessionEnded()).toBe(false);
+  });
+
+  it('keeps recording when tokens are missing but no sign-out was recorded', async () => {
+    // Regression: the gate used to infer sign-out from absent tokens, so an
+    // unpersisted SecureStore write (which the auth store swallows) silently
+    // killed background tracking for a signed-in driver.
+    (SecureStore.getItemAsync as jest.Mock).mockImplementation(() => Promise.resolve(null));
+
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any, error: null });
+
+    expect(mockedOutbox.enqueue).toHaveBeenCalled();
+    expect(Location.stopLocationUpdatesAsync).not.toHaveBeenCalled();
+  });
+
+  it('drops background samples without persisting them once signed out', async () => {
+    mockSignedIn = false;
+    await handleBackgroundLocationTask({
+      data: { locations: [makeLocation(0), makeLocation(1)] } as any,
+      error: null,
+    });
+    // Nothing reached the durable outbox — the point of gating before
+    // recordNativeFix rather than only before the upload.
+    expect(mockedOutbox.enqueue).not.toHaveBeenCalled();
+    expect(mockQueuedPoints).toHaveLength(0);
+  });
+
+  it('stops the native task and disarms the fence when a signed-out sample arrives', async () => {
+    mockSignedIn = false;
+    (Location.hasStartedLocationUpdatesAsync as jest.Mock).mockResolvedValue(true);
+
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any, error: null });
+
+    expect(Location.stopLocationUpdatesAsync).toHaveBeenCalledWith('spinr-background-location');
+    expect(Location.stopGeofencingAsync).toHaveBeenCalledWith('spinr-geofence-recovery');
+  });
+
+  it('still records samples while the session is live', async () => {
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any, error: null });
+    expect(mockedOutbox.enqueue).toHaveBeenCalled();
+    expect(Location.stopLocationUpdatesAsync).not.toHaveBeenCalled();
+  });
+
+  it('geofence exit tears down instead of re-arming once signed out', async () => {
+    mockSignedIn = false;
+    (Location.hasStartedLocationUpdatesAsync as jest.Mock).mockResolvedValue(false);
+
+    await geofenceHandler({
+      data: { eventType: Location.GeofencingEventType.Exit, region: { identifier: 'spinr-recovery' } },
+      error: null,
+    });
+
+    // The resurrection path: previously this re-started tracking and re-centred
+    // the fence, so a signed-out driver stayed tracked indefinitely.
+    expect(Location.startLocationUpdatesAsync).not.toHaveBeenCalled();
+    expect(Location.startGeofencingAsync).not.toHaveBeenCalled();
+    expect(Location.stopGeofencingAsync).toHaveBeenCalledWith('spinr-geofence-recovery');
+  });
+
+  it('geofence exit still re-arms while the session is live', async () => {
+    (Location.hasStartedLocationUpdatesAsync as jest.Mock).mockResolvedValue(false);
+    await geofenceHandler({
+      data: { eventType: Location.GeofencingEventType.Exit, region: { identifier: 'spinr-recovery' } },
+      error: null,
+    });
+    expect(Location.startLocationUpdatesAsync).toHaveBeenCalled();
+  });
+
+  it('clears bg_access_token even when the task was already stopped', async () => {
+    // The original bug: cleanup sat behind an `if (!isRunning) return`, so a
+    // stop on an already-dead task (OS kill, logout path) left the cached
+    // driver JWT on disk for the headless task to keep uploading with.
+    (Location.hasStartedLocationUpdatesAsync as jest.Mock).mockResolvedValue(false);
+
+    await stopBackgroundLocation();
+
+    const deleted = (SecureStore.deleteItemAsync as jest.Mock).mock.calls.map((c) => c[0]);
+    expect(deleted).toContain('bg_access_token');
+    expect(deleted).toContain('bg_access_token_expires');
+    expect(deleted).toContain('spinr_bg_trip_active');
+    expect(Location.stopLocationUpdatesAsync).not.toHaveBeenCalled();
+  });
+
+  it('clears cached credentials even when the native stop throws', async () => {
+    (Location.hasStartedLocationUpdatesAsync as jest.Mock).mockResolvedValue(true);
+    (Location.stopLocationUpdatesAsync as jest.Mock).mockRejectedValue(new Error('not registered'));
+
+    await expect(stopBackgroundLocation()).resolves.toBeUndefined();
+
+    const deleted = (SecureStore.deleteItemAsync as jest.Mock).mock.calls.map((c) => c[0]);
+    expect(deleted).toContain('bg_access_token');
   });
 });

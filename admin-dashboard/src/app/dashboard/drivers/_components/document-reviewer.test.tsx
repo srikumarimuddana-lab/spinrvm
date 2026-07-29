@@ -92,8 +92,8 @@ describe('DocumentReviewer', () => {
     await renderWithDocs([licenseDoc]);
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
-    const confirmButton = screen.getByRole('button', { name: /Confirm approval/ });
-    expect(confirmButton).toBeDisabled();
+    const confirmButton = screen.getByRole('button', { name: /Confirm approval/ }) as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
 
     fireEvent.click(confirmButton);
     expect(reviewDocument).not.toHaveBeenCalled();

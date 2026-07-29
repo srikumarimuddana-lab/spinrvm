@@ -405,6 +405,43 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
      audited but not necessarily tested; a broken admin endpoint can corrupt
      production data at scale (e.g. bulk driver approval, wallet
      adjustments).
+     - `backend/routes/admin/drivers.py` — **improved 59% → 70%** (1015
+       statements, 301 remaining uncovered; measured via full `pytest tests/
+       -q`, real pytest-cov output). Prioritized write/mutation endpoints
+       over read-only list/search per the item's stated risk (a broken
+       write here can lock a real driver out or leave an ineligible driver
+       online — regulatory consequence under the Saskatchewan
+       Transportation Act driver-eligibility rules). Added
+       `tests/test_admin_drivers_coverage.py` (52 tests) covering:
+       `POST /drivers/{id}/action` (approve/suspend/ban/unban/reactivate,
+       missing-reason 400s, driver-not-found 404, DB-failure 500,
+       push-failure non-fatal), `PUT /drivers/{id}/status-override`,
+       `POST /drivers/{id}/verify`, `PUT /drivers/{id}` (field routing
+       across `users`/`drivers`, null-coalescing, work-authorization-status
+       flag sync, 409 on email/gender without a linked user), driver notes
+       CRUD, `POST/GET /drivers/{id}/photo` + `/photo-review`,
+       `PUT /drivers/{id}/area`, `POST /drivers/{id}/nudge-expiry`,
+       `POST /drivers/{id}/refresh-stripe-kyc`, and
+       `POST /drivers/{id}/reveal-sin` (super_admin-only gate, SIN never
+       logged, Stripe-failure 502). Deprioritized (left at their existing
+       coverage): the pure read/list/export endpoints
+       (`GET /drivers`, `/drivers/stats`, `/drivers/approval-queue`,
+       `/drivers/expiring`, referral leaderboards/analytics,
+       payouts-summary, location-trail, daily-activity) — lower real-world
+       consequence than a broken write, and several are already exercised
+       by `test_admin_approval_queue.py` / `test_admin_drivers_expiring.py`
+       / `test_referral_analytics.py`. **Two pre-existing bugs found, not
+       fixed (test-only task)** — see
+       `docs/change-log/2026-07-29-a1b-admin-drivers-coverage.md` for
+       detail: (1) `admin_driver_action`'s `DriverActionRequest.action`
+       Literal and docstring both list `"reject"` as valid, but the
+       if/elif chain has no `reject` branch — it 400s with "Unknown
+       action: reject", so an admin can never reject a driver application
+       through this endpoint; (2) `admin_override_driver_status`'s
+       `DriverStatusOverride.status` Literal includes `"rejected"` but the
+       endpoint's own `valid` set does not (and vice versa for
+       `"needs_review"`), so some pydantic-valid status values 400 at the
+       handler's internal guard.
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth

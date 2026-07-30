@@ -1596,14 +1596,21 @@ async def send_push_notification(
       - ``"driver"`` → ``fcm_token_driver``
       - ``None``     → legacy ``fcm_token`` (backward compat)
 
-    Delivery is attempted INLINE for every priority. Dispatch (ride offer) and
-    safety (SOS) pushes are time-critical — a ride offer expires in ~15s — so
-    they must never wait on the 30s push_retry loop. If the immediate attempt
-    fails for any reason — the FCM/Expo send OR a transient error in the users
-    lookup — dispatch/safety pushes fall back to the push_retry_queue so the
-    offer/SOS is never silently dropped (the retry loop re-reads the user at
-    send time). Normal (informational) pushes are best-effort: a lookup error
-    surfaces to the caller rather than being masked.
+    Delivery is attempted INLINE for every priority. Three tiers are treated as
+    guaranteed-delivery: ``dispatch`` and ``safety`` because they are
+    time-critical — a ride offer expires in ~15s, so they must never wait on
+    the 30s push_retry loop — and ``account`` (driver rejected/suspended/
+    banned) because a driver who can no longer earn must be told why rather
+    than discovering it as a 403 on their next "Go online". All three bypass
+    the user's push opt-out and, if the immediate attempt fails for any reason
+    — the FCM/Expo send OR a transient error in the users lookup — fall back to
+    the push_retry_queue so the notice is never silently dropped (the retry
+    loop re-reads the user at send time). Normal (informational) pushes are
+    best-effort and honour the opt-out: a lookup error surfaces to the caller
+    rather than being masked.
+
+    The push_retry_queue.priority CHECK constraint must list every tier used
+    here — see migration 272, which added ``account``.
 
     Every call also writes an in-app notification-inbox row (best-effort,
     non-blocking) regardless of whether device delivery succeeds — the

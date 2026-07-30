@@ -51,3 +51,25 @@ regexes = [
   # Expo public env vars (safe — intentionally client-exposed by design)
   '''EXPO_PUBLIC_[A-Z_]+=.+''',
 ]
+
+# aws-access-token override — the upstream rule (id/description/regex/keywords
+# copied verbatim from the embedded default config, `strings` on the gitleaks
+# binary) has no entropy floor, so it fires on any 20-char run starting with
+# AKIA/ASIA/ABIA/ACCA/A3T[0-9A-Z] regardless of randomness. G5b (admin-dashboard
+# bundle scan) hit this on minified webpack chunks that embed base64-ish binary
+# tables (font/icon data) — low-entropy repeating byte patterns coincidentally
+# start with the `ABIA` prefix. Confirmed false positive by reproducing locally
+# against admin-dashboard/.next/static with the real gitleaks binary: both
+# matches scored entropy 2.1–2.5, well below a real random AWS key ID's ~4+.
+# `entropy = 3.5` matches gitleaks' own default for generic-api-key, a rule with
+# the same false-positive-prone shape. This does not touch detection of real,
+# random AWS credentials anywhere else in the repo (source, env files, git
+# history) — only the coincidental low-entropy shape.
+[[rules]]
+id = "aws-access-token"
+description = "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+regex = '''(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}'''
+entropy = 3.5
+keywords = [
+    "akia", "asia", "abia", "acca",
+]

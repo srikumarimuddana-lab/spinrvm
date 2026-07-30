@@ -416,6 +416,16 @@ function RootLayout() {
   // ran on cold-start unconditionally and silently 401'd for any user
   // who wasn't already logged in — meaning drivers who signed in for
   // the first time never got a server-side token registered.
+  // Re-arm token registration on sign-out. fcmRegisteredRef is a ref, so it
+  // survives logout for the life of the app process — without this reset, a
+  // driver who signs out and back in without killing the app never re-runs
+  // the registration effect below, and the backend keeps whatever token it
+  // had (or, once logout_clears_push_token is enabled server-side, none at
+  // all — which would mean missed ride offers).
+  useEffect(() => {
+    if (!authToken) fcmRegisteredRef.current = false;
+  }, [authToken]);
+
   useEffect(() => {
     if (!isAuthInitialized || !authToken || fcmRegisteredRef.current) return;
 

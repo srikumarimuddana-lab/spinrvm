@@ -443,7 +443,7 @@ Production health is measured against these targets. Code that risks breaching t
 
 ## Deployment
 
-- **Backend**: deployed to **both** Railway (Canada) and Fly.io (`yyz`, Toronto) from `main` in parallel. Fly.io is the intended primary; Railway is the warm standby. Routing is a Cloudflare CNAME on `api-spinr.spinr.ca` — fail-over/fail-back is a single DNS change (no load balancer). Shared Redis sits behind a `redis.spinr.ca` DNS alias so the Redis backend can be repointed on fail-back. See `docs/runbooks/railway-fly-failover.md` and `docs/adr/007-fly-primary-railway-standby.md`.
+- **Backend**: deployed to **both** Railway (Canada) and Fly.io (`yyz`, Toronto) from `main` in parallel *by design*. Fly.io is the intended primary; Railway is the warm standby. Routing is a Cloudflare CNAME on `api-spinr.spinr.ca` — fail-over/fail-back is a single DNS change (no load balancer). Shared Redis sits behind a `redis.spinr.ca` DNS alias so the Redis backend can be repointed on fail-back. See `docs/runbooks/railway-fly-failover.md` and `docs/adr/007-fly-primary-railway-standby.md`. **Current status: degraded** — Railway's `deploy-backend.yml` is blocked by a GitHub Environment protection rule (undated "temporary" pause), so Railway has been silently drifting from `main`; a Fly outage today would fail over to a stale build. Tracked in `ACTION_ITEMS.md` C5 — check there before assuming standby is live.
 - **Frontend/Admin**: Vercel
 - **Mobile builds**: Expo EAS — only triggered when commit message contains `[build]`
 

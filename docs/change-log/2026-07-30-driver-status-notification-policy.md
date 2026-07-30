@@ -167,3 +167,28 @@ If a flag is wanted before this reaches production, the natural seam is
 - **No production build run** — backend-only change, no frontend surface touched.
 - **Copy not reviewed by anyone but me.** "Changes Under Review" and its body are new customer-facing strings written in this session. They follow the existing tone but have had no product/copy review.
 - **`admin_verify_driver` still bypasses the policy module** — it sends its own push and therefore lacks the `deleted_at` recipient guard. Left as a documented gap rather than widened into this change.
+
+---
+
+## 11. Follow-up review (2026-07-30, same day)
+
+A self-review of this branch found five defects in the work above. All fixed;
+recorded here rather than silently amended so the history is auditable.
+
+| ID | Finding | Fix |
+|---|---|---|
+| H1 | The reminder repeat cap counted claim-log rows client-side under a limit sized at exactly the worst case (200 drivers × 2 types × cap+1 = 3200, zero headroom). The log also holds rows from before the cap existed, so a page could exceed 12,000 rows; PostgREST truncates with no `ORDER BY`, counts came back low, and capped drivers would be pushed again — the exact spam the cap exists to stop, with nothing logged. | Migration 273 adds a `GROUP BY` RPC so counting happens in the DB with no limit in the path. The client-side count survives as a pre-migration fallback but now detects saturation and **fails closed**, suppressing the page rather than over-notifying (`ca2c905`) |
+| M1 | Migration 272 dropped the `priority` CHECK by its assumed auto-generated name with `IF EXISTS`. A name mismatch would no-op silently, the `ADD` would create a second constraint, and the old narrow one would keep rejecting `account` — a migration reporting success while doing nothing | Drops by `pg_constraint` lookup instead; name-independent and idempotent. Also fixed the rollback comment, which ordered the `DELETE` after the constraint it must precede (`22c8a05`) |
+| M2 | Moving the send into the policy module left 10 test patches of `routes.admin.drivers.send_push_notification` dead — verified with a spy: patch awaited 0 times, real sender running against unpatched mocks. `test_push_notification_failure_does_not_fail_request` was asserting nothing as a result | Repointed the `/action` and `/status-override` tests; left `verify`/`photo-review`/`nudge-expiry` alone since those still send directly (`172345e`) |
+| L1 | `_push_token_columns_to_clear` returned `{}` when no per-app column was set, so pre-migration-102 rows holding only the legacy `fcm_token` were never cleared — the logout fix did nothing for them | Clears the legacy column for single-role accounts (attributable); leaves it and logs for dual-role accounts where clearing could kill the other app's pushes (`eedb281`) |
+| L2 | `send_push_notification`'s docstring still described only dispatch/safety as bypassing the opt-out and retry-queueing | Updated for the `account` tier, plus a pointer to the CHECK constraint that must list every tier (`eedb281`) |
+
+Also closed in `eedb281`: the opt-out bypass is now asserted end to end
+(`test_push_opt_out_does_not_block_dispatch_safety_or_account` drives
+`send_push_notification` with `push_enabled=False`), not just at the policy
+layer — a gap §10 had flagged as worth closing.
+
+**Deploy ordering now involves two migrations**, neither yet applied anywhere:
+
+1. `272_push_retry_queue_account_priority.sql` — must precede the code, or `account`-tier retry enqueues violate the old CHECK.
+2. `273_driver_onboarding_reminder_counts_fn.sql` — the code tolerates its absence (fallback fails closed), but the cap is only exact once it is applied.

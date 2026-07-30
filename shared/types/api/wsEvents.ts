@@ -29,12 +29,39 @@ export interface WSLocationBatchAck {
   count: number;
 }
 
+/**
+ * Pre-match driver positions for the rider map.
+ *
+ * `lat`/`lng` are deliberately COARSE — snapped to a `precision_m` grid cell
+ * (default 500m) by the backend, because before a ride is assigned there is no
+ * relationship that justifies exact coordinates (PIPEDA; see
+ * backend/utils/driver_map_visibility.py). Do not present these as a precise
+ * position, and do not use them to compute an ETA — ETA and availability are
+ * computed server-side from the true positions.
+ *
+ * Exact coordinates are only available for an assigned ride, via the ride
+ * tracking events.
+ *
+ * The payload carries no `vehicle_make`/`vehicle_model` by design: together with
+ * `heading` they made a specific vehicle re-identifiable on the street. Vehicle
+ * details for the *assigned* driver come from the ride/driver detail endpoints.
+ */
 export interface WSNearbyDrivers {
   type: 'nearby_drivers';
   drivers: Array<{
-    driver_id: string;
+    /** Driver row id. Previously typed `driver_id`, which the server has never
+     *  sent — the index signature below hid the mismatch. */
+    id: string;
     lat: number;
     lng: number;
+    /** Always 'approximate' for pre-match positions. */
+    precision?: 'approximate';
+    /** Grid cell size in metres that `lat`/`lng` were snapped to. */
+    precision_m?: number;
+    heading?: number | null;
+    vehicle_type_id?: string | null;
+    vehicle_type_name?: string | null;
+    marker_variant?: string | null;
     [key: string]: unknown;
   }>;
 }

@@ -16,6 +16,11 @@ try:
     from ...services import lms_service
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
+    from ...utils.driver_status_notifications import (
+        action_message,
+        should_notify_driver,
+        status_message,
+    )
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
     from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
 except ImportError:
@@ -27,6 +32,11 @@ except ImportError:
     from services import lms_service  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
+    from utils.driver_status_notifications import (  # type: ignore
+        action_message,
+        should_notify_driver,
+        status_message,
+    )
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
@@ -120,7 +130,11 @@ class DriverActionRequest(BaseModel):
 
 
 class DriverStatusOverride(BaseModel):
-    status: Literal["pending", "active", "rejected", "suspended", "banned"]
+    # Must stay in sync with the `valid` set in admin_override_driver_status.
+    # They previously disagreed in both directions: `rejected` was in this
+    # Literal but not in `valid` (400), and `needs_review` was in `valid` but
+    # not here (422) — so neither status was reachable through this endpoint.
+    status: Literal["pending", "active", "needs_review", "rejected", "suspended", "banned"]
     is_verified: Optional[bool] = None
     reason: Optional[str] = None
 
@@ -1532,6 +1546,33 @@ async def admin_driver_vehicle_history(driver_id: str, admin: dict = Depends(get
     return {"history": rows or []}
 
 
+async def _notify_driver_status_change(
+    driver: Dict[str, Any],
+    message: Optional[Dict[str, Any]],
+    context: str,
+) -> None:
+    """Send a lifecycle push, if the policy produced one and there is a recipient.
+
+    Best-effort: a push failure must not fail the admin action, which has
+    already been persisted. Logged at warning (not error) because the state
+    change itself succeeded and the driver still sees it in-app — the inbox row
+    is written by send_push_notification regardless of device delivery.
+    """
+    if not message or not should_notify_driver(driver):
+        return
+    try:
+        await send_push_notification(
+            driver["user_id"],
+            message["title"],
+            message["body"],
+            message["data"],
+            priority=message["priority"],
+            target_app="driver",
+        )
+    except Exception as e:
+        logger.warning(f"[ADMIN] Push notification failed for driver {context}: {e}")
+
+
 @router.post("/drivers/{driver_id}/action")
 async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: dict = Depends(get_admin_user)):
     """Perform a lifecycle action on a driver.
@@ -1554,6 +1595,20 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
         updates["is_verified"] = True
         updates["rejection_reason"] = None
         updates["verified_at"] = now
+
+    elif req.action == "reject":
+        # Reject → Rejected: application declined, driver cannot go online.
+        # This branch was missing entirely — `reject` was accepted by
+        # DriverActionRequest but fell through to the `else` below and returned
+        # 400 "Unknown action: reject", so `rejected` was unreachable via this
+        # endpoint (and via status-override, whose `valid` set omitted it).
+        if not req.reason:
+            raise HTTPException(status_code=400, detail="Reason is required when rejecting")
+        updates["status"] = "rejected"
+        updates["is_verified"] = False
+        updates["rejection_reason"] = req.reason
+        updates["is_online"] = False
+        updates["is_available"] = False
 
     elif req.action == "suspend":
         # Suspend: temporarily disable, store reason
@@ -1638,47 +1693,10 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
 
     # G4: Notify the driver about their status change. Critical for
     # approve/reject/suspend — without this, drivers wait days not knowing
-    # their application was processed.
-    action_push_map = {
-        "approve": (
-            "You're Approved! 🎉",
-            "Your driver application has been approved. You can now go online and start earning!",
-        ),
-        "reject": (
-            "Application Update",
-            "Your driver application needs attention. Please check your documents.",
-        ),
-        "suspend": (
-            "Account Suspended ⚠️",
-            f"Your account has been suspended. Reason: {req.reason or 'Contact support for details.'}",
-        ),
-        "ban": (
-            "Account Deactivated",
-            "Your driver account has been deactivated. Contact support for more information.",
-        ),
-        "unban": (
-            "Account Restored! ✅",
-            "Your driver account has been restored. You can now go online again.",
-        ),
-        "reactivate": (
-            "Account Reactivated! ✅",
-            "Your account has been reactivated. You can now go online and accept rides!",
-        ),
-    }
-    push_info = action_push_map.get(req.action)
-    if push_info and driver.get("user_id"):
-        try:
-            await send_push_notification(
-                driver["user_id"],
-                push_info[0],
-                push_info[1],
-                {
-                    "type": f"driver_{req.action}",
-                    "new_status": updates.get("status", ""),
-                },
-            )
-        except Exception as e:
-            logger.warning(f"[ADMIN] Push notification failed for driver action {req.action}: {e}")
+    # their application was processed. Copy and delivery tier live in
+    # utils/driver_status_notifications so the status-override endpoint and the
+    # driver-triggered needs_review paths use the same policy.
+    await _notify_driver_status_change(driver, action_message(req.action, req.reason), req.action)
 
     return {
         "message": f"Driver {req.action}d successfully",
@@ -1692,7 +1710,7 @@ async def admin_override_driver_status(
     driver_id: str, req: DriverStatusOverride, admin: dict = Depends(get_admin_user)
 ):
     """Manually move a driver to any status. Use with caution."""
-    valid = {"pending", "active", "needs_review", "suspended", "banned"}
+    valid = {"pending", "active", "needs_review", "rejected", "suspended", "banned"}
     if req.status not in valid:
         raise HTTPException(
             status_code=400,
@@ -1719,6 +1737,8 @@ async def admin_override_driver_status(
             updates["suspension_reason"] = req.reason
         elif req.status == "banned":
             updates["ban_reason"] = req.reason
+        elif req.status == "rejected":
+            updates["rejection_reason"] = req.reason
 
     await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
@@ -1744,6 +1764,16 @@ async def admin_override_driver_status(
             "reason": req.reason,
         },
     )
+
+    # This endpoint previously notified nobody: an admin could suspend a driver
+    # here and the driver would only find out via a 403 the next time they tried
+    # to go online. Same policy as the action endpoint, keyed on the status
+    # entered rather than an action name.
+    if req.status != driver.get("status"):
+        await _notify_driver_status_change(
+            driver, status_message(req.status, req.reason), f"status_override:{req.status}"
+        )
+
     return {"message": f"Driver status set to {req.status}"}
 
 

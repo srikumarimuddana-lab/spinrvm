@@ -38,12 +38,19 @@ jobs:
           python-version: '3.12'
       - run: pip install bandit[toml]
       - name: Run Bandit
+        # BLOCKING. `|| true` was removed 2026-07-30: bandit exits non-zero when it
+        # finds an issue, so the swallow made this gate report green regardless.
+        # Verified clean at these thresholds when enforced (0 findings at
+        # high severity / high confidence over backend/).
         run: |
           bandit -r backend/ \
             --severity-level high \
             --confidence-level high \
-            -f json -o bandit-report.json || true
+            -f json -o bandit-report.json
       - uses: actions/upload-artifact@v7
+        # always() so the report is still available for triage on the run that
+        # failed — which is the only run anyone needs it for.
+        if: always()
         with:
           name: bandit-report
           path: bandit-report.json
@@ -76,11 +83,71 @@ jobs:
       - name: Lint
         working-directory: ${{ matrix.module }}
         # Respects the repo's own lint script (e.g. admin-dashboard intentionally
-        # allows --max-warnings 600). Security gates are baselining — module
-        # owners tune strictness in their own package.json.
+        # allows --max-warnings 600). Module owners tune strictness in their own
+        # package.json — this gate's job is to make sure the linter actually RAN.
+        #
+        # `|| true` was removed 2026-07-30. It was hiding more than findings: at that
+        # point `expo lint` could not start in two of the three modules, and the
+        # swallow reported both as green.
+        #   rider-app  — eslint pinned ^8.57.0 but eslint.config.js requires eslint
+        #                9's `eslint/config` export: ERR_PACKAGE_PATH_NOT_EXPORTED.
+        #   driver-app — "expand is not a function" inside minimatch 3.x, because a
+        #                blanket `brace-expansion: ^5.0.8` resolution forced every
+        #                consumer onto v5 (which exports an object, not a function).
+        #
+        # Both were fixed the same day — see
+        # docs/change-log/2026-07-30-mobile-eslint-could-not-start.md. Both apps now
+        # lint, and their finding counts are known for the first time:
+        #   rider-app   28 errors / 306 warnings
+        #   driver-app 178 errors / 225 warnings
+        # Those are NOT blocking yet, for the same reason the gitleaks history scan
+        # is not: a gate flipped onto a 178-error baseline is a permanently red gate,
+        # which decays into the thing `|| true` was. They are bounded instead (see
+        # the budget check below) so the counts cannot grow unnoticed while they are
+        # worked down.
+        #
+        # ESLint exit codes: 0 clean, 1 lint problems, 2+ fatal (bad config, missing
+        # module, internal crash). Yarn propagates them. Distinguishing 2 from 1 is
+        # the whole point — a linter that cannot start must never look like a clean
+        # one.
         run: |
-          if [ -f yarn.lock ]; then yarn lint || true
-          elif [ -f package-lock.json ]; then npm run lint || true
+          rc=0
+          if [ -f yarn.lock ]; then yarn lint 2>&1 | tee /tmp/lint.out; rc=${PIPESTATUS[0]}
+          elif [ -f package-lock.json ]; then npm run lint 2>&1 | tee /tmp/lint.out; rc=${PIPESTATUS[0]}
+          else echo "No lockfile in ${{ matrix.module }}"; exit 0
+          fi
+
+          if [ "$rc" -ge 2 ]; then
+            echo "::error::${{ matrix.module }}: the linter FAILED TO RUN (exit $rc) — broken tooling, not clean code."
+            exit "$rc"
+          fi
+
+          if [ "$rc" -eq 1 ]; then
+            # admin-dashboard is verified enforceable: its own script already
+            # thresholds at --max-warnings 600, and it currently sits at 0 errors /
+            # 319 warnings, so a non-zero exit there is a real regression.
+            if [ "${{ matrix.module }}" = "admin-dashboard" ]; then
+              echo "::error::admin-dashboard lint failed (errors, or warnings over the 600 budget)"
+              exit 1
+            fi
+
+            # rider-app / driver-app: they lint now, but on an inherited baseline of
+            # 28 and 178 errors. Rather than block (permanently red) or wave through
+            # (the `|| true` failure mode), hold the line with an error budget. The
+            # numbers are the measured baselines as of 2026-07-30 — RATCHET THEM DOWN
+            # as errors are fixed, never up to accommodate new ones.
+            case "${{ matrix.module }}" in
+              rider-app)  budget=28  ;;
+              driver-app) budget=178 ;;
+              *)          budget=0   ;;
+            esac
+            found=$(grep -oE '[0-9]+ error' /tmp/lint.out | tail -1 | grep -oE '[0-9]+' || echo 0)
+            echo "${{ matrix.module }}: $found errors (budget $budget)"
+            if [ "$found" -gt "$budget" ]; then
+              echo "::error::${{ matrix.module }} lint errors rose to $found, over the $budget baseline. Fix the new ones — do not raise the budget."
+              exit 1
+            fi
+            echo "::warning::${{ matrix.module }} lint: $found errors within the $budget baseline budget (backlog, tracked in ACTION_ITEMS.md)"
           fi
 
   # G3 — Semgrep with Spinr-specific ruleset + public registry rules
@@ -92,8 +159,44 @@ jobs:
       image: semgrep/semgrep:latest
     steps:
       - uses: actions/checkout@v6
+
+      # The Spinr ruleset silently failed to parse for its entire existence
+      # (unquoted `- pattern:` scalars containing `": "`; fixed 2026-07-30). The
+      # scan step's `|| true` swallowed semgrep's exit 7, so the gate reported
+      # green while running none of the 10 Spinr rules. This check is a plain YAML
+      # parse — no network, no registry — so it catches that exact class of
+      # breakage even when semgrep.dev is unreachable.
+      - name: Validate Spinr ruleset parses
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          path = ".semgrep/spinr-rules.yml"
+          try:
+              doc = yaml.safe_load(open(path))
+          except yaml.YAMLError as exc:
+              print(f"::error file={path}::ruleset is not valid YAML: {exc}")
+              sys.exit(1)
+          rules = (doc or {}).get("rules")
+          if not rules:
+              print(f"::error file={path}::ruleset declares no rules")
+              sys.exit(1)
+          missing = [r.get("id", "<no id>") for r in rules if not r.get("severity")]
+          if missing:
+              print(f"::error file={path}::rules missing severity: {missing}")
+              sys.exit(1)
+          print(f"{path}: OK, {len(rules)} rules")
+          PY
+
       - name: Semgrep scan
         run: |
+          # Semgrep exit codes: 0 = clean, 1 = findings, 7 = invalid config,
+          # other = internal error. Distinguishing them is the whole point: a
+          # broken gate must never again be indistinguishable from a clean one.
+          #
+          # `|| rc=$?` not `; rc=$?` — GitHub's default shell is `bash -e`, which
+          # exits before a semicolon-separated assignment runs (same trap the
+          # yarn-audit job documents below).
+          rc=0
           semgrep scan \
             --config=.semgrep/spinr-rules.yml \
             --config=p/python \
@@ -102,7 +205,29 @@ jobs:
             --config=p/owasp-top-ten \
             --severity=ERROR \
             --severity=WARNING \
-            --sarif --output=semgrep.sarif || true
+            --sarif --output=semgrep.sarif || rc=$?
+
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+            echo "::error::semgrep exited $rc — it failed to RUN (bad config, network, or internal error)."
+            echo "::error::This is a broken gate, not a clean one. Do not suppress it."
+            exit "$rc"
+          fi
+
+          # Findings themselves are not yet blocking. This is deliberate and
+          # temporary: the first real run of the Spinr ruleset produced 74
+          # findings dominated by rule defects, not code defects — e.g.
+          # spinr-no-float-in-money flags fare_service._f(), the Decimal->float
+          # helper CLAUDE.md *mandates* at the response boundary, and
+          # spinr-jwt-role-must-reread fires on any `user.get('role')`. Blocking
+          # on those would force removing the prescribed pattern.
+          #
+          # Tracked as its own task: tune the four over-broad rules, then delete
+          # this block so findings fail the job. Findings are uploaded to the
+          # GitHub Security tab below either way, so they are visible now.
+          if [ "$rc" -eq 1 ]; then
+            echo "::warning::semgrep reported findings — visible in the Security tab (not yet merge-blocking; rule tuning pending)"
+          fi
+
       - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
@@ -119,7 +244,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pip-audit
-      - run: pip-audit -r backend/requirements-locked.txt --vulnerability-service osv || true
+      # BLOCKING. `|| true` was removed 2026-07-30. Verified clean against the
+      # PyPI advisory service (`--vulnerability-service pypi`) — the OSV service
+      # used here is a superset, so a first enforced run could surface an advisory
+      # PyPI does not carry. If that happens, fix or pin the dependency; do not
+      # restore the swallow.
+      - run: pip-audit -r backend/requirements-locked.txt --vulnerability-service osv
 
   yarn-audit:
     name: G4b · yarn audit (JS deps)
@@ -174,6 +304,25 @@ jobs:
   gitleaks:
     name: G5a · Gitleaks (git history)
     runs-on: ubuntu-latest
+    # NOT blocking yet — and the reason is important, so do not "clean this up".
+    #
+    # This was briefly flipped to false on the strength of a full-history scan
+    # reporting "no leaks found". That result was worthless: .gitleaks.toml had no
+    # [extend] stanza, so passing --config REPLACED gitleaks' ruleset with zero
+    # rules and the scan could not report anything (fixed 2026-07-30 — see the
+    # comment at the top of .gitleaks.toml). Re-running with rules actually loaded
+    # returned 44,492 findings, so enforcing here would simply have made the
+    # default branch permanently red.
+    #
+    # 44,487 of those are gitleaks' `generic-api-key` entropy heuristic firing on
+    # the committed frontend/.metro-cache build cache, now excluded. The remaining
+    # handful are triaged in
+    # docs/change-log/2026-07-30-secret-scanning-gate-was-vacuous.md — and one of
+    # them is a real, still-valid Supabase service_role key in git history, which
+    # needs rotation before this gate can be honestly enforced.
+    #
+    # Flip to false once the baseline is genuinely clean; do not flip it to make
+    # the gate look enforced.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6

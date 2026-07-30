@@ -20,11 +20,13 @@ try:
     from .. import db_supabase
     from ..features import send_push_notification
     from ..socket_manager import manager
+    from .card_hold_release import release_open_hold
     from .metrics import inc as _metric_inc
 except ImportError:
     import db_supabase  # type: ignore
     from features import send_push_notification  # type: ignore
     from socket_manager import manager  # type: ignore
+    from utils.card_hold_release import release_open_hold  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
 
 try:
@@ -36,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 _SWEEP_INTERVAL_SECONDS = 60
 _SEARCHING_TIMEOUT_MINUTES = 5
+
+# The release itself lives in utils/card_hold_release so the sweeper, the
+# orphaned-hold reconciler and (conceptually) the interactive cancel path share one
+# definition of the failure semantics. Duplicating those semantics is exactly how the
+# bug this fixes came about: the release existed in routes/rides/cancellation.py and
+# was never carried over to this loop.
 
 
 async def _sweep() -> None:
@@ -79,6 +87,14 @@ async def _sweep() -> None:
         ride_id = ride.get("id")
         rider_id = ride.get("rider_id")
         driver_id = ride.get("driver_id")
+
+        # Release the rider's card hold FIRST. The WS and push calls below are
+        # network round-trips that can block for seconds (push especially), and
+        # money integrity should not queue behind a notification — CLAUDE.md's
+        # anti-patterns list calls out awaiting Twilio/Stripe inline for this
+        # reason. Both notify calls already tolerate failure independently, so
+        # nothing downstream depends on this ordering.
+        await release_open_hold(ride, source="sweeper")
 
         if rider_id:
             try:

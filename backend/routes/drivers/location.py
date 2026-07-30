@@ -176,15 +176,40 @@ async def get_nearby_drivers_public(
     vehicle_type: str = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Get nearby active drivers for riders. Filters by service area + vehicle type."""
-    # Use admin-configured search_radius_km if caller didn't override
-    if radius is None:
-        try:
-            from ...settings_loader import get_app_settings  # type: ignore
-        except ImportError:
-            from settings_loader import get_app_settings  # type: ignore
-        app_settings = await get_app_settings() or {}
-        radius = float(app_settings.get("search_radius_km", 10.0))
+    """Get nearby active drivers for riders. Filters by service area + vehicle type.
+
+    Positions are **coarsened** (see utils/driver_map_visibility). Pre-match there
+    is no assigned ride to justify exact coordinates, and this endpoint is
+    reachable by any authenticated rider with arbitrary lat/lng, so exact
+    coordinates here let a caller enumerate and follow individual drivers.
+    """
+    try:
+        from ...settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        from ...utils.driver_map_visibility import clamp_radius, map_settings, prematch_driver_list
+    except ImportError:
+        from utils.driver_map_visibility import (  # type: ignore
+            clamp_radius,
+            map_settings,
+            prematch_driver_list,
+        )
+
+    app_settings = await get_app_settings() or {}
+    show_locations, cell_m, max_radius_km = map_settings(app_settings)
+    default_radius = float(app_settings.get("search_radius_km", 10.0))
+
+    # Kill switch (launch plan: map visibility stays behind one). Returning an
+    # empty list rather than 404/403 keeps the rider map functional — it renders
+    # no cars, and the availability count from /rides/estimate is unaffected
+    # because that endpoint never carried coordinates.
+    if not show_locations:
+        return []
+
+    # Use admin-configured search_radius_km if caller didn't override, and cap
+    # whatever we end up with: unbounded, one request sweeps the province.
+    radius = clamp_radius(radius if radius is not None else default_radius, max_radius_km, default_radius)
 
     # is_verified + status='active' prevent unverified / suspended / needs_review
     # drivers from appearing on the rider map even if their is_online flag is
@@ -251,7 +276,7 @@ async def get_nearby_drivers_public(
         vt_marker_by_id = {vt["id"]: vt.get("marker_variant") for vt in vehicle_types if vt.get("id")}
 
     # Manual filtering by distance
-    nearby = []
+    in_radius = []
     for d in drivers:
         # Exclude orphan/demo driver rows (no user_id → cannot be dispatched).
         if not d.get("user_id"):
@@ -270,23 +295,25 @@ async def get_nearby_drivers_public(
         # default and means "no GPS yet" — skip those so a freshly-online
         # driver doesn't surface as a ghost car at the origin.
         if d_lat is not None and d_lng is not None and (d_lat != 0 or d_lng != 0):
+            # Distance filtering uses the TRUE position so the radius stays
+            # accurate; only the coordinates we hand back are coarsened.
             dist = calculate_distance(lat, lng, d_lat, d_lng)
             if dist <= radius:
-                # hide personal info for riders
-                safe_driver = {
-                    "id": d["id"],
-                    "lat": d_lat,
-                    "lng": d_lng,
-                    "heading": d.get("heading"),
-                    "vehicle_type_id": d.get("vehicle_type_id"),
-                    "vehicle_type_name": vt_name_by_id.get(d.get("vehicle_type_id")),
-                    "marker_variant": vt_marker_by_id.get(d.get("vehicle_type_id")),
-                    "vehicle_make": d.get("vehicle_make"),
-                    "vehicle_model": d.get("vehicle_model"),
-                }
-                nearby.append(safe_driver)
+                in_radius.append(
+                    {
+                        **d,
+                        "vehicle_type_name": vt_name_by_id.get(d.get("vehicle_type_id")),
+                        "marker_variant": vt_marker_by_id.get(d.get("vehicle_type_id")),
+                    }
+                )
 
-    return nearby
+    # Single projection point for what a pre-match rider may see — an allowlist,
+    # so a new `drivers` column cannot become rider-visible by default. This also
+    # drops vehicle_make/vehicle_model, which together with heading made a
+    # specific car re-identifiable.
+    # viewer_id scopes the marker pseudonyms to this rider so observations from
+    # two accounts cannot be pooled into one trace.
+    return prematch_driver_list(in_radius, cell_m, viewer_id=current_user.get("id"))
 
 
 @router.get("")

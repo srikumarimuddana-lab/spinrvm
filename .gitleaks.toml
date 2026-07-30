@@ -4,19 +4,40 @@
 
 title = "Spinr Gitleaks Config"
 
+# CRITICAL — do not remove. Passing --config makes gitleaks REPLACE its built-in
+# ruleset, it does not merge. Without this stanza the file below defines an
+# allowlist and *no rules at all*, so every scan using it loads zero detectors and
+# reports "no leaks found" for anything — including a plaintext AWS key or an
+# sk_live_ Stripe key. That was the state until 2026-07-30, which made both the
+# G5a history scan and the G5b bundle scan in security-gates.yml vacuous while
+# reporting green. Verified with a canary file: without this, 0 findings; with it,
+# the same file reports 2.
+[extend]
+useDefault = true
+
 [allowlist]
 description = "Dev testing false-positive suppressions"
 
-# Never scan gitignored local env files or build artefacts
+# Never scan local env files.
+#
+# Build-artefact directories were removed from this list on 2026-07-30. They
+# protected nothing — `git log --diff-filter=A` shows zero files under .next/,
+# node_modules/, dist/, build/ or coverage/ have ever been committed, and each is
+# gitignored (e.g. admin-dashboard/.gitignore:17 for /.next/) — while '''\.next/'''
+# actively defeated the G5b gate, whose entire job is scanning
+# admin-dashboard/.next/static for NEXT_PUBLIC_* secrets baked into the shipped
+# bundle. With that entry present, G5b could not report a finding by construction.
+# Re-add a path here only with evidence it suppresses a real false positive.
 paths = [
   '''.env\.local''',
   '''.env\.\w+\.local''',
-  '''\.next/''',
-  '''node_modules/''',
-  '''\.expo/''',
-  '''dist/''',
-  '''build/''',
-  '''coverage/''',
+  # Committed Metro bundler cache from the retired `frontend/` surface. These are
+  # binary-ish build-cache blobs full of high-entropy hashes: they account for
+  # 44,487 of the 44,492 findings on a full-history scan, every one of them
+  # gitleaks' `generic-api-key` entropy heuristic firing on a cache key. Excluding
+  # them is what makes a history scan readable at all. (The directory should not
+  # be in git; removing it is tracked separately.)
+  '''\.metro-cache/''',
 ]
 
 # Placeholder / test-fixture key patterns used in settings forms and test files

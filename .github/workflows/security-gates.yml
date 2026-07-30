@@ -176,7 +176,12 @@ jobs:
       # later ModuleNotFoundError.
       - name: Validate Spinr ruleset parses
         run: |
-          pip install --quiet --no-cache-dir pyyaml
+          # --break-system-packages: the semgrep/semgrep:latest image's
+          # system Python is PEP 668 "externally managed" (Alpine), so a
+          # bare `pip install` is refused outright. Safe here — this is an
+          # ephemeral CI container discarded after the job, not a shared or
+          # persistent environment a system-package conflict could affect.
+          pip install --quiet --no-cache-dir --break-system-packages pyyaml
           python3 - <<'PY'
           import sys, yaml
           path = ".semgrep/spinr-rules.yml"

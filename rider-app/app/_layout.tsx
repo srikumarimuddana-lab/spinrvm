@@ -374,6 +374,15 @@ function RootLayout() {
     }
   }, []);
 
+  // Re-arm token registration on sign-out. fcmRegisteredRef is a ref, so it
+  // survives logout for the life of the app process — without this reset, a
+  // user who signs out and back in without killing the app never re-runs the
+  // effect below, and the backend keeps whatever token it had (or, once
+  // logout_clears_push_token is enabled server-side, none at all).
+  useEffect(() => {
+    if (!authToken) fcmRegisteredRef.current = false;
+  }, [authToken]);
+
   // FCM token registration, gated on auth
   useEffect(() => {
     if (!isAuthInitialized || !authToken || fcmRegisteredRef.current) return;

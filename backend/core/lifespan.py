@@ -425,6 +425,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import stuck ride sweeper: {e}", exc_info=True)
 
+    # Orphaned card-hold reconciler — releases booking-time authorizations left open
+    # on rides that are cancelled and will never be billed. Two populations: the
+    # historical backlog from before the stuck-ride sweeper released holds at all
+    # (every swept ride reserved the rider's money for ~7 days), and ongoing
+    # release failures, which nothing else retries — a single transient Stripe
+    # error would otherwise turn a 5-minute inconvenience into a week-long hold on
+    # a real card. Redis leader lock + updated_at compare-and-swap + Stripe
+    # idempotency key; safe to crash mid-flight, the next tick re-finds the ride.
+    try:
+        from utils.orphaned_hold_reconciler import orphaned_hold_reconciler_loop
+
+        _spawn("orphaned_hold_reconciler (15m)", orphaned_hold_reconciler_loop)
+    except Exception as e:
+        logger.error(f"Failed to import orphaned hold reconciler: {e}", exc_info=True)
+
     # Durable offer-expiry reaper — restart-safe backstop for offer timeouts.
     # In-process asyncio offer/search timers are lost on a pod restart; this loop
     # finds pending ride_offers past their persisted expires_at (migration 224)

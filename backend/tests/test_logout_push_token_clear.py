@@ -108,3 +108,26 @@ class TestFlagGating:
         monkeypatch.setattr("routes.auth.db.update_one", AsyncMock(side_effect=RuntimeError("db down")))
 
         await _clear_push_token_on_logout(DRIVER_ONLY, "driver")
+
+
+class TestLegacyTokenOnly:
+    """Rows written before migration 102 added the per-app columns have only
+    the legacy `fcm_token`. It is still a live delivery target, so skipping it
+    would defeat the point of clearing on logout (review finding L1)."""
+
+    SINGLE_ROLE_LEGACY = {"id": "u4", "is_driver": True, "is_rider": False, "fcm_token": "legacy-tok"}
+    DUAL_ROLE_LEGACY = {"id": "u5", "is_driver": True, "is_rider": True, "fcm_token": "legacy-tok"}
+
+    def test_single_role_legacy_token_is_cleared(self):
+        assert _push_token_columns_to_clear(self.SINGLE_ROLE_LEGACY, "driver") == {"fcm_token": None}
+
+    def test_single_role_legacy_cleared_without_client_type(self):
+        assert _push_token_columns_to_clear(self.SINGLE_ROLE_LEGACY, None) == {"fcm_token": None}
+
+    def test_dual_role_legacy_token_is_left_alone(self):
+        """Ambiguous: the token carries no client_type and both apps could be
+        using it. Clearing it could silently kill the other app's pushes."""
+        assert _push_token_columns_to_clear(self.DUAL_ROLE_LEGACY, "driver") == {}
+
+    def test_no_token_at_all_stays_a_no_op(self):
+        assert _push_token_columns_to_clear({"id": "u6", "is_driver": True, "is_rider": False}, "driver") == {}

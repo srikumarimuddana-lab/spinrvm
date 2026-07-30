@@ -1662,13 +1662,36 @@ def _push_token_columns_to_clear(user: Dict[str, Any], client_type: Optional[str
 
     columns = ["fcm_token_driver", "fcm_token_rider"] if normalized is None else [f"fcm_token_{normalized}"]
     updates: Dict[str, None] = {col: None for col in columns if user.get(col)}
-    if not updates:
-        return {}
 
     generic = user.get("fcm_token")
-    if generic and generic in {user.get(col) for col in columns}:
-        updates["fcm_token"] = None
-    return updates
+    if not generic:
+        return updates
+
+    if updates:
+        # Clear the legacy column only when it still mirrors a surface we are
+        # clearing. Otherwise it belongs to the app that is staying signed in,
+        # and nulling it would kill that app's pushes for a dual-role account.
+        if generic in {user.get(col) for col in columns}:
+            updates["fcm_token"] = None
+        return updates
+
+    # No per-app column set at all: a row written before migration 102 added
+    # them, where `fcm_token` is the only token on file. It is still a live
+    # delivery target, so leaving it would defeat the whole point of clearing
+    # on logout — but it carries no client_type, so it can only be attributed
+    # when the account has a single role.
+    if not user.get("is_driver", False) or not user.get("is_rider", True):
+        return {"fcm_token": None}
+
+    # Genuinely ambiguous: dual-role account whose only token is the legacy
+    # one. Clearing it could silently kill the other app's pushes, so leave it
+    # and say so — the next registration from either app writes the per-app
+    # column and the ambiguity resolves itself.
+    logger.info(
+        "logout: leaving legacy fcm_token in place for dual-role user %s (no per-app token to attribute it to)",
+        user.get("id"),
+    )
+    return {}
 
 
 async def _clear_push_token_on_logout(user: Dict[str, Any], client_type: Optional[str]) -> None:

@@ -11,7 +11,6 @@ Hard rule: scrubbing must NEVER drop an event. Any failure returns the event
 unchanged so error reporting keeps working.
 """
 
-import re
 from typing import Any, Optional
 
 try:
@@ -30,57 +29,26 @@ def _scrub(value: Any) -> Any:
 
 
 # ── Key-name redaction ──────────────────────────────────────────────
-# Value patterns alone are not enough for structured payloads, and the reason is
-# specific and load-bearing: Sentry serializes values BEFORE before_send runs, so
-# a float local `pickup_lat = 52.1332` arrives here as the string '52.1332' in one
-# dict key and '-106.67' in another. Every coordinate pattern in ai/pii.py needs
-# lat and lng adjacent in a single string ("lat=… lng=…" or "lat,lng"), so a lone
-# '52.1332' matches nothing and raw GPS egresses. Names are unmatched by regex at
-# all (ai/pii.py says so explicitly).
+# The definition moved to utils/pii.py so the Sentry hook, the loguru sink guard
+# (utils/log_guard.py) and any future emission site share ONE answer to "what is
+# PII". Re-exported under the original private names because this module's tests
+# and _scrub_frames/_scrub_deep below reference them.
 #
-# So for dicts we also redact on the KEY. This is the one place a name-denylist is
-# the right tool: we control none of the values, and the key is the only reliable
-# signal about what a value means.
-_SENSITIVE_KEY_RE = re.compile(
-    r"(lat|lng|lon|longitude|latitude|coord"
-    r"|phone|mobile|tel"
-    r"|email|e_mail"
-    r"|(?:^|_)name$|full_name|first_name|last_name|display_name"
-    r"|address|street|postal|zip"
-    r"|sin|licence|license|passport|dob|birth"
-    r"|vin|plate"
-    r"|password|passwd|secret|token|api_key|apikey|authorization|auth|cookie|session"
-    r"|card|pan|cvv|cvc|iban|account_number)",
-    re.IGNORECASE,
-)
-
-_REDACTED = "[REDACTED]"
-
-# Keys that look sensitive by substring but are safe IDs we deliberately keep —
-# they are how an event gets triaged at all, and CLAUDE.md lists them as ID-only.
-_KEY_ALLOWLIST = frozenset(
-    {
-        "name",  # bare 'name' on a frame/module dict is a symbol name, not a person
-        "filename",
-        "module_name",
-        "function_name",
-        "event_id",
-        "request_id",
-        "ride_id",
-        "driver_id",
-        "rider_id",
-        "user_id",
-        "transaction_name",
-    }
-)
-
-
-def _key_is_sensitive(key: Any) -> bool:
-    if not isinstance(key, str):
-        return False
-    if key.lower() in _KEY_ALLOWLIST:
-        return False
-    return bool(_SENSITIVE_KEY_RE.search(key))
+# Why key-name redaction exists at all: Sentry serializes values BEFORE before_send
+# runs, so a float local `pickup_lat = 52.1332` arrives as the string '52.1332' in
+# one dict key and '-106.67' in another. Every coordinate pattern in ai/pii.py needs
+# lat and lng adjacent in a single string, so a lone '52.1332' matches nothing and
+# raw GPS egresses. Names are unmatched by regex at all.
+try:
+    from .pii import KEY_ALLOWLIST as _KEY_ALLOWLIST  # noqa: F401  (re-export)
+    from .pii import REDACTED as _REDACTED
+    from .pii import SENSITIVE_KEY_RE as _SENSITIVE_KEY_RE  # noqa: F401  (re-export)
+    from .pii import is_sensitive_key as _key_is_sensitive
+except ImportError:  # pragma: no cover - dual import
+    from utils.pii import KEY_ALLOWLIST as _KEY_ALLOWLIST  # type: ignore # noqa: F401
+    from utils.pii import REDACTED as _REDACTED  # type: ignore
+    from utils.pii import SENSITIVE_KEY_RE as _SENSITIVE_KEY_RE  # type: ignore # noqa: F401
+    from utils.pii import is_sensitive_key as _key_is_sensitive  # type: ignore
 
 
 # Bound the recursion so a pathological/cyclic event can never spin the scrubber.

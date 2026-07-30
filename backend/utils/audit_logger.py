@@ -1,4 +1,27 @@
-"""Shared helper for writing admin audit log entries."""
+"""Shared helper for writing admin audit log entries.
+
+**The `details` blob is deliberately NOT PII-scrubbed.** This is a considered
+decision, not an oversight, and it is recorded here because the T2 sink guard
+(`utils/log_guard.py`) scrubs the loguru sinks and the obvious next step looks like
+"scrub this too". Do not.
+
+`audit_logs` is not a log sink in the PIPEDA sense. CLAUDE.md's prohibition names
+"logs, Sentry events, or analytics payloads" — egress paths that leave the trust
+boundary or land in a third party's storage. This table is primary storage in the
+same Canadian-region Supabase project as `users`, under the same RLS, subject to the
+same retention and deletion rules. Recording that an admin changed a rider's phone
+number, including the before/after value, is the entire point of an audit trail;
+redacting it produces rows that prove something happened but not what, which is
+worse than no audit trail because it looks like one.
+
+It also has regulatory weight pulling the other way: the Saskatchewan retention
+rules require driver/vehicle linkage at trip time kept for 7 years, and insurance
+period transitions for commercial-coverage audit for 7 years. An audit row scrubbed
+to `[REDACTED]` cannot satisfy an SGI or Privacy Commissioner request.
+
+What *does* apply here: the `details` blob must not be echoed into a log line or a
+Sentry event. That boundary is enforced at those sinks, not by weakening this one.
+"""
 
 import logging
 import uuid

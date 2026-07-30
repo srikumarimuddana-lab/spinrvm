@@ -7,7 +7,75 @@ Use these helpers at every emission site.
 
 from __future__ import annotations
 
+import re as _re
+from typing import Any
+
 _GEOHASH_BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz"
+
+REDACTED = "[REDACTED]"
+
+# ── Key-name redaction ──────────────────────────────────────────────
+# Value patterns alone cannot protect a structured payload, and the reason is
+# specific: a coordinate split across two dict keys ({"lat": 52.1332,
+# "lng": -106.67}) matches no coordinate pattern in ai/pii.py, because those all
+# require lat and lng adjacent in one string. Names are not regex-matchable at all.
+# So for mappings we redact on the KEY — the one place a name-denylist is the right
+# tool, because we control none of the values and the key is the only reliable
+# signal about what a value means.
+#
+# This lives here rather than in utils/sentry_scrub.py (where it was written for
+# T1c) because there are now three consumers — the Sentry before_send hook, the
+# loguru sink guard in utils/log_guard.py, and any future emission site — and
+# "what counts as PII" must have exactly one definition. Sentry re-exports these
+# under its old private names for continuity with its tests.
+SENSITIVE_KEY_RE = _re.compile(
+    r"(lat|lng|lon|longitude|latitude|coord"
+    r"|phone|mobile|tel"
+    r"|email|e_mail"
+    r"|(?:^|_)name$|full_name|first_name|last_name|display_name"
+    r"|address|street|postal|zip"
+    r"|sin|licence|license|passport|dob|birth"
+    r"|vin|plate"
+    r"|password|passwd|secret|token|api_key|apikey|authorization|auth|cookie|session"
+    r"|card|pan|cvv|cvc|iban|account_number)",
+    _re.IGNORECASE,
+)
+
+# Keys that look sensitive by substring but are the IDs that make an event
+# triageable at all. CLAUDE.md lists these as ID-only and explicitly permitted.
+# Over-redaction is its own failure mode: a log line with every field redacted is
+# as useless as no log line.
+KEY_ALLOWLIST = frozenset(
+    {
+        "name",  # a bare 'name' on a frame/module dict is a symbol, not a person
+        "filename",
+        "module_name",
+        "function_name",
+        "event_id",
+        "request_id",
+        "ride_id",
+        "driver_id",
+        "rider_id",
+        "user_id",
+        "transaction_name",
+        # Observability context — never PII, and needed to correlate anything.
+        "domain",
+        "surface",
+        "trace_id",
+        "span_id",
+        "correlation_id",
+        "idempotency_key",  # a derived key, not a credential
+    }
+)
+
+
+def is_sensitive_key(key: Any) -> bool:
+    """True when a mapping key names a value that must not be emitted."""
+    if not isinstance(key, str):
+        return False
+    if key.lower() in KEY_ALLOWLIST:
+        return False
+    return bool(SENSITIVE_KEY_RE.search(key))
 
 
 def geohash(lat: float | None, lng: float | None, precision: int = 5) -> str:

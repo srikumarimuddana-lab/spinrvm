@@ -112,18 +112,23 @@ Admin acts via `POST /admin/drivers/{id}/action`
 | Action | Result | Side effects |
 |---|---|---|
 | `approve` | `active` | `is_verified = True`, `verified_at` stamped, `rejection_reason` cleared |
+| `reject` | `rejected` | Reason **required**, `is_verified = False`, `rejection_reason` stored, forced offline |
 | `suspend` | `suspended` | Reason **required**, `is_online = False`, `is_available = False` |
 | `ban` | `banned` | Reason **required**, `is_verified = False`, forced offline |
 | `unban` | `active` | `is_verified = True`, ban fields cleared |
 | `reactivate` | `active` | `is_verified = True`, suspension fields cleared |
 
-> ⚠️ **`reject` is accepted by the request model but has no handler.**
-> `DriverActionRequest` (line 118) allows `"reject"`, and the activity-log title
-> map has an entry for it (line 1609), but the `if/elif` chain at lines 1551–1596
-> has no `reject` branch — so it falls through to
-> `else: raise HTTPException(400, "Unknown action: reject")`.
-> The only working path to `rejected` today is the separate status-override
-> endpoint (`DriverStatusOverride`, line 122). Not fixed here — filed as a gap.
+The status-override endpoint (`PUT /admin/drivers/{id}/status-override`) can set
+any of the six statuses directly, bypassing the action semantics. It syncs
+`is_verified` to `status == "active"` and forces offline for anything else.
+
+> **Fixed 2026-07-30.** `rejected` was previously unreachable through the whole
+> API: the action endpoint accepted `"reject"` in its `Literal` but had no
+> `if/elif` branch for it (fell through to `400 Unknown action: reject`), and
+> the override endpoint's `valid` set omitted `rejected` (400). `needs_review`
+> had the mirror-image bug on the override endpoint — present in `valid`,
+> missing from the `Literal`, so `422`. Both sets now agree and carry a comment
+> to keep them in sync.
 
 ### Phase 3 — Active driving
 
@@ -224,12 +229,69 @@ daily purge. Login is refused outright at that point.
 
 ---
 
-## 5. Known gaps
+## 5. Who gets notified, by status
+
+Two distinct classes. Conflating them is what produced the endless
+"finish your vehicle info" push.
+
+**A. Lifecycle notices** — one push, fired on *entering* a status.
+Policy: `backend/utils/driver_status_notifications.py`.
+
+| Entering | Title | Tier | Fired from |
+|---|---|---|---|
+| `pending` | *(none)* | — | Signup screen shows the next step |
+| `active` | "You're Approved! 🎉" / "Account Restored! ✅" / "Account Reactivated! ✅" | `normal` | approve / unban / reactivate |
+| `needs_review` | "Changes Under Review" | `normal` | Driver's own vehicle edit or doc re-upload; admin override |
+| `rejected` | "Application Update" + reason | **`account`** | reject action; admin override |
+| `suspended` | "Account Suspended ⚠️" + reason | **`account`** | suspend action; admin override |
+| `banned` | "Account Deactivated" | **`account`** | ban action; admin override |
+| soft-deleted | **never** | — | `should_notify_driver` returns False on `deleted_at` |
+
+**B. Recurring reminders** — repeating daily nudge, only where the driver has
+work to do. Policy: `backend/utils/driver_onboarding_reminder_rules.py`.
+
+| Status | Reminder | Cap |
+|---|---|---|
+| `pending` | Vehicle details / document upload, 08:00 local | 7 per type |
+| everything else | none | — |
+
+### Delivery tiers
+
+`send_push_notification`'s `priority` decides whether the user's
+Settings → Push Notifications opt-out is honoured:
+
+| Tier | Bypasses opt-out | Retry-queued | Used for |
+|---|---|---|---|
+| `dispatch` | ✅ | ✅ | Ride offers (latency-critical) |
+| `safety` | ✅ | ✅ | SOS |
+| `account` | ✅ | ✅ | Driver can no longer earn: rejected / suspended / banned |
+| `normal` | ❌ | ❌ | Everything else, incl. approvals and `needs_review` |
+
+`account` exists for **guaranteed delivery, not speed**. Rationale: a driver
+whose account was blocked must be told why, rather than discovering it as a
+403 the next time they tap "Go online". Restoring notices stay on `normal` —
+good news is not a reason to override a stated preference.
+
+Ban deliberately does **not** echo the admin's reason into the push. Ban
+reasons are internal admin text ("fraud ring #4412"), not vetted
+customer-facing copy; the notice routes the driver to support instead.
+
+The `push_retry_queue.priority` CHECK constraint must list every tier —
+migration 272 added `account`. Without that, the retry enqueue violates the
+constraint and the notice is silently dropped.
+
+---
+
+## 6. Known gaps
 
 | Gap | Where | Impact |
 |---|---|---|
-| `reject` action has no handler | `backend/routes/admin/drivers.py:1551-1596` | Admin "Reject" returns 400. `rejected` reachable only via status override |
 | Driver row auto-created from a single profile PATCH | `backend/routes/drivers/profile.py:187` | Riders who tap into vehicle-info once become permanent `pending` drivers with `users.role = "driver"` |
-| `unban` / `reactivate` always land on `active` | `backend/routes/admin/drivers.py:1579-1593` | Unbanning a never-approved driver silently approves them |
+| `unban` / `reactivate` always land on `active` | `backend/routes/admin/drivers.py` | Unbanning a never-approved driver silently approves them |
 | No status transition guard | Throughout | Unlike rides (`_require_ride_in_state`), driver status has no central transition validator — any admin action can move any status to any other |
-| Re-review ignores ride state | `backend/routes/drivers/profile.py:195` | A driver mid-trip can be dropped to `needs_review` and forced offline |
+| Re-review ignores ride state | `backend/routes/drivers/profile.py:195` | A driver mid-trip can be dropped to `needs_review` and forced offline. They are now notified, but the transition itself is still unguarded |
+| `admin_verify_driver` bypasses the notification policy | `backend/routes/admin/drivers.py` | Sends its own push directly rather than through `notify_driver_status_change`, so it does not get the `deleted_at` recipient guard |
+
+Fixed on 2026-07-30: the `reject` handler, the `rejected`/`needs_review`
+reachability mismatch, status-override sending no notice, and the silent
+forced-offline on driver-triggered `needs_review`.

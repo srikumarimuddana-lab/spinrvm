@@ -405,8 +405,11 @@ class TestAuthEndpoints:
 
     def test_send_otp_success(self, test_client, mock_supabase_client, mock_sms_service):
         """Test sending OTP successfully."""
-        # Mock OTP insertion
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
+        # Mock OTP insertion. execute() is synchronous in the real client --
+        # production code always wraps it in run_sync(lambda: ...) rather
+        # than awaiting it directly, so an AsyncMock here leaks an
+        # un-awaited coroutine and can fail an unrelated test on GC (A8).
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(
             return_value=MagicMock(data=[{"id": "otp_123"}])
         )
 
@@ -437,7 +440,9 @@ class TestAuthEndpoints:
         # Mock OTP lookup
         mock_response = MagicMock()
         mock_response.data = [{"id": "otp_123", "verified": False}]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        # execute() is synchronous in the real client -- see A8 in
+        # ACTION_ITEMS.md; an AsyncMock here leaks an un-awaited coroutine.
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -504,7 +509,9 @@ class TestPasswordlessAuth:
         # Step 3: Verify OTP (would check database)
         mock_response = MagicMock()
         mock_response.data = [{"id": "otp_123", "verified": False}]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        # execute() is synchronous in the real client -- see A8 in
+        # ACTION_ITEMS.md; an AsyncMock here leaks an un-awaited coroutine.
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 

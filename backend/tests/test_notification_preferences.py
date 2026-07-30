@@ -107,14 +107,17 @@ async def test_push_suppressed_when_user_opted_out():
     find_one.assert_not_awaited()  # suppressed before the token lookup
 
 
-async def test_push_opt_out_does_not_block_dispatch_or_safety():
-    """Ride offers and SOS alerts are time-critical and bypass the preference."""
+async def test_push_opt_out_does_not_block_dispatch_safety_or_account():
+    """Ride offers and SOS alerts bypass the preference because they are
+    time-critical. Account-state notices (driver rejected/suspended/banned)
+    bypass it for a different reason: a driver who can no longer earn must be
+    told why, not left to discover it as a 403 on their next go-online."""
     try:
         import features
     except ImportError:  # pragma: no cover
         from backend import features  # type: ignore
 
-    for priority in ("dispatch", "safety"):
+    for priority in ("dispatch", "safety", "account"):
         deliver = AsyncMock(return_value=True)
         with (
             patch.object(features, "_record_inbox_notification"),

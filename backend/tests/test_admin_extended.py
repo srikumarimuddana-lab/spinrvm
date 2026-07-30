@@ -1142,7 +1142,7 @@ class TestAdminDriverAction:
             patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
-            patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.admin.drivers.notify_driver_status_change", AsyncMock()),
         ):
             req = DriverActionRequest(action="suspend", reason="Violation")
             result = asyncio.run(admin_drivers.admin_driver_action(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER))
@@ -1159,7 +1159,7 @@ class TestAdminDriverAction:
             patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
-            patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.admin.drivers.notify_driver_status_change", AsyncMock()),
         ):
             req = DriverActionRequest(action="reactivate")
             result = asyncio.run(admin_drivers.admin_driver_action(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER))

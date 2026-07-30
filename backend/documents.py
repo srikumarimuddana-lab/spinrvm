@@ -271,6 +271,16 @@ async def _supersede_and_flag_pending_review(
                     "updated_at": datetime.now(timezone.utc),
                 },
             )
+            # This takes the driver offline. Without a notice their only signal
+            # is the Go-online toggle refusing them later with no explanation.
+            try:
+                from .utils.driver_status_notifications import notify_driver_status_change, status_message
+            except ImportError:
+                from utils.driver_status_notifications import (  # type: ignore
+                    notify_driver_status_change,
+                    status_message,
+                )
+            await notify_driver_status_change(driver, status_message("needs_review"), "document_upload")
         else:
             await db_supabase.update_one("drivers", {"id": driver_id}, {"updated_at": datetime.now(timezone.utc)})
     except Exception as e:

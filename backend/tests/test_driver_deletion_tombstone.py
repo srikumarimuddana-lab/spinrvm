@@ -94,6 +94,79 @@ class TestTombstoneDriverRow:
         inval.assert_not_awaited()
 
 
+class TestDeletionGuards:
+    """The driver app already told drivers deletion was rejected on an active
+    ride / unsettled balance / pending payout. Nothing on the backend checked."""
+
+    async def _assert(self, *, rides_by_filter=None, payouts=None, balance="0.00", driver=DRIVER):
+        rides_by_filter = rides_by_filter or {}
+
+        async def _get_rows(table, filters=None, limit=None, **kw):
+            if table == "drivers":
+                return [driver] if driver else []
+            if table == "payouts":
+                return payouts or []
+            if table == "rides":
+                key = "driver_id" if "driver_id" in (filters or {}) else "rider_id"
+                return rides_by_filter.get(key) or []
+            return []
+
+        with (
+            patch.object(users_route.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
+            patch(
+                f"{_USERS_MOD}.db_supabase.get_rows",
+                AsyncMock(side_effect=_get_rows),
+            ),
+            patch("routes.drivers.earnings.get_driver_balance", AsyncMock(return_value={"payable_balance": balance})),
+        ):
+            await users_route._assert_deletable("usr-1")
+
+    @pytest.mark.anyio
+    async def test_clean_account_passes(self):
+        await self._assert()
+
+    @pytest.mark.anyio
+    async def test_rider_with_active_ride_is_blocked(self):
+        with pytest.raises(Exception) as ei:
+            await self._assert(rides_by_filter={"rider_id": [{"id": "ride-1", "status": "in_progress"}]})
+        assert ei.value.status_code == 409
+        assert "ride in progress" in ei.value.detail
+
+    @pytest.mark.anyio
+    async def test_driver_with_active_ride_is_blocked(self):
+        with pytest.raises(Exception) as ei:
+            await self._assert(rides_by_filter={"driver_id": [{"id": "ride-1", "status": "driver_arrived"}]})
+        assert ei.value.status_code == 409
+
+    @pytest.mark.anyio
+    async def test_pending_payout_is_blocked(self):
+        with pytest.raises(Exception) as ei:
+            await self._assert(payouts=[{"id": "p1", "status": "pending"}])
+        assert ei.value.status_code == 409
+        assert "payout" in ei.value.detail
+
+    @pytest.mark.anyio
+    async def test_positive_balance_is_blocked(self):
+        """Deletion revokes every token, so a driver who deletes holding a
+        balance can no longer reach the payout screen to claim it."""
+        with pytest.raises(Exception) as ei:
+            await self._assert(balance="42.50")
+        assert ei.value.status_code == 409
+        assert "42.50" in ei.value.detail
+
+    @pytest.mark.anyio
+    async def test_negative_balance_does_not_block(self):
+        """An over-paid driver owes Spinr, not the other way round — that is a
+        recovery problem, not a reason to trap the account."""
+        await self._assert(balance="-5.00")
+
+    @pytest.mark.anyio
+    async def test_rider_without_driver_row_skips_driver_checks(self):
+        """A rider has no drivers row; the payout/balance lookups must not run
+        (and must not 404 inside get_driver_balance)."""
+        await self._assert(driver=None, payouts=[{"id": "p1", "status": "pending"}], balance="99.00")
+
+
 class TestDispatchExcludesDeletedDrivers:
     @pytest.mark.anyio
     async def test_candidate_query_filters_deleted_at_is_null(self):

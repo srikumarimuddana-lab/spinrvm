@@ -310,7 +310,9 @@ async def get_nearby_drivers_public(
     # so a new `drivers` column cannot become rider-visible by default. This also
     # drops vehicle_make/vehicle_model, which together with heading made a
     # specific car re-identifiable.
-    return prematch_driver_list(in_radius, cell_m)
+    # viewer_id scopes the marker pseudonyms to this rider so observations from
+    # two accounts cannot be pooled into one trace.
+    return prematch_driver_list(in_radius, cell_m, viewer_id=current_user.get("id"))
 
 
 @router.get("")

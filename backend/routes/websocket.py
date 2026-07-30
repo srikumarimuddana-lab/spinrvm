@@ -1182,7 +1182,12 @@ async def websocket_endpoint(
 
                     # Same projection as the REST endpoint, so the two cannot drift.
                     await websocket.send_json(
-                        {"type": "nearby_drivers", "drivers": prematch_driver_list(in_radius, _cell_m)}
+                        {
+                            "type": "nearby_drivers",
+                            "drivers": prematch_driver_list(
+                                in_radius, _cell_m, viewer_id=user.get("id")
+                            ),
+                        }
                     )
 
             elif data.get("type") == "chat_message":

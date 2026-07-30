@@ -282,10 +282,11 @@ def _render_tabular_report(
     format: str,
     pdf_landscape: bool = False,
     pdf_col_widths: list[float] | None = None,
+    grouped_xlsx: list[tuple[dict, list[dict]]] | None = None,
 ) -> Response:
     """Shared branded-report rendering for any (fieldnames, rows) tabular
-    report — used by both the GST/PST remittance and insurance-period audit
-    endpoints so format handling (pdf/csv/xlsx/docx) lives in one place.
+    report — used by most Compliance report endpoints so format handling
+    (pdf/csv/xlsx/docx) lives in one place.
 
     pdf_landscape/pdf_col_widths: reports with several columns or long
     cell values (UUIDs, ISO timestamps) need landscape orientation and
@@ -295,7 +296,15 @@ def _render_tabular_report(
     the moment real data (full UUIDs, microsecond timestamps) was used —
     confirmed against a real downloaded report from the live admin portal.
     Now uses fpdf2's native Table API (report_branding.render_pdf_table),
-    which wraps text and syncs row heights instead of clipping."""
+    which wraps text and syncs row heights instead of clipping.
+
+    grouped_xlsx: when a report has a natural parent/child row structure
+    (e.g. one trip summarizing several per-phase rows), pass the same data
+    here as (parent_row, child_rows) pairs and the xlsx format renders it
+    with Excel's native collapsible row grouping (report_branding.
+    write_branded_grouped_table) instead of the flat write_branded_table.
+    PDF/CSV/Word ignore this entirely and always render `rows` flat — none
+    of those formats has a collapse mechanism."""
     if format == "csv":
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames)
@@ -309,7 +318,10 @@ def _render_tabular_report(
 
     if format == "xlsx":
         wb, ws = report_branding.new_branded_workbook(title, subtitle)
-        report_branding.write_branded_table(ws, fieldnames, rows)
+        if grouped_xlsx is not None:
+            report_branding.write_branded_grouped_table(ws, fieldnames, grouped_xlsx)
+        else:
+            report_branding.write_branded_table(ws, fieldnames, rows)
         buf = io.BytesIO()
         wb.save(buf)
         return Response(
@@ -789,10 +801,19 @@ _KNIGHT_ARCHER_RATE_PER_KM = Decimal("0.011")
 
 async def _insurance_billing_detail_rows(
     start_date: datetime, end_date: datetime, rate_per_km: Decimal
-) -> tuple[list[dict], Decimal, bool]:
+) -> tuple[list[dict], Decimal, bool, list[tuple[dict, list[dict]]]]:
     """Per-trip, per-phase insured-km detail: one row per (driver, ride,
     period) with driver identity, trip date, which phase (2 or 3), km
-    driven in that specific phase, and the billed amount for that row."""
+    driven in that specific phase, and the billed amount for that row.
+
+    Also returns `groups`: the same rows bundled per-trip as (parent,
+    children) pairs — parent is a synthetic "All phases" summary row
+    (total km + amount across that trip's phases), children are that
+    trip's individual phase rows in the same shape as `rows`. Only the
+    xlsx renderer uses `groups` (Excel's native collapsible row grouping —
+    see report_branding.write_branded_grouped_table); PDF/CSV/Word use the
+    flat `rows` and ignore `groups` entirely, since none of those formats
+    has a collapse mechanism."""
     distances = await db_supabase.get_rows(
         "driver_period_distances",
         {
@@ -806,7 +827,7 @@ async def _insurance_billing_detail_rows(
     )
     truncated = _check_truncated(len(distances), "insurance_billing_detail")
     if not distances:
-        return [], Decimal("0"), truncated
+        return [], Decimal("0"), truncated, []
 
     driver_ids = sorted({d["driver_id"] for d in distances if d.get("driver_id")})
     driver_names: dict[str, str] = {}
@@ -822,25 +843,54 @@ async def _insurance_billing_detail_rows(
 
     grand_total_km = Decimal("0")
     rows: list[dict] = []
+    # ride_id groups a trip's Period 2 + Period 3 rows together for the
+    # xlsx grouped view — never rendered as a column (same driver_id/
+    # ride_id exclusion as the flat rows below).
+    trip_order: list[str] = []
+    trips: dict[str, dict] = {}
     for d in distances:
         km = _d(d.get("distance_km"))
         grand_total_km += km
         amount = (km * rate_per_km).quantize(Decimal("0.01"))
-        rows.append(
-            {
-                # driver_id/ride_id intentionally excluded from the rendered
-                # report (same product decision as the retired insurance-
-                # period-audit report) — driver_name + trip_date already
-                # identify the row.
-                "driver_name": driver_names.get(d.get("driver_id"), d.get("driver_id") or ""),
-                "trip_date": report_branding.format_report_timestamp(d.get("started_at")),
-                "phase": _PERIOD_LABELS.get(d.get("period"), str(d.get("period"))),
-                "phase_km": f"{km:.3f}",
-                "rate_per_km": f"${rate_per_km:.3f}",
-                "amount": f"${amount:.2f}",
-            }
-        )
-    return rows, grand_total_km, truncated
+        driver_name = driver_names.get(d.get("driver_id"), d.get("driver_id") or "")
+        trip_date = report_branding.format_report_timestamp(d.get("started_at"))
+        row = {
+            # driver_id/ride_id intentionally excluded from the rendered
+            # report (same product decision as the retired insurance-
+            # period-audit report) — driver_name + trip_date already
+            # identify the row.
+            "driver_name": driver_name,
+            "trip_date": trip_date,
+            "phase": _PERIOD_LABELS.get(d.get("period"), str(d.get("period"))),
+            "phase_km": f"{km:.3f}",
+            "rate_per_km": f"${rate_per_km:.3f}",
+            "amount": f"${amount:.2f}",
+        }
+        rows.append(row)
+
+        trip_key = d.get("ride_id") or f"_no_ride_id_{len(trip_order)}"
+        if trip_key not in trips:
+            trips[trip_key] = {"driver_name": driver_name, "trip_date": trip_date, "km": Decimal("0"), "children": []}
+            trip_order.append(trip_key)
+        trip = trips[trip_key]
+        trip["km"] += km
+        trip["children"].append(row)
+
+    groups: list[tuple[dict, list[dict]]] = []
+    for trip_key in trip_order:
+        trip = trips[trip_key]
+        trip_amount = (trip["km"] * rate_per_km).quantize(Decimal("0.01"))
+        parent = {
+            "driver_name": trip["driver_name"],
+            "trip_date": trip["trip_date"],
+            "phase": "All phases",
+            "phase_km": f"{trip['km']:.3f}",
+            "rate_per_km": f"${rate_per_km:.3f}",
+            "amount": f"${trip_amount:.2f}",
+        }
+        groups.append((parent, trip["children"]))
+
+    return rows, grand_total_km, truncated, groups
 
 
 async def _render_insurance_billing_report(
@@ -860,7 +910,9 @@ async def _render_insurance_billing_report(
     start_date, end_date = _resolve_date_window(date_from, date_to)
 
     try:
-        rows, grand_total_km, truncated = await _insurance_billing_detail_rows(start_date, end_date, rate_per_km)
+        rows, grand_total_km, truncated, groups = await _insurance_billing_detail_rows(
+            start_date, end_date, rate_per_km
+        )
     except Exception as e:
         logger.error(f"Failed to build {insurer_label} insurance billing report: {e}", exc_info=True)
         _capture_export_failure(report_type, e)
@@ -897,6 +949,7 @@ async def _render_insurance_billing_report(
         format=format,
         pdf_landscape=True,
         pdf_col_widths=[2.2, 1.8, 2.6, 1.4, 1.4, 1.4],
+        grouped_xlsx=groups,
     )
     return await _deliver_report(resp, email_to, admin, f"{insurer_label} Insurance Billing")
 

@@ -21,6 +21,7 @@ import {
     type DataTransferEntityRow,
     type DataTransferSearchParams,
 } from "@/lib/api";
+import { monthToDateDefaults } from "@/lib/utils";
 import type { EntitySelectionState } from "./useEntitySelection";
 
 const PAGE_SIZE = 50;
@@ -69,8 +70,15 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
     const [status, setStatus] = useState<string>("all");
     const [serviceAreaId, setServiceAreaId] = useState<string>("all");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
-    const [dateFrom, setDateFrom] = useState("");
-    const [dateTo, setDateTo] = useState("");
+    // Defaults to the current calendar month (matches every other
+    // date-ranged filter in Records/Compliance) rather than unbounded —
+    // an admin can still clear both fields for an all-time search, e.g.
+    // looking up one specific user/driver by name regardless of when they
+    // joined; the hint below calls that out since a narrowed-by-default
+    // name search that returns nothing is otherwise a confusing dead end.
+    const monthDefaults = monthToDateDefaults();
+    const [dateFrom, setDateFrom] = useState(monthDefaults.from);
+    const [dateTo, setDateTo] = useState(monthDefaults.to);
     const [page, setPage] = useState(1);
     const [rows, setRows] = useState<DataTransferEntityRow[]>([]);
     const [totalCount, setTotalCount] = useState(0);
@@ -186,9 +194,17 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
                     </Select>
                     <Hint text="Only narrows driver results — riders aren't assigned to a service area, so this filter has no effect when searching riders." />
                 </div>
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-[160px]" />
-                <span className="text-sm text-muted-foreground self-center">to</span>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-[160px]" />
+                <div className="flex items-center gap-1.5">
+                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-[160px]" />
+                    <span className="text-sm text-muted-foreground">to</span>
+                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-[160px]" />
+                    <Hint text="Defaults to the current month, by onboarding date. Clear both fields (the X button on each date picker, or backspace) to search all time regardless of when a record was created — useful when looking up one specific person by name." />
+                    {(dateFrom || dateTo) && (
+                        <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }}>
+                            Clear dates
+                        </Button>
+                    )}
+                </div>
                 <Button onClick={onSearchClick} disabled={loading}>
                     {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                     Search

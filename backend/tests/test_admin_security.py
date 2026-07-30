@@ -20,9 +20,21 @@ import jwt
 import pytest
 
 # ---------------------------------------------------------------------------
-# Minimal stubs so the module imports succeed in isolation
+# Minimal stubs so the module imports succeed in isolation.
+#
+# These are installed into sys.modules permanently and are NEVER restored, so
+# every test module imported after this one in the same session gets the mock.
+# pytest imports all test modules during collection, so "after" means
+# alphabetically after "test_admin_security" — a wide and non-obvious blast
+# radius. Only stub something here that no other test needs for real.
+#
+# `sentry_sdk` was in this list and had to come out: it is a real installed
+# dependency (see requirements.txt), so it never needed stubbing to import, and
+# mocking it session-wide silently disabled the PIPEDA frame-var egress tests in
+# test_sentry_frame_vars.py — they passed alone and failed in the full suite,
+# because sentry_sdk.Client() was returning a MagicMock that captured nothing.
 # ---------------------------------------------------------------------------
-for _mod in ["loguru", "logging_utils", "sentry_sdk", "firebase_admin"]:
+for _mod in ["loguru", "logging_utils", "firebase_admin"]:
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 

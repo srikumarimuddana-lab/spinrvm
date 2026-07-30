@@ -456,18 +456,20 @@ if sentry_dsn:
     # arbitrary error-message strings to a third party; these hooks redact
     # phones/emails/coords/postal codes from event + breadcrumb text and stamp
     # surface=backend before egress. They never drop an event on failure.
-    from utils.sentry_scrub import scrub_breadcrumb, scrub_event, tags_from_log_extra
+    from utils.sentry_scrub import pipeda_sentry_options, tags_from_log_extra
 
+    # The PIPEDA-critical options (send_default_pii, include_local_variables,
+    # before_send, before_breadcrumb) come from pipeda_sentry_options() so they are
+    # unit-assertable — this init call only runs on import of this module, so
+    # inlining them left them untestable. Keep them last: they must not be
+    # overridable by the operational options above.
     sentry_sdk.init(
         dsn=sentry_dsn,
         integrations=integrations,
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
         environment=settings.ENV if hasattr(settings, "ENV") else "production",
-        # PIPEDA: never send IP, cookies, or auth headers to Sentry.
-        send_default_pii=False,
-        before_send=scrub_event,
-        before_breadcrumb=scrub_breadcrumb,
+        **pipeda_sentry_options(),
     )
 
     # Bridge loguru → Sentry. The LoggingIntegration above only captures

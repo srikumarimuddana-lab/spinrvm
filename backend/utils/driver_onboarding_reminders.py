@@ -21,13 +21,17 @@ try:
     from .. import db_supabase as db
     from ..features import send_push_notification
     from ..onboarding_status import _has_vehicle as _has_vehicle_details
+    from ..settings_loader import get_app_settings as _get_app_settings
     from ..utils.driver_onboarding_reminder_rules import (
+        DEFAULT_MAX_REMINDERS_PER_TYPE,
         VEHICLE_DETAILS,
         VEHICLE_DOCUMENTS,
         as_utc,
         local_date_for_send_window,
         missing_required_document_uploads,
         open_send_windows,
+        parse_remindable_statuses,
+        reminder_cap_reached,
         reminder_message,
         should_skip_driver,
     )
@@ -36,13 +40,17 @@ except ImportError:
     import db_supabase as db  # type: ignore
     from features import send_push_notification  # type: ignore
     from onboarding_status import _has_vehicle as _has_vehicle_details  # type: ignore
+    from settings_loader import get_app_settings as _get_app_settings  # type: ignore
     from utils.driver_onboarding_reminder_rules import (  # type: ignore
+        DEFAULT_MAX_REMINDERS_PER_TYPE,
         VEHICLE_DETAILS,
         VEHICLE_DOCUMENTS,
         as_utc,
         local_date_for_send_window,
         missing_required_document_uploads,
         open_send_windows,
+        parse_remindable_statuses,
+        reminder_cap_reached,
         reminder_message,
         should_skip_driver,
     )
@@ -175,7 +183,7 @@ async def _send(driver: dict[str, Any], kind: str, local_date: str, now: datetim
 
 async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> dict[str, int]:
     now = as_utc(now_utc)
-    stats = {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+    stats = {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0, "capped_skips": 0}
 
     area_rows = await _get_rows("service_areas", {}, limit=1000, columns="id,timezone,required_documents")
     if area_rows is None:
@@ -200,8 +208,10 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
     # Any failed read below leaves scan_ok False so the window is NOT marked
     # completed — the next 15-min tick inside the same send hour retries.
     # Claims already written for earlier pages dedupe via DuplicateRecordError.
+    remindable_statuses, max_per_type = await _reminder_settings()
+
     try:
-        scan_ok = await _scan_pages(areas, global_reqs, now, stats)
+        scan_ok = await _scan_pages(areas, global_reqs, now, stats, remindable_statuses, max_per_type)
     except ServiceUnavailableException as exc:
         # Breaker-open / DB-down is systemic — _claim re-raises it so the
         # scan aborts with one log line, not a traceback per driver.
@@ -215,9 +225,62 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
     cutoff = (now - timedelta(days=1)).date().isoformat()
     _completed_windows.difference_update({w for w in _completed_windows if w.rsplit(":", 1)[1] < cutoff})
 
-    if stats["claims_attempted"]:
+    if stats["claims_attempted"] or stats["capped_skips"]:
         logger.info("onboarding reminders: %s", stats)
     return stats
+
+
+async def _reminder_settings() -> tuple[frozenset[str], int]:
+    """(remindable statuses, max reminders per type) from app_settings.
+
+    Both are overridable without a redeploy — this loop pushes to real drivers
+    daily, so narrowing it needs a config-only rollback path. On a settings
+    read failure we fall back to the conservative built-in defaults rather than
+    the old send-to-everyone behaviour.
+    """
+    try:
+        settings = await _get_app_settings()
+    except Exception:
+        logger.error("onboarding reminders: failed to read app_settings; using defaults", exc_info=True)
+        return parse_remindable_statuses(None), DEFAULT_MAX_REMINDERS_PER_TYPE
+
+    statuses = parse_remindable_statuses(settings.get("driver_onboarding_reminder_statuses"))
+    raw_max = settings.get("driver_onboarding_reminder_max_days")
+    try:
+        max_per_type = DEFAULT_MAX_REMINDERS_PER_TYPE if raw_max is None else int(raw_max)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid driver_onboarding_reminder_max_days %r; using %s",
+            raw_max,
+            DEFAULT_MAX_REMINDERS_PER_TYPE,
+        )
+        max_per_type = DEFAULT_MAX_REMINDERS_PER_TYPE
+    return statuses, max_per_type
+
+
+async def _prior_reminder_counts(driver_ids: list[str], max_per_type: int) -> dict[tuple[str, str], int] | None:
+    """{(driver_id, reminder_type): reminders already claimed}, or None on read failure.
+
+    One batched read per page rather than a per-driver count (the N+1 pattern
+    the perf conventions call out). Skipped entirely when the cap is disabled.
+    """
+    if max_per_type <= 0 or not driver_ids:
+        return {}
+    rows = await _get_rows(
+        LOG_TABLE,
+        {"driver_id": {"$in": driver_ids}},
+        # One row per (driver, type, local_date); a capped driver accumulates at
+        # most max_per_type rows per type, +1 slack for the in-flight day.
+        limit=max(1000, len(driver_ids) * (max_per_type + 1) * 2),
+        columns="driver_id,reminder_type",
+    )
+    if rows is None:
+        return None
+    counts: dict[tuple[str, str], int] = {}
+    for row in rows:
+        key = (str(row.get("driver_id")), str(row.get("reminder_type")))
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 async def _scan_pages(
@@ -225,6 +288,8 @@ async def _scan_pages(
     global_reqs: list[dict[str, Any]],
     now: datetime,
     stats: dict[str, int],
+    remindable_statuses: frozenset[str],
+    max_per_type: int,
 ) -> bool:
     """Page through drivers, attempting claims + pushes.
 
@@ -266,27 +331,41 @@ async def _scan_pages(
             if doc.get("driver_id"):
                 docs_by_driver.setdefault(str(doc["driver_id"]), []).append(doc)
 
+        prior = await _prior_reminder_counts(ids, max_per_type)
+        if prior is None:
+            # Without the log we can't tell a first reminder from a 40th;
+            # processing anyway would re-open the unbounded daily nag.
+            scan_ok = False
+            break
+
         for driver in drivers:
             stats["drivers_scanned"] += 1
-            if should_skip_driver(driver):
+            if should_skip_driver(driver, remindable_statuses):
                 continue
             local_date = local_date_for_send_window(driver, areas, now)
             if not local_date:
                 continue
+            driver_id = str(driver["id"])
             if not _has_vehicle_details(driver):
-                stats["claims_attempted"] += 1
-                sent = await _send(driver, VEHICLE_DETAILS, local_date, now)
-                if sent is None:
-                    scan_ok = False  # claim insert failed — retry this window next tick
+                if reminder_cap_reached(prior.get((driver_id, VEHICLE_DETAILS), 0), max_per_type):
+                    stats["capped_skips"] += 1
                 else:
-                    stats["pushes_delivered"] += int(sent)
-            if missing_required_document_uploads(driver, docs_by_driver.get(str(driver["id"]), []), areas, global_reqs):
-                stats["claims_attempted"] += 1
-                sent = await _send(driver, VEHICLE_DOCUMENTS, local_date, now)
-                if sent is None:
-                    scan_ok = False
+                    stats["claims_attempted"] += 1
+                    sent = await _send(driver, VEHICLE_DETAILS, local_date, now)
+                    if sent is None:
+                        scan_ok = False  # claim insert failed — retry this window next tick
+                    else:
+                        stats["pushes_delivered"] += int(sent)
+            if missing_required_document_uploads(driver, docs_by_driver.get(driver_id, []), areas, global_reqs):
+                if reminder_cap_reached(prior.get((driver_id, VEHICLE_DOCUMENTS), 0), max_per_type):
+                    stats["capped_skips"] += 1
                 else:
-                    stats["pushes_delivered"] += int(sent)
+                    stats["claims_attempted"] += 1
+                    sent = await _send(driver, VEHICLE_DOCUMENTS, local_date, now)
+                    if sent is None:
+                        scan_ok = False
+                    else:
+                        stats["pushes_delivered"] += int(sent)
 
         if len(drivers) < PAGE_SIZE:
             break

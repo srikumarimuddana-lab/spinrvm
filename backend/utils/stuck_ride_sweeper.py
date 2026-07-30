@@ -21,11 +21,13 @@ try:
     from ..features import send_push_notification
     from ..socket_manager import manager
     from .metrics import inc as _metric_inc
+    from .stripe_charge import cancel_authorization
 except ImportError:
     import db_supabase  # type: ignore
     from features import send_push_notification  # type: ignore
     from socket_manager import manager  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.stripe_charge import cancel_authorization  # type: ignore
 
 try:
     from ..supabase_client import supabase
@@ -36,6 +38,78 @@ logger = logging.getLogger(__name__)
 
 _SWEEP_INTERVAL_SECONDS = 60
 _SEARCHING_TIMEOUT_MINUTES = 5
+
+# Hold states that are still open and therefore releasable. Terminal states
+# ('captured', 'released') and NULL (no pre-auth: wallet/corporate) are skipped.
+# Source of truth for the lifecycle: migrations/156_ride_preauth_columns.sql.
+_OPEN_AUTH_STATES = ("authorized", "fare_only")
+
+
+async def _release_booking_hold(ride: dict) -> None:
+    """Cancel the booking-time card hold on a ride this sweeper just cancelled.
+
+    ``routes/rides/booking.py`` places a manual-capture PaymentIntent hold for
+    ``grand_total + RIDE_AUTH_BUFFER_CAD`` **before** dispatch, so a ride sitting in
+    ``searching`` has live funds reserved on the rider's card. The interactive cancel
+    path releases that hold (``routes/rides/cancellation.py``, "WS-8 finding 11") —
+    this sweeper cancelled the ride with a direct table UPDATE and never did, so the
+    hold survived until Stripe's ~7-day authorization expiry. Nothing else cleaned it
+    up: ``utils/preauth_capture`` only looks at ``status='completed'``, and
+    ``utils/stripe_reconcile`` only heals stuck *processing* rides.
+
+    Best-effort by construction: ``cancel_authorization`` never raises and carries its
+    own Stripe idempotency key. A failure is logged at error (a stranded hold is a
+    payment-path anomaly, and CLAUDE.md requires payment errors to surface loudly) and
+    the sweep continues — the remaining rides still need cancelling.
+    """
+    ride_id = ride.get("id")
+    payment_intent_id = ride.get("payment_intent_id")
+    auth_status = ride.get("auth_status")
+
+    if not payment_intent_id or auth_status not in _OPEN_AUTH_STATES:
+        return
+
+    try:
+        released = await cancel_authorization(ride_id=str(ride_id), payment_intent_id=str(payment_intent_id))
+    except Exception as exc:  # defence-in-depth; cancel_authorization is no-raise
+        logger.error(
+            f"[stuck_ride_sweeper] pre-auth release raised for ride {ride_id}: {exc}",
+            exc_info=True,
+        )
+        _metric_inc("spinr_stuck_ride_hold_release_total", {"outcome": "error"})
+        return
+
+    if not released:
+        # Do NOT mark auth_status='released' here — the hold may still be live, and
+        # a false 'released' would hide it from any future reconciler.
+        logger.error(
+            f"[stuck_ride_sweeper] could not release pre-auth hold for ride {ride_id} "
+            f"— rider funds may stay reserved until Stripe auth expiry"
+        )
+        _metric_inc("spinr_stuck_ride_hold_release_total", {"outcome": "failed"})
+        return
+
+    # Mirror the interactive path: mark the hold released so reconcilers and the
+    # tip-window capture sweeper never treat it as an open authorization. Filtered
+    # on the open states so a concurrent writer that already moved it cannot be
+    # overwritten.
+    try:
+        await db_supabase.update_one(
+            "rides",
+            {"id": ride_id, "auth_status": {"$in": list(_OPEN_AUTH_STATES)}},
+            {"auth_status": "released", "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception as exc:
+        # The money is already free — this is bookkeeping drift, not a stranded
+        # hold, so it must not be reported as a release failure.
+        logger.error(
+            f"[stuck_ride_sweeper] hold released but auth_status write failed for ride {ride_id}: {exc}",
+            exc_info=True,
+        )
+        _metric_inc("spinr_stuck_ride_hold_release_total", {"outcome": "released_unmarked"})
+        return
+
+    _metric_inc("spinr_stuck_ride_hold_release_total", {"outcome": "released"})
 
 
 async def _sweep() -> None:
@@ -79,6 +153,14 @@ async def _sweep() -> None:
         ride_id = ride.get("id")
         rider_id = ride.get("rider_id")
         driver_id = ride.get("driver_id")
+
+        # Release the rider's card hold FIRST. The WS and push calls below are
+        # network round-trips that can block for seconds (push especially), and
+        # money integrity should not queue behind a notification — CLAUDE.md's
+        # anti-patterns list calls out awaiting Twilio/Stripe inline for this
+        # reason. Both notify calls already tolerate failure independently, so
+        # nothing downstream depends on this ordering.
+        await _release_booking_hold(ride)
 
         if rider_id:
             try:

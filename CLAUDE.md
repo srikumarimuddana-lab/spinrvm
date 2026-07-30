@@ -73,6 +73,7 @@ Sprint-scoped and domain-deep context is loaded on demand, not baked into this f
 - `@.claude/context/domain-corporate.md` — corporate account/membership/policy lifecycle, cascade-effect checklist, flag conventions
 - `@.claude/context/domain-safety.md` — SOS, insurance periods, emergency flows
 - `@.claude/context/regulatory-sk.md` — Saskatchewan Transportation Act obligations
+- `@.claude/context/brand-spinr.md` — brand colors, typography, and logo assets; load for any customer-facing marketing/creative work
 
 ## Project Overview
 

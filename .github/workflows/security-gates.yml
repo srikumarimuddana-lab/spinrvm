@@ -166,8 +166,17 @@ jobs:
       # green while running none of the 10 Spinr rules. This check is a plain YAML
       # parse — no network, no registry — so it catches that exact class of
       # breakage even when semgrep.dev is unreachable.
+      #
+      # CR #2915: the semgrep/semgrep:latest image (Alpine-based) doesn't ship
+      # PyYAML, so this validation step itself failed with ModuleNotFoundError
+      # on every PR, before semgrep scan ever ran — the exact "gate silently
+      # never runs" failure mode this step exists to catch, just from a
+      # different cause. pip install here, not a separate step, so a failure
+      # to install still fails fast with a clear error instead of a confusing
+      # later ModuleNotFoundError.
       - name: Validate Spinr ruleset parses
         run: |
+          pip install --quiet --no-cache-dir pyyaml
           python3 - <<'PY'
           import sys, yaml
           path = ".semgrep/spinr-rules.yml"

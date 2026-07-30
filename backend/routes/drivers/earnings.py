@@ -73,10 +73,24 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         # (Before, only status='pending' was deducted — a 'completed' /
         # 'transfer_completed' payout silently stopped reducing the balance, so
         # the driver could re-withdraw the same earnings.)
+        #
+        # payout_type='stripe_sync' rows are the one exception: they are
+        # legacy-app payout HISTORY materialized from Stripe transfer records
+        # (services/stripe_payout_sync_service.py) for T4A/tax completeness.
+        # The earnings they cashed out were paid in the OLD app and are not in
+        # this DB's rides, so deducting them would drive every migrated
+        # driver's payable_balance negative and block real withdrawals.
+        # ('legacy_import' offset rows still deduct — they pair with imported
+        # rides whose earnings ARE counted above.)
         payout_rows = await db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=5000)
         _not_money_out = {"reversed", "failed"}
         total_payouts = sum(
-            (_d(p.get("amount") or 0) for p in payout_rows if str(p.get("status") or "").lower() not in _not_money_out),
+            (
+                _d(p.get("amount") or 0)
+                for p in payout_rows
+                if str(p.get("status") or "").lower() not in _not_money_out
+                and p.get("payout_type") != "stripe_sync"
+            ),
             Decimal("0"),
         )
         # 'pending' = recorded but not yet transferred (shown as "Pending");

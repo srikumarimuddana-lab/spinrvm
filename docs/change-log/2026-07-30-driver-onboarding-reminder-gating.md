@@ -40,8 +40,12 @@ screen, so riders who tap into that screen once enter the reminder population.
 
 - Replaced the denylist with an allowlist — `pending` only. An unrecognised or
   newly-added status now defaults to silence rather than to a daily push.
-- Capped reminders at 7 per driver per reminder type, counted from existing
-  `driver_onboarding_reminder_log` rows via one batched read per 200-driver page.
+- Capped reminders at 7 per driver per reminder type, counted by the
+  `driver_onboarding_reminder_counts` RPC (migration 273) so the aggregate
+  happens in the database. An earlier revision counted rows client-side under a
+  row limit; that silently under-reported once the log held pre-cap rows and was
+  replaced — see `2026-07-30-driver-status-notification-policy.md` §Follow-up
+  review for the finding.
 - Both values overridable through `app_settings` without a redeploy.
 - A failed claim-log read now leaves the send window incomplete instead of
   processing the page blind (mirrors the existing docs-read failure handling).
@@ -161,6 +165,13 @@ pushes are not recoverable, but no state was mutated by suppressing them.
 - **Not run against live or staging Supabase.** All coverage is against the
   in-test `FakeReminderDB`; the `driver_onboarding_reminder_log` `$in` filter
   compiles to PostgREST and was not exercised against a real PostgREST instance.
+- **Migration 273 (`driver_onboarding_reminder_counts`) has not been applied
+  anywhere.** The RPC body, its `GRANT`s, and the `SECURITY DEFINER` +
+  `search_path` pinning were written from the conventions and reviewed by
+  reading only — never executed. Until it is applied the loop falls back to the
+  client-side count, which fails closed on saturation (suppressing a page's
+  reminders) rather than over-notifying. Apply the migration before relying on
+  the cap being exact.
 - **No production build run** — backend-only change, no frontend surface touched.
 - **Real driver population not sampled.** I did not query how many `active`
   drivers currently have an incomplete `_has_vehicle`, so the size of the

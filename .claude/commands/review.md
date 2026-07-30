@@ -1,65 +1,122 @@
-# /review — Pre-Commit Code Review for spinr
+# /review — Pre-Commit Review Router for spinr
 
-Review all staged and unstaged changes. Domain-aware for ride share.
+Route the current diff to the specialist subagent(s) that actually cover it,
+run a lightweight generic code-quality pass yourself, and present one
+consolidated report. This command does not reinvent domain rules — the 8
+`spinr-*` subagents already encode them in more depth than any inline
+checklist here could; this command's job is dispatch, not duplication.
 
-## Security (BLOCK if found)
-- No hardcoded secrets, Supabase keys, Stripe live keys
-- No .env files staged
-- No PII in logs (GPS, phone numbers, names, emails)
-- No string-concatenated SQL (must use parameterised queries or ORM)
-- All API inputs validated (Pydantic for Python, Zod for TypeScript)
-- Supabase service role key not in frontend or mobile code
+## Usage
 
-## Code Quality
-- Python: type hints present, no bare except clauses
-- TypeScript: no any types, errors handled on all async functions
+```
+/review                  # audits staged + unstaged changes
+/review backend/services/fare_service.py   # audits a specific file/path
+/review PR 123            # audits a GitHub PR's diff
+```
+
+## 1 · Scope the diff
+
+- No args → `git diff --cached --name-only` + `git diff --name-only` (staged + unstaged), then `git diff --cached` + `git diff` for content
+- Path args → those files
+- `PR N` → pull the PR diff via the GitHub MCP tools (`mcp__github__pull_request_read` or equivalent)
+
+If the diff is empty, say so and stop — don't run agents against nothing.
+
+## 2 · Route to subagents by path
+
+Match the changed-file list against each trigger set below (same taxonomy as
+`.github/labeler.yml`'s `area:*` labels — reuse it, don't re-derive it) and
+dispatch every matched subagent **in parallel**. A single diff commonly
+triggers several — that's expected, not redundant, since each covers a
+different failure mode over the same lines.
+
+| Trigger paths (`area:*` in labeler.yml, or the subagent's own scope) | Subagent |
+|---|---|
+| `backend/routes/auth.py`, `backend/routes/admin/auth*.py`, `backend/utils/crypto.py`, `backend/utils/rate_limiter.py`, any `*rls*.sql`/`*policy*.sql` migration, `backend/routes/admin/**`, anything touching JWT/OTP/PII handling | `spinr-security-auditor` |
+| `backend/services/fare_*.py`, `backend/services/corporate_*.py`, `backend/routes/payments.py`, `routes/wallet.py`, `routes/corporate*.py`, `routes/fares.py`, `routes/tips.py`, `routes/payouts.py`, `utils/surge_engine.py`, `utils/payment_retry.py`, `routes/drivers.py`, `routes/rides.py` (money paths — `area:money`) | `spinr-money-auditor` |
+| `backend/utils/surge_engine.py`, `backend/routes/admin/*surge*`, surge application inside `fare_service.py` | `spinr-surge-auditor` |
+| `backend/routes/corporate*.py`, `backend/services/corporate_*.py`, `backend/routes/wallet.py`, any caller of `corporate_wallet_apply_delta` | `spinr-corporate-billing-reviewer` |
+| `backend/services/dispatch_service.py`, `backend/routes/rides.py`, `backend/socket_manager.py`, `backend/utils/ws_pubsub.py`, `backend/utils/scheduled_rides.py` (`area:dispatch`) | `spinr-dispatch-reviewer` |
+| Any diff touching `driver_insurance_periods` writes, `go_online`, or ride-state transitions that cross a period boundary | `spinr-insurance-period-auditor` |
+| New/modified `backend/migrations/*.sql` | `spinr-migration-reviewer` |
+| `backend/routes/safety.py`, `routes/sos.py`, `services/insurance_*.py`, `utils/emergency_*.py` (`area:safety`) | `spinr-security-auditor` **and** `spinr-regulatory-compliance-checker` |
+| Anything touching driver eligibility, trip/GPS retention, receipt tax line items, accessibility (WAV/service animal), logging/analytics/Sentry payloads, or data-deletion flows | `spinr-regulatory-compliance-checker` |
+
+`spinr-regulatory-compliance-checker` explicitly isn't path-scoped in its own
+definition ("compliance issues can appear anywhere") — if the diff touches
+anything logging-, retention-, or receipt-related outside the obvious paths
+above, include it anyway rather than relying on the table being exhaustive.
+
+If **no** trigger matches (e.g. the diff is docs-only, or touches only
+`rider-app`/`driver-app`/`admin-dashboard` UI with no money/auth/safety
+surface), skip agent dispatch entirely and go straight to step 3 — don't
+force an irrelevant subagent to run just to have output.
+
+## 3 · Generic code-quality pass (inline, not delegated)
+
+None of the 8 subagents cover this — it's intentionally generic, not
+Spinr-specific, so keep it here rather than inventing a 9th subagent for it:
+
+- Python: type hints present, no bare `except:` clauses
+- TypeScript: no `any` types, errors handled on async functions
 - No dead code or unused imports
 - New functions have docstrings (Python) or JSDoc (TypeScript)
+- Tests: does the diff touch a path with a coverage minimum in CLAUDE.md
+  (`routes/payments.py`, `services/fare_service.py`, `utils/crypto.py` ≥90%;
+  `routes/rides.py`, `services/dispatch_service.py` ≥80%) without a
+  corresponding test file change? Flag if so.
 
-## spinr Domain Checks
+## 4 · Consolidate and report
 
-### Money / Payments
-- No float arithmetic for fares or payouts (use Decimal or integer cents)
-- Stripe test mode used in non-production paths
-- Platform commission and driver split match CLAUDE.md values
+Present each dispatched subagent's report verbatim under its own heading —
+don't paraphrase or compress their findings, they're already terse. Then add
+one rollup verdict.
 
-### Trip State Machine
-- No skipped states
-- CANCELLED only before TRIP_STARTED
-- State changes emit events
-
-### Location / Privacy
-- No raw GPS in logs
-- Driver location not over-shared to riders
-- Supabase data in Canada region
-
-### Safety
-- SOS does not auto-dial 911
-- SOS notifies emergency contact AND safety team
-- Safety features not behind feature flags
-
-### Auth
-- JWT has expiry
-- Supabase RLS policies not bypassed
-- FLAG: auth changes need human security review
-
-### Insurance Periods
-- Period 0/1/2/3 correctly classified
-- Period changes logged for regulatory audit
-
-## Output Format
-SPINR PRE-COMMIT REVIEW
+```
+SPINR REVIEW — <scope>
 =======================
 Files: X changed | +Y -Z lines
-Domains: [list]
+Routed to: <list of dispatched subagents, or "none — no domain paths touched">
 
-SECURITY:         PASSED / BLOCKED — details
-MONEY:            N/A / PASSED / ISSUES
-STATE MACHINE:    N/A / PASSED / ISSUES
-LOCATION/PRIVACY: N/A / PASSED / REVIEW
-SAFETY:           N/A / PASSED / ISSUES
-AUTH:             N/A / PASSED / HUMAN REVIEW REQUIRED
-CODE QUALITY:     GOOD / SUGGESTIONS
-TESTS:            COVERED / MISSING — what needs tests
+── spinr-security-auditor ──────────────────────
+<verbatim report, or omitted if not dispatched>
 
-VERDICT: Safe to commit / Fix first / Human review required
+── spinr-money-auditor ─────────────────────────
+<verbatim report, or omitted if not dispatched>
+
+... (one section per dispatched subagent) ...
+
+── CODE QUALITY (inline) ───────────────────────
+<findings from step 3>
+
+VERDICT: SAFE TO COMMIT / FIX BLOCKERS / NEEDS HUMAN REVIEW
+```
+
+The rollup verdict is the worst of: any dispatched subagent's own verdict, or
+`FIX BLOCKERS` if step 3 found something. Never soften a subagent's verdict
+in the rollup — if `spinr-security-auditor` says `FIX BLOCKERS`, the rollup
+says `FIX BLOCKERS` regardless of what anything else found.
+
+## When to run
+
+- Before every commit that isn't purely docs/formatting (the pre-commit git
+  hook catches secrets/PII/float regressions mechanically; `/review` is the
+  deeper pass before that, not a replacement for it)
+- Before opening a PR with `/pr` — `/pr` doesn't run these subagents itself
+
+## Do NOT
+
+- Do not re-derive the domain rules inline — if a check feels missing, the
+  fix is updating the relevant `spinr-*` subagent definition, not adding a
+  bullet here
+- Do not skip dispatching a matched subagent because the diff "looks small"
+  — one rogue line is exactly what these exist to catch
+- Do not auto-fix findings — every subagent is audit-only by design; report,
+  let the user decide
+
+## See also
+
+For a single-domain deep dive instead of the full router: `/fare-audit`
+(money), `/migration-check` (migrations), `/security-check`,
+`/dispatch-check`, `/surge-check`, `/corporate-check`, `/insurance-check`,
+`/compliance-check`.

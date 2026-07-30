@@ -57,7 +57,7 @@ logger = logging.getLogger("reconcile_orphaned_holds")
 async def _main(apply_changes: bool, drain_all: bool, batch: int) -> int:
     from utils.orphaned_hold_reconciler import reconcile_tick
 
-    total = {"found": 0, "released": 0, "failed": 0, "not_claimed": 0, "skipped": 0}
+    total = {"found": 0, "released": 0, "released_unmarked": 0, "failed": 0, "not_claimed": 0, "skipped": 0}
     passes = 0
 
     while True:
@@ -76,9 +76,17 @@ async def _main(apply_changes: bool, drain_all: bool, batch: int) -> int:
 
         if not drain_all or not apply_changes:
             break
-        # Stop when a pass finds nothing, or when nothing could be acted on (which
-        # would otherwise spin: the same rows keep matching the query).
-        if found == 0 or (summary.get("released", 0) == 0 and summary.get("failed", 0) == 0):
+        # Stop when a pass finds nothing, or when nothing was acted on. Note that
+        # released_unmarked counts as progress (money WAS freed that pass) — leaving
+        # it out here would prematurely abandon the rest of the backlog if a whole
+        # batch came back unmarked. Re-visited unmarked rows re-cancel idempotently
+        # and are bounded by the 200-pass backstop below.
+        acted = (
+            summary.get("released", 0)
+            or summary.get("released_unmarked", 0)
+            or summary.get("failed", 0)
+        )
+        if found == 0 or not acted:
             break
         if passes >= 200:  # backstop against an unexpected non-converging loop
             logger.warning("stopping after %d passes — re-run to continue", passes)
@@ -88,6 +96,11 @@ async def _main(apply_changes: bool, drain_all: bool, batch: int) -> int:
     if apply_changes:
         print(f"  rides found         : {total['found']}")
         print(f"  holds released      : {total['released']}")
+        if total["released_unmarked"]:
+            print(
+                f"  released (unmarked) : {total['released_unmarked']}  "
+                "(money freed; auth_status re-marked by the 15-min loop — no rider impact)"
+            )
         print(f"  failed              : {total['failed']}   (money may still be held — investigate)")
         print(f"  lost claim race     : {total['not_claimed']}  (another replica handled them)")
     else:

@@ -50,10 +50,33 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         limit=10000,
     )
 
+    # Legacy-era income synced from Stripe transfer history
+    # (services/stripe_payout_sync_service.py): the old app's rides were never
+    # imported, so payouts rows with payout_type='stripe_sync' are the only
+    # record of that income — the T4A must report it, attributed to the year of
+    # the transfer (CRA reports amounts PAID). App-native payouts are cash-outs
+    # of the ride earnings summed below, and 'legacy_import' offsets pair with
+    # imported rides — only the synced type is added, so nothing double-counts.
+    # Queried via this module's db binding so the established
+    # _deps.db_supabase patch point covers it in tests.
+    synced_rows = await db_supabase.get_rows(
+        "payouts",
+        {
+            "driver_id": driver["id"],
+            "payout_type": "stripe_sync",
+            "created_at": {
+                "$gte": f"{year}-01-01T00:00:00+00:00",
+                "$lt": f"{year + 1}-01-01T00:00:00+00:00",
+            },
+        },
+        limit=10000,
+    )
+    synced_earnings = sum((Decimal(str(p.get("amount") or "0")) for p in synced_rows), Decimal("0"))
+
     # T4A reports the driver's INCOME — sum driver_earnings (see _ride_income),
     # not the gross fare; that would misreport income to the CRA if they ever
     # diverge under a future fee model.
-    total_earnings = _money_str(sum((_ride_income(r) for r in rides), Decimal("0")))
+    total_earnings = _money_str(sum((_ride_income(r) for r in rides), Decimal("0")) + synced_earnings)
 
     driver_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
     return {
@@ -62,6 +85,9 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         "total_trips": len(rides),
         "platform_fees": "0.00",
         "net_earnings": total_earnings,
+        # Slice of total_earnings that came from the Stripe-synced legacy
+        # history — shown so a driver (or auditor) can reconcile the slip.
+        "legacy_synced_earnings": _money_str(synced_earnings),
         "gst_registered": driver.get("gst_registered", False),
         "gst_bn": driver.get("gst_bn") or "",
         "generated_at": datetime.now(timezone.utc).isoformat(),

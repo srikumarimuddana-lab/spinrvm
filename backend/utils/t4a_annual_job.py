@@ -158,7 +158,18 @@ async def _run_issuance(year: int) -> None:
 
 
 async def _driver_annual_earnings(driver_id: str, year: int) -> Decimal:
-    """Sum completed driver_earnings for a driver in a calendar year."""
+    """Sum completed driver_earnings for a driver in a calendar year, plus
+    legacy-era income synced from Stripe transfer history.
+
+    payout_type='stripe_sync' rows (services/stripe_payout_sync_service.py)
+    are the only record of income the OLD app paid out — its rides were never
+    imported — so the ≥$500 eligibility check and the notified amount must
+    include them, attributed to the year of the transfer (CRA reports amounts
+    PAID). App-native payouts are cash-outs of the ride earnings summed here,
+    and 'legacy_import' offsets pair with imported rides — only the synced
+    type is added, so nothing double-counts. Must stay consistent with
+    routes/drivers/tax_exports.get_t4a_summary (the slip the driver downloads).
+    """
     rides = await db_supabase.get_rows(
         "rides",
         {
@@ -171,7 +182,24 @@ async def _driver_annual_earnings(driver_id: str, year: int) -> Decimal:
         },
         limit=10000,
     )
-    return sum(
+    ride_total = sum(
         (Decimal(str(r.get("driver_earnings") or "0")) for r in rides),
         Decimal("0"),
     )
+    synced_rows = await db_supabase.get_rows(
+        "payouts",
+        {
+            "driver_id": driver_id,
+            "payout_type": "stripe_sync",
+            "created_at": {
+                "$gte": f"{year}-01-01T00:00:00+00:00",
+                "$lt": f"{year + 1}-01-01T00:00:00+00:00",
+            },
+        },
+        limit=10000,
+    )
+    synced_total = sum(
+        (Decimal(str(p.get("amount") or "0")) for p in synced_rows),
+        Decimal("0"),
+    )
+    return ride_total + synced_total

@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore } from "@/store/authStore";
 import { Sidebar } from "@/components/sidebar";
+import { Topbar } from "@/components/topbar";
 import { FeatureFlagsProvider, useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 // Reads the flag from inside FeatureFlagsProvider (useFeatureFlag needs a
@@ -16,9 +17,10 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     return (
         <div className={`min-h-screen bg-background ${themeV2Enabled ? "theme-v2" : ""}`}>
             <Sidebar />
-            <main className="transition-all duration-200 md:ml-[var(--sidebar-width,240px)]">
-                <div className="p-4 pt-14 md:pt-6 md:p-8">{children}</div>
-            </main>
+            <div className="transition-all duration-200 md:ml-[var(--sidebar-width,240px)]">
+                <Topbar />
+                <main className="p-4 pt-4 md:p-8">{children}</main>
+            </div>
         </div>
     );
 }

@@ -3742,6 +3742,32 @@ export async function downloadT4aFilerHandoff(
     return { blob, filename: `t4a_filer_handoff_${year}.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
+/** Insurance usage-based billing — per-driver insured km (Period 2+3) and
+ *  the resulting invoice amount at the given cents/km rate. */
+export async function downloadInsuranceUsageBilling(
+    dateRange: string,
+    rateCentsPerKm: number,
+    format: ComplianceReportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ date_range: dateRange, rate_cents_per_km: String(rateCentsPerKm), format });
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/insurance-usage-billing?${sp.toString()}`,
+        "insurance_usage_billing",
+    );
+    return { blob, filename: `insurance_usage_billing.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+/** Completed rides with an airport pickup or dropoff, for airport
+ *  ground-transportation program reporting. */
+export async function downloadAirportTrips(
+    dateRange: string,
+    format: ComplianceReportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ date_range: dateRange, format });
+    const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`, "airport_trips");
+    return { blob, filename: `airport_trips.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
 /** Email a compliance report to a @spinr.ca address instead of downloading
  * it — the backend hard-validates the domain, this just calls the same GET
  * endpoint with `email_to` set, which returns a small JSON confirmation

@@ -564,6 +564,12 @@ async def admin_get_drivers(
                 # Single consolidated work-authorization projection; the raw
                 # columns are still spread above for back-compat.
                 "work_authorization": work_authorization_view(d),
+                # Account deletion cannot change `status` (no 'deleted' value in
+                # the set), so a departed driver still reads as status='active'
+                # here. Deleted rows stay IN this list on purpose — an admin
+                # still has to find them to file the SGI removal — but they must
+                # be visibly distinct rather than silently indistinguishable.
+                "account_deleted": bool(d.get("deleted_at")),
             }
         )
     return out
@@ -653,6 +659,16 @@ async def admin_get_driver_stats(
         u = users_map.get(d.get("user_id"))
         driver_status = d.get("status", "pending")
 
+        # Account deletion soft-deletes the drivers row but cannot change
+        # `status` — there is no 'deleted' value in the status set — so a driver
+        # who left kept status='active' and went on being counted as an active
+        # driver on this page (and as online, for rows whose intent flags
+        # predate the deletion hardening in routes/users.py). Classify them into
+        # their own bucket instead. Derived for display/counting only; the
+        # stored `status` column is untouched.
+        if d.get("deleted_at"):
+            driver_status = "deleted"
+
         # Auto-detect needs_review for active drivers
         if driver_status == "active":
             for ef in expiry_fields:
@@ -677,12 +693,14 @@ async def admin_get_driver_stats(
 
     # ── Compute overall driver stats ──
     total = len(enriched_drivers)
-    online = sum(1 for d in enriched_drivers if d.get("is_online"))
+    # A deleted account is never "online", whatever its stale intent flag says.
+    online = sum(1 for d in enriched_drivers if d.get("is_online") and d.get("status") != "deleted")
     active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
     pending_count = sum(1 for d in enriched_drivers if d.get("status") == "pending")
     needs_review_count = sum(1 for d in enriched_drivers if d.get("status") == "needs_review")
     suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
+    deleted_count = sum(1 for d in enriched_drivers if d.get("status") == "deleted")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
     total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
     avg_rating = 0.0
@@ -793,6 +811,7 @@ async def admin_get_driver_stats(
             "needs_review": needs_review_count,
             "suspended": suspended_count,
             "banned": banned_count,
+            "deleted": deleted_count,
             "total_rides": total_rides_sum,
             "total_earnings": total_earnings_sum,
             "avg_rating": avg_rating,

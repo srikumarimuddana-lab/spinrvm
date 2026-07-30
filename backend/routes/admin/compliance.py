@@ -488,22 +488,37 @@ _PERIOD_LABELS = {
 }
 
 
-async def _driver_roster_rows(status: Optional[str]) -> tuple[list[dict], bool]:
+async def _driver_roster_rows(status: Optional[str], include_deleted: bool = False) -> tuple[list[dict], bool]:
     """Pull every onboarded driver's license/status info. Deliberately
     covers every driver status, not just active — Knight Archer's original
     ask was for "driver onboarded, driver license, with all status", i.e.
     the full roster regardless of where a driver currently sits in the
     pipeline (pending/needs_review/active/suspended/banned); the optional
     `status` filter narrows to just "active" for a consumer that only
-    wants that slice."""
+    wants that slice.
+
+    Drivers who deleted their account are excluded by default. Account
+    deletion cannot change `drivers.status` — there is no 'deleted' value in
+    the status set — so a driver who left kept status='active' and went on
+    appearing on the roster this report sends to an insurer/regulator as a
+    currently-onboarded driver. This roster answers "who is on the road now";
+    telling the regulator someone has stopped driving is the SGI D00032/D00033
+    'remove' form's job, not a silent omission from a status column.
+
+    `include_deleted=True` restores the old behavior for an operator auditing
+    historical roster membership, and tags each row so the two are never
+    confused on the page.
+    """
     filters: dict = {}
     if status:
         filters["status"] = status
+    if not include_deleted:
+        filters["deleted_at"] = None  # compiles to PostgREST `is.null`
 
     drivers = await db_supabase.get_rows(
         "drivers",
         filters,
-        columns="id,name,first_name,last_name,license_number,license_class,status,created_at",
+        columns="id,name,first_name,last_name,license_number,license_class,status,created_at,deleted_at",
         order="created_at",
         desc=True,
         limit=_ROW_LIMIT,
@@ -522,7 +537,10 @@ async def _driver_roster_rows(status: Optional[str]) -> tuple[list[dict], bool]:
             "driver_name": d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"],
             "license_number": d.get("license_number") or "",
             "license_class": d.get("license_class") or "",
-            "status": d.get("status") or "",
+            # A soft-deleted row still carries its pre-deletion status (usually
+            # 'active'), which would read as a working driver. Only reachable
+            # when include_deleted=True.
+            "status": "deleted" if d.get("deleted_at") else (d.get("status") or ""),
             "onboarded_at": report_branding.format_report_timestamp(d.get("created_at")),
         }
         for d in drivers
@@ -535,6 +553,10 @@ async def _driver_roster_rows(status: Optional[str]) -> tuple[list[dict], bool]:
 async def get_driver_roster(
     request: Request,
     status: Optional[str] = Query(None, description="Exact match on drivers.status; omit to include every status"),
+    include_deleted: bool = Query(
+        False,
+        description="Include drivers who deleted their account (excluded by default; they are not on the road)",
+    ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     email_to: Optional[str] = Query(
         None, description="Email the report to this @spinr.ca address instead of downloading it"
@@ -546,10 +568,14 @@ async def get_driver_roster(
     to one status). Original use case: keeping Knight Archer Insurance (the
     broker) current on active drivers, monthly cadence — content is
     generic enough for other roster-review consumers too. Spinr-branded,
-    not a fixed regulator form (see module docstring)."""
+    not a fixed regulator form (see module docstring).
+
+    Drivers who deleted their account are excluded unless `include_deleted`
+    is set — see `_driver_roster_rows` for why a status filter alone does not
+    catch them."""
     _require_spinr_ca(email_to)
     try:
-        rows, truncated = await _driver_roster_rows(status)
+        rows, truncated = await _driver_roster_rows(status, include_deleted=include_deleted)
     except Exception as e:
         logger.error(f"Failed to build driver roster export: {e}", exc_info=True)
         _capture_export_failure("driver_roster", e)
@@ -561,6 +587,9 @@ async def get_driver_roster(
 
     fieldnames = ["driver_name", "license_number", "license_class", "status", "onboarded_at"]
     subtitle = f"Status: {status}" if status else "All statuses"
+    # State the exclusion on the page itself — an insurer reading this needs to
+    # know whether departed drivers are in or out of the count they are seeing.
+    subtitle += " — including deleted accounts" if include_deleted else " — excluding deleted accounts"
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow with the status filter"
 

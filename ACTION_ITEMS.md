@@ -1360,6 +1360,70 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   `/dashboard/driver-license-backfill` queue and a decision is made on
   the larger proposal.
 
+### B15. Rider/driver SOS: DB insert has no fallback on failure, and "PagerDuty" in domain-safety.md doesn't exist in code
+- [ ] **Status:** open — found 2026-07-30 while tracing the SOS flow against
+  `.claude/context/domain-safety.md`'s documented behavior. Not fixed yet;
+  logging as a tracked finding per user instruction rather than fixing inline,
+  so it can be picked up as its own scoped change with a Change Impact Log
+  (touches a live safety surface).
+- **Why:** `trigger_emergency` (`backend/routes/rides/safety.py:38-83`) —
+  the rider/driver in-ride SOS endpoint — calls
+  `await _deps.db_supabase.insert_one("safety_incidents", incident)` at
+  line 83 with **no surrounding try/except**. If that insert throws, the
+  request 500s before any of the subsequent steps run: the admin WS
+  broadcast, the safety-team email (`notify_safety_team`), and the
+  emergency-contact SMS loop are all sequenced *after* the insert in the
+  same function body. Its sibling endpoint for non-urgent reports,
+  `backend/routes/safety.py:98-105` (`POST /safety/report`), wraps the
+  identical-purpose insert in a try/except that logs the full exception and
+  returns a clean 503 — `trigger_emergency` doesn't follow that pattern.
+  Separately, `.claude/context/domain-safety.md` describes a rule that a DB
+  failure on SOS should "fall back to direct Twilio + PagerDuty call with
+  best-effort data" — grepped the whole backend for "pagerduty"
+  (case-insensitive) and found zero implementation matches anywhere. What
+  actually fires today on a successful SOS is a WS broadcast to the admin
+  dashboard + an email to a safety distribution list + a `logger.critical()`
+  line — no paging mechanism that would reach an on-call person not actively
+  watching the dashboard or a log stream. The doc describes intended
+  behavior that was either never built or removed without a doc update.
+- **Severity note (calibrated, not worst-case):** the client
+  (`shared/components/SOSButton.tsx`) retries 3× (1s/2s backoff) and never
+  shows a false "Alert Sent" — it only confirms success after a real 200,
+  and on exhausted retries shows a persistent amber "Not Sent — Call 911
+  directly" state with one-tap retry. So a transient DB blip self-heals via
+  retry, and even a sustained outage across all 3 attempts never leaves the
+  user believing help is coming when it isn't. The real gap is narrower:
+  during a DB outage spanning all 3 client retries (~3-4s), **zero**
+  emergency-contact SMS and **zero** safety-team notification fire through
+  the backend path — exactly the scenario the doc's own fallback rule was
+  meant to cover, and the code has no such fallback.
+- **Also noted, separate/smaller finding, same trace:** the SOS endpoint has
+  no rideless/standalone path — `ride_id` is a required path param and the
+  handler 404s if the ride doesn't exist, contradicting the doc's payload
+  example showing `ride_id?` as optional. `SOSButton.tsx` confirms this is
+  intentional client-side (`if (!rideId)` shows "Emergency alert requires an
+  active ride. Call 911 directly" instead of attempting a call) — so a
+  rider who feels unsafe while waiting for pickup or just after drop-off has
+  no in-app SOS path today, only a prompt to call 911 themselves. Product
+  decision, not obviously a bug, but worth a deliberate call rather than
+  silent-by-omission. Doc also says hold duration is "3s"; code
+  (`SOS_HOLD_MS`) is 1200ms — minor doc inaccuracy, fix alongside.
+- **Files:** `backend/routes/rides/safety.py` (add try/except around the
+  `insert_one` at line 83, mirroring `backend/routes/safety.py:98-105`'s
+  pattern — 503 on failure, full exception logged, never a silent 500);
+  `.claude/context/domain-safety.md` (correct the PagerDuty claim to match
+  actual notification channels, or file a decision to build real paging;
+  correct hold duration 3s → 1.2s; clarify the ride-required constraint).
+- **Approach:** wrap the insert per the sibling pattern first (small, low
+  risk, matches an existing precedent in the same codebase). Then decide,
+  as a separate follow-up: (a) whether SOS needs a non-DB-dependent
+  fallback path for the sustained-outage case (e.g. direct Twilio SMS to
+  safety on-call using only in-memory ride/user context, bypassing the DB
+  write), and (b) whether real paging (PagerDuty/Opsgenie) should be built
+  or the doc should stop claiming it exists.
+- **Acceptance:** not yet defined — this entry exists so the finding isn't
+  lost; scope the fix and acceptance criteria when picked up.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

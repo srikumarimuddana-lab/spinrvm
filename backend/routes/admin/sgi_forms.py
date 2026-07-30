@@ -10,8 +10,10 @@ only touches the mapping, not the PDF-filling code.
 """
 
 import logging
+from datetime import datetime, timezone
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 try:
@@ -143,6 +145,39 @@ async def generate_sgi_form(
         raise HTTPException(status_code=502, detail="Could not generate the SGI form") from e
 
     observability.record_sgi_form_result(body.form_type, "completed")
+
+    # Record that the removal was actually filed. Without this there was no way
+    # to tell an already-submitted removal from one nobody had done, so the only
+    # options were to re-file (duplicate submission to SGI) or hope. Stamped per
+    # form because a driver needs BOTH D00032 and D00033 — marking the job done
+    # off whichever was generated first would leave the vehicle on SGI's books.
+    #
+    # Best-effort: the PDF is already built and returned below, and failing the
+    # request here would make the admin re-generate (and re-file) the very form
+    # that just succeeded. Logged at error so a persistent failure is actionable
+    # rather than silently leaving the queue full.
+    if body.action == "remove":
+        stamp_column = (
+            "regulator_removal_driver_form_at"
+            if body.form_type == "driver_details"
+            else "regulator_removal_vehicle_form_at"
+        )
+        stamped_at = datetime.now(timezone.utc).isoformat()
+        for d in driver_rows:
+            try:
+                await db_supabase.update_one(
+                    "drivers",
+                    {"id": d["id"]},
+                    {stamp_column: stamped_at, "regulator_removal_reported_by": admin.get("id")},
+                )
+            except Exception:
+                logger.error(
+                    "data-transfer sgi-forms: failed to stamp %s for driver %s — removal queue will still show it as outstanding",
+                    stamp_column,
+                    d.get("id"),
+                    exc_info=True,
+                )
+
     await log_admin_action(
         admin,
         "sgi_form_generated",
@@ -156,3 +191,65 @@ async def generate_sgi_form(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/data-transfer/sgi-forms/removal-queue")
+async def sgi_removal_queue(
+    include_filed: bool = Query(False, description="Also return removals already filed on both forms"),
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Drivers who left but are still filed with the regulator.
+
+    Spinr stops dispatching the moment a driver deletes their account, but SGI
+    goes on listing them as an active passenger-for-hire driver until the
+    D00032 removal row is filed — and their vehicle until D00033. Nothing used
+    to surface that backlog, so it depended on an admin remembering.
+
+    Returns one entry per driver with a per-form outstanding flag, since both
+    forms are required and they are filed separately. `entity_id` is `users.id`
+    to match what the generate endpoint and the rest of the Data Transfer
+    module take as `driver_ids`.
+    """
+    rows = await db_supabase.get_rows(
+        "drivers",
+        {"regulator_removal_required": True},
+        columns=(
+            "id,user_id,name,license_plate,regulatory_authority,regulator_removal_effective_date,"
+            "regulator_removal_driver_form_at,regulator_removal_vehicle_form_at,deleted_at"
+        ),
+        order="regulator_removal_effective_date",
+        limit=500,
+    )
+
+    def _entry(d: dict) -> Optional[dict]:
+        driver_form_done = bool(d.get("regulator_removal_driver_form_at"))
+        vehicle_form_done = bool(d.get("regulator_removal_vehicle_form_at"))
+        if not include_filed and driver_form_done and vehicle_form_done:
+            return None
+        return {
+            # users.id — the id every other Data Transfer endpoint takes.
+            "entity_id": d.get("user_id"),
+            "driver_id": d.get("id"),
+            "name": d.get("name") or "",
+            "license_plate": d.get("license_plate") or "",
+            "regulatory_authority": d.get("regulatory_authority"),
+            "effective_date": d.get("regulator_removal_effective_date")
+            or (str(d.get("deleted_at") or "")[:10] or None),
+            "driver_form_filed_at": d.get("regulator_removal_driver_form_at"),
+            "vehicle_form_filed_at": d.get("regulator_removal_vehicle_form_at"),
+            "driver_form_outstanding": not driver_form_done,
+            "vehicle_form_outstanding": not vehicle_form_done,
+        }
+
+    entries = [e for e in (_entry(d) for d in rows or []) if e]
+    # A driver with no linked users row cannot be selected in the Data Transfer
+    # flow (which keys on users.id), so it would silently never clear. Surface
+    # the count rather than dropping it on the floor.
+    unresolvable = sum(1 for e in entries if not e["entity_id"])
+    if unresolvable:
+        logger.error(
+            "sgi removal queue: %s driver(s) owe a regulator removal but have no linked user row — "
+            "they cannot be selected for form generation",
+            unresolvable,
+        )
+    return {"drivers": entries, "count": len(entries), "unresolvable": unresolvable}

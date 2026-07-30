@@ -76,6 +76,31 @@ class TestTombstoneDriverRow:
         inval.assert_awaited_once_with(driver_id="drv-1", user_id="usr-1")
 
     @pytest.mark.anyio
+    async def test_queues_a_regulator_removal_for_a_filed_driver(self):
+        """SGI keeps listing a departed driver as an active passenger-for-hire
+        driver until the D00032/D00033 removal is filed. Deletion has to queue
+        that, stamped with the date they actually stopped."""
+        _, upd, _, _, _ = await self._run({**DRIVER, "is_verified": True})
+        payload = upd.await_args.args[2]
+        assert payload["regulator_removal_required"] is True
+        # DATE column, not the full timestamp.
+        assert payload["regulator_removal_effective_date"] == "2026-07-30"
+
+    @pytest.mark.anyio
+    async def test_regulator_approved_driver_also_queues(self):
+        _, upd, _, _, _ = await self._run({**DRIVER, "regulatory_authority_approved": True})
+        assert upd.await_args.args[2]["regulator_removal_required"] is True
+
+    @pytest.mark.anyio
+    async def test_never_approved_applicant_does_not_queue(self):
+        """An applicant who never got approved was never filed with the
+        regulator, so there is nothing to remove — queueing them would bury the
+        real backlog."""
+        payload = (await self._run({**DRIVER, "is_verified": False}))[1].await_args.args[2]
+        assert "regulator_removal_required" not in payload
+        assert "regulator_removal_effective_date" not in payload
+
+    @pytest.mark.anyio
     async def test_lookup_excludes_already_deleted_rows(self):
         _, _, _, rows, _ = await self._run(DRIVER)
         assert rows.await_args.args[1] == {"user_id": "usr-1", "deleted_at": None}

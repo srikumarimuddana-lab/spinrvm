@@ -144,6 +144,36 @@ export const adminCommitDataTransferImport = (file: File, batch?: string, update
 };
 
 export type SgiFormType = "driver_details" | "vehicle_details";
+
+/** A driver who left but is still filed with the regulator. Spinr stops
+ *  dispatching the moment they delete their account, but SGI keeps listing
+ *  them as an active passenger-for-hire driver until the D00032 removal row
+ *  is filed — and their vehicle until D00033. */
+export interface SgiRemovalQueueEntry {
+    /** users.id — the id the generate endpoint and Search & Select take. */
+    entity_id: string | null;
+    driver_id: string;
+    name: string;
+    license_plate: string;
+    regulatory_authority: string | null;
+    /** Date the driver actually stopped, used as the removal's effective date. */
+    effective_date: string | null;
+    driver_form_filed_at: string | null;
+    vehicle_form_filed_at: string | null;
+    driver_form_outstanding: boolean;
+    vehicle_form_outstanding: boolean;
+}
+export interface SgiRemovalQueue {
+    drivers: SgiRemovalQueueEntry[];
+    count: number;
+    /** Queue entries with no linked users row — they cannot be selected for
+     *  form generation, so they would never clear on their own. */
+    unresolvable: number;
+}
+export const getSgiRemovalQueue = (includeFiled = false) =>
+    request<SgiRemovalQueue>(
+        `/api/admin/data-transfer/sgi-forms/removal-queue${includeFiled ? "?include_filed=true" : ""}`,
+    );
 // PDF binary response — can't use the generic request<T>() helper (it always
 // calls res.json()). Mirrors fetchKybDocumentBlob's manual fetch + auth
 // header pattern, adding the CSRF header this call needs since it's a POST.

@@ -260,16 +260,28 @@ async def _tombstone_driver_row(user_id: str, now: str) -> Optional[dict]:
     if not driver:
         return None
 
-    await db_supabase.update_one(
-        "drivers",
-        {"id": driver["id"]},
-        {
-            "deleted_at": now,
-            "is_online": False,
-            "is_available": False,
-            "went_offline_at": now,
-        },
-    )
+    updates = {
+        "deleted_at": now,
+        "is_online": False,
+        "is_available": False,
+        "went_offline_at": now,
+    }
+
+    # Spinr stops dispatching immediately, but the regulator (SGI in SK) still
+    # lists this driver as an active passenger-for-hire driver until we file the
+    # D00032/D00033 "remove" rows. Nothing triggered that filing, so it depended
+    # on someone remembering. Queue it here, stamped with the date the driver
+    # actually stopped — SGI cares about that date, not the date an admin got
+    # round to generating the form.
+    #
+    # Only for drivers who were actually filed with the regulator: an applicant
+    # who never got approved was never added, so there is nothing to remove and
+    # queueing them would bury the real backlog in noise.
+    if driver.get("is_verified") or driver.get("regulatory_authority_approved"):
+        updates["regulator_removal_required"] = True
+        updates["regulator_removal_effective_date"] = now[:10]
+
+    await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
     # `_pre_invalidate_for_table` only evicts the cache keys present in the
     # update's filter dict, so keying the write by `id` leaves the separate
     # by-user_id entry (30s TTL, read by get_current_user on every request)

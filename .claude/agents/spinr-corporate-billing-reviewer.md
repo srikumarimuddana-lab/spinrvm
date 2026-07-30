@@ -38,13 +38,33 @@ Audit only. You report; the user fixes. Load `@.claude/context/domain-corporate.
 ## 6. Blast radius for shared functions
 - If the diff changes the signature or locking behavior of `corporate_wallet_apply_delta` itself, grep the **entire** codebase for every consumer (not just this diff) and list them explicitly — this is a shared money primitive, not a local helper
 
+## 7. The two-independent-booking-paths trap (from domain-corporate.md's "Lessons learned")
+- `backend/routes/rides/booking.py`'s `create_ride` contains **two separate,
+  independent** corporate booking code blocks: `company_allowance` and
+  `work_profile`. This exact shape of bug — a fix applied to one path but
+  not the other — has already shipped in this codebase (documented in
+  `domain-corporate.md`'s "Lessons learned" and "Common pitfalls": booking-
+  time company-status check, policy-change audit visibility, and the
+  original three integration gaps were all variants of this).
+- If the diff touches allowance-cap enforcement, company/membership-status
+  checks, or payment-source-priority logic inside `routes/rides/booking.py`,
+  **explicitly verify both blocks were changed identically** (or state why
+  only one legitimately needs the change). A diff that only touches one
+  block without an explanation is a blocker, not a warning — this is a
+  confirmed-recurring failure mode, not a theoretical one.
+- Same applies to any new DB read added to either corporate booking
+  block — per `domain-corporate.md`'s testing-conventions note, a new read
+  in one block breaks tests for that block only, which can mask that the
+  other block was never given the equivalent fix at all.
+
 # How to audit
 
-1. Scope: `git diff --cached -- 'backend/routes/corporate*' 'backend/services/corporate_*' 'backend/routes/wallet.py' | head -2000`
+1. Scope: `git diff --cached -- 'backend/routes/corporate*' 'backend/services/corporate_*' 'backend/routes/wallet.py' 'backend/routes/rides/booking.py' | head -2000`
 2. Grep patterns (run against the diff, then against the full codebase for blast radius):
    - `corporate_wallet_apply_delta` — every call site
    - `UPDATE.*wallet_balance|UPDATE.*allowance` — direct-write bypass red flag
    - `surge_multiplier` near corporate payment branches — must be excluded
+   - `company_allowance|work_profile` in `routes/rides/booking.py` — confirm any allowance/status-check change touches both blocks
    - `auto_approved_this_period|idempotency_key|reminder_sent` — confirm present on retry/reset loops
    - `allowance_reset|corporate_auto_topup|low_balance_nudge` — background loop replay-safety check
 

@@ -270,6 +270,37 @@ class TestGetDriverBalance:
         assert result["pending_payouts"] == "5.00"
         assert result["total_paid_out"] == "40.00"  # 30 + 10 sent (not pending)
 
+    def test_balance_excludes_stripe_synced_legacy_payouts(self):
+        """payout_type='stripe_sync' rows are legacy-app payout history synced
+        from Stripe for T4A (stripe_payout_sync_service). The earnings they
+        cashed out are NOT in this DB's rides, so they must not deduct — else
+        every migrated driver's payable_balance goes negative and payouts are
+        blocked with 'Insufficient funds'."""
+        from backend.routes import drivers as drv
+
+        rides = [{"base_fare": 100.0}]  # $100 earned in the NEW app
+        payouts = [
+            {"amount": 30.0, "status": "completed", "payout_type": "standard"},  # deduct
+            {"amount": 500.0, "status": "completed", "payout_type": "stripe_sync"},  # history only
+            {"amount": 20.0, "status": "completed", "payout_type": "legacy_import"},  # deduct (paired rides)
+        ]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return rides
+            if table == "payouts":
+                return payouts
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # 100 - 30 - 20 = 50; the $500 synced legacy payout never deducts.
+        assert result["payable_balance"] == "50.00"
+        assert result["total_paid_out"] == "50.00"
+
     def test_db_error_raises_503_not_zeroed_balance(self):
         # Regression: a DB error fetching rides/payouts must surface as 503, not
         # be masked as a $0.00 balance (which looks to the driver like their

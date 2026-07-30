@@ -65,6 +65,9 @@ export {
     getDriverPayoutsSummary,
     refreshDriverStripeKyc,
     revealDriverSin,
+    getDriverStatements,
+    downloadDriverStatement,
+    emailDriverStatement,
     getDriverStats,
     updateDriver,
 } from "./api/drivers";
@@ -84,6 +87,9 @@ export type {
     ReferralPair,
     DriverPayoutSummary,
     RevealSinResponse,
+    DriverStatement,
+    DriverStatementPeriodType,
+    StatementSelection,
 } from "./api/drivers";
 export {
     getCorporateAccounts,

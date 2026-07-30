@@ -414,6 +414,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import T4A annual job loop: {e}", exc_info=True)
 
+    # Driver earnings statements — weekly (Mon-Sun) + monthly periodic
+    # statement emails with a branded PDF, Uber-style. Insert-claim on the
+    # driver_statements unique index (migration 272) makes each (driver,
+    # period) statement single-send across replicas.
+    try:
+        from utils.driver_statement_job import driver_statement_loop
+
+        _spawn("driver_statements (30min)", driver_statement_loop)
+    except Exception as e:
+        logger.error(f"Failed to import driver statement loop: {e}", exc_info=True)
+
     # Stuck ride sweeper — cancels rides that have been in 'searching' for
     # more than 5 minutes. Recovers rides whose in-process asyncio timeout
     # was lost due to a pod restart. Atomic claim pattern ensures only one
@@ -501,6 +512,7 @@ async def lifespan(app: FastAPI):
             "data_export_purge (1h)",
             "stripe_reconcile (24h)",
             "t4a_annual_job (yearly Feb 28)",
+            "driver_statements (30min)",
             "stuck_ride_sweeper (60s)",
             "offer_expiry_reaper (10s)",
             "push_retry (30s)",

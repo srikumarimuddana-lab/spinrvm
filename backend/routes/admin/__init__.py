@@ -65,6 +65,7 @@ from .data_transfer_jobs import router as data_transfer_jobs_router
 from .data_transfer_search import router as data_transfer_search_router
 from .documents import router as documents_router
 from .driver_import import router as driver_import_router
+from .driver_statements import router as driver_statements_router
 from .drivers import router as drivers_router
 from .export_approvals import router as export_approvals_router
 from .faqs import router as faqs_router
@@ -82,6 +83,7 @@ from .settings import router as settings_router
 from .sgi_forms import router as sgi_forms_router
 from .staff import router as staff_router
 from .stripe_import import router as stripe_import_router
+from .stripe_payout_sync import router as stripe_payout_sync_router
 from .subscriptions import offer_analytics_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
@@ -115,9 +117,16 @@ admin_router.include_router(venues_router, dependencies=[Depends(require_module(
 admin_router.include_router(vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))])
 admin_router.include_router(drivers_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(driver_import_router, dependencies=[Depends(require_module("drivers"))])
+# Driver earnings statements (payout section: date-filter -> download / email
+# to driver). Read-only + driver-addressed email; drivers module grant.
+admin_router.include_router(driver_statements_router, dependencies=[Depends(require_module("drivers"))])
 # Legacy Stripe mapping import (drivers + riders kinds) — migration ops
 # tooling, gated like the bulk driver import it mirrors.
 admin_router.include_router(stripe_import_router, dependencies=[Depends(require_module("drivers"))])
+# Stripe payout-history sync (legacy migration: rebuild payouts from Stripe
+# Transfer truth). Writes to payouts, so it takes the booking-import posture:
+# require_super_admin at the mount AND re-checked inside each handler.
+admin_router.include_router(stripe_payout_sync_router, dependencies=[Depends(require_super_admin)])
 # Data Transfer module (export/import users+drivers with docs/history between
 # Spinr's own environments) — gated on require_super_admin, not a module flag.
 # Previously gated on require_module("bulk_operations"); that module string

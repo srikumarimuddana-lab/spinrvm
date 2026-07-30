@@ -422,6 +422,9 @@ class TestDispatchServiceFindCandidates:
                 "is_available": True,
                 "is_verified": True,
                 "status": "active",
+                # Soft-deleted accounts keep status='active' (there is no
+                # 'deleted' driver status), so dispatch has to exclude them here.
+                "deleted_at": None,
                 "vehicle_type_id": "economy",
             },
             limit=500,
@@ -630,6 +633,7 @@ class TestDispatchServiceFindCandidates:
                 "is_available": True,
                 "is_verified": True,
                 "status": "active",
+                "deleted_at": None,
                 "vehicle_type_id": "economy",
                 "is_wav": True,
             },

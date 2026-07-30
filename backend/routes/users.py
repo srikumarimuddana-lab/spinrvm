@@ -7,6 +7,7 @@ try:
     from ..utils.audit_logger import log_admin_action  # type: ignore
     from ..utils.error_handling import ErrorCode, SpinrException  # type: ignore
     from ..utils.error_keys import ErrorKeys  # type: ignore
+    from ..utils.insurance_periods import record_period_transition  # type: ignore
     from ..utils.redis_client import redis_delete  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
@@ -22,6 +23,7 @@ except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
     from utils.error_handling import ErrorCode, SpinrException  # type: ignore  # noqa: F811
     from utils.error_keys import ErrorKeys  # type: ignore  # noqa: F811
+    from utils.insurance_periods import record_period_transition  # type: ignore  # noqa: F811
     from utils.redis_client import redis_delete  # type: ignore  # noqa: F811
     from utils.referral_terms import (  # type: ignore  # noqa: F811
         area_id_for_rider,
@@ -158,6 +160,61 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
 # at the separate 3-year ceiling inside that same purge.
 
 
+async def _tombstone_driver_row(user_id: str, now: str) -> Optional[dict]:
+    """Soft-delete the caller's driver row and take it out of service.
+
+    Setting `deleted_at` alone was not enough. `drivers.status` stays whatever
+    it was (normally 'active') and there is no 'deleted' value in the status
+    set, so the row stayed indistinguishable from a working driver on every
+    bulk `get_rows` read — including the dispatch candidate query, which does
+    not join the users row and so never saw `status='pending_deletion'`.
+
+    Two things therefore have to happen here, not just the `deleted_at` stamp:
+
+    1. Clear the intent flags. `is_online`/`is_available` are what dispatch
+       actually filters on. The `stale_intent` background loop would flip them
+       eventually (after `stale_intent_offline_hours`, default 4h), but that is
+       a reconciler for unreachable apps, not the correct primary path for a
+       driver who explicitly left — and its presence-based safety net is
+       fail-open, so a Redis outage inside that window could still route a ride
+       to a deleted driver.
+    2. Close the open insurance period. `driver_insurance_periods` is the
+       append-only 7-year SGI/insurance audit trail; a driver who deletes while
+       online (Period 1) otherwise leaves a period row that never ends. Mirrors
+       what the go-offline toggle does (`routes/drivers/status.py`).
+
+    Returns the driver row (pre-update) or None when the caller is not a driver
+    (or was already tombstoned — the lookup filters `deleted_at IS NULL`, so a
+    repeat call is a no-op rather than a double-write that would append another
+    row to the insurance-period audit table).
+    """
+    rows = await db_supabase.get_rows("drivers", {"user_id": user_id, "deleted_at": None}, limit=1)
+    driver = rows[0] if rows else None
+    if not driver:
+        return None
+
+    await db_supabase.update_one(
+        "drivers",
+        {"id": driver["id"]},
+        {
+            "deleted_at": now,
+            "is_online": False,
+            "is_available": False,
+            "went_offline_at": now,
+        },
+    )
+    # `_pre_invalidate_for_table` only evicts the cache keys present in the
+    # update's filter dict, so keying the write by `id` leaves the separate
+    # by-user_id entry (30s TTL, read by get_current_user on every request)
+    # serving the pre-deletion row. Evict both explicitly.
+    await db_supabase.invalidate_driver_cache(driver_id=driver["id"], user_id=user_id)
+    # Period 0 = out of the app entirely, personal auto insurance only.
+    # Non-raising by contract (see utils/insurance_periods.py) — a missed
+    # transition must not block the deletion the user asked for.
+    await record_period_transition(driver["id"], 0)
+    return driver
+
+
 @api_router.delete("/account")
 async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     """Soft-delete / tombstone the account (Uber/Lyft model).
@@ -191,7 +248,7 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
                 "token_version": next_token_version,
             },
         )
-        await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        await _tombstone_driver_row(user_id, now)
         # Kill credentials at the root: revoke every refresh token (so /auth/refresh
         # can't rotate a deleting account back to life) and drop the Redis session
         # mirror. Best-effort — the deletion is already recorded above, and the daily
@@ -236,8 +293,9 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
 
     now = datetime.now(timezone.utc).isoformat()
     try:
-        # Soft-delete driver record (preserves audit trail)
-        await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        # Soft-delete driver record (preserves audit trail), clear the intent
+        # flags dispatch reads, and close any open insurance period.
+        await _tombstone_driver_row(user_id, now)
         # Hard-delete non-sensitive ancillary data (no soft-delete column)
         await db_supabase.delete_many("driver_documents", {"driver_id": user_id})
         await db_supabase.delete_many("emergency_contacts", {"user_id": user_id})

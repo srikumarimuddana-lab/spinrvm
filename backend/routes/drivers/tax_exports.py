@@ -286,6 +286,88 @@ async def email_earnings_export(
     return {"message": f"Your earnings export for {year} is on its way. Check your email."}
 
 
+async def _email_statement_document(user_id: str, email: str, statement: dict) -> None:
+    """Background task: render the earnings-statement PDF and email it."""
+    try:
+        from ...utils.driver_statement_pdf import generate_driver_statement_pdf
+    except ImportError:
+        from utils.driver_statement_pdf import generate_driver_statement_pdf  # type: ignore
+    try:
+        pdf_bytes = generate_driver_statement_pdf(statement)
+    except Exception:
+        logger.error("statement PDF render failed for user %s", user_id, exc_info=True)
+        return
+    filename = f"spinr-statement-{statement['period_type']}-{statement['period_start']}.pdf"
+    await _email_driver_document(
+        user_id,
+        email,
+        subject=f"Your Spinr earnings statement — {statement['period_label']}",
+        body=(
+            "Hi,\n\n"
+            f"As requested, your Spinr earnings statement for {statement['period_label']} "
+            f'is attached as a PDF ("{filename}").\n\n'
+            f"  Total earnings: ${statement['earnings']['total']}\n"
+            f"  Trips completed: {statement['trips']}\n"
+            f"  Paid out this period: ${statement['payouts_total']}\n\n"
+            "Questions? Contact support@spinr.ca.\n\n"
+            "— The Spinr Team"
+        ),
+        filename=filename,
+        content=pdf_bytes,
+        mime="application/pdf",
+        log_id="stmt",
+    )
+
+
+@router.post("/statements/email")
+@tax_doc_email_limit
+async def email_driver_statement(
+    background_tasks: BackgroundTasks,
+    period_type: str = Query(..., description="weekly or monthly"),
+    period_start: str = Query(..., description="Monday (weekly) or 1st (monthly), YYYY-MM-DD"),
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Email the driver their earnings statement for one anchored period —
+    self-serve re-send of what the periodic job delivers (drivers can always
+    request a copy, e.g. after changing their email address).
+
+    Rate-limited (@tax_doc_email_limit, 6/hour) like the other tax-document
+    senders. SlowAPI needs a parameter named ``request`` typed as starlette
+    Request; do not remove it.
+    """
+    from datetime import date as _date
+
+    try:
+        from ...utils.driver_statement import PERIOD_TYPES, build_statement
+    except ImportError:
+        from utils.driver_statement import PERIOD_TYPES, build_statement  # type: ignore
+
+    if period_type not in PERIOD_TYPES:
+        raise HTTPException(status_code=422, detail="period_type must be weekly or monthly")
+    try:
+        start_d = _date.fromisoformat(period_start)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail="period_start must be YYYY-MM-DD") from e
+
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+    email = _driver_email_or_400(current_user)
+
+    driver_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
+    try:
+        statement = await build_statement(driver, period_type, start_d, driver_name=driver_name)
+    except ValueError as e:
+        # Misaligned anchor (weekly not a Monday / monthly not the 1st).
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    background_tasks.add_task(_email_statement_document, current_user["id"], email, statement)
+    return {"message": f"Your earnings statement for {statement['period_label']} is on its way. Check your email."}
+
+
 # Account (users) fields omitted from a data export: credentials and internal
 # session/auth state that are not "personal data about the subject".
 #  - password_hash: credential

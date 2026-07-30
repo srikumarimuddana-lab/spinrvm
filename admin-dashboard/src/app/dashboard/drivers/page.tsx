@@ -24,6 +24,7 @@ import AreaStatsTable from "./_components/area-stats-table";
 import DriverActionBar from "./_components/driver-action-bar";
 import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
+import { DriverStatementsPanel } from "./_components/driver-statements-panel";
 import DriverActivity from "./_components/driver-activity";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -1284,7 +1285,9 @@ export default function DriversPage() {
                                     <DriverPayoutsTab
                                         data={payoutSummary}
                                         loading={payoutLoading}
+                                        driverId={selected.id}
                                         driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim() || selected.email || "this driver"}
+                                        notify={toast}
                                         retryingPayoutId={retryingPayoutId}
                                         refreshingKyc={refreshingKyc}
                                         revealedSin={revealedSin}
@@ -1755,9 +1758,10 @@ function PayoutMetric({ label, value, tone, sub }: { label: string; value: strin
     );
 }
 
-function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRevealSin, refreshingKyc, revealedSin, canRevealSin }: {
+function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRevealSin, refreshingKyc, revealedSin, canRevealSin, notify }: {
     data: DriverPayoutSummary | null;
     loading: boolean;
+    driverId: string;
     driverName: string;
     retryingPayoutId: string | null;
     onRetry: (payoutId: string) => Promise<void>;
@@ -1766,6 +1770,7 @@ function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry
     refreshingKyc: boolean;
     revealedSin: { sin: string; expiresAt: number } | null;
     canRevealSin: boolean;
+    notify: (opts: { title: string; description?: string; variant?: "destructive" }) => void;
 }) {
     const fmtDateTime = (iso?: string | null) => {
         if (!iso) return "—";
@@ -2054,6 +2059,9 @@ function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry
                     </div>
                 </div>
             )}
+
+            {/* Earnings statements — date-filtered download / email to driver */}
+            <DriverStatementsPanel driverId={driverId} driverName={driverName} notify={notify} />
 
             {/* Payout history table */}
             <div className="rounded-xl border border-border overflow-x-auto">

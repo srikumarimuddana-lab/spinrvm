@@ -1,0 +1,397 @@
+// Driver listings, live stats, referrals, training, and payout summaries.
+// Extracted from the monolithic lib/api.ts as part of the per-domain split
+// (this is one contiguous block of the original file's driver-related
+// functions; more live in api/driver-documents.ts and elsewhere — the
+// original file had no strict single "Drivers" boundary).
+
+import { request } from "./client";
+
+/* ── Drivers ──────────────────────────────── */
+export const getDrivers = (opts: {
+    limit?: number;
+    offset?: number;
+    is_verified?: boolean;
+    is_online?: boolean;
+    is_available?: boolean;
+    status?: string;
+    service_area_id?: string;
+    vehicle_type_id?: string;
+    search?: string;
+    photo_status?: string;
+    /** ACTION_ITEMS.md B14 backfill queue — drivers missing license_number
+     * or license_class. Cannot be combined with `search` (backend 400s). */
+    missing_license?: boolean;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.is_verified != null) sp.set("is_verified", String(opts.is_verified));
+    if (opts.is_online != null) sp.set("is_online", String(opts.is_online));
+    if (opts.is_available != null) sp.set("is_available", String(opts.is_available));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    if (opts.vehicle_type_id) sp.set("vehicle_type_id", opts.vehicle_type_id);
+    if (opts.search) sp.set("search", opts.search);
+    if (opts.photo_status) sp.set("photo_status", opts.photo_status);
+    if (opts.missing_license != null) sp.set("missing_license", String(opts.missing_license));
+    if (opts.sort_by) sp.set("sort_by", opts.sort_by);
+    if (opts.sort_dir) sp.set("sort_dir", opts.sort_dir);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
+};
+
+/** POST-based typeahead search — keeps search terms (may include phone digits) out of URL/server logs. */
+export const adminSearchDrivers = (opts: {
+    search: string;
+    limit?: number;
+    is_online?: boolean;
+    is_available?: boolean;
+}) =>
+    request<any[]>("/api/admin/drivers/search", {
+        method: "POST",
+        body: JSON.stringify(opts),
+    });
+
+/** POST-based typeahead search — keeps search terms out of URL/server logs. */
+export const adminSearchUsers = (opts: {
+    search: string;
+    role?: "all" | "rider" | "driver" | "admin";
+    limit?: number;
+}) =>
+    request<any[]>("/api/admin/users/search", {
+        method: "POST",
+        body: JSON.stringify(opts),
+    });
+export const getDriverRides = (id: string) =>
+    request<any>(`/api/admin/drivers/${id}/rides`);
+
+export const getDriverDailyActivity = (id: string, date?: string) =>
+    request<any>(`/api/admin/drivers/${id}/daily-activity${date ? `?date=${date}` : ""}`);
+
+export interface DriverLiveStats {
+    total_rides: number;
+    total_earnings: number;
+    avg_rating: number | null;
+    acceptance_rate: number | null;
+    cancelled_by_driver: number;
+    total_assigned: number;
+    // Driver avatar, loaded lazily here so the bulk drivers list no longer
+    // has to ship profile_image (a base64 blob for legacy accounts).
+    photo_url: string | null;
+}
+export const getDriverLiveStats = (id: string) =>
+    request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);
+
+export interface DriverReferee {
+    name: string;
+    email: string;
+    referred_at: string;
+    is_driver: boolean;
+    completed_rides: number;
+    rides_required: number;
+    rides_remaining: number;
+    qualified: boolean;
+    status: "earned" | "in_progress";
+}
+export interface DriverReferralSummary {
+    referral_code: string;
+    total_referrals: number;
+    qualified_referrals: number;
+    pending_referrals: number;
+    referral_earnings: number;
+    reward_amount: number;
+    rides_required: number;
+    referees: DriverReferee[];
+    referred_by?: { name: string; code: string } | null;
+}
+export const getDriverReferrals = (id: string) =>
+    request<DriverReferralSummary>(`/api/admin/drivers/${id}/referrals`);
+
+// ─── LMS training integration ───────────────────────────────────────
+// The backend matches the driver against the external Spinr LMS by phone
+// number and proxies its training record (see routes/admin/drivers.py
+// admin_get_driver_training + services/lms_service.py).
+export interface DriverTrainingCourse {
+    course_title: string | null;
+    status: string;
+    progress: number;
+    enrolled_at: string | null;
+    completed_at: string | null;
+}
+export interface DriverTrainingCertificate {
+    certificate_number: string;
+    course_title: string;
+    final_quiz_score: number | null;
+    issued_at: string;
+    expires_at: string | null;
+    status: "active" | "revoked" | "expired" | string;
+}
+export interface DriverTrainingQuizAttempt {
+    quiz_title: string | null;
+    score: number;
+    passed: boolean;
+    attempted_at: string;
+}
+export interface DriverTrainingCommunication {
+    communication_type: string;
+    message_type: string;
+    subject: string | null;
+    status: string;
+    sent_at: string;
+}
+export interface DriverTraining {
+    matched: boolean;
+    reason: "no_phone" | "not_found_in_lms" | null;
+    phone_last4: string | null;
+    lms: {
+        driver: {
+            id: string;
+            full_name: string;
+            email: string;
+            phone: string | null;
+            city: string | null;
+            spinr_approved: boolean;
+            sgi_approved: boolean;
+        };
+        training: {
+            status: "not_invited" | "invited" | "registered" | "in_progress" | "completed" | string;
+            registered: boolean;
+            registered_at: string | null;
+            completed_at: string | null;
+            completion_percentage: number;
+            courses: DriverTrainingCourse[];
+        };
+        certificates: DriverTrainingCertificate[];
+        history: {
+            quiz_attempts: DriverTrainingQuizAttempt[];
+            communications: DriverTrainingCommunication[];
+        };
+    } | null;
+}
+export const getDriverTraining = (id: string, refresh = false) =>
+    request<DriverTraining>(
+        `/api/admin/drivers/${id}/training${refresh ? "?refresh=true" : ""}`,
+    );
+
+export interface ReferralLeader {
+    driver_id: string;
+    driver_code: string;
+    name: string;
+    total_referrals: number;
+    qualified_referrals: number;
+    referral_earnings: number;
+}
+export interface ReferralLeaderboard {
+    leaders: ReferralLeader[];
+    fleet_total_referrals: number;
+    fleet_total_referrers: number;
+    reward_amount: number;
+    rides_required: number;
+}
+export const getReferralLeaderboard = (limit = 20) =>
+    request<ReferralLeaderboard>(`/api/admin/referrals/leaderboard?limit=${limit}`);
+
+export const getRiderReferralLeaderboard = (limit = 20) =>
+    request<ReferralLeaderboard>(`/api/admin/referrals/rider-leaderboard?limit=${limit}`);
+
+export interface ReferralAnalytics {
+    source: "driver" | "rider";
+    funnel: {
+        total_referred: number | null; // null when an area filter is active
+        qualified: number;
+        redeemed: number;
+        processing: number;
+        failed: number;
+        redemption_rate: number | null;
+        total_paid: string;
+        referrer_paid: string;
+        referee_paid: string;
+        avg_paid: string;
+    };
+    trend: { date: string; redeemed: number; paid: string }[];
+    reward_amount: number;
+    rides_required: number;
+}
+export const getReferralAnalytics = (params: {
+    source?: "driver" | "rider";
+    serviceAreaId?: string | null;
+    start?: string | null;
+    end?: string | null;
+} = {}) => {
+    const q = new URLSearchParams();
+    if (params.source) q.set("source", params.source);
+    if (params.serviceAreaId) q.set("service_area_id", params.serviceAreaId);
+    if (params.start) q.set("start", params.start);
+    if (params.end) q.set("end", params.end);
+    const qs = q.toString();
+    return request<ReferralAnalytics>(`/api/admin/referrals/analytics${qs ? `?${qs}` : ""}`);
+};
+
+export interface FailedReferralClaim {
+    id: string;
+    referee_user_id: string;
+    kind: string;
+    referrer_name: string;
+    referee_name: string;
+    referrer_reward: string;
+    referee_reward: string;
+    created_at: string;
+}
+export const getFailedReferralClaims = (params: { source?: "driver" | "rider"; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.source) q.set("source", params.source);
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return request<{ claims: FailedReferralClaim[]; total: number }>(
+        `/api/admin/referrals/failed-claims${qs ? `?${qs}` : ""}`,
+    );
+};
+export const requeueFailedReferral = (refereeUserId: string) =>
+    request<{ success: boolean; requeued: string }>(
+        `/api/admin/referrals/failed-claims/${encodeURIComponent(refereeUserId)}/requeue`,
+        { method: "POST" },
+    );
+
+export interface ReferralPair {
+    id: string;
+    referrer_name: string;
+    referee_name: string;
+    status: string;
+    referrer_reward: string;
+    referee_reward: string;
+    created_at: string;
+}
+export const getReferralPairs = (params: { source?: "driver" | "rider"; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.source) q.set("source", params.source);
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return request<{ pairs: ReferralPair[]; total: number }>(
+        `/api/admin/referrals/pairs${qs ? `?${qs}` : ""}`,
+    );
+};
+
+export interface DriverPayoutSummary {
+    summary: {
+        lifetime_earnings: number;
+        lifetime_tips: number;
+        ytd_earnings: number;
+        total_paid_out: number;
+        pending_in_flight: number;
+        pending_balance: number;
+        on_hold: number;
+        rides_count: number;
+        active_days_30d: number;
+        last_payout: {
+            id: string;
+            amount: number;
+            processed_at: string | null;
+            bank_name: string | null;
+            account_last4: string | null;
+        } | null;
+        last_failed_payout: {
+            id: string;
+            amount: number;
+            error_message: string | null;
+            created_at: string;
+        } | null;
+    };
+    payment_method: {
+        has_bank_account: boolean;
+        bank_name: string | null;
+        account_last4: string | null;
+        account_holder_name: string | null;
+        account_type: string | null;
+        is_verified: boolean | null;
+        stripe_connected: boolean;
+        stripe_account_hint: string | null;
+    };
+    payouts: Array<{
+        id: string;
+        amount: number;
+        status: "pending" | "processing" | "completed" | "failed" | string;
+        stripe_payout_id: string | null;
+        bank_name: string | null;
+        account_last4: string | null;
+        error_message: string | null;
+        created_at: string;
+        processed_at: string | null;
+    }>;
+    // Stripe Connect KYC + tax identity mirror (migration 92).
+    // SIN itself is never exposed here — only id_number_provided and
+    // last4. Use /reveal-sin for the one-shot retrieval.
+    kyc: {
+        details_submitted: boolean;
+        charges_enabled: boolean;
+        payouts_enabled: boolean;
+        verification_status: string | null;
+        business_type: string | null;
+        id_number_provided: boolean;
+        id_number_last4: string | null;
+        gst_hst_number: string | null;
+        requirements_due: string[];
+        requirements_past_due: string[];
+        disabled_reason: string | null;
+        tos_accepted_at: string | null;
+        last_synced_at: string | null;
+    };
+}
+export const getDriverPayoutsSummary = (id: string) =>
+    request<DriverPayoutSummary>(`/api/admin/drivers/${id}/payouts-summary`);
+
+export const refreshDriverStripeKyc = (id: string) =>
+    request<{ status: string }>(`/api/admin/drivers/${id}/refresh-stripe-kyc`, { method: "POST" });
+
+export interface RevealSinResponse {
+    sin: string;
+    sin_last4: string;
+    audit_log_id: string | null;
+    warning: string;
+}
+export const revealDriverSin = (id: string) =>
+    request<RevealSinResponse>(`/api/admin/drivers/${id}/reveal-sin`, { method: "POST" });
+
+export const getDriverStats = (params?: {
+    service_area_id?: string;
+    start_date?: string;
+    end_date?: string;
+}) => {
+    const sp = new URLSearchParams();
+    if (params?.service_area_id) sp.set("service_area_id", params.service_area_id);
+    if (params?.start_date) sp.set("start_date", params.start_date);
+    if (params?.end_date) sp.set("end_date", params.end_date);
+    return request<{
+        stats: {
+            total: number;
+            online: number;
+            verified: number;
+            unverified: number;
+            total_rides: number;
+            total_earnings: number;
+            avg_rating: number;
+        };
+        area_stats: {
+            service_area_id: string;
+            service_area_name: string;
+            total: number;
+            online: number;
+            verified: number;
+            unverified: number;
+            total_rides: number;
+            total_earnings: number;
+        }[];
+        charts: {
+            daily_joins: { date: string; date_raw: string; count: number }[];
+            daily_rides: { date: string; date_raw: string; count: number }[];
+            daily_earnings: { date: string; date_raw: string; amount: number }[];
+        };
+        drivers: any[];
+        service_areas: { id: string; name: string }[];
+    }>(`/api/admin/drivers/stats?${sp.toString()}`);
+};
+
+export const updateDriver = (id: string, data: Record<string, any>) =>
+    request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+

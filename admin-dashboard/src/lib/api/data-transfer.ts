@@ -1,0 +1,357 @@
+// Data Transfer module (backend/routes/admin/data_transfer_export.py):
+// cross-entity search/export/import, SGI forms, compliance report
+// downloads/emails (GST/PST remittance, insurance period audit, driver
+// onboarding), and background export job tracking. Extracted from the
+// monolithic lib/api.ts as part of the per-domain split — this was the
+// last remaining section.
+
+import { request } from "./client";
+import { useAuthStore } from "@/store/authStore";
+
+/* ── Data Transfer module (backend/routes/admin/data_transfer_*.py) ─────── */
+export interface DataTransferEntityRow {
+    id: string;
+    user_id?: string;
+    full_name?: string;
+    email?: string;
+    phone?: string;
+    created_at?: string;
+    role?: string;
+    vehicle_plate?: string;
+    status?: string;
+}
+export interface DataTransferSearchResult {
+    rows: DataTransferEntityRow[];
+    total_count: number;
+    page: number;
+    page_size: number;
+}
+export interface DataTransferSearchParams {
+    q?: string;
+    entityType?: "driver" | "rider";
+    dateFrom?: string;
+    dateTo?: string;
+    // Exact match on drivers.status/users.status -- free-text, not a shared
+    // enum, since the two tables' status vocabularies aren't identical (see
+    // backend/routes/admin/data_transfer_search.py's status param comment).
+    status?: string;
+    // Only meaningful when entityType is "driver" (or omitted/"all", where it
+    // still only narrows the driver rows) -- `users` has no service_area_id
+    // column, see data_transfer_search.py's driver-only branch.
+    serviceAreaId?: string;
+    page?: number;
+    pageSize?: number;
+}
+export const searchDataTransferEntities = (params: DataTransferSearchParams) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.entityType) qs.set("entity_type", params.entityType);
+    if (params.dateFrom) qs.set("date_from", params.dateFrom);
+    if (params.dateTo) qs.set("date_to", params.dateTo);
+    if (params.status) qs.set("status", params.status);
+    if (params.serviceAreaId) qs.set("service_area_id", params.serviceAreaId);
+    qs.set("page", String(params.page ?? 1));
+    qs.set("page_size", String(params.pageSize ?? 50));
+    return request<DataTransferSearchResult>(`/api/admin/data-transfer/search?${qs.toString()}`);
+};
+
+export type DataTransferExportFormat = "zip" | "csv" | "json" | "excel";
+export interface DataTransferExportEntityRef {
+    entity_type: "driver" | "rider";
+    entity_id: string;
+}
+// The export route is backgrounded (see backend/routes/admin/data_transfer_export.py) --
+// it returns only a job_id immediately; the caller polls getDataTransferJob
+// until status leaves "pending", then fetches the download link separately.
+export interface DataTransferExportQueuedResult {
+    job_id: string;
+    status: "pending";
+    requested_count: number;
+}
+/** ACTION_ITEMS.md B10 dual-approval gate — returned instead of
+ * DataTransferExportQueuedResult when settings.dual_approval_exports_enabled
+ * is on and this export needs a second admin's sign-off before the job
+ * even starts. Check `"approval_required" in result` to distinguish. */
+export interface ExportApprovalRequiredResult {
+    approval_required: true;
+    request_id: string;
+    status: "pending" | "approved" | "denied" | "expired" | "consumed";
+    row_count: number;
+}
+export interface DataTransferExportScopeOptions {
+    docTypes?: string[];
+    // PIA recommendation R-B (ACTION_ITEMS.md B11) — default true (current
+    // full-fidelity behavior) on both; the backend's ExportRequest defaults
+    // match, so omitting these entirely is still safe/backward-compatible.
+    includeRideGps?: boolean;
+    includeDocumentBytes?: boolean;
+}
+export const exportDataTransferEntities = (
+    entities: DataTransferExportEntityRef[],
+    format: DataTransferExportFormat,
+    reason: string,
+    options?: DataTransferExportScopeOptions,
+) =>
+    request<DataTransferExportQueuedResult | ExportApprovalRequiredResult>("/api/admin/data-transfer/export", {
+        method: "POST",
+        body: JSON.stringify({
+            entities,
+            format,
+            doc_types: options?.docTypes ?? null,
+            reason,
+            include_ride_gps: options?.includeRideGps ?? true,
+            include_document_bytes: options?.includeDocumentBytes ?? true,
+        }),
+    });
+
+export interface DataTransferImportReportItem {
+    entity_id: string;
+    field: string;
+    message: string;
+}
+export interface DataTransferImportReport {
+    can_commit: boolean;
+    counts: { entities: number; new: number; existing_match: number; conflict: number };
+    warnings: DataTransferImportReportItem[];
+    errors: DataTransferImportReportItem[];
+}
+export interface DataTransferImportCommitResult extends DataTransferImportReport {
+    committed: boolean;
+    created_users?: number;
+    created_drivers?: number;
+    updated_users?: number;
+    updated_drivers?: number;
+    documents_replayed?: number;
+    insurance_periods_replayed?: number;
+}
+export const adminValidateDataTransferImport = (file: File) => {
+    const fd = new FormData();
+    fd.append("bundle_zip", file);
+    return request<DataTransferImportReport>("/api/admin/data-transfer/import/validate", {
+        method: "POST",
+        body: fd,
+    });
+};
+export const adminCommitDataTransferImport = (file: File, batch?: string, updateExisting?: boolean) => {
+    const fd = new FormData();
+    fd.append("bundle_zip", file);
+    if (batch) fd.append("batch", batch);
+    if (updateExisting) fd.append("update_existing", "true");
+    return request<DataTransferImportCommitResult>("/api/admin/data-transfer/import/commit", {
+        method: "POST",
+        body: fd,
+    });
+};
+
+export type SgiFormType = "driver_details" | "vehicle_details";
+// PDF binary response — can't use the generic request<T>() helper (it always
+// calls res.json()). Mirrors fetchKybDocumentBlob's manual fetch + auth
+// header pattern, adding the CSRF header this call needs since it's a POST.
+export async function generateSgiForm(
+    formType: SgiFormType,
+    driverIds: string[],
+    action: "add" | "remove" | "change" = "add",
+): Promise<Blob> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/generate", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ form_type: formType, driver_ids: driverIds, action }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not generate form (${res.status})`);
+    }
+    return res.blob();
+}
+
+// ─── Compliance & Tax Reporting ────────────────────────────────────────
+
+export type ComplianceReportFormat = "pdf" | "csv" | "xlsx" | "docx";
+
+const COMPLIANCE_FILE_EXTENSIONS: Record<ComplianceReportFormat, string> = {
+    pdf: "pdf",
+    csv: "csv",
+    xlsx: "xlsx",
+    docx: "docx",
+};
+
+/** Shared GET-and-download for the Compliance & Tax Reporting endpoints —
+ *  both return a branded PDF/CSV/Excel/Word file, not JSON, so they use a
+ *  raw authed fetch like generateSgiForm rather than request<T>. */
+async function downloadComplianceReport(path: string, fallbackFilename: string): Promise<Blob> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = {};
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    const res = await fetch(path, { headers });
+    // ACTION_ITEMS.md B10 dual-approval gate: a 202 is in fetch's `ok`
+    // range, so without this check the JSON {"approval_required": true,
+    // ...} body would silently be treated as file bytes and downloaded as
+    // a corrupt "report". Check the content-type, not just status, since a
+    // 202 is otherwise indistinguishable from a real (2xx) file response.
+    if (res.status === 202 && (res.headers.get("content-type") || "").includes("application/json")) {
+        throw new Error(
+            "This report needs a different admin's approval before it can be generated — it's been added to the Export Approvals queue.",
+        );
+    }
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not generate report (${res.status})`);
+    }
+    return res.blob();
+}
+
+export async function downloadGstPstRemittance(
+    dateRange: string,
+    format: ComplianceReportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ date_range: dateRange, format });
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/gst-pst-remittance?${sp.toString()}`,
+        "gst_pst_remittance",
+    );
+    return { blob, filename: `gst_pst_remittance.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+export async function downloadInsurancePeriodAudit(
+    dateRange: string,
+    format: ComplianceReportFormat,
+    driverId?: string,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ date_range: dateRange, format });
+    if (driverId) sp.set("driver_id", driverId);
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/insurance-period-audit?${sp.toString()}`,
+        "insurance_period_audit",
+    );
+    return { blob, filename: `insurance_period_audit.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+export async function downloadKnightArcherDriverOnboarding(
+    format: ComplianceReportFormat,
+    status?: string,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ format });
+    if (status) sp.set("status", status);
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/knight-archer-driver-onboarding?${sp.toString()}`,
+        "knight_archer_driver_onboarding",
+    );
+    return { blob, filename: `knight_archer_driver_onboarding.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+/** T4A filer handoff — per-driver annual earnings + Stripe-verified legal
+ *  name/address for drivers at or above the $500 CRA threshold, for
+ *  handoff to a third-party tax filer. NEVER includes the SIN itself —
+ *  see routes/admin/compliance.py's module-section docstring for why. */
+export async function downloadT4aFilerHandoff(
+    year: number,
+    format: ComplianceReportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ year: String(year), format });
+    const blob = await downloadComplianceReport(`/api/admin/compliance/t4a-filer-handoff?${sp.toString()}`, "t4a_filer_handoff");
+    return { blob, filename: `t4a_filer_handoff_${year}.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+/** Insurance usage-based billing — per-driver insured km (Period 2+3) and
+ *  the resulting invoice amount at the given cents/km rate. */
+export async function downloadInsuranceUsageBilling(
+    dateRange: string,
+    rateCentsPerKm: number,
+    format: ComplianceReportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ date_range: dateRange, rate_cents_per_km: String(rateCentsPerKm), format });
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/insurance-usage-billing?${sp.toString()}`,
+        "insurance_usage_billing",
+    );
+    return { blob, filename: `insurance_usage_billing.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+/** Completed rides with an airport pickup or dropoff, for airport
+ *  ground-transportation program reporting. */
+export async function downloadAirportTrips(
+    dateRange: string,
+    format: ComplianceReportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ date_range: dateRange, format });
+    const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`, "airport_trips");
+    return { blob, filename: `airport_trips.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+/** Email a compliance report to a @spinr.ca address instead of downloading
+ * it — the backend hard-validates the domain, this just calls the same GET
+ * endpoint with `email_to` set, which returns a small JSON confirmation
+ * instead of a file. */
+async function emailComplianceReport(path: string, emailTo: string): Promise<{ emailed_to: string }> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = {};
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    const sep = path.includes("?") ? "&" : "?";
+    const res = await fetch(`${path}${sep}email_to=${encodeURIComponent(emailTo)}`, { headers });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not email report (${res.status})`);
+    }
+    const body = await res.json();
+    // ACTION_ITEMS.md B10: a 202 approval-required body is also `res.ok`
+    // and JSON-shaped like a real {"emailed_to": ...} success response --
+    // without this check, an admin would be told the report was emailed
+    // when nothing was sent.
+    if (body?.approval_required) {
+        throw new Error(
+            "This report needs a different admin's approval before it can be generated or emailed — it's been added to the Export Approvals queue.",
+        );
+    }
+    return body;
+}
+
+export const emailGstPstRemittance = (dateRange: string, format: ComplianceReportFormat, emailTo: string) =>
+    emailComplianceReport(
+        `/api/admin/compliance/gst-pst-remittance?${new URLSearchParams({ date_range: dateRange, format }).toString()}`,
+        emailTo,
+    );
+export const emailInsurancePeriodAudit = (
+    dateRange: string,
+    format: ComplianceReportFormat,
+    emailTo: string,
+    driverId?: string,
+) => {
+    const sp = new URLSearchParams({ date_range: dateRange, format });
+    if (driverId) sp.set("driver_id", driverId);
+    return emailComplianceReport(`/api/admin/compliance/insurance-period-audit?${sp.toString()}`, emailTo);
+};
+export const emailKnightArcherDriverOnboarding = (
+    format: ComplianceReportFormat,
+    emailTo: string,
+    status?: string,
+) => {
+    const sp = new URLSearchParams({ format });
+    if (status) sp.set("status", status);
+    return emailComplianceReport(`/api/admin/compliance/knight-archer-driver-onboarding?${sp.toString()}`, emailTo);
+};
+
+export interface DataTransferJob {
+    id: string;
+    requested_by_admin_id?: string;
+    entity_type: string;
+    entity_ids: string[];
+    entity_count: number;
+    doc_type_filter?: string[] | null;
+    format: string;
+    reason?: string | null;
+    status: "pending" | "completed" | "failed";
+    error_message?: string | null;
+    created_at: string;
+    completed_at?: string | null;
+    expires_at?: string | null;
+}
+export const listDataTransferJobs = (limit = 50) =>
+    request<{ jobs: DataTransferJob[] }>(`/api/admin/data-transfer/jobs?limit=${limit}`);
+export const getDataTransferJob = (jobId: string) =>
+    request<DataTransferJob>(`/api/admin/data-transfer/jobs/${jobId}`);
+export const regenerateDataTransferJobDownload = (jobId: string) =>
+    request<{ download_url: string }>(`/api/admin/data-transfer/jobs/${jobId}/download`);

@@ -296,6 +296,10 @@ jobs:
         working-directory: admin-dashboard
         run: npm run lint
 
+      - name: Verify auth middleware is wired up
+        working-directory: admin-dashboard
+        run: npm run check:middleware
+
       - name: Run admin dashboard tests
         working-directory: admin-dashboard
         run: npm test

@@ -464,6 +464,8 @@ export {
     downloadInsurancePeriodAudit,
     downloadKnightArcherDriverOnboarding,
     downloadT4aFilerHandoff,
+    downloadInsuranceUsageBilling,
+    downloadAirportTrips,
     emailGstPstRemittance,
     emailInsurancePeriodAudit,
     emailKnightArcherDriverOnboarding,

@@ -838,3 +838,295 @@ async def get_t4a_filer_handoff(
         pdf_landscape=True,
     )
     return await _deliver_report(resp, email_to, admin, f"T4A Filer Handoff — Tax Year {year}")
+
+
+# ── Insurance Usage-Based Billing (per-km, cents) ─────────────────────
+#
+# Spinr's commercial TNC insurance is billed on a usage basis — the
+# insurer charges per kilometre driven while a driver is in a primary-
+# commercial insurance period (Period 2, en route to pickup, or Period 3,
+# passenger aboard — see CLAUDE.md's Insurance periods table; Period 1,
+# "available" with no assigned ride, is contingent-liability coverage,
+# not billed the same way). This report is the SIN-free-equivalent
+# pattern for insurer billing: it aggregates exactly what the insurer
+# needs to reconcile their invoice — per-driver insured kilometres in the
+# requested window — from data Spinr already tracks (driver_insurance_
+# periods' ride_id join to rides.distance_km), with no new data collection.
+#
+# rate_cents_per_km has NO built-in default tied to a real contracted
+# rate — the actual cents/km rate is a business/insurance-contract detail
+# this code has no way to know, and guessing one would silently misstate
+# every invoice. The admin must supply it per report request; the report
+# shows the math (km × rate) inline so a wrong rate is obvious before it's
+# sent, not discovered after the insurer disputes the invoice.
+
+
+async def _insurance_usage_billing_rows(
+    start_date: datetime, end_date: datetime, rate_cents_per_km: Decimal
+) -> tuple[list[dict], Decimal, bool]:
+    periods = await db_supabase.get_rows(
+        "driver_insurance_periods",
+        {
+            "period": {"$in": [2, 3]},
+            "started_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
+        },
+        columns="driver_id,period,ride_id,started_at",
+        limit=_ROW_LIMIT,
+    )
+    truncated = _check_truncated(len(periods), "insurance_usage_billing")
+    if not periods:
+        return [], Decimal("0"), truncated
+
+    ride_ids = sorted({p["ride_id"] for p in periods if p.get("ride_id")})
+    distance_by_ride: dict[str, Decimal] = {}
+    for i in range(0, len(ride_ids), 200):
+        batch = ride_ids[i : i + 200]
+        ride_rows = await db_supabase.get_rows(
+            "rides", {"id": {"$in": batch}}, columns="id,distance_km", limit=len(batch)
+        )
+        for r in ride_rows:
+            distance_by_ride[r["id"]] = _d(r.get("distance_km"))
+
+    # A ride can appear in both a Period 2 row and a Period 3 row (en
+    # route, then passenger aboard) — the insured distance for that ride
+    # is counted once, not once per period row, or a single ride would
+    # double-bill. Track by (driver_id, ride_id) pair, not by period row.
+    seen_ride_per_driver: dict[str, set[str]] = {}
+    km_by_driver: dict[str, Decimal] = {}
+    for p in periods:
+        driver_id, ride_id = p.get("driver_id"), p.get("ride_id")
+        if not driver_id or not ride_id:
+            continue
+        seen = seen_ride_per_driver.setdefault(driver_id, set())
+        if ride_id in seen:
+            continue
+        seen.add(ride_id)
+        km_by_driver[driver_id] = km_by_driver.get(driver_id, Decimal("0")) + distance_by_ride.get(ride_id, Decimal("0"))
+
+    driver_ids = sorted(km_by_driver.keys())
+    driver_rows: list[dict] = []
+    for i in range(0, len(driver_ids), 200):
+        batch = driver_ids[i : i + 200]
+        driver_rows.extend(
+            await db_supabase.get_rows(
+                "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
+            )
+        )
+    by_id = {d["id"]: d for d in driver_rows}
+
+    grand_total_km = Decimal("0")
+    rows: list[dict] = []
+    for driver_id in driver_ids:
+        km = km_by_driver[driver_id]
+        grand_total_km += km
+        d = by_id.get(driver_id, {})
+        amount_cents = (km * rate_cents_per_km).quantize(Decimal("1"))
+        rows.append(
+            {
+                "driver_name": d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or driver_id,
+                "insured_trips": len(seen_ride_per_driver.get(driver_id, set())),
+                "insured_km": f"{km:.2f}",
+                "rate_cents_per_km": f"{rate_cents_per_km:.2f}",
+                "amount_cents": str(amount_cents),
+                "amount_dollars": f"{(amount_cents / 100):.2f}",
+            }
+        )
+    return rows, grand_total_km, truncated
+
+
+@api_router.get("/insurance-usage-billing")
+@limiter.limit("10/minute")
+async def get_insurance_usage_billing(
+    request: Request,
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    rate_cents_per_km: Decimal = Query(..., gt=0, description="Contracted insurer rate, in cents per km"),
+    format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
+    email_to: Optional[str] = Query(
+        None, description="Email the report to this @spinr.ca address instead of downloading it"
+    ),
+    admin: dict = Depends(get_admin_user),
+):
+    """Per-driver insured kilometres (Period 2 + 3, primary-commercial
+    coverage) and the resulting bill at the given cents/km rate — for
+    reconciling the insurer's usage-based-insurance invoice. Spinr-
+    branded; this is Spinr's own reconciliation report, not a fixed
+    insurer form."""
+    _require_spinr_ca(email_to)
+    start_date = _parse_date_range(date_range)
+    end_date = datetime.now(timezone.utc)
+
+    try:
+        rows, grand_total_km, truncated = await _insurance_usage_billing_rows(start_date, end_date, rate_cents_per_km)
+    except Exception as e:
+        logger.error(f"Failed to build insurance usage billing report: {e}", exc_info=True)
+        _capture_export_failure("insurance_usage_billing", e)
+        metrics.inc("spinr_admin_compliance_export_total", {"report_type": "insurance_usage_billing", "outcome": "error"})
+        raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
+
+    gate_response = await _check_export_gate(
+        admin,
+        "compliance.insurance_usage_billing",
+        {"date_range": date_range, "rate_cents_per_km": str(rate_cents_per_km), "format": format, "email_to": email_to},
+        len(rows),
+    )
+    if gate_response is not None:
+        return gate_response
+
+    fieldnames = ["driver_name", "insured_trips", "insured_km", "rate_cents_per_km", "amount_cents", "amount_dollars"]
+    total_amount_dollars = (grand_total_km * rate_cents_per_km / 100).quantize(Decimal("0.01"))
+    subtitle = [
+        f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — Periods 2+3 only (primary-commercial coverage)",
+        f"Total: {grand_total_km:.2f} km  ·  Rate: {rate_cents_per_km:.2f} cents/km  ·  Total billed: ${total_amount_dollars}",
+    ]
+    if truncated:
+        subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow the date range"
+
+    await _log_compliance_export(
+        admin, "insurance_usage_billing", {"date_range": date_range, "rate_cents_per_km": str(rate_cents_per_km)}, len(rows)
+    )
+    metrics.inc("spinr_admin_compliance_export_total", {"report_type": "insurance_usage_billing", "outcome": "success"})
+
+    resp = _render_tabular_report(
+        title="Insurance Usage-Based Billing",
+        filename_base="insurance_usage_billing",
+        fieldnames=fieldnames,
+        rows=rows,
+        subtitle=subtitle,
+        format=format,
+    )
+    return await _deliver_report(resp, email_to, admin, "Insurance Usage-Based Billing")
+
+
+# ── Airport Trips ──────────────────────────────────────────────────
+#
+# Airport ground-transportation programs (the common pattern across North
+# American airport authorities that permit TNC pickup/drop-off — this
+# report follows that general convention, not a specific published spec
+# from any one Saskatchewan airport authority, since none was available
+# to confirm exact field requirements against) typically want, per trip:
+# date/time, driver identity, whether the trip was an airport PICKUP
+# (revenue-generating — usually what the airport's per-trip fee is based
+# on) or an airport DROPOFF, distance, and which service area (city) the
+# airport is in. Matched by a simple text search on pickup/dropoff
+# address rather than a dedicated "is this an airport" flag — Spinr's
+# venues table already curates "Airport" as a named pickup venue
+# (routes/admin/venues.py), but rides store free-text geocoded addresses,
+# not a venue_id foreign key, so address matching is what's actually
+# queryable today.
+
+
+async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple[list[dict], bool]:
+    rides = await db_supabase.get_rows(
+        "rides",
+        {
+            "status": "completed",
+            "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
+        },
+        columns="id,driver_id,service_area_id,pickup_address,dropoff_address,distance_km,ride_completed_at",
+        limit=_ROW_LIMIT,
+    )
+    airport_rides = [
+        r
+        for r in rides
+        if "airport" in (r.get("pickup_address") or "").lower() or "airport" in (r.get("dropoff_address") or "").lower()
+    ]
+    truncated = _check_truncated(len(rides), "airport_trips")
+    if not airport_rides:
+        return [], truncated
+
+    driver_ids = sorted({r["driver_id"] for r in airport_rides if r.get("driver_id")})
+    driver_names: dict[str, str] = {}
+    for i in range(0, len(driver_ids), 200):
+        batch = driver_ids[i : i + 200]
+        driver_rows = await db_supabase.get_rows(
+            "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
+        )
+        for d in driver_rows:
+            driver_names[d["id"]] = d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
+
+    area_ids = sorted({r["service_area_id"] for r in airport_rides if r.get("service_area_id")})
+    area_names: dict[str, str] = {}
+    if area_ids:
+        area_rows = await db_supabase.get_rows(
+            "service_areas", {"id": {"$in": area_ids}}, columns="id,name", limit=len(area_ids)
+        )
+        area_names = {a["id"]: a.get("name") or a["id"] for a in area_rows}
+
+    rows = []
+    for r in airport_rides:
+        pickup_is_airport = "airport" in (r.get("pickup_address") or "").lower()
+        dropoff_is_airport = "airport" in (r.get("dropoff_address") or "").lower()
+        trip_type = "Both" if pickup_is_airport and dropoff_is_airport else ("Airport Pickup" if pickup_is_airport else "Airport Dropoff")
+        rows.append(
+            {
+                "date": report_branding.format_report_timestamp(r.get("ride_completed_at")),
+                "trip_type": trip_type,
+                "pickup_address": r.get("pickup_address") or "",
+                "dropoff_address": r.get("dropoff_address") or "",
+                "distance_km": f"{_d(r.get('distance_km')):.2f}",
+                "driver_name": driver_names.get(r.get("driver_id"), r.get("driver_id") or ""),
+                "service_area": area_names.get(r.get("service_area_id"), ""),
+            }
+        )
+    rows.sort(key=lambda row: row["date"], reverse=True)
+    return rows, truncated
+
+
+@api_router.get("/airport-trips")
+@limiter.limit("10/minute")
+async def get_airport_trips(
+    request: Request,
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
+    email_to: Optional[str] = Query(
+        None, description="Email the report to this @spinr.ca address instead of downloading it"
+    ),
+    admin: dict = Depends(get_admin_user),
+):
+    """Completed rides with "airport" in the pickup or dropoff address —
+    trip type (pickup/dropoff/both), distance, driver, and service area —
+    for airport ground-transportation program reporting. Spinr-branded;
+    not any specific airport authority's fixed form (see module docstring
+    for why: general TNC-airport reporting convention, not a confirmed
+    published spec)."""
+    _require_spinr_ca(email_to)
+    start_date = _parse_date_range(date_range)
+    end_date = datetime.now(timezone.utc)
+
+    try:
+        rows, truncated = await _airport_trips_rows(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Failed to build airport trips report: {e}", exc_info=True)
+        _capture_export_failure("airport_trips", e)
+        metrics.inc("spinr_admin_compliance_export_total", {"report_type": "airport_trips", "outcome": "error"})
+        raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
+
+    gate_response = await _check_export_gate(
+        admin, "compliance.airport_trips", {"date_range": date_range, "format": format, "email_to": email_to}, len(rows)
+    )
+    if gate_response is not None:
+        return gate_response
+
+    fieldnames = ["date", "trip_type", "pickup_address", "dropoff_address", "distance_km", "driver_name", "service_area"]
+    total_km = sum((Decimal(r["distance_km"]) for r in rows), Decimal("0"))
+    subtitle = [
+        f"{start_date.date().isoformat()} to {end_date.date().isoformat()}",
+        f"{len(rows)} trip(s)  ·  {total_km:.2f} total km",
+    ]
+    if truncated:
+        subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides scanned; narrow the date range"
+
+    await _log_compliance_export(admin, "airport_trips", {"date_range": date_range, "format": format}, len(rows))
+    metrics.inc("spinr_admin_compliance_export_total", {"report_type": "airport_trips", "outcome": "success"})
+
+    resp = _render_tabular_report(
+        title="Airport Trips Report",
+        filename_base="airport_trips",
+        fieldnames=fieldnames,
+        rows=rows,
+        subtitle=subtitle,
+        format=format,
+        pdf_landscape=True,
+        pdf_col_widths=[1.6, 1.4, 2.6, 2.6, 1.1, 1.8, 1.4],
+    )
+    return await _deliver_report(resp, email_to, admin, "Airport Trips Report")

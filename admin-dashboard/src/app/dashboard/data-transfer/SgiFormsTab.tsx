@@ -11,8 +11,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { HelpCircle } from "lucide-react";
+import { InfoHint as Hint } from "@/components/info-hint";
 import { generateSgiForm, searchDataTransferEntities, type SgiFormType } from "@/lib/api";
 import { inferEntityType, type EntitySelectionState } from "@/components/data-transfer/useEntitySelection";
 
@@ -37,17 +36,6 @@ const FORM_FILENAMES: Record<SgiFormType, string> = {
 // re-query so it fetches enough rows to check either form's limit without
 // silently under-fetching for whichever one is checked.
 const MAX_ROW_LIMIT = Math.max(...Object.values(FORM_ROW_LIMITS));
-
-function Hint({ text }: { text: string }) {
-    return (
-        <Tooltip>
-            <TooltipTrigger asChild>
-                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0 cursor-help" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-[260px]">{text}</TooltipContent>
-        </Tooltip>
-    );
-}
 
 /** Splits `items` into consecutive chunks of at most `size`. */
 function chunk<T>(items: T[], size: number): T[][] {
@@ -183,7 +171,11 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
             <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
                     <span className="text-sm font-medium">Forms to generate</span>
-                    <Hint text="Company name, SGI customer number, and address are filled in automatically on every page. Verified driver history and criminal record check attached default to Yes for the selected drivers — uncheck the form and regenerate individually if a specific driver doesn't actually qualify." />
+                    <Hint
+                        text="Company name, SGI customer number, and address are filled in automatically on every page. Verified driver history and criminal record check attached default to Yes for the selected drivers — uncheck the form and regenerate individually if a specific driver doesn't actually qualify."
+                        href="https://www.sgi.sk.ca"
+                        linkLabel="SGI — Saskatchewan Government Insurance"
+                    />
                 </div>
                 <div className="flex flex-wrap gap-4">
                     {(Object.keys(FORM_LABELS) as SgiFormType[]).map((formType) => (

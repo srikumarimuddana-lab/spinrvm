@@ -1,8 +1,9 @@
-"""Factory helpers for corporate-account tests.
+"""Shared test factory/mock helpers.
 
 Kept out of conftest.py because pytest loads conftest modules by file path,
 not by package-qualified name, so `from tests.conftest import X` fails.
-This module is a regular importable module for shared test data builders.
+This module is a regular importable module for shared test data builders
+and mock helpers used across multiple test files.
 """
 
 import uuid
@@ -16,6 +17,29 @@ def _uid() -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def close_spawned_coro(coro: Any, *args: Any, **kwargs: Any) -> None:
+    """``side_effect`` for a mocked ``spawn()``/``asyncio.create_task`` seam.
+
+    Production fire-and-forget dispatch always looks like
+    ``_deps.spawn(some_coroutine(...))`` -- the coroutine argument is
+    created by evaluating ``some_coroutine(...)`` *before* ``spawn`` (or,
+    in tests that intercept the seam one level deeper, ``asyncio.create_task``
+    itself) is even called. A bare ``MagicMock()`` standing in for either
+    records the call and returns, but never awaits or otherwise consumes
+    that coroutine -- it leaks until GC collects it, which can fail an
+    unrelated test under pytest 9's unraisableexception plugin (A8).
+
+    Real ``asyncio.create_task`` takes ownership of the coroutine; this
+    mirrors that by explicitly closing it instead. Use as
+    ``MagicMock(side_effect=close_spawned_coro)`` (or pass to the
+    ``new=``/``side_effect=`` of whichever mock stands in for ``spawn`` or
+    ``asyncio.create_task`` in a given test) wherever a test doesn't care
+    what the spawned task actually does, only that it was invoked.
+    """
+    if coro is not None and hasattr(coro, "close"):
+        coro.close()
 
 
 def corporate_account_row(status_value: str = "active", **overrides: Any) -> Dict[str, Any]:

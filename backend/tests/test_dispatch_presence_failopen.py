@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.tests._factories import close_spawned_coro
 from backend.utils import metrics
 
 
@@ -89,7 +90,10 @@ async def _run_match(presence_result, drivers, ranked_pools, mget_raises=False, 
         patch("backend.db_supabase.find_one", AsyncMock(return_value=service_area)),
         patch("backend.routes.rides._deps.filter_and_rank_drivers", side_effect=_record_rank),
         patch("backend.routes.rides.matching._dispatch_retry", new_callable=AsyncMock),
-        patch("backend.routes.rides._deps.asyncio.create_task", return_value=MagicMock()),
+        # side_effect closes the spawned coroutine instead of leaking it (A8).
+        # spawn()'s own docstring notes a None return here is expected --
+        # its isinstance(task, asyncio.Task) check just skips registration.
+        patch("backend.routes.rides._deps.asyncio.create_task", side_effect=close_spawned_coro),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
             new_callable=AsyncMock,

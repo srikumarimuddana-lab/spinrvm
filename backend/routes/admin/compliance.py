@@ -131,9 +131,7 @@ _APPROVAL_GATE_ROW_THRESHOLD = 1000
 _T4A_THRESHOLD = Decimal("500.00")
 
 
-async def _check_export_gate(
-    admin: dict, route_key: str, gate_params: dict, row_count: int
-) -> Optional[JSONResponse]:
+async def _check_export_gate(admin: dict, route_key: str, gate_params: dict, row_count: int) -> Optional[JSONResponse]:
     """Returns a 202 JSONResponse if this export needs (and doesn't yet
     have) a second admin's approval; returns None if the caller should
     proceed with generating the report as normal -- either the gate is
@@ -311,6 +309,7 @@ def _render_tabular_report(
     # default: pdf
     pdf = report_branding.new_branded_pdf(title, subtitle, landscape=pdf_landscape)
     report_branding.render_pdf_table(pdf, fieldnames, rows, col_widths=pdf_col_widths)
+    report_branding.render_branded_pdf_footer(pdf)
     return Response(
         content=bytes(pdf.output()),
         media_type="application/pdf",
@@ -356,7 +355,9 @@ async def _deliver_report(resp: Response, email_to: Optional[str], admin: dict, 
         # the real exception loudly, then surface the same clean 502 the
         # `not sent` branch already gives for an expected send failure.
         logger.error("compliance report email send failed for %s: %s", title, e, exc_info=True)
-        raise HTTPException(status_code=502, detail="Could not send the report email — try downloading it instead") from e
+        raise HTTPException(
+            status_code=502, detail="Could not send the report email — try downloading it instead"
+        ) from e
     if not sent:
         raise HTTPException(status_code=502, detail="Could not send the report email — try downloading it instead")
     return Response(content=f'{{"emailed_to": "{email_to}"}}', media_type="application/json")
@@ -399,24 +400,34 @@ async def get_gst_pst_remittance(
         return gate_response
 
     fieldnames = ["month", "gst", "pst", "hst", "unrecognized_tax", "total_tax"]
-    # Two lines instead of one crammed sentence — date range/scope on its
-    # own line, tax totals on a second with even spacing (report_branding
-    # supports subtitle as list[str] specifically for this). Previously:
-    # "2026-06-29 to 2026-07-29 — Total GST $17.91, Total PST $0.00, Total
-    # HST $0.00" all run together, reported as reading unprofessionally.
-    totals_line = f"GST: ${gst_total:.2f}    PST: ${pst_total:.2f}    HST: ${hst_total:.2f}"
+    # The header states what the report is and what period it covers — the
+    # GST/PST/HST figures themselves belong in the table body (a TOTAL row
+    # below), not crammed under the title next to the date range. Previously
+    # this put a "GST: $x  PST: $y  HST: $z" line directly under the title,
+    # which read as a stray calculation rather than part of the document.
+    subtitle = report_branding.period_label(start_date, end_date)
     if truncated:
-        # Appended to the totals line, not a 3rd line — new_branded_workbook
-        # only renders the first 2 subtitle lines, and truncation is too
-        # important to risk dropping from the Excel format specifically.
-        totals_line += f"  — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
-    subtitle = [f"{start_date.date().isoformat()} to {end_date.date().isoformat()}", totals_line]
+        subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
+
+    month_row_count = len(rows)
+    if rows:
+        rows = [
+            *rows,
+            {
+                "month": "TOTAL",
+                "gst": f"{gst_total:.2f}",
+                "pst": f"{pst_total:.2f}",
+                "hst": f"{hst_total:.2f}",
+                "unrecognized_tax": f"{sum(_d(r['unrecognized_tax']) for r in rows):.2f}",
+                "total_tax": f"{(gst_total + pst_total + hst_total):.2f}",
+            },
+        ]
 
     await _log_compliance_export(
         admin,
         "gst_pst_remittance",
         {"date_range": date_range, "format": format, "start": start_date.isoformat(), "end": end_date.isoformat()},
-        len(rows),
+        month_row_count,
     )
     metrics.inc("spinr_admin_compliance_export_total", {"report_type": "gst_pst_remittance", "outcome": "success"})
 
@@ -532,7 +543,7 @@ async def get_insurance_period_audit(
     # `driver_id` query param above; `driver_name` already identifies the
     # driver on the report itself.
     fieldnames = ["driver_name", "period", "started_at", "ended_at"]
-    subtitle = f"{start_date.date().isoformat()} to {end_date.date().isoformat()}" + (
+    subtitle = report_branding.period_label(start_date, end_date) + (
         f" — driver {driver_id}" if driver_id else " — all drivers"
     )
     if truncated:
@@ -750,7 +761,9 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
         stripe_info = await get_legal_name_and_address_from_stripe(d) or {}
         rows.append(
             {
-                "driver_name": d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or driver_id,
+                "driver_name": d.get("name")
+                or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip()
+                or driver_id,
                 "legal_name_stripe": stripe_info.get("legal_name") or "",
                 "address_line1": stripe_info.get("address_line1") or "",
                 "address_line2": stripe_info.get("address_line2") or "",
@@ -901,7 +914,9 @@ async def _insurance_usage_billing_rows(
         if ride_id in seen:
             continue
         seen.add(ride_id)
-        km_by_driver[driver_id] = km_by_driver.get(driver_id, Decimal("0")) + distance_by_ride.get(ride_id, Decimal("0"))
+        km_by_driver[driver_id] = km_by_driver.get(driver_id, Decimal("0")) + distance_by_ride.get(
+            ride_id, Decimal("0")
+        )
 
     driver_ids = sorted(km_by_driver.keys())
     driver_rows: list[dict] = []
@@ -923,7 +938,9 @@ async def _insurance_usage_billing_rows(
         amount_cents = (km * rate_cents_per_km).quantize(Decimal("1"))
         rows.append(
             {
-                "driver_name": d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or driver_id,
+                "driver_name": d.get("name")
+                or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip()
+                or driver_id,
                 "insured_trips": len(seen_ride_per_driver.get(driver_id, set())),
                 "insured_km": f"{km:.2f}",
                 "rate_cents_per_km": f"{rate_cents_per_km:.2f}",
@@ -960,7 +977,9 @@ async def get_insurance_usage_billing(
     except Exception as e:
         logger.error(f"Failed to build insurance usage billing report: {e}", exc_info=True)
         _capture_export_failure("insurance_usage_billing", e)
-        metrics.inc("spinr_admin_compliance_export_total", {"report_type": "insurance_usage_billing", "outcome": "error"})
+        metrics.inc(
+            "spinr_admin_compliance_export_total", {"report_type": "insurance_usage_billing", "outcome": "error"}
+        )
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
 
     gate_response = await _check_export_gate(
@@ -975,14 +994,17 @@ async def get_insurance_usage_billing(
     fieldnames = ["driver_name", "insured_trips", "insured_km", "rate_cents_per_km", "amount_cents", "amount_dollars"]
     total_amount_dollars = (grand_total_km * rate_cents_per_km / 100).quantize(Decimal("0.01"))
     subtitle = [
-        f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — Periods 2+3 only (primary-commercial coverage)",
+        report_branding.period_label(start_date, end_date) + " — Periods 2+3 only (primary-commercial coverage)",
         f"Total: {grand_total_km:.2f} km  ·  Rate: {rate_cents_per_km:.2f} cents/km  ·  Total billed: ${total_amount_dollars}",
     ]
     if truncated:
         subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow the date range"
 
     await _log_compliance_export(
-        admin, "insurance_usage_billing", {"date_range": date_range, "rate_cents_per_km": str(rate_cents_per_km)}, len(rows)
+        admin,
+        "insurance_usage_billing",
+        {"date_range": date_range, "rate_cents_per_km": str(rate_cents_per_km)},
+        len(rows),
     )
     metrics.inc("spinr_admin_compliance_export_total", {"report_type": "insurance_usage_billing", "outcome": "success"})
 
@@ -1022,7 +1044,7 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
             "status": "completed",
             "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
         },
-        columns="id,driver_id,service_area_id,pickup_address,dropoff_address,distance_km,ride_completed_at",
+        columns="id,rider_id,driver_id,service_area_id,pickup_address,dropoff_address,distance_km,ride_completed_at",
         limit=_ROW_LIMIT,
     )
     airport_rides = [
@@ -1042,7 +1064,19 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
             "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
         )
         for d in driver_rows:
-            driver_names[d["id"]] = d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
+            driver_names[d["id"]] = (
+                d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
+            )
+
+    rider_ids = sorted({r["rider_id"] for r in airport_rides if r.get("rider_id")})
+    rider_names: dict[str, str] = {}
+    for i in range(0, len(rider_ids), 200):
+        batch = rider_ids[i : i + 200]
+        rider_rows = await db_supabase.get_rows(
+            "users", {"id": {"$in": batch}}, columns="id,first_name,last_name", limit=len(batch)
+        )
+        for u in rider_rows:
+            rider_names[u["id"]] = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or u["id"]
 
     area_ids = sorted({r["service_area_id"] for r in airport_rides if r.get("service_area_id")})
     area_names: dict[str, str] = {}
@@ -1056,7 +1090,11 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
     for r in airport_rides:
         pickup_is_airport = "airport" in (r.get("pickup_address") or "").lower()
         dropoff_is_airport = "airport" in (r.get("dropoff_address") or "").lower()
-        trip_type = "Both" if pickup_is_airport and dropoff_is_airport else ("Airport Pickup" if pickup_is_airport else "Airport Dropoff")
+        trip_type = (
+            "Both"
+            if pickup_is_airport and dropoff_is_airport
+            else ("Airport Pickup" if pickup_is_airport else "Airport Dropoff")
+        )
         rows.append(
             {
                 "date": report_branding.format_report_timestamp(r.get("ride_completed_at")),
@@ -1064,6 +1102,7 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
                 "pickup_address": r.get("pickup_address") or "",
                 "dropoff_address": r.get("dropoff_address") or "",
                 "distance_km": f"{_d(r.get('distance_km')):.2f}",
+                "rider_name": rider_names.get(r.get("rider_id"), r.get("rider_id") or ""),
                 "driver_name": driver_names.get(r.get("driver_id"), r.get("driver_id") or ""),
                 "service_area": area_names.get(r.get("service_area_id"), ""),
             }
@@ -1107,10 +1146,19 @@ async def get_airport_trips(
     if gate_response is not None:
         return gate_response
 
-    fieldnames = ["date", "trip_type", "pickup_address", "dropoff_address", "distance_km", "driver_name", "service_area"]
+    fieldnames = [
+        "date",
+        "trip_type",
+        "pickup_address",
+        "dropoff_address",
+        "distance_km",
+        "rider_name",
+        "driver_name",
+        "service_area",
+    ]
     total_km = sum((Decimal(r["distance_km"]) for r in rows), Decimal("0"))
     subtitle = [
-        f"{start_date.date().isoformat()} to {end_date.date().isoformat()}",
+        report_branding.period_label(start_date, end_date),
         f"{len(rows)} trip(s)  ·  {total_km:.2f} total km",
     ]
     if truncated:
@@ -1127,6 +1175,6 @@ async def get_airport_trips(
         subtitle=subtitle,
         format=format,
         pdf_landscape=True,
-        pdf_col_widths=[1.6, 1.4, 2.6, 2.6, 1.1, 1.8, 1.4],
+        pdf_col_widths=[1.6, 1.4, 2.4, 2.4, 1.0, 1.6, 1.6, 1.3],
     )
     return await _deliver_report(resp, email_to, admin, "Airport Trips Report")

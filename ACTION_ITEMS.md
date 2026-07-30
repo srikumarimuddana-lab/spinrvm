@@ -1518,6 +1518,66 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
 
+### C6. `docker-image-scan` (Trivy): stale-pinned base image confirmed; a second finding (msgpack) still unexplained
+- [ ] **Status:** open — found 2026-07-30 while triaging `docker-image-scan` on
+  PR #2931 (a backend change, so this wasn't waved off as the usual
+  unrelated-base-image noise without checking), then reproduced identically
+  on PR #2934 (a *docs-only* PR touching zero backend files) — same two HIGH
+  findings, byte-for-byte: `msgpack` `GHSA-6v7p-g79w-8964` (installed 1.1.2,
+  fixed 1.2.1) and `setuptools` `CVE-2025-47273` (installed 70.3.0, fixed
+  78.1.1), against `spinr-backend:ci-<sha>`.
+- **First hypothesis (stale Docker layer cache) — investigated and
+  retracted.** Located the job (`.github/workflows/ci.yml:705`,
+  `docker-image-scan`): it runs on a fresh `ubuntu-latest` runner (a new VM
+  per job, empty local Docker cache) with a bare `docker build --tag
+  spinr-backend:ci-${{ github.sha }}` — no `--cache-from`, no
+  `docker/setup-buildx-action`, no registry cache. There is no persistent
+  cache mechanism here for a *build* to be stale from. That theory doesn't
+  fit this workflow's actual shape.
+- **Confirmed, real, separate finding: the base image pin is genuinely
+  stale.** `backend/Dockerfile:12,36` pins
+  `python:3.12.9-slim@sha256:48a11b7...`, captured **2026-04-29** per its own
+  comment, which also says "refresh quarterly." Today is 2026-07-30 — three
+  months past that cadence, and past the quarterly mark. This alone would
+  explain OS-level (Debian) drift and plausibly `setuptools` specifically:
+  Python's official Docker images bundle a fixed `ensurepip`-provided
+  setuptools version tied to that image build date, and while the Dockerfile
+  does run `pip install --upgrade pip setuptools` right after, that upgrade
+  not visibly taking effect (or being satisfied by whatever's already
+  resolvable at that point) is plausible but **not directly confirmed** —
+  didn't reproduce a live build to verify.
+- **`msgpack` remains genuinely unexplained.** Unlike setuptools, msgpack
+  isn't part of any base image — it's installed exclusively via `pip install
+  --require-hashes -r requirements-locked.txt`
+  (`backend/Dockerfile:32,54`), and the lockfile (confirmed by direct read)
+  pins `msgpack==1.2.1` with hashes. `--require-hashes` mode cannot silently
+  substitute a different version. Also noticed but not chased further: the
+  Dockerfile has two nearly-identical stages (an unnamed first stage
+  building into `/install`, and a `runtime` stage that does its own
+  independent `pip install` rather than `COPY --from=` the first stage's
+  output) — the first stage's output appears to go unused, which is odd but
+  doesn't by itself explain a version mismatch in the stage that's actually
+  used.
+- **Why it matters:** the base-image staleness is real and actionable on its
+  own regardless of the msgpack mystery. The unexplained msgpack finding
+  matters more: if `--require-hashes` can produce a package version that
+  doesn't match its own lockfile, either something about this
+  investigation's assumptions is wrong, or there's a real, more concerning
+  build-reproducibility bug worth a second, deeper look (ideally with an
+  actual local Docker build reproduced end-to-end, which wasn't available in
+  this session — no Docker daemon in the sandbox).
+- **Files:** `backend/Dockerfile` (base image digest, lines 12 & 36),
+  `backend/requirements-locked.txt`, `.github/workflows/ci.yml` (the
+  `docker-image-scan` job, line 705).
+- **Approach:** (1) refresh the base image digest per
+  `docs/runbooks/docker-image-pinning.md` — straightforward, do this
+  regardless; (2) actually build `backend/Dockerfile` locally/in a scratch
+  CI run and run `pip show msgpack` inside the resulting image to see what
+  really gets installed and why, before assuming any explanation.
+- **Acceptance:** base image digest refreshed and confirmed current;
+  msgpack's installed-vs-locked mismatch either reproduced-and-explained or
+  confirmed to no longer reproduce after a clean rebuild.
+
 ### B-AI1. Corporate rider booking via AI chat bypasses corporate billing
 - [x] **Status:** done (2026-07-29) — found by the 2026-07-28 AI guardrail
   audit (branch `claude/rider-ai-location-selection-yn0mem`), fixed on branch

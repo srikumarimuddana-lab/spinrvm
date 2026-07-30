@@ -65,10 +65,18 @@ Two separate leaks, and the second is the serious one:
    ("Raw GPS coordinates (lat/lng) — log geohashed area at most").
 
 2. **`res_data=` leaks the whole row.** PostgREST returns the full updated row by default,
-   so this logs *every column of the drivers table* — including
-   `drivers.license_number` (added in `backend/migrations/08_complete_schema.sql:44`), the
-   encrypted address column, phone, and Stripe/KYC identifiers. CLAUDE.md forbids
-   government IDs, driver licence numbers, and full phone numbers in logs categorically.
+   so this logs *every column of the drivers table*.
+
+   > **Correction (2026-07-30).** This section originally said the leak exposed
+   > `drivers.license_number` as a government ID. That is **wrong**:
+   > `backend/migrations/32_encrypt_sensitive_fields.sql:11-15` and
+   > `244_vehicle_vin_plaintext_at_rest.sql:3` establish that `license_number` holds a
+   > `vault.secrets` UUID, not a plaintext licence number. The plaintext columns actually
+   > exposed are **`name` (full legal name), `phone` (full phone), and `vehicle_vin`** —
+   > VIN having been reverted to plaintext at rest by migration 244 — alongside raw
+   > `lat`/`lng`. Still a P0 and still four never-log fields, but the legal
+   > "real risk of significant harm" argument is *location + name + phone + VIN*, not
+   > *location + government ID*. T4 must use the corrected list.
 
 **Blast radius — this is the number that matters:** 28 `update_one("drivers", …)` call
 sites across 15 files, every one of them currently logging a full driver row:
@@ -102,6 +110,17 @@ payload. Details and consequences in T2.
 
 **Severity:** P0, and per CLAUDE.md's breach protocol this is a suspected PII exposure
 event requiring a scope assessment inside 24h, not just a code fix. See T4.
+
+**A second, broader leak in the same file (found 2026-07-30, not in the original review).**
+`backend/repositories/_base.py`'s catch-all DB error line logged `str(exc)` verbatim for
+**every table**, not just `drivers`. Postgres embeds column values in its error text: a unique
+violation carries `Key (phone)=(+1306…)`, and a CHECK or NOT NULL violation carries
+`Failing row contains (…)` — the entire row. The same string also rode into
+`DatabaseError.details["original"]`, which CLAUDE.md instructs callers to log, so it escaped
+the log sink as well. Fixed in the same commit as T1 via `_redact_pg_error()`.
+
+**Status: T1 is done** — commit `cb6cc67`. Impact log:
+`docs/change-log/2026-07-30-base-pii-logging.md`.
 
 ---
 
@@ -338,6 +357,10 @@ harm'."* Follow `docs/runbooks/data-breach.md`.
 Scope assessment must answer, with evidence:
 1. **When did the leak start?** `git log -S "[GO-ONLINE] db_supabase.update_one" -- backend/repositories/_base.py`
    (and its pre-split path `backend/db_supabase.py`) gives the first-shipped commit and date.
+   ⚠️ **Run `git fetch --unshallow` first.** The working checkout is a shallow clone (141
+   commits) and the block sits on the grafted boundary, so `git log -S` and `git blame` both
+   return the graft commit rather than the real one. Without unshallowing, this step silently
+   produces a wrong date.
 2. **What retention applies?** Fly.io and Railway log-retention windows, plus any log drain
    or third-party aggregator configured on either host. **Open question — needs the account
    owner; not answerable from the repo.**

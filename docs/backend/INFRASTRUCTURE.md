@@ -254,9 +254,26 @@ Loguru JSON to stderr, captured by Railway:
 {time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {name}:{function}:{line} | {message}
 ```
 
-No local file sink (ephemeral disk on Railway). Special loggers: `_goonline_logger` for the driver go-online state machine (`[GO-ONLINE]`), `diag_logger` for diagnostics.
+No local file sink (ephemeral disk on Railway). Special logger: `diag_logger` for diagnostics
+(`socket_manager.py`, `routes/drivers/_deps.py`, `routes/rides/cancellation.py`).
+
+`logging_utils._goonline_logger` also exists but **is imported by nothing** — the `[GO-ONLINE]`
+lines you see in production come from loguru with the tag hardcoded in the message, not from
+that logger. Both it and `diag_logger` set `propagate = False`, so `caplog` cannot see either.
 
 **Never log secrets** — the JWT secret, Stripe keys, Twilio tokens, service role key. Error handlers scrub details in prod.
+
+**Never log personal information**, and prefer an allowlist over a denylist when logging
+anything derived from a DB row. `utils/pii.py` provides `geohash()` (coarse area from
+coordinates), `redact_phone()`, `redact_email()`, `area_only()`, and `first_name_only()` — use
+them at the emission site. Two worked examples in the DB layer: `repositories/_base.py`'s
+`_log_safe_write()` (key names + geohash, never values) and `_redact_pg_error()` (Postgres
+error text carries `Key (col)=(value)` and `Failing row contains (…)`, so it is redacted before
+reaching either the log or the exception `details`).
+
+Note that `.claude/hooks/pre-commit`'s "PII in logs" step is a small source-text denylist. It
+cannot see a runtime-interpolated payload — e.g. `logger.info(f"... payload={row}")` — so a
+green result there is not evidence that a log line is safe.
 
 ---
 

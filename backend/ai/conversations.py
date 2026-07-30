@@ -1,10 +1,13 @@
 """Persistence for AI assistant conversations (ai_conversations / ai_messages).
 
-PIPEDA contract (see migration 140): only user text (already PII-scrubbed by
-the orchestrator) and assistant replies are written. Tool arguments and tool
-results never reach these tables — an assistant row records tool *names*
-only. Every read and delete is owner-scoped; a foreign conversation_id
-behaves exactly like a missing one.
+PIPEDA contract (see migration 140): only user text and assistant replies
+are written, and both are PII-scrubbed by the orchestrator (scrub_pii)
+before they ever reach append_message — the model can echo tool-result data
+verbatim (e.g. a phone number), so the assistant side is scrubbed the same
+as the user side, not treated as trusted first-party text. Tool arguments
+and tool results never reach these tables — an assistant row records tool
+*names* only. Every read and delete is owner-scoped; a foreign
+conversation_id behaves exactly like a missing one.
 """
 
 import logging

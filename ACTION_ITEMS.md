@@ -1424,6 +1424,57 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
 - **Acceptance:** not yet defined — this entry exists so the finding isn't
   lost; scope the fix and acceptance criteria when picked up.
 
+### B16. Driver SOS UX doesn't implement the discretion the design sketch chose it for
+- [ ] **Status:** open — found 2026-07-30, same trace session as B15, this
+  time against the actual design-decision artifacts rather than a context
+  doc: `.planning/sketches/010-rider-sos/index.html` and
+  `.planning/sketches/011-driver-sos/index.html`. Product/design call, not
+  a pure code bug — logging as a tracked finding per user instruction
+  rather than redesigning inline.
+- **Why:** sketch 011's stated design question is *"Can a driver call for
+  help with one hand while driving [without alerting a threatening
+  passenger]?"* It mocks 3 variants and explicitly rejects the
+  loud/visible one: *"Full-screen red flash is visible to the
+  passenger... dangerous in the scenario that needs it most."* The chosen
+  winner, "Discreet Hold Shield," is dual-mode: a muted shield icon, hold
+  3s → **silent** alert (no modal, no red flash — just a tiny badge + a
+  small dark toast), or a short **tap** → a full Safety overlay (911
+  button, "Share Live Trip Link," per-contact "✓ Notified" list, an
+  explicit "Discreet mode on" label with a toggle, "I'm Safe — Close").
+  Sketch 010 (rider) deliberately picked a *different* winner — tap opens
+  the overlay, then a visible 2s hold inside it — because the design
+  reasoning treats the rider's threat model as not requiring silence the
+  way the driver's does.
+  What's shipped (`shared/components/SOSButton.tsx`) is the same component
+  for both apps (confirmed via grep — `driver-app/app/driver/(tabs)/index.tsx`
+  and `driver-app/app/_layout.tsx` both import it, no driver-specific
+  variant exists): one persistent **red** circular button, hold **1.2s**
+  (matches neither sketch's 2s/3s — same hold-duration mismatch as B15,
+  now cross-confirmed by a second, independent source), and on success
+  fires a native `Alert.alert()` — an interruptive modal, not a silent
+  confirmation. There is no silent/discreet path, no tap-vs-hold duality,
+  no Safety overlay, no "Share Live Trip Link," no per-contact notified
+  list, no discreet-mode toggle. The shipped driver UX is structurally
+  closer to the sketch's own **rejected** Variant A than to the winning
+  Variant C — the exact pattern the design process ruled out as most
+  dangerous for the driver's actual threat scenario.
+- **Files (reference only, no code changed by this entry):**
+  `shared/components/SOSButton.tsx`, `driver-app/app/driver/(tabs)/index.tsx`,
+  `.planning/sketches/010-rider-sos/index.html`,
+  `.planning/sketches/011-driver-sos/index.html`.
+- **Approach:** needs a product decision before any code: (a) confirm the
+  discreet-hold-shield design is still wanted for the driver surface (it
+  may have been deprioritized after the sketch phase — worth confirming
+  rather than assuming), (b) if yes, scope it as its own feature build
+  (new component or a `discreet` prop on `SOSButton` that swaps the
+  success path from `Alert.alert()` to a silent toast, plus the tap-opens-
+  overlay affordance) rather than folding it into B15's DB-fallback fix,
+  since this is UX surface area, not a backend reliability fix, (c) if the
+  rider/driver split was intentionally abandoned in favor of one shared
+  component, update the sketches or archive them so they stop describing
+  intent nobody plans to build.
+- **Acceptance:** not yet defined — pending the product decision above.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

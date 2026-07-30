@@ -138,6 +138,44 @@ class TestTriggerEmergency:
         assert row["reported_by_user_id"] == RIDER_ID
         assert row["role"] == "rider"
 
+    async def test_db_insert_failure_returns_503_not_silent_500(self):
+        """A DB failure on the safety_incidents insert must surface as a
+        clean 503 (which SOSButton.tsx's client-side retry loop treats as a
+        retryable failure, matching backend/routes/safety.py's identical
+        pattern for the non-urgent report endpoint) -- not an unhandled 500.
+        None of the downstream notify steps (admin WS, safety-team email,
+        contact SMS) may fire, since the incident was never persisted."""
+        from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
+
+        ws_calls = []
+
+        async def _broadcast_to_admins(message):
+            ws_calls.append(message)
+
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch(
+                "backend.routes.rides._deps.db_supabase.insert_one",
+                AsyncMock(side_effect=RuntimeError("connection reset")),
+            ),
+            patch(
+                "backend.routes.rides._deps.manager.broadcast_to_admins",
+                AsyncMock(side_effect=_broadcast_to_admins),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await rides_mod.trigger_emergency(
+                    ride_id=RIDE_ID,
+                    body=_Req(),
+                    current_user={"id": RIDER_ID},
+                )
+
+        assert exc_info.value.status_code == 503
+        assert ws_calls == [], "admin must not be notified for an incident that was never persisted"
+
     async def test_rider_sos_admin_notified_via_ws(self):
         _, _, ws_calls, _sms = await self._trigger(RIDER_ID)
 
@@ -256,7 +294,9 @@ class TestTriggerEmergency:
             )
 
         assert result["contacts_notified"] == 1
-        error_calls = [c.args[0] for c in mock_logger.error.call_args_list if "SOS SMS failed for contact ec-1" in c.args[0]]
+        error_calls = [
+            c.args[0] for c in mock_logger.error.call_args_list if "SOS SMS failed for contact ec-1" in c.args[0]
+        ]
         assert error_calls, "expected an error log for the failing contact"
         assert "RuntimeError" in error_calls[0]
         assert "+13061112222" not in error_calls[0]  # PIPEDA: no raw phone number in the log
@@ -276,9 +316,7 @@ class TestTriggerEmergency:
             )
 
         assert result["contacts_notified"] == 0
-        assert any(
-            "type=twilio_error status=400" in c.args[0] for c in mock_logger.error.call_args_list
-        )
+        assert any("type=twilio_error status=400" in c.args[0] for c in mock_logger.error.call_args_list)
 
     async def test_contact_notification_outer_failure_returns_warning(self):
         """A failure anywhere in the contact-notification block (e.g.
@@ -298,6 +336,4 @@ class TestTriggerEmergency:
         assert "notification_warning" in result
         assert persisted, "the incident itself must still be persisted"
         assert sms_calls == []
-        assert any(
-            "SOS emergency contact notification failed" in c.args[0] for c in mock_logger.error.call_args_list
-        )
+        assert any("SOS emergency contact notification failed" in c.args[0] for c in mock_logger.error.call_args_list)

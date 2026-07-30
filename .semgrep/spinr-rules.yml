@@ -8,9 +8,9 @@ rules:
   - id: spinr-supabase-no-mongo-wrappers
     patterns:
       - pattern-either:
-          - pattern: $DB.update($TABLE, {"$set": ...}, ...)
-          - pattern: $DB.update($TABLE, {"$set": ...})
-          - pattern: supabase.table($TABLE).update({"$set": ...})
+          - pattern: '$DB.update($TABLE, {"$set": ...}, ...)'
+          - pattern: '$DB.update($TABLE, {"$set": ...})'
+          - pattern: 'supabase.table($TABLE).update({"$set": ...})'
     message: |
       Supabase is not MongoDB. Do not wrap update payloads in {"$set": ...}.
       The key is treated as a column name and the update silently writes nothing.
@@ -69,8 +69,8 @@ rules:
   - id: spinr-ride-state-needs-guard
     patterns:
       - pattern-either:
-          - pattern: $DB.update("rides", {"status": "$STATE", ...}, ...)
-          - pattern: supabase.table("rides").update({"status": "$STATE", ...})
+          - pattern: '$DB.update("rides", {"status": "$STATE", ...}, ...)'
+          - pattern: 'supabase.table("rides").update({"status": "$STATE", ...})'
     paths:
       exclude:
         - "backend/routes/rides.py"

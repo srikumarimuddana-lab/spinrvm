@@ -174,7 +174,13 @@ jobs:
           # there. The "Semgrep scan" step right after this one already requires
           # network (pulling p/python, p/typescript, etc. from the registry), so
           # this doesn't add a new dependency class to the job.
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          #
+          # --break-system-packages: the image's Alpine base marks the system
+          # python3 as PEP 668 externally-managed, so a bare `pip install`
+          # refuses to run (confirmed live in CI, not assumed). This container
+          # is recreated fresh every job — there's no persistent system to
+          # "break".
+          python3 -m pip install --quiet --disable-pip-version-check --break-system-packages pyyaml
           python3 - <<'PY'
           import sys, yaml
           path = ".semgrep/spinr-rules.yml"

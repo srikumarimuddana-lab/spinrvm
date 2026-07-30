@@ -102,6 +102,14 @@ REPORT_FORMAT_REGISTRY: dict[str, ReportRegistration] = {
         "mode": "branded",
         "description": "Per-driver annual earnings + Stripe-verified address for a third-party T4A filer (never includes SIN)",
     },
+    "insurance_usage_billing": {
+        "mode": "branded",
+        "description": "Per-driver insured kilometres (Period 2+3) and billed amount, for reconciling the insurer's usage-based-insurance invoice",
+    },
+    "airport_trips": {
+        "mode": "branded",
+        "description": "Completed rides with an airport pickup or dropoff, for airport ground-transportation program reporting",
+    },
 }
 
 

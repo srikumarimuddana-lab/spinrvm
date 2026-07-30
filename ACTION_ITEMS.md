@@ -393,13 +393,17 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        410, new-user creation (+ `create_user` DB-failure → 503, never
        mints a token for an unpersisted row), and 4 OTP-record validation
        branches (wrong code, expired, malformed/missing `expires_at`).
-       Still open in this file: the company-email-OTP flow
-       (`send_company_email_otp`/`verify_company_email_otp`),
-       `firebase_auth_login`, `refresh_access_token`,
-       `logout`/`logout_all`, and `reactivate_account` — none of these
-       endpoints have direct tests yet; large remaining scope, not
-       pursued further in this pass. See
-       `docs/change-log/2026-07-29-a1b-verify-otp-coverage.md`.
+       See `docs/change-log/2026-07-29-a1b-verify-otp-coverage.md`.
+       **Update 2026-07-30 — now 66%**: added 44 more tests
+       (`tests/test_auth_remaining_endpoints.py`) covering the
+       company-email-OTP flow (`send_company_email_otp`/
+       `verify_company_email_otp`), `firebase_auth_login`,
+       `refresh_access_token`, `logout`/`logout_all`, and
+       `reactivate_account` — success paths, validation-error branches,
+       and DB-failure propagation. No application code changed, no bugs
+       found. Remaining gap is deeper validation branches and the
+       dual-import fallback. See
+       `docs/change-log/2026-07-30-a1b-auth-remaining-endpoints-coverage.md`.
      - `routes/admin/auth.py` — **done, 94%** (was 70%, re-measured fresh
        against the full suite — the previously-tracked 64-70% figure was in
        the right ballpark). The endpoint was well-covered for login/MFA/

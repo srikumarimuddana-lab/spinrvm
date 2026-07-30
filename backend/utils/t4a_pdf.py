@@ -29,6 +29,12 @@ Design notes
   already carries pre-rounded ``Decimal``-derived strings from the route.
 - The layout targets A4 portrait (210 × 297 mm).  Margins: 15 mm all sides.
 - Font: built-in Helvetica (no external font files required).
+- Header/footer use the same Spinr branded chrome (logo, brand-red accent
+  rule, muted grey footer with company contact info) as the other admin
+  compliance reports in utils/report_branding.py, so this document doesn't
+  read as a visually different product from the rest of the report suite.
+  The CRA box layout below the header is left in its own fixed format —
+  the *shell* is branded, the *regulatory content* is not restyled.
 """
 
 from __future__ import annotations
@@ -54,7 +60,10 @@ def generate_t4a_pdf(summary: dict) -> bytes:
         - total_earnings (str) – falls back to net_earnings
     """
     # Lazy import so the rest of the backend doesn't pay the import cost.
-    from fpdf import FPDF  # type: ignore[import-untyped]
+    try:
+        from . import report_branding
+    except ImportError:
+        from utils import report_branding  # type: ignore
 
     # ── Normalise inputs ──────────────────────────────────────────────────────
     year = int(summary.get("year", datetime.now(timezone.utc).year))
@@ -68,9 +77,15 @@ def generate_t4a_pdf(summary: dict) -> bytes:
     generated_at = generated_at_raw[:19].replace("T", " ") + " UTC"
 
     # ── PDF document setup ────────────────────────────────────────────────────
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    # Shared branded header (logo, brand-red accent rule, dark title, grey
+    # subtitle) — same chrome as every other admin compliance report, so a
+    # T4A slip doesn't look like a different product's document. Portrait,
+    # A4 — matches the original layout this function has always used.
+    pdf = report_branding.new_branded_pdf(
+        title="T4A - Statement of Fees for Services",
+        subtitle=f"Canada Revenue Agency / Agence du revenu du Canada  —  Tax Year: {year}",
+    )
     pdf.set_auto_page_break(auto=False)
-    pdf.add_page()
     pdf.set_margins(left=15, top=15, right=15)
 
     W = 180  # usable width (210 - 15 - 15)
@@ -110,23 +125,12 @@ def generate_t4a_pdf(summary: dict) -> bytes:
         pdf.ln(1)
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # HEADER
-    # ═══════════════════════════════════════════════════════════════════════════
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(W, 10, "T4A - Statement of Fees for Services", align="C", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(W, 6, "Canada Revenue Agency / Agence du revenu du Canada", align="C", ln=True)
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(W, 7, f"Tax Year: {year}", align="C", ln=True)
-    h_rule(3)
-
-    # ═══════════════════════════════════════════════════════════════════════════
     # PAYER INFORMATION
     # ═══════════════════════════════════════════════════════════════════════════
     section_heading("PAYER INFORMATION")
     label_value("Payer / Issuer", "Spinr Technologies Inc.")
     label_value("Business Number (BN)", "See Spinr corporate tax records")
-    label_value("Address", "Saskatchewan, Canada")
+    label_value("Address", "Saskatoon, SK, Canada")
     h_rule()
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -199,6 +203,11 @@ def generate_t4a_pdf(summary: dict) -> bytes:
 
     # Reset colour before output.
     pdf.set_text_color(0, 0, 0)
+
+    # Standard pinned-to-bottom company/contact line — same treatment as
+    # every other Spinr compliance report, so this slip's footer reads as
+    # the same document family instead of its own one-off wording.
+    report_branding.render_branded_pdf_footer(pdf)
 
     # ── Serialise to bytes ─────────────────────────────────────────────────────
     # FPDF.output() returns bytes when no destination is provided.

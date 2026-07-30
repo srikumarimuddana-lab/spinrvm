@@ -90,10 +90,6 @@ REPORT_FORMAT_REGISTRY: dict[str, ReportRegistration] = {
         "mode": "branded",
         "description": "GST/PST tax remittance summary",
     },
-    "insurance_period_audit": {
-        "mode": "branded",
-        "description": "Driver insurance-period regulatory audit export",
-    },
     "dsar_lookup": {
         "mode": "branded",
         "description": "Admin lookup of a rider/driver's self-service DSAR export status",
@@ -102,13 +98,21 @@ REPORT_FORMAT_REGISTRY: dict[str, ReportRegistration] = {
         "mode": "branded",
         "description": "Per-driver annual earnings + Stripe-verified address for a third-party T4A filer (never includes SIN)",
     },
-    "insurance_usage_billing": {
+    "insurance_billing_sgi": {
         "mode": "branded",
-        "description": "Per-driver insured kilometres (Period 2+3) and billed amount, for reconciling the insurer's usage-based-insurance invoice",
+        "description": "Per-trip, per-phase insured km (Period 2+3) at SGI's contracted rate ($0.11/km), for reconciling SGI's invoice",
+    },
+    "insurance_billing_knight_archer": {
+        "mode": "branded",
+        "description": "Per-trip, per-phase insured km (Period 2+3) at Knight Archer's contracted rate ($0.011/km), for reconciling their invoice",
     },
     "airport_trips": {
         "mode": "branded",
         "description": "Completed rides with an airport pickup or dropoff, for airport ground-transportation program reporting",
+    },
+    "driver_roster": {
+        "mode": "branded",
+        "description": "Full driver roster (name, license, status) — originally for Knight Archer's monthly active-driver update, generic enough for other roster-review consumers",
     },
 }
 

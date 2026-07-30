@@ -15,7 +15,7 @@ Money arithmetic is Decimal-only per CLAUDE.md — never float.
 import csv
 import io
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -53,17 +53,40 @@ def _d(v) -> Decimal:
     return Decimal(str(v))
 
 
-def _parse_date_range(date_range: str) -> datetime:
-    """Mirrors routes/admin/analytics.py's _parse_date_range shorthand."""
+def _month_to_date_window() -> tuple[datetime, datetime]:
+    """1st of the current calendar month through now — the default window
+    product decided every Records/Compliance report should use, replacing
+    the old rolling-N-days shorthand."""
     now = datetime.now(timezone.utc)
-    mapping = {
-        "today": timedelta(days=1),
-        "7d": timedelta(days=7),
-        "30d": timedelta(days=30),
-        "90d": timedelta(days=90),
-        "1y": timedelta(days=365),
-    }
-    return now - mapping.get(date_range, timedelta(days=30))
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return start, now
+
+
+def _resolve_date_window(date_from: Optional[str], date_to: Optional[str]) -> tuple[datetime, datetime]:
+    """Explicit From/To (YYYY-MM-DD) query params for reports that used to
+    take a rolling-N-days `date_range` shorthand. Either side omitted falls
+    back to the current-month default on that side; both omitted falls back
+    to the full current-month-to-date window."""
+    if not date_from and not date_to:
+        return _month_to_date_window()
+
+    default_start, default_end = _month_to_date_window()
+    try:
+        start = (
+            datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+            if date_from
+            else default_start
+        )
+        end = (
+            datetime.fromisoformat(date_to).replace(hour=23, minute=59, second=59, microsecond=0, tzinfo=timezone.utc)
+            if date_to
+            else default_end
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail="date_from/date_to must be YYYY-MM-DD") from e
+    if start > end:
+        raise HTTPException(status_code=422, detail="date_from must be on or before date_to")
+    return start, end
 
 
 def _capture_export_failure(report_type: str, error: Exception) -> None:
@@ -131,9 +154,7 @@ _APPROVAL_GATE_ROW_THRESHOLD = 1000
 _T4A_THRESHOLD = Decimal("500.00")
 
 
-async def _check_export_gate(
-    admin: dict, route_key: str, gate_params: dict, row_count: int
-) -> Optional[JSONResponse]:
+async def _check_export_gate(admin: dict, route_key: str, gate_params: dict, row_count: int) -> Optional[JSONResponse]:
     """Returns a 202 JSONResponse if this export needs (and doesn't yet
     have) a second admin's approval; returns None if the caller should
     proceed with generating the report as normal -- either the gate is
@@ -356,7 +377,9 @@ async def _deliver_report(resp: Response, email_to: Optional[str], admin: dict, 
         # the real exception loudly, then surface the same clean 502 the
         # `not sent` branch already gives for an expected send failure.
         logger.error("compliance report email send failed for %s: %s", title, e, exc_info=True)
-        raise HTTPException(status_code=502, detail="Could not send the report email — try downloading it instead") from e
+        raise HTTPException(
+            status_code=502, detail="Could not send the report email — try downloading it instead"
+        ) from e
     if not sent:
         raise HTTPException(status_code=502, detail="Could not send the report email — try downloading it instead")
     return Response(content=f'{{"emailed_to": "{email_to}"}}', media_type="application/json")
@@ -366,7 +389,8 @@ async def _deliver_report(resp: Response, email_to: Optional[str], admin: dict, 
 @limiter.limit("10/minute")
 async def get_gst_pst_remittance(
     request: Request,
-    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     email_to: Optional[str] = Query(
         None, description="Email the report to this @spinr.ca address instead of downloading it"
@@ -378,8 +402,7 @@ async def get_gst_pst_remittance(
     regulator format — CRA remittance filing has no prescribed layout,
     unlike SGI's forms)."""
     _require_spinr_ca(email_to)
-    start_date = _parse_date_range(date_range)
-    end_date = datetime.now(timezone.utc)
+    start_date, end_date = _resolve_date_window(date_from, date_to)
 
     try:
         rows, gst_total, pst_total, hst_total, truncated = await _gst_pst_rows(start_date, end_date)
@@ -392,7 +415,7 @@ async def get_gst_pst_remittance(
     gate_response = await _check_export_gate(
         admin,
         "compliance.gst_pst_remittance",
-        {"date_range": date_range, "format": format, "email_to": email_to},
+        {"date_from": date_from, "date_to": date_to, "format": format, "email_to": email_to},
         len(rows),
     )
     if gate_response is not None:
@@ -415,7 +438,7 @@ async def get_gst_pst_remittance(
     await _log_compliance_export(
         admin,
         "gst_pst_remittance",
-        {"date_range": date_range, "format": format, "start": start_date.isoformat(), "end": end_date.isoformat()},
+        {"format": format, "start": start_date.isoformat(), "end": end_date.isoformat()},
         len(rows),
     )
     metrics.inc("spinr_admin_compliance_export_total", {"report_type": "gst_pst_remittance", "outcome": "success"})
@@ -431,8 +454,20 @@ async def get_gst_pst_remittance(
     return await _deliver_report(resp, email_to, admin, "GST/PST Remittance Summary")
 
 
-# ── Insurance-Period Regulatory Audit ────────────────────────────────
-
+# ── Driver Roster (formerly "Knight Archer Driver Onboarding") ───────
+#
+# Renamed from a Knight-Archer-specific name to a generic one: the report
+# itself was never Knight-Archer-specific (it's every onboarded driver's
+# license/status info, full roster regardless of status), only its stated
+# purpose was — keeping Knight Archer Insurance (the broker) current on
+# active drivers, monthly. The old name baked a single consumer into the
+# report's identity; the content is generically useful (e.g. an internal
+# monthly driver-roster review) and other insurers/consumers can use the
+# same export without a name implying it's Knight-Archer-only.
+#
+# _PERIOD_LABELS stays here (moved from the now-retired Insurance-Period
+# Regulatory Audit report below) — the new per-trip insurance billing
+# reports still need it to label Period 2 vs Period 3 rows.
 
 _PERIOD_LABELS = {
     0: "0 — Offline",
@@ -442,144 +477,14 @@ _PERIOD_LABELS = {
 }
 
 
-async def _insurance_period_rows(
-    start_date: datetime, end_date: datetime, driver_id: Optional[str]
-) -> tuple[list[dict], bool]:
-    """Pull driver_insurance_periods rows for the requested window (append-
-    only regulatory audit table, migration 64), joined with each driver's
-    name for readability — mirrors the driver-identification already shown
-    on the real SGI forms (sgi_field_maps.py), not new PII exposure."""
-    filters: dict = {"started_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()}}
-    if driver_id:
-        filters["driver_id"] = driver_id
-
-    periods = await db_supabase.get_rows(
-        "driver_insurance_periods",
-        filters,
-        columns="id,driver_id,period,started_at,ended_at,ride_id",
-        order="started_at",
-        desc=True,
-        limit=_ROW_LIMIT,
-    )
-    truncated = _check_truncated(len(periods), "insurance_period_audit")
-    if not periods:
-        return [], truncated
-
-    driver_ids = sorted({p["driver_id"] for p in periods if p.get("driver_id")})
-    driver_names: dict[str, str] = {}
-    for i in range(0, len(driver_ids), 200):
-        batch = driver_ids[i : i + 200]
-        driver_rows = await db_supabase.get_rows(
-            "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
-        )
-        for d in driver_rows:
-            concatenated = f"{d.get('first_name', '')} {d.get('last_name', '')}".strip()
-            driver_names[d["id"]] = d.get("name") or concatenated or d["id"]
-
-    rows = [
-        {
-            "driver_name": driver_names.get(p["driver_id"], p["driver_id"]),
-            "period": _PERIOD_LABELS.get(p.get("period"), str(p.get("period"))),
-            "started_at": report_branding.format_report_timestamp(p.get("started_at")),
-            "ended_at": report_branding.format_report_timestamp(p.get("ended_at"), empty="(open)"),
-        }
-        for p in periods
-    ]
-    return rows, truncated
-
-
-@api_router.get("/insurance-period-audit")
-@limiter.limit("10/minute")
-async def get_insurance_period_audit(
-    request: Request,
-    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
-    driver_id: Optional[str] = None,
-    format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
-    email_to: Optional[str] = Query(
-        None, description="Email the report to this @spinr.ca address instead of downloading it"
-    ),
-    admin: dict = Depends(get_admin_user),
-):
-    """Driver insurance-period transition audit export — for SGI or a
-    future province's regulator audit of TNC insurance-period
-    classification (CLAUDE.md's Insurance periods table). Spinr-branded;
-    this is Spinr's own audit trail, not a fixed regulator form."""
-    _require_spinr_ca(email_to)
-    start_date = _parse_date_range(date_range)
-    end_date = datetime.now(timezone.utc)
-
-    try:
-        rows, truncated = await _insurance_period_rows(start_date, end_date, driver_id)
-    except Exception as e:
-        logger.error(f"Failed to build insurance-period audit export: {e}", exc_info=True)
-        _capture_export_failure("insurance_period_audit", e)
-        metrics.inc(
-            "spinr_admin_compliance_export_total", {"report_type": "insurance_period_audit", "outcome": "error"}
-        )
-        raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
-
-    gate_response = await _check_export_gate(
-        admin,
-        "compliance.insurance_period_audit",
-        {"date_range": date_range, "driver_id": driver_id, "format": format, "email_to": email_to},
-        len(rows),
-    )
-    if gate_response is not None:
-        return gate_response
-
-    # driver_id and ride_id are intentionally excluded from the rendered
-    # report (product decision) — driver_id filtering still works via the
-    # `driver_id` query param above; `driver_name` already identifies the
-    # driver on the report itself.
-    fieldnames = ["driver_name", "period", "started_at", "ended_at"]
-    subtitle = f"{start_date.date().isoformat()} to {end_date.date().isoformat()}" + (
-        f" — driver {driver_id}" if driver_id else " — all drivers"
-    )
-    if truncated:
-        subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow the date range or filter by driver_id"
-
-    await _log_compliance_export(
-        admin,
-        "insurance_period_audit",
-        {
-            "date_range": date_range,
-            "format": format,
-            "driver_id": driver_id,
-            "start": start_date.isoformat(),
-            "end": end_date.isoformat(),
-        },
-        len(rows),
-    )
-    metrics.inc("spinr_admin_compliance_export_total", {"report_type": "insurance_period_audit", "outcome": "success"})
-
-    resp = _render_tabular_report(
-        title="Driver Insurance-Period Audit",
-        filename_base="insurance_period_audit",
-        fieldnames=fieldnames,
-        rows=rows,
-        subtitle=subtitle,
-        format=format,
-        # Long period-label/ISO-timestamp content still needs landscape +
-        # wider ratios than the shorter driver_name column — portrait +
-        # equal widths is what produced the overlapping, unreadable table
-        # (see docstring on _render_tabular_report).
-        pdf_landscape=True,
-        pdf_col_widths=[2.5, 2.5, 2.2, 2.2],
-    )
-    return await _deliver_report(resp, email_to, admin, "Driver Insurance-Period Audit")
-
-
-# ── Knight Archer Insurance — Driver Onboarding Report ───────────────
-
-
-async def _knight_archer_driver_rows(status: Optional[str]) -> tuple[list[dict], bool]:
-    """Pull every onboarded driver's license/status info for Knight Archer
-    (a Saskatchewan insurance company Spinr reports driver onboarding to,
-    separate from the SGI D00032/D00033 regulator forms). Deliberately
-    covers every driver status, not just active — Knight Archer's ask was
-    for "driver onboarded, driver license, with all status", i.e. the full
-    roster regardless of where a driver currently sits in the pipeline
-    (pending/needs_review/active/suspended/banned)."""
+async def _driver_roster_rows(status: Optional[str]) -> tuple[list[dict], bool]:
+    """Pull every onboarded driver's license/status info. Deliberately
+    covers every driver status, not just active — Knight Archer's original
+    ask was for "driver onboarded, driver license, with all status", i.e.
+    the full roster regardless of where a driver currently sits in the
+    pipeline (pending/needs_review/active/suspended/banned); the optional
+    `status` filter narrows to just "active" for a consumer that only
+    wants that slice."""
     filters: dict = {}
     if status:
         filters["status"] = status
@@ -592,7 +497,7 @@ async def _knight_archer_driver_rows(status: Optional[str]) -> tuple[list[dict],
         desc=True,
         limit=_ROW_LIMIT,
     )
-    truncated = _check_truncated(len(drivers), "knight_archer_driver_onboarding")
+    truncated = _check_truncated(len(drivers), "driver_roster")
     if not drivers:
         return [], truncated
 
@@ -614,9 +519,9 @@ async def _knight_archer_driver_rows(status: Optional[str]) -> tuple[list[dict],
     return rows, truncated
 
 
-@api_router.get("/knight-archer-driver-onboarding")
+@api_router.get("/driver-roster")
 @limiter.limit("10/minute")
-async def get_knight_archer_driver_onboarding(
+async def get_driver_roster(
     request: Request,
     status: Optional[str] = Query(None, description="Exact match on drivers.status; omit to include every status"),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
@@ -625,19 +530,21 @@ async def get_knight_archer_driver_onboarding(
     ),
     admin: dict = Depends(get_admin_user),
 ):
-    """Knight Archer (Saskatchewan insurance company) driver-onboarding
-    report — driver name, license number, license class, and current
-    status, for every onboarded driver regardless of status. Spinr-branded,
+    """Driver roster — name, license number, license class, and current
+    status, for every onboarded driver regardless of status (or filtered
+    to one status). Original use case: keeping Knight Archer Insurance (the
+    broker) current on active drivers, monthly cadence — content is
+    generic enough for other roster-review consumers too. Spinr-branded,
     not a fixed regulator form (see module docstring)."""
     _require_spinr_ca(email_to)
     try:
-        rows, truncated = await _knight_archer_driver_rows(status)
+        rows, truncated = await _driver_roster_rows(status)
     except Exception as e:
-        logger.error(f"Failed to build Knight Archer driver onboarding export: {e}", exc_info=True)
-        _capture_export_failure("knight_archer_driver_onboarding", e)
+        logger.error(f"Failed to build driver roster export: {e}", exc_info=True)
+        _capture_export_failure("driver_roster", e)
         metrics.inc(
             "spinr_admin_compliance_export_total",
-            {"report_type": "knight_archer_driver_onboarding", "outcome": "error"},
+            {"report_type": "driver_roster", "outcome": "error"},
         )
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
 
@@ -648,18 +555,18 @@ async def get_knight_archer_driver_onboarding(
 
     await _log_compliance_export(
         admin,
-        "knight_archer_driver_onboarding",
+        "driver_roster",
         {"status": status, "format": format},
         len(rows),
     )
     metrics.inc(
         "spinr_admin_compliance_export_total",
-        {"report_type": "knight_archer_driver_onboarding", "outcome": "success"},
+        {"report_type": "driver_roster", "outcome": "success"},
     )
 
     resp = _render_tabular_report(
-        title="Knight Archer Insurance — Driver Onboarding Report",
-        filename_base="knight_archer_driver_onboarding",
+        title="Driver Roster",
+        filename_base="driver_roster",
         fieldnames=fieldnames,
         rows=rows,
         subtitle=subtitle,
@@ -667,7 +574,7 @@ async def get_knight_archer_driver_onboarding(
         pdf_landscape=True,
         pdf_col_widths=[2.5, 2.2, 1.6, 1.8, 2.0],
     )
-    return await _deliver_report(resp, email_to, admin, "Knight Archer Insurance — Driver Onboarding Report")
+    return await _deliver_report(resp, email_to, admin, "Driver Roster")
 
 
 # ── T4A / Reportable Platform Operator Filer Handoff ─────────────────
@@ -750,7 +657,9 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
         stripe_info = await get_legal_name_and_address_from_stripe(d) or {}
         rows.append(
             {
-                "driver_name": d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or driver_id,
+                "driver_name": d.get("name")
+                or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip()
+                or driver_id,
                 "legal_name_stripe": stripe_info.get("legal_name") or "",
                 "address_line1": stripe_info.get("address_line1") or "",
                 "address_line2": stripe_info.get("address_line2") or "",
@@ -840,161 +749,193 @@ async def get_t4a_filer_handoff(
     return await _deliver_report(resp, email_to, admin, f"T4A Filer Handoff — Tax Year {year}")
 
 
-# ── Insurance Usage-Based Billing (per-km, cents) ─────────────────────
+# ── Insurance Usage-Based Billing (per-trip, per-phase) ───────────────
 #
-# Spinr's commercial TNC insurance is billed on a usage basis — the
-# insurer charges per kilometre driven while a driver is in a primary-
-# commercial insurance period (Period 2, en route to pickup, or Period 3,
-# passenger aboard — see CLAUDE.md's Insurance periods table; Period 1,
-# "available" with no assigned ride, is contingent-liability coverage,
-# not billed the same way). This report is the SIN-free-equivalent
-# pattern for insurer billing: it aggregates exactly what the insurer
-# needs to reconcile their invoice — per-driver insured kilometres in the
-# requested window — from data Spinr already tracks (driver_insurance_
-# periods' ride_id join to rides.distance_km), with no new data collection.
+# Spinr's commercial TNC insurers bill on a usage basis — per kilometre
+# driven while a driver is in a primary-commercial insurance period
+# (Period 2, en route to pickup, or Period 3, passenger aboard — see
+# CLAUDE.md's Insurance periods table; Period 1, "available" with no
+# assigned ride, is contingent-liability coverage, not billed the same
+# way). Two insurers, two fixed contracted rates (a business decision,
+# not derived): SGI at $0.11/km, Knight Archer at $0.011/km. Both share
+# the same per-trip, per-phase detail builder below — one row per
+# (driver, ride, phase) showing exactly how many km that specific phase
+# contributed, not just a per-driver total, so either insurer can audit
+# down to the trip. Monthly cadence by default — date_from/date_to
+# default to the current calendar month.
 #
-# rate_cents_per_km has NO built-in default tied to a real contracted
-# rate — the actual cents/km rate is a business/insurance-contract detail
-# this code has no way to know, and guessing one would silently misstate
-# every invoice. The admin must supply it per report request; the report
-# shows the math (km × rate) inline so a wrong rate is obvious before it's
-# sent, not discovered after the insurer disputes the invoice.
+# Reads driver_period_distances (migration 249, utils/period_distance_
+# audit.py's GPS-measured driven distance per insurance period), NOT
+# rides.distance_km. The retired aggregate report (insurance_usage_
+# billing) summed the full ride distance into both Period 2 and Period 3
+# and had to de-duplicate per ride to avoid double-billing; per-phase GPS
+# distance has no such ambiguity — each period's row already covers only
+# that phase's own leg of the trip.
+
+_SGI_RATE_PER_KM = Decimal("0.11")
+_KNIGHT_ARCHER_RATE_PER_KM = Decimal("0.011")
 
 
-async def _insurance_usage_billing_rows(
-    start_date: datetime, end_date: datetime, rate_cents_per_km: Decimal
+async def _insurance_billing_detail_rows(
+    start_date: datetime, end_date: datetime, rate_per_km: Decimal
 ) -> tuple[list[dict], Decimal, bool]:
-    periods = await db_supabase.get_rows(
-        "driver_insurance_periods",
+    """Per-trip, per-phase insured-km detail: one row per (driver, ride,
+    period) with driver identity, trip date, which phase (2 or 3), km
+    driven in that specific phase, and the billed amount for that row."""
+    distances = await db_supabase.get_rows(
+        "driver_period_distances",
         {
             "period": {"$in": [2, 3]},
             "started_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
         },
-        columns="driver_id,period,ride_id,started_at",
+        columns="driver_id,ride_id,period,distance_km,started_at",
+        order="started_at",
+        desc=True,
         limit=_ROW_LIMIT,
     )
-    truncated = _check_truncated(len(periods), "insurance_usage_billing")
-    if not periods:
+    truncated = _check_truncated(len(distances), "insurance_billing_detail")
+    if not distances:
         return [], Decimal("0"), truncated
 
-    ride_ids = sorted({p["ride_id"] for p in periods if p.get("ride_id")})
-    distance_by_ride: dict[str, Decimal] = {}
-    for i in range(0, len(ride_ids), 200):
-        batch = ride_ids[i : i + 200]
-        ride_rows = await db_supabase.get_rows(
-            "rides", {"id": {"$in": batch}}, columns="id,distance_km", limit=len(batch)
-        )
-        for r in ride_rows:
-            distance_by_ride[r["id"]] = _d(r.get("distance_km"))
-
-    # A ride can appear in both a Period 2 row and a Period 3 row (en
-    # route, then passenger aboard) — the insured distance for that ride
-    # is counted once, not once per period row, or a single ride would
-    # double-bill. Track by (driver_id, ride_id) pair, not by period row.
-    seen_ride_per_driver: dict[str, set[str]] = {}
-    km_by_driver: dict[str, Decimal] = {}
-    for p in periods:
-        driver_id, ride_id = p.get("driver_id"), p.get("ride_id")
-        if not driver_id or not ride_id:
-            continue
-        seen = seen_ride_per_driver.setdefault(driver_id, set())
-        if ride_id in seen:
-            continue
-        seen.add(ride_id)
-        km_by_driver[driver_id] = km_by_driver.get(driver_id, Decimal("0")) + distance_by_ride.get(ride_id, Decimal("0"))
-
-    driver_ids = sorted(km_by_driver.keys())
-    driver_rows: list[dict] = []
+    driver_ids = sorted({d["driver_id"] for d in distances if d.get("driver_id")})
+    driver_names: dict[str, str] = {}
     for i in range(0, len(driver_ids), 200):
         batch = driver_ids[i : i + 200]
-        driver_rows.extend(
-            await db_supabase.get_rows(
-                "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
-            )
+        driver_rows = await db_supabase.get_rows(
+            "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
         )
-    by_id = {d["id"]: d for d in driver_rows}
+        for d in driver_rows:
+            driver_names[d["id"]] = (
+                d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
+            )
 
     grand_total_km = Decimal("0")
     rows: list[dict] = []
-    for driver_id in driver_ids:
-        km = km_by_driver[driver_id]
+    for d in distances:
+        km = _d(d.get("distance_km"))
         grand_total_km += km
-        d = by_id.get(driver_id, {})
-        amount_cents = (km * rate_cents_per_km).quantize(Decimal("1"))
+        amount = (km * rate_per_km).quantize(Decimal("0.01"))
         rows.append(
             {
-                "driver_name": d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or driver_id,
-                "insured_trips": len(seen_ride_per_driver.get(driver_id, set())),
-                "insured_km": f"{km:.2f}",
-                "rate_cents_per_km": f"{rate_cents_per_km:.2f}",
-                "amount_cents": str(amount_cents),
-                "amount_dollars": f"{(amount_cents / 100):.2f}",
+                # driver_id/ride_id intentionally excluded from the rendered
+                # report (same product decision as the retired insurance-
+                # period-audit report) — driver_name + trip_date already
+                # identify the row.
+                "driver_name": driver_names.get(d.get("driver_id"), d.get("driver_id") or ""),
+                "trip_date": report_branding.format_report_timestamp(d.get("started_at")),
+                "phase": _PERIOD_LABELS.get(d.get("period"), str(d.get("period"))),
+                "phase_km": f"{km:.3f}",
+                "rate_per_km": f"${rate_per_km:.3f}",
+                "amount": f"${amount:.2f}",
             }
         )
     return rows, grand_total_km, truncated
 
 
-@api_router.get("/insurance-usage-billing")
+async def _render_insurance_billing_report(
+    admin: dict,
+    insurer_label: str,
+    rate_per_km: Decimal,
+    report_type: str,
+    date_from: Optional[str],
+    date_to: Optional[str],
+    format: str,
+    email_to: Optional[str],
+) -> Response:
+    """Shared handler body for the SGI and Knight Archer billing endpoints
+    below — same query, same row shape, only the insurer label and
+    contracted rate differ."""
+    _require_spinr_ca(email_to)
+    start_date, end_date = _resolve_date_window(date_from, date_to)
+
+    try:
+        rows, grand_total_km, truncated = await _insurance_billing_detail_rows(start_date, end_date, rate_per_km)
+    except Exception as e:
+        logger.error(f"Failed to build {insurer_label} insurance billing report: {e}", exc_info=True)
+        _capture_export_failure(report_type, e)
+        metrics.inc("spinr_admin_compliance_export_total", {"report_type": report_type, "outcome": "error"})
+        raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
+
+    gate_response = await _check_export_gate(
+        admin,
+        f"compliance.{report_type}",
+        {"date_from": date_from, "date_to": date_to, "format": format, "email_to": email_to},
+        len(rows),
+    )
+    if gate_response is not None:
+        return gate_response
+
+    fieldnames = ["driver_name", "trip_date", "phase", "phase_km", "rate_per_km", "amount"]
+    total_amount = (grand_total_km * rate_per_km).quantize(Decimal("0.01"))
+    subtitle = [
+        f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — {insurer_label} — Periods 2+3 only",
+        f"Total: {grand_total_km:.2f} km  ·  Rate: ${rate_per_km:.3f}/km  ·  Total billed: ${total_amount}",
+    ]
+    if truncated:
+        subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow the date range"
+
+    await _log_compliance_export(admin, report_type, {"date_from": date_from, "date_to": date_to}, len(rows))
+    metrics.inc("spinr_admin_compliance_export_total", {"report_type": report_type, "outcome": "success"})
+
+    resp = _render_tabular_report(
+        title=f"{insurer_label} Insurance Billing",
+        filename_base=report_type,
+        fieldnames=fieldnames,
+        rows=rows,
+        subtitle=subtitle,
+        format=format,
+        pdf_landscape=True,
+        pdf_col_widths=[2.2, 1.8, 2.6, 1.4, 1.4, 1.4],
+    )
+    return await _deliver_report(resp, email_to, admin, f"{insurer_label} Insurance Billing")
+
+
+@api_router.get("/insurance-billing-sgi")
 @limiter.limit("10/minute")
-async def get_insurance_usage_billing(
+async def get_insurance_billing_sgi(
     request: Request,
-    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
-    rate_cents_per_km: Decimal = Query(..., gt=0, description="Contracted insurer rate, in cents per km"),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     email_to: Optional[str] = Query(
         None, description="Email the report to this @spinr.ca address instead of downloading it"
     ),
     admin: dict = Depends(get_admin_user),
 ):
-    """Per-driver insured kilometres (Period 2 + 3, primary-commercial
-    coverage) and the resulting bill at the given cents/km rate — for
-    reconciling the insurer's usage-based-insurance invoice. Spinr-
-    branded; this is Spinr's own reconciliation report, not a fixed
+    """SGI usage-based insurance billing — per-trip, per-phase insured km
+    at SGI's contracted rate ($0.11/km), for reconciling SGI's invoice.
+    Spinr-branded; this is Spinr's own reconciliation report, not a fixed
     insurer form."""
-    _require_spinr_ca(email_to)
-    start_date = _parse_date_range(date_range)
-    end_date = datetime.now(timezone.utc)
+    return await _render_insurance_billing_report(
+        admin, "SGI", _SGI_RATE_PER_KM, "insurance_billing_sgi", date_from, date_to, format, email_to
+    )
 
-    try:
-        rows, grand_total_km, truncated = await _insurance_usage_billing_rows(start_date, end_date, rate_cents_per_km)
-    except Exception as e:
-        logger.error(f"Failed to build insurance usage billing report: {e}", exc_info=True)
-        _capture_export_failure("insurance_usage_billing", e)
-        metrics.inc("spinr_admin_compliance_export_total", {"report_type": "insurance_usage_billing", "outcome": "error"})
-        raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
 
-    gate_response = await _check_export_gate(
+@api_router.get("/insurance-billing-knight-archer")
+@limiter.limit("10/minute")
+async def get_insurance_billing_knight_archer(
+    request: Request,
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
+    format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
+    email_to: Optional[str] = Query(
+        None, description="Email the report to this @spinr.ca address instead of downloading it"
+    ),
+    admin: dict = Depends(get_admin_user),
+):
+    """Knight Archer usage-based insurance billing — per-trip, per-phase
+    insured km at Knight Archer's contracted rate ($0.011/km), for
+    reconciling their invoice. Spinr-branded, not a fixed insurer form."""
+    return await _render_insurance_billing_report(
         admin,
-        "compliance.insurance_usage_billing",
-        {"date_range": date_range, "rate_cents_per_km": str(rate_cents_per_km), "format": format, "email_to": email_to},
-        len(rows),
+        "Knight Archer",
+        _KNIGHT_ARCHER_RATE_PER_KM,
+        "insurance_billing_knight_archer",
+        date_from,
+        date_to,
+        format,
+        email_to,
     )
-    if gate_response is not None:
-        return gate_response
-
-    fieldnames = ["driver_name", "insured_trips", "insured_km", "rate_cents_per_km", "amount_cents", "amount_dollars"]
-    total_amount_dollars = (grand_total_km * rate_cents_per_km / 100).quantize(Decimal("0.01"))
-    subtitle = [
-        f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — Periods 2+3 only (primary-commercial coverage)",
-        f"Total: {grand_total_km:.2f} km  ·  Rate: {rate_cents_per_km:.2f} cents/km  ·  Total billed: ${total_amount_dollars}",
-    ]
-    if truncated:
-        subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow the date range"
-
-    await _log_compliance_export(
-        admin, "insurance_usage_billing", {"date_range": date_range, "rate_cents_per_km": str(rate_cents_per_km)}, len(rows)
-    )
-    metrics.inc("spinr_admin_compliance_export_total", {"report_type": "insurance_usage_billing", "outcome": "success"})
-
-    resp = _render_tabular_report(
-        title="Insurance Usage-Based Billing",
-        filename_base="insurance_usage_billing",
-        fieldnames=fieldnames,
-        rows=rows,
-        subtitle=subtitle,
-        format=format,
-    )
-    return await _deliver_report(resp, email_to, admin, "Insurance Usage-Based Billing")
 
 
 # ── Airport Trips ──────────────────────────────────────────────────
@@ -1042,7 +983,9 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
             "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
         )
         for d in driver_rows:
-            driver_names[d["id"]] = d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
+            driver_names[d["id"]] = (
+                d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
+            )
 
     area_ids = sorted({r["service_area_id"] for r in airport_rides if r.get("service_area_id")})
     area_names: dict[str, str] = {}
@@ -1056,7 +999,11 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
     for r in airport_rides:
         pickup_is_airport = "airport" in (r.get("pickup_address") or "").lower()
         dropoff_is_airport = "airport" in (r.get("dropoff_address") or "").lower()
-        trip_type = "Both" if pickup_is_airport and dropoff_is_airport else ("Airport Pickup" if pickup_is_airport else "Airport Dropoff")
+        trip_type = (
+            "Both"
+            if pickup_is_airport and dropoff_is_airport
+            else ("Airport Pickup" if pickup_is_airport else "Airport Dropoff")
+        )
         rows.append(
             {
                 "date": report_branding.format_report_timestamp(r.get("ride_completed_at")),
@@ -1076,7 +1023,8 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
 @limiter.limit("10/minute")
 async def get_airport_trips(
     request: Request,
-    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     email_to: Optional[str] = Query(
         None, description="Email the report to this @spinr.ca address instead of downloading it"
@@ -1090,8 +1038,7 @@ async def get_airport_trips(
     for why: general TNC-airport reporting convention, not a confirmed
     published spec)."""
     _require_spinr_ca(email_to)
-    start_date = _parse_date_range(date_range)
-    end_date = datetime.now(timezone.utc)
+    start_date, end_date = _resolve_date_window(date_from, date_to)
 
     try:
         rows, truncated = await _airport_trips_rows(start_date, end_date)
@@ -1102,12 +1049,23 @@ async def get_airport_trips(
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
 
     gate_response = await _check_export_gate(
-        admin, "compliance.airport_trips", {"date_range": date_range, "format": format, "email_to": email_to}, len(rows)
+        admin,
+        "compliance.airport_trips",
+        {"date_from": date_from, "date_to": date_to, "format": format, "email_to": email_to},
+        len(rows),
     )
     if gate_response is not None:
         return gate_response
 
-    fieldnames = ["date", "trip_type", "pickup_address", "dropoff_address", "distance_km", "driver_name", "service_area"]
+    fieldnames = [
+        "date",
+        "trip_type",
+        "pickup_address",
+        "dropoff_address",
+        "distance_km",
+        "driver_name",
+        "service_area",
+    ]
     total_km = sum((Decimal(r["distance_km"]) for r in rows), Decimal("0"))
     subtitle = [
         f"{start_date.date().isoformat()} to {end_date.date().isoformat()}",
@@ -1116,7 +1074,9 @@ async def get_airport_trips(
     if truncated:
         subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides scanned; narrow the date range"
 
-    await _log_compliance_export(admin, "airport_trips", {"date_range": date_range, "format": format}, len(rows))
+    await _log_compliance_export(
+        admin, "airport_trips", {"date_from": date_from, "date_to": date_to, "format": format}, len(rows)
+    )
     metrics.inc("spinr_admin_compliance_export_total", {"report_type": "airport_trips", "outcome": "success"})
 
     resp = _render_tabular_report(

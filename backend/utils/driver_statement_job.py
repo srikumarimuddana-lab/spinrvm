@@ -59,6 +59,9 @@ _GRACE_DAYS = 2
 # would skip that period's statements permanently.
 _CATCHUP_PERIODS = 2
 
+# Page size for the driver / ledger scans (see _fetch_all).
+_PAGE_SIZE = 500
+
 try:
     from utils.loop_monitor import record_heartbeat as _record_heartbeat
 except ImportError:  # pragma: no cover
@@ -173,19 +176,45 @@ async def _tick() -> None:
             )
 
 
+async def _fetch_all(table: str, filters: dict, columns: str) -> list[dict]:
+    """Every matching row, paged.
+
+    A single large-``limit`` read is NOT safe here: PostgREST caps any query at
+    its ``db-max-rows`` setting (1000 on Supabase) and returns the truncated
+    page with no signal that rows were dropped. A driver past that cap would
+    silently never receive a statement — and nothing would ever surface it,
+    since the job would consider the period fully handled. Paging until a short
+    page comes back is the only way to be certain the scan is complete.
+    """
+    out: list[dict] = []
+    offset = 0
+    while True:
+        page = (
+            await db_supabase.get_rows(
+                table,
+                filters,
+                columns=columns,
+                order="id",
+                limit=_PAGE_SIZE,
+                offset=offset,
+            )
+            or []
+        )
+        out.extend(page)
+        if len(page) < _PAGE_SIZE:
+            return out
+        offset += _PAGE_SIZE
+
+
 async def _ensure_period(period_type: str, start_d: date, end_d: date) -> None:
     """Produce statements for every driver that doesn't have one yet."""
-    existing = (
-        await db_supabase.get_rows(
-            "driver_statements",
-            {"period_type": period_type, "period_start": start_d.isoformat()},
-            columns="driver_id",
-            limit=20000,
-        )
-        or []
+    existing = await _fetch_all(
+        "driver_statements",
+        {"period_type": period_type, "period_start": start_d.isoformat()},
+        "driver_id,id",
     )
     done = {r["driver_id"] for r in existing}
-    drivers = await db_supabase.get_rows("drivers", {}, columns="id,user_id,name", limit=10000) or []
+    drivers = await _fetch_all("drivers", {}, "id,user_id,name")
 
     todo = [d for d in drivers if d["id"] not in done]
     if not todo:

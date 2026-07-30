@@ -185,9 +185,9 @@ driver_statements` (migration header).
 
 ## 9b. Self-review findings (found and fixed before merge)
 
-An adversarial pass over this diff surfaced four real defects. All are fixed
-in this branch with regression tests; recorded here because two of them are
-the kind that would only have shown up in production months later.
+An adversarial pass over this diff surfaced six real defects. All are fixed
+in this branch with regression tests; recorded here because several are the
+kind that would only have shown up in production months later.
 
 | # | Finding | Severity | Fix |
 |---|---|---|---|
@@ -195,6 +195,8 @@ the kind that would only have shown up in production months later.
 | 2 | **Late tips never appeared on any statement.** `routes/rides/payments.add_tip` accepts a tip on any completed ride with no time window. A statement cut at midnight missed a tip added the next morning; the ledger row then blocked a redo, and the next period's window excludes that ride — so the tip was lost from every statement, permanently under-reporting driver income. | **Medium** (financial-document accuracy) | 2-day grace before a period is eligible (`_GRACE_DAYS`), plus `_CATCHUP_PERIODS` so an outage can't skip a period. Weekly now lands Wednesday, monthly on the 3rd. |
 | 3 | **Statement PDF silently truncated the payout table at 40 rows** while "Total paid out" summed all of them — on a document a driver may file for tax, the visible rows wouldn't add up to the stated total, with no indication anything was omitted (CLAUDE.md forbids silent caps). Reachable for instant-payout-heavy drivers. | **Medium** | The overflow is now stated on the document ("+N more payouts not shown… the total below includes all of them"), with a test that extracts the rendered text via `pypdf`. |
 | 4 | **Stripe payout sync silently processed at most ~1000 drivers.** `_fetch_sync_targets` called `.execute()` with no `.limit()`/`.range()`, so PostgREST's `db-max-rows` (1000 on Supabase) capped it **with no truncation signal** — drivers past the cap would never get their payout history synced, under-reporting their T4A. | **Medium** (CRA reporting) | Explicit `.order("id").range(...)` pagination. The test fake now models the server-side cap, and a new test with 1250 drivers proves every one is scanned. |
+| 5 | **Admin statement endpoints were unrate-limited.** The email path sends to the DRIVER's inbox at an admin's discretion — the same abuse surface `tax_doc_email_limit` guards for the driver's own sends — and both paths rebuild the statement and render a PDF per call. | **Low** (admins are trusted + audited, but a compromised session could inbox-bomb a driver / burn SES reputation) | `admin_statement_email_limit` (20/hour) and `admin_statement_download_limit` (60/hour); email is the tighter of the two. |
+| 6 | **The statement job's driver scan could silently skip drivers.** `_ensure_period` read drivers with a single `limit=10000`, but PostgREST caps any query at `db-max-rows` and returns the truncated page with no signal. A driver past the cap would never receive a statement, and the job would consider the period fully handled, so nothing would surface it. | **Low today, latent** (~900 drivers now; same class as finding 4, and the codebase-wide `limit=10000` idiom shares the assumption) | New `_fetch_all` helper pages both the driver and ledger scans until a short page returns; test with `_PAGE_SIZE + 137` drivers proves every one is processed. |
 
 ## What was NOT verified
 

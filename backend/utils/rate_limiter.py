@@ -306,6 +306,18 @@ export_approvals_decide_limit = default_limiter.limit("20/minute")
 # for retries.
 tax_doc_email_limit = default_limiter.limit("6/hour")
 
+# Admin driver earnings-statement endpoints. Both rebuild the statement from
+# live data (rides + bonuses + incentives + payouts reads) and render a PDF, so
+# neither is free; the email path additionally sends to the DRIVER's inbox at an
+# admin's discretion, which is the abuse surface tax_doc_email_limit guards for
+# the driver's own self-serve sends. Email is the tighter of the two: a support
+# agent working a queue needs a handful per hour, while a compromised admin
+# session must not be able to inbox-bomb a driver or burn SES reputation.
+# Download is looser (no outbound mail, and an admin may legitimately pull
+# several periods for one dispute) but still bounded, unlike before.
+admin_statement_email_limit = default_limiter.limit("20/hour")
+admin_statement_download_limit = default_limiter.limit("60/hour")
+
 # AI assistant chat — each message triggers LLM spend; per-user daily cap
 # (ai_daily_message_cap) is enforced separately in backend/ai/orchestrator.py
 ai_chat_limit = default_limiter.limit("10/minute")

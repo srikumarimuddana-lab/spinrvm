@@ -175,6 +175,36 @@ async def test_process_driver_send_failure_marks_failed():
 
 
 @pytest.mark.asyncio
+async def test_ensure_period_pages_past_the_postgrest_row_cap():
+    """PostgREST truncates a query at db-max-rows with no signal, so a single
+    big-limit read would silently skip drivers — and the job would consider the
+    period fully handled, so nothing would ever surface it."""
+    total = job._PAGE_SIZE + 137
+    drivers = [{"id": f"drv_{i:05d}", "user_id": f"u{i}"} for i in range(total)]
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "driver_statements":
+            return []
+        if table == "drivers":
+            offset = kw.get("offset") or 0
+            limit = kw.get("limit")
+            # Model the server-side cap: never return more than one page.
+            return drivers[offset : offset + limit]
+        return []
+
+    with (
+        patch.object(job, "db_supabase") as db,
+        patch.object(job, "_process_driver", AsyncMock()) as proc,
+    ):
+        db.get_rows = AsyncMock(side_effect=_get_rows)
+        await job._ensure_period("weekly", date(2026, 7, 20), date(2026, 7, 26))
+
+    assert proc.await_count == total
+    processed = {c.args[0]["id"] for c in proc.await_args_list}
+    assert len(processed) == total
+
+
+@pytest.mark.asyncio
 async def test_ensure_period_only_processes_unclaimed_drivers():
     drivers = [{"id": "d1", "user_id": "u1"}, {"id": "d2", "user_id": "u2"}]
 

@@ -23,7 +23,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 
 try:
@@ -33,6 +33,10 @@ try:
     from ...utils.audit_logger import log_admin_action
     from ...utils.driver_statement import PERIOD_TYPES, build_custom_statement, build_statement
     from ...utils.driver_statement_pdf import generate_driver_statement_pdf
+    from ...utils.rate_limiter import (
+        admin_statement_download_limit,
+        admin_statement_email_limit,
+    )
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_admin_user  # noqa: F401
@@ -44,6 +48,10 @@ except ImportError:
         build_statement,
     )
     from utils.driver_statement_pdf import generate_driver_statement_pdf  # type: ignore
+    from utils.rate_limiter import (  # type: ignore
+        admin_statement_download_limit,
+        admin_statement_email_limit,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -140,15 +148,22 @@ async def list_driver_statements(
 
 
 @router.get("/drivers/{driver_id}/statements/pdf")
+@admin_statement_download_limit
 async def download_driver_statement(
     driver_id: str,
+    request: Request = None,
     period_type: Optional[str] = Query(None),
     period_start: Optional[str] = Query(None),
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     admin: dict = Depends(get_admin_user),
 ):
-    """Download the statement PDF for the selected period / date range."""
+    """Download the statement PDF for the selected period / date range.
+
+    Rate-limited (60/hour): rebuilds the statement from live data and renders
+    a PDF. SlowAPI needs a parameter named ``request`` typed as starlette
+    Request; do not remove it.
+    """
     driver = await _driver_or_404(driver_id)
     statement = await _build_for_selection(driver, period_type, period_start, start, end)
     pdf_bytes = generate_driver_statement_pdf(statement)
@@ -169,15 +184,24 @@ async def download_driver_statement(
 
 
 @router.post("/drivers/{driver_id}/statements/email")
+@admin_statement_email_limit
 async def email_driver_statement_admin(
     driver_id: str,
+    request: Request = None,
     period_type: Optional[str] = Query(None),
     period_start: Optional[str] = Query(None),
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     admin: dict = Depends(get_admin_user),
 ):
-    """Send the selected statement to the driver's on-file email address."""
+    """Send the selected statement to the driver's on-file email address.
+
+    Rate-limited (20/hour): this sends mail to the DRIVER's inbox at an
+    admin's discretion, so it needs the same class of guard as the driver's
+    own tax-document sends — a compromised admin session must not be able to
+    inbox-bomb a driver or burn SES sender reputation. SlowAPI needs a
+    parameter named ``request`` typed as starlette Request; do not remove it.
+    """
     driver = await _driver_or_404(driver_id)
     user = await db_supabase.get_user_by_id(driver.get("user_id")) if driver.get("user_id") else None
     email = ((user or {}).get("email") or "").strip()

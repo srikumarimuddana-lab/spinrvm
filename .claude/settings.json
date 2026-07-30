@@ -126,7 +126,8 @@
       {
         "matcher": "Write|Edit",
         "hooks": [
-          { "type": "command", "command": "bash .claude/hooks/pre-migration-write.sh" }
+          { "type": "command", "command": "bash .claude/hooks/pre-migration-write.sh" },
+          { "type": "command", "command": "bash .claude/hooks/pre-domain-write.sh" }
         ]
       }
     ],

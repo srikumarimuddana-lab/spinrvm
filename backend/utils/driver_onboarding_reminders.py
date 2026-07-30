@@ -258,29 +258,83 @@ async def _reminder_settings() -> tuple[frozenset[str], int]:
     return statuses, max_per_type
 
 
-async def _prior_reminder_counts(driver_ids: list[str], max_per_type: int) -> dict[tuple[str, str], int] | None:
-    """{(driver_id, reminder_type): reminders already claimed}, or None on read failure.
+COUNTS_RPC = "driver_onboarding_reminder_counts"
 
-    One batched read per page rather than a per-driver count (the N+1 pattern
-    the perf conventions call out). Skipped entirely when the cap is disabled.
+
+async def _counts_via_rpc(driver_ids: list[str]) -> dict[tuple[str, str], int] | None:
+    """Exact per-driver/per-type counts from the DB, or None if unavailable.
+
+    Aggregating server-side keeps the row limit out of the path — see
+    migration 273 for why a client-side count was not safe.
     """
-    if max_per_type <= 0 or not driver_ids:
-        return {}
+    try:
+        rows = await db.rpc(COUNTS_RPC, {"p_driver_ids": driver_ids})
+    except Exception as exc:
+        original = getattr(exc, "details", {}).get("original") if hasattr(exc, "details") else None
+        logger.error(
+            "onboarding reminders: %s RPC failed (is migration 273 applied?): %s original=%s",
+            COUNTS_RPC,
+            exc,
+            original,
+            exc_info=True,
+        )
+        return None
+    if rows is None:
+        logger.error("onboarding reminders: %s RPC unavailable (no supabase client)", COUNTS_RPC)
+        return None
+    return {(str(r.get("driver_id")), str(r.get("reminder_type"))): int(r.get("sent_count") or 0) for r in rows}
+
+
+async def _counts_via_scan(driver_ids: list[str], max_per_type: int) -> dict[tuple[str, str], int] | None:
+    """Fallback client-side count. None on read failure.
+
+    Used only when the RPC is unavailable (migration 273 not yet applied).
+    The log holds rows written before the cap existed, so the row count is NOT
+    bounded by max_per_type and a limit can truncate. PostgREST applies no
+    ORDER BY, so truncation drops arbitrary rows and under-counts — which would
+    push a capped driver again, the exact failure this cap exists to prevent.
+    So truncation is detected and fails CLOSED: the whole page is reported at
+    the cap, suppressing sends, rather than silently over-notifying.
+    """
+    limit = max(5000, len(driver_ids) * (max_per_type + 1) * 4)
     rows = await _get_rows(
         LOG_TABLE,
         {"driver_id": {"$in": driver_ids}},
-        # One row per (driver, type, local_date); a capped driver accumulates at
-        # most max_per_type rows per type, +1 slack for the in-flight day.
-        limit=max(1000, len(driver_ids) * (max_per_type + 1) * 2),
+        limit=limit,
         columns="driver_id,reminder_type",
     )
     if rows is None:
         return None
+    if len(rows) >= limit:
+        logger.error(
+            "onboarding reminders: claim-log read hit the %s-row limit for %s drivers — "
+            "counts would under-report, suppressing this page's reminders instead. "
+            "Apply migration 273 so counts come from the %s RPC.",
+            limit,
+            len(driver_ids),
+            COUNTS_RPC,
+        )
+        return {(did, kind): max_per_type for did in driver_ids for kind in (VEHICLE_DETAILS, VEHICLE_DOCUMENTS)}
     counts: dict[tuple[str, str], int] = {}
     for row in rows:
         key = (str(row.get("driver_id")), str(row.get("reminder_type")))
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+async def _prior_reminder_counts(driver_ids: list[str], max_per_type: int) -> dict[tuple[str, str], int] | None:
+    """{(driver_id, reminder_type): reminders already claimed}, or None on read failure.
+
+    Skipped entirely when the cap is disabled. Prefers the DB-side aggregate;
+    falls back to a truncation-guarded client-side count so the loop still
+    works (conservatively) before migration 273 is applied.
+    """
+    if max_per_type <= 0 or not driver_ids:
+        return {}
+    counts = await _counts_via_rpc(driver_ids)
+    if counts is not None:
+        return counts
+    return await _counts_via_scan(driver_ids, max_per_type)
 
 
 async def _scan_pages(

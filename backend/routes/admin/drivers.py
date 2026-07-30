@@ -18,7 +18,7 @@ try:
     from ...utils.datetime_utils import parse_iso_utc
     from ...utils.driver_status_notifications import (
         action_message,
-        should_notify_driver,
+        notify_driver_status_change,
         status_message,
     )
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
@@ -34,7 +34,7 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_status_notifications import (  # type: ignore
         action_message,
-        should_notify_driver,
+        notify_driver_status_change,
         status_message,
     )
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
@@ -1546,33 +1546,6 @@ async def admin_driver_vehicle_history(driver_id: str, admin: dict = Depends(get
     return {"history": rows or []}
 
 
-async def _notify_driver_status_change(
-    driver: Dict[str, Any],
-    message: Optional[Dict[str, Any]],
-    context: str,
-) -> None:
-    """Send a lifecycle push, if the policy produced one and there is a recipient.
-
-    Best-effort: a push failure must not fail the admin action, which has
-    already been persisted. Logged at warning (not error) because the state
-    change itself succeeded and the driver still sees it in-app — the inbox row
-    is written by send_push_notification regardless of device delivery.
-    """
-    if not message or not should_notify_driver(driver):
-        return
-    try:
-        await send_push_notification(
-            driver["user_id"],
-            message["title"],
-            message["body"],
-            message["data"],
-            priority=message["priority"],
-            target_app="driver",
-        )
-    except Exception as e:
-        logger.warning(f"[ADMIN] Push notification failed for driver {context}: {e}")
-
-
 @router.post("/drivers/{driver_id}/action")
 async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: dict = Depends(get_admin_user)):
     """Perform a lifecycle action on a driver.
@@ -1696,7 +1669,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
     # their application was processed. Copy and delivery tier live in
     # utils/driver_status_notifications so the status-override endpoint and the
     # driver-triggered needs_review paths use the same policy.
-    await _notify_driver_status_change(driver, action_message(req.action, req.reason), req.action)
+    await notify_driver_status_change(driver, action_message(req.action, req.reason), req.action)
 
     return {
         "message": f"Driver {req.action}d successfully",
@@ -1770,7 +1743,7 @@ async def admin_override_driver_status(
     # to go online. Same policy as the action endpoint, keyed on the status
     # entered rather than an action name.
     if req.status != driver.get("status"):
-        await _notify_driver_status_change(
+        await notify_driver_status_change(
             driver, status_message(req.status, req.reason), f"status_override:{req.status}"
         )
 

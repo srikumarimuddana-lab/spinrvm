@@ -161,7 +161,7 @@ class TestDriverAction:
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-r")),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+            patch("features.send_push_notification", AsyncMock()) as push,
         ):
             resp = self._post(test_client, "reject", reason="Licence expired")
         assert resp.status_code == 200, resp.text
@@ -191,7 +191,7 @@ class TestDriverAction:
             patch("db_supabase.update_one", AsyncMock()),
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-d")),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+            patch("features.send_push_notification", AsyncMock()) as push,
         ):
             resp = self._post(test_client, "ban", reason="fraud")
         assert resp.status_code == 200, resp.text
@@ -270,7 +270,7 @@ class TestStatusOverride:
             patch("db_supabase.update_one", AsyncMock()),
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock()),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+            patch("features.send_push_notification", AsyncMock()) as push,
         ):
             resp = test_client.put(
                 "/api/admin/drivers/drv-1/status-override",
@@ -289,7 +289,7 @@ class TestStatusOverride:
             patch("db_supabase.update_one", AsyncMock()),
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock()),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+            patch("features.send_push_notification", AsyncMock()) as push,
         ):
             resp = test_client.put("/api/admin/drivers/drv-1/status-override", json={"status": "pending"})
         assert resp.status_code == 200, resp.text
@@ -343,6 +343,8 @@ class TestVerifyDriver:
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+            # admin_verify_driver still sends directly, not through the
+            # lifecycle policy module — so its binding is the local one.
             patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
             patch("routes.admin.drivers._fire_driver_approved", lambda d: None),
         ):

@@ -557,6 +557,16 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        not re-run locally this pass (relying on this PR's CI as the
        regression gate — see
        `docs/change-log/2026-07-30-a1b-admin-maintenance-fleet-staff-coverage.md`).
+     - `routes/admin/monitoring.py`: 54% → 96% (live-map driver/ride
+       fetchers, Redis health/connectivity/flush-prefix, WebSocket health,
+       infrastructure snapshot). See
+       `docs/change-log/2026-07-29-a1b-admin-monitoring-messaging-legal-coverage.md`.
+     - `routes/admin/messaging.py`: 60% → 97% (recipient resolution +
+       service-area filter, per-channel senders, `_fan_out` stats
+       write-back including the failure-to-persist path, audience-preview,
+       suppressions). Same change-log entry.
+     - `routes/admin/legal_documents.py`: 47% → 100% (upsert version-bump
+       semantics — PIPEDA consent-version tracking). Same change-log entry.
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth

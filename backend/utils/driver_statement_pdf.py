@@ -29,10 +29,10 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
     period_type = str(statement.get("period_type") or "weekly")
     label = str(statement.get("period_label") or "")
     driver_name = str(statement.get("driver_name") or "Driver")
-    doc_kind = "Monthly" if period_type == "monthly" else "Weekly"
+    doc_kind = {"monthly": "Monthly ", "weekly": "Weekly "}.get(period_type, "")
 
     pdf = report_branding.new_branded_pdf(
-        title=f"{doc_kind} Earnings Statement",
+        title=f"{doc_kind}Earnings Statement",
         subtitle=[label, f"Driver: {driver_name}"],
     )
     pdf.set_auto_page_break(auto=True, margin=22)

@@ -138,6 +138,23 @@ async def test_build_statement_no_activity():
 
 
 @pytest.mark.asyncio
+async def test_build_custom_statement_range_validation_and_label():
+    with patch.object(stmt, "db_supabase") as db:
+        db.get_rows = _tables(rides=[{"id": "r1", "driver_earnings": "10.00"}])
+        out = await stmt.build_custom_statement({"id": "d1"}, date(2026, 7, 1), date(2026, 7, 15))
+    assert out["period_type"] == "custom"
+    assert out["period_start"] == "2026-07-01"
+    assert out["period_end"] == "2026-07-15"
+    assert out["period_label"] == "Jul 01 - 15, 2026"
+    assert out["earnings"]["ride_earnings"] == "10.00"
+
+    with pytest.raises(ValueError):
+        await stmt.build_custom_statement({"id": "d1"}, date(2026, 7, 15), date(2026, 7, 1))
+    with pytest.raises(ValueError):
+        await stmt.build_custom_statement({"id": "d1"}, date(2025, 1, 1), date(2026, 7, 15))
+
+
+@pytest.mark.asyncio
 async def test_build_statement_legacy_fare_component_fallback():
     """Rows predating driver_earnings fall back to fare components + tip —
     same rule as routes/drivers/_shared._ride_income."""

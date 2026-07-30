@@ -41,7 +41,14 @@ STATEMENT_TZ = ZoneInfo("America/Regina")
 
 WEEKLY = "weekly"
 MONTHLY = "monthly"
+# Arbitrary date range — admin "filter by dates → download / email" only;
+# the scheduled job and driver self-serve use the anchored types above.
+CUSTOM = "custom"
 PERIOD_TYPES = {WEEKLY, MONTHLY}
+
+# Cap for custom ranges: a statement is a period document, not a full-history
+# export (that's the T4A / DSAR path).
+MAX_CUSTOM_RANGE_DAYS = 366
 
 _ZERO = Decimal("0")
 _CENT = Decimal("0.01")
@@ -142,7 +149,7 @@ async def build_statement(
     *,
     driver_name: str | None = None,
 ) -> dict:
-    """Aggregate one driver's earnings + payouts for one period.
+    """Aggregate one driver's earnings + payouts for one anchored period.
 
     ``driver`` needs at least ``id``. Returns a JSON-serializable dict with
     2-dp money strings; ``has_activity`` is False when the period contains no
@@ -150,6 +157,32 @@ async def build_statement(
     emailing those so inactive drivers aren't spammed with $0.00 statements).
     """
     start_d, end_d = period_bounds(period_type, period_start)
+    return await _build(driver, period_type, start_d, end_d, driver_name=driver_name)
+
+
+async def build_custom_statement(
+    driver: dict,
+    start_d: date,
+    end_d: date,
+    *,
+    driver_name: str | None = None,
+) -> dict:
+    """Statement for an arbitrary inclusive date range (admin date filter)."""
+    if end_d < start_d:
+        raise ValueError("end date is before start date")
+    if (end_d - start_d).days > MAX_CUSTOM_RANGE_DAYS:
+        raise ValueError(f"range exceeds {MAX_CUSTOM_RANGE_DAYS} days")
+    return await _build(driver, CUSTOM, start_d, end_d, driver_name=driver_name)
+
+
+async def _build(
+    driver: dict,
+    period_type: str,
+    start_d: date,
+    end_d: date,
+    *,
+    driver_name: str | None = None,
+) -> dict:
     win_gte, win_lt = period_window_utc(start_d, end_d)
     driver_id = driver["id"]
     window = {"$gte": win_gte, "$lt": win_lt}

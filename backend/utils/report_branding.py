@@ -43,6 +43,13 @@ RULE_RGB = (224, 224, 224)  # light grey divider lines
 _ASSET_DIR = Path(__file__).resolve().parents[1] / "static" / "branding"
 LOGO_PATH = _ASSET_DIR / "spinr_logo.png"
 
+# Same company identity line used in the rider receipt footer
+# (utils/receipt_pdf.py's "Spinr Technologies Inc. - Saskatoon, SK") — kept
+# identical here (previously this module's own footer said "Spinr Mobility
+# Inc." instead, a naming inconsistency between two Spinr-generated PDFs).
+COMPANY_LINE = "Spinr Technologies Inc. - Saskatoon, SK"
+COMPANY_CONTACT_LINE = "support@spinr.ca - www.spinr.ca"
+
 # Mirrors services/data_transfer/tabular_writer.py's _sanitize_csv_cell
 # (OWASP CSV-injection guard). Duplicated rather than imported: importing
 # tabular_writer pulls in services/__init__.py's full service-layer import
@@ -131,6 +138,17 @@ def pdf_safe(text: str) -> str:
     of crashing it outright."""
     text = text.replace("—", "-").replace("–", "-").replace("’", "'").replace("⚠", "!")
     return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
+def period_label(start_date, end_date) -> str:
+    """Render a report's covered date range as ``Period: YYYY-MM-DD to
+    YYYY-MM-DD`` — a labeled range reads as a document property; a bare
+    "2026-06-30 to 2026-07-30" with no label looks like an unfinished
+    sentence at the top of a report. `start_date`/`end_date` accept either
+    `datetime`/`date` objects or pre-formatted strings."""
+    start = start_date.date().isoformat() if hasattr(start_date, "date") else str(start_date)
+    end = end_date.date().isoformat() if hasattr(end_date, "date") else str(end_date)
+    return f"Period: {start} to {end}"
 
 
 def format_report_timestamp(value: "str | None", *, empty: str = "") -> str:
@@ -441,18 +459,22 @@ def render_pdf_table(
 
 
 def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> None:
-    """Draw a small grey footer with province/regulator letterhead info
-    (from the `provinces` table, e.g. {"name": "Saskatchewan",
-    "default_regulatory_authority": "SGI"}) plus a generation timestamp
-    placeholder the caller fills in. No-op if letterhead is not supplied —
-    callers pass None for reports that aren't province-scoped (e.g. a
-    company-wide DSAR lookup)."""
-    if not province_letterhead:
-        return
+    """Draw a small grey footer at the bottom of the current page: the
+    company identity/contact line (always shown — registered address and
+    contact info is expected on every generated document, not just
+    province-scoped ones) plus an optional province/regulator letterhead
+    line (from the `provinces` table, e.g. {"name": "Saskatchewan",
+    "default_regulatory_authority": "SGI"}) when the report is
+    province-scoped. Pass province_letterhead=None for reports that aren't
+    province-scoped (e.g. a company-wide DSAR lookup) — the company line
+    still renders."""
     pdf.set_font(BRAND_FONT, "", 7)
     pdf.set_text_color(*MUTED_RGB)
-    name = province_letterhead.get("name", "")
-    authority = province_letterhead.get("default_regulatory_authority", "")
-    line = f"Spinr Mobility Inc. — {name}" + (f" — regulator of record: {authority}" if authority else "")
-    pdf.set_y(-15)
-    pdf.cell(0, 5, pdf_safe(line), align="C")
+    pdf.set_y(-18)
+    pdf.cell(0, 4.5, pdf_safe(f"{COMPANY_LINE}  |  {COMPANY_CONTACT_LINE}"), align="C", ln=True)
+    if province_letterhead:
+        name = province_letterhead.get("name", "")
+        authority = province_letterhead.get("default_regulatory_authority", "")
+        line = f"Province: {name}" + (f"  |  Regulator of record: {authority}" if authority else "")
+        pdf.set_x(15)
+        pdf.cell(0, 4.5, pdf_safe(line), align="C")

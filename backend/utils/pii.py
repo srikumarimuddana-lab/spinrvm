@@ -57,6 +57,85 @@ def geohash(lat: float | None, lng: float | None, precision: int = 5) -> str:
     return "".join(out)
 
 
+def coarsen_coord(
+    lat: float | None,
+    lng: float | None,
+    cell_m: int = 500,
+) -> tuple[float, float] | None:
+    """Snap a coordinate to a fixed grid, for coordinates that must be *displayed*
+    rather than logged.
+
+    ``geohash()`` is the right tool for a log line, but a rider map needs numbers
+    back, so this snaps to the centre of a ``cell_m``-sized cell instead. Two
+    properties matter and both are deliberate:
+
+    * **Deterministic, not jittered.** The same input always yields the same
+      output, so a driver's marker does not shimmer between polls. Random jitter
+      would look like movement, and — worse — repeated sampling of a jittered
+      position averages back to the true one, so it leaks what it appears to
+      protect.
+    * **Grid-snapped, not rounded per-axis.** Longitude degrees shrink with
+      latitude, so a fixed decimal rounding gives a cell that is ~500m tall and
+      ~300m wide at Saskatoon's latitude. Scaling the longitude step by
+      ``cos(lat)`` keeps the cell roughly square in metres.
+
+    Returns ``None`` for missing/invalid input, and for the literal ``(0, 0)``
+    registration default, which means "no GPS yet" rather than a location in the
+    Gulf of Guinea — callers already skip it and must keep doing so.
+    """
+    import math
+
+    try:
+        latf = float(lat)  # type: ignore[arg-type]
+        lngf = float(lng)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not (-90.0 <= latf <= 90.0 and -180.0 <= lngf <= 180.0):
+        return None
+    if latf == 0.0 and lngf == 0.0:
+        return None
+    if cell_m <= 0:
+        # Explicit opt-out (exact coordinates) — callers gate this on an
+        # authorization check, never on a client-supplied value.
+        return (latf, lngf)
+
+    lat_step = cell_m / 111_320.0
+
+    # Snap to cell centre rather than corner, so the displayed point is never
+    # further from the truth than half a cell diagonal.
+    snapped_lat = (math.floor(latf / lat_step) + 0.5) * lat_step
+
+    # Scale the longitude step by cos(SNAPPED latitude), not the raw one. Deriving
+    # it from the raw latitude makes lng_step vary continuously as the driver moves
+    # north, so the snapped longitude drifts even when the true longitude is
+    # unchanged — the output stops being a grid, and worse, the longitude then
+    # encodes fine-grained latitude, leaking back the precision this removes.
+    # Quantising the latitude first makes lng_step constant within a band.
+    cos_lat = math.cos(math.radians(snapped_lat))
+    # Guard the pole: cos(lat) → 0 would blow up the longitude step.
+    lng_step = cell_m / (111_320.0 * cos_lat) if abs(cos_lat) > 1e-6 else 360.0
+
+    if lng_step >= 360.0:
+        # Near the poles one cell spans every meridian, so longitude carries no
+        # information. Report the meridian itself rather than an arbitrary
+        # multiple of a >360° step.
+        snapped_lng = 0.0
+    else:
+        snapped_lng = (math.floor(lngf / lng_step) + 0.5) * lng_step
+        # Snapping to a cell *centre* can push the value past the antimeridian
+        # when the cell is very wide. Wrap into [-180, 180) so the client never
+        # receives a coordinate its map cannot plot.
+        snapped_lng = ((snapped_lng + 180.0) % 360.0) - 180.0
+
+    # Latitude cannot wrap — clamp instead, so a driver at the pole does not come
+    # back as 90.002.
+    snapped_lat = max(-90.0, min(90.0, snapped_lat))
+
+    # Round for a stable, compact wire representation. 5 dp ≈ 1.1m, well below
+    # any cell size we would use, so this does not undo the coarsening.
+    return (round(snapped_lat, 5), round(snapped_lng, 5))
+
+
 def redact_phone(phone: str | None) -> str:
     """Return ``****1234`` style mask. Empty/short input returns ``****``."""
     if not phone:

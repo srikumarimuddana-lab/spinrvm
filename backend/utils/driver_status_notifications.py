@@ -18,12 +18,18 @@ Two lookup paths, deliberately:
   have no admin action: the status-override endpoint and the driver-triggered
   `needs_review` transitions in routes/drivers/profile.py and documents.py.
 
-Pure functions only — no DB, no push. Callers do the sending.
+Message construction is pure; `notify_driver_status_change` at the bottom is
+the one side-effecting function, shared by all three call sites (the admin
+action endpoint, the status-override endpoint, and the driver-triggered
+needs_review transitions) so the send contract cannot drift between them.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Delivery tier for account-state notices. Bypasses the push_enabled opt-out
 # and falls back to the retry queue (see features.send_push_notification and
@@ -154,3 +160,39 @@ def status_message(status: str, reason: str | None = None) -> dict[str, Any] | N
     if not copy:
         return None
     return _build(status, copy, reason, f"driver_status_{status}")
+
+
+async def notify_driver_status_change(
+    driver: dict[str, Any],
+    message: dict[str, Any] | None,
+    context: str,
+) -> bool:
+    """Send a lifecycle push. Returns True if it was delivered.
+
+    Best-effort by contract: every caller has already committed the status
+    change before reaching here, so a push failure must not propagate and undo
+    the admin action or the driver's own profile save. Logged at warning rather
+    than error because the state change succeeded and
+    `send_push_notification` writes the in-app inbox row regardless of whether
+    device delivery worked — the driver still sees it next time they open the app.
+    """
+    if not message or not should_notify_driver(driver):
+        return False
+    try:
+        from ..features import send_push_notification
+    except ImportError:
+        from features import send_push_notification  # type: ignore
+    try:
+        return bool(
+            await send_push_notification(
+                driver["user_id"],
+                message["title"],
+                message["body"],
+                message["data"],
+                priority=message["priority"],
+                target_app="driver",
+            )
+        )
+    except Exception as exc:
+        logger.warning("driver status push failed (%s) for driver %s: %s", context, driver.get("id"), exc)
+        return False

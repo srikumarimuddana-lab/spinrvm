@@ -646,8 +646,7 @@ def init_middleware(app):
         if hasattr(exc, "status_code") and hasattr(exc, "detail"):
             response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         else:
-            # Handle unhandled exceptions
-            logger.error(f"Unhandled exception: {exc}")
+            logger.error(f"Unhandled exception: {exc}", exc_info=True)
             response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
         # Add CORS headers if origin is allowed
@@ -677,7 +676,23 @@ def init_middleware(app):
 
         return response
 
-    app.add_exception_handler(Exception, cors_exception_handler)
+    # NOT registered here. `utils/error_handling.py::register_exception_handlers`
+    # (called later, in server.py, after init_middleware) registers its own
+    # handlers for HTTPException and the base Exception class. Starlette's
+    # exception-handler lookup always picks the most specific class in the
+    # MRO regardless of registration order, and for two handlers on the
+    # *same* exact class the one registered last wins — so had this been
+    # registered, it would never run: HTTPException instances go to
+    # error_handling.http_exception_handler (more specific), and everything
+    # else goes to error_handling.general_exception_handler (registered
+    # later for the same Exception class, silently overwriting this one in
+    # Starlette's handler dict). general_exception_handler already logs the
+    # full traceback (`traceback.format_exc()`) and adds the same CORS
+    # headers this function computes below, via `_cors_headers_for` in
+    # error_handling.py — so removing this dead registration doesn't lose
+    # any behavior. cors_exception_handler is kept only because
+    # tests/test_p1_cors.py exercises its logic directly (via its own
+    # closure, not through the app), not because anything live calls it.
 
     # Relative-redirect middleware — when FastAPI issues a 307 trailing-slash
     # redirect the Location header contains an absolute backend URL

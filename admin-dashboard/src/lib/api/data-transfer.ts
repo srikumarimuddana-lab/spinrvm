@@ -204,11 +204,22 @@ async function downloadComplianceReport(path: string, fallbackFilename: string):
     return res.blob();
 }
 
+/** date_from/date_to (YYYY-MM-DD) are optional -- the backend defaults an
+ *  omitted side to the current calendar month (1st through today). Every
+ *  date-ranged Compliance report shares this shape. */
+function dateWindowParams(dateFrom?: string, dateTo?: string): Record<string, string> {
+    const params: Record<string, string> = {};
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
+    return params;
+}
+
 export async function downloadGstPstRemittance(
-    dateRange: string,
     format: ComplianceReportFormat,
+    dateFrom?: string,
+    dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
-    const sp = new URLSearchParams({ date_range: dateRange, format });
+    const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
     const blob = await downloadComplianceReport(
         `/api/admin/compliance/gst-pst-remittance?${sp.toString()}`,
         "gst_pst_remittance",
@@ -216,31 +227,19 @@ export async function downloadGstPstRemittance(
     return { blob, filename: `gst_pst_remittance.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
-export async function downloadInsurancePeriodAudit(
-    dateRange: string,
-    format: ComplianceReportFormat,
-    driverId?: string,
-): Promise<{ blob: Blob; filename: string }> {
-    const sp = new URLSearchParams({ date_range: dateRange, format });
-    if (driverId) sp.set("driver_id", driverId);
-    const blob = await downloadComplianceReport(
-        `/api/admin/compliance/insurance-period-audit?${sp.toString()}`,
-        "insurance_period_audit",
-    );
-    return { blob, filename: `insurance_period_audit.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
-}
-
-export async function downloadKnightArcherDriverOnboarding(
+/** Driver roster (formerly Knight Archer Driver Onboarding) — name,
+ *  license number, license class, and current status for every onboarded
+ *  driver (or filtered to one status). Originally built for Knight
+ *  Archer's monthly active-driver update; renamed once the report content
+ *  turned out generically useful beyond that one consumer. */
+export async function downloadDriverRoster(
     format: ComplianceReportFormat,
     status?: string,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ format });
     if (status) sp.set("status", status);
-    const blob = await downloadComplianceReport(
-        `/api/admin/compliance/knight-archer-driver-onboarding?${sp.toString()}`,
-        "knight_archer_driver_onboarding",
-    );
-    return { blob, filename: `knight_archer_driver_onboarding.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+    const blob = await downloadComplianceReport(`/api/admin/compliance/driver-roster?${sp.toString()}`, "driver_roster");
+    return { blob, filename: `driver_roster.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
 /** T4A filer handoff — per-driver annual earnings + Stripe-verified legal
@@ -256,28 +255,46 @@ export async function downloadT4aFilerHandoff(
     return { blob, filename: `t4a_filer_handoff_${year}.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
-/** Insurance usage-based billing — per-driver insured km (Period 2+3) and
- *  the resulting invoice amount at the given cents/km rate. */
-export async function downloadInsuranceUsageBilling(
-    dateRange: string,
-    rateCentsPerKm: number,
+/** SGI usage-based insurance billing — per-trip, per-phase insured km
+ *  (Period 2+3) at SGI's contracted rate ($0.11/km, fixed server-side —
+ *  no rate to enter). */
+export async function downloadInsuranceBillingSgi(
     format: ComplianceReportFormat,
+    dateFrom?: string,
+    dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
-    const sp = new URLSearchParams({ date_range: dateRange, rate_cents_per_km: String(rateCentsPerKm), format });
+    const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
     const blob = await downloadComplianceReport(
-        `/api/admin/compliance/insurance-usage-billing?${sp.toString()}`,
-        "insurance_usage_billing",
+        `/api/admin/compliance/insurance-billing-sgi?${sp.toString()}`,
+        "insurance_billing_sgi",
     );
-    return { blob, filename: `insurance_usage_billing.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+    return { blob, filename: `insurance_billing_sgi.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
+/** Knight Archer usage-based insurance billing — per-trip, per-phase
+ *  insured km (Period 2+3) at Knight Archer's contracted rate
+ *  ($0.011/km, fixed server-side). */
+export async function downloadInsuranceBillingKnightArcher(
+    format: ComplianceReportFormat,
+    dateFrom?: string,
+    dateTo?: string,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
+    const blob = await downloadComplianceReport(
+        `/api/admin/compliance/insurance-billing-knight-archer?${sp.toString()}`,
+        "insurance_billing_knight_archer",
+    );
+    return { blob, filename: `insurance_billing_knight_archer.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
 /** Completed rides with an airport pickup or dropoff, for airport
  *  ground-transportation program reporting. */
 export async function downloadAirportTrips(
-    dateRange: string,
     format: ComplianceReportFormat,
+    dateFrom?: string,
+    dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
-    const sp = new URLSearchParams({ date_range: dateRange, format });
+    const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
     const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`, "airport_trips");
     return { blob, filename: `airport_trips.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
@@ -309,30 +326,41 @@ async function emailComplianceReport(path: string, emailTo: string): Promise<{ e
     return body;
 }
 
-export const emailGstPstRemittance = (dateRange: string, format: ComplianceReportFormat, emailTo: string) =>
+export const emailGstPstRemittance = (
+    format: ComplianceReportFormat,
+    emailTo: string,
+    dateFrom?: string,
+    dateTo?: string,
+) =>
     emailComplianceReport(
-        `/api/admin/compliance/gst-pst-remittance?${new URLSearchParams({ date_range: dateRange, format }).toString()}`,
+        `/api/admin/compliance/gst-pst-remittance?${new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format }).toString()}`,
         emailTo,
     );
-export const emailInsurancePeriodAudit = (
-    dateRange: string,
-    format: ComplianceReportFormat,
-    emailTo: string,
-    driverId?: string,
-) => {
-    const sp = new URLSearchParams({ date_range: dateRange, format });
-    if (driverId) sp.set("driver_id", driverId);
-    return emailComplianceReport(`/api/admin/compliance/insurance-period-audit?${sp.toString()}`, emailTo);
-};
-export const emailKnightArcherDriverOnboarding = (
-    format: ComplianceReportFormat,
-    emailTo: string,
-    status?: string,
-) => {
+export const emailDriverRoster = (format: ComplianceReportFormat, emailTo: string, status?: string) => {
     const sp = new URLSearchParams({ format });
     if (status) sp.set("status", status);
-    return emailComplianceReport(`/api/admin/compliance/knight-archer-driver-onboarding?${sp.toString()}`, emailTo);
+    return emailComplianceReport(`/api/admin/compliance/driver-roster?${sp.toString()}`, emailTo);
 };
+export const emailInsuranceBillingSgi = (
+    format: ComplianceReportFormat,
+    emailTo: string,
+    dateFrom?: string,
+    dateTo?: string,
+) =>
+    emailComplianceReport(
+        `/api/admin/compliance/insurance-billing-sgi?${new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format }).toString()}`,
+        emailTo,
+    );
+export const emailInsuranceBillingKnightArcher = (
+    format: ComplianceReportFormat,
+    emailTo: string,
+    dateFrom?: string,
+    dateTo?: string,
+) =>
+    emailComplianceReport(
+        `/api/admin/compliance/insurance-billing-knight-archer?${new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format }).toString()}`,
+        emailTo,
+    );
 
 export interface DataTransferJob {
     id: string;

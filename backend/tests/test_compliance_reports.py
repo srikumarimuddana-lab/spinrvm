@@ -1,5 +1,5 @@
 """Tests for routes/admin/compliance.py — the Compliance & Tax Reporting
-module's GST/PST remittance and insurance-period audit endpoints.
+module's GST/PST remittance and per-trip insurance-billing endpoints.
 
 Mirrors the direct-patch style used by test_admin_users_search.py rather
 than the full mock_supabase_client fixture, since these tests exercise the
@@ -155,23 +155,26 @@ class TestGstPstRows:
         assert isinstance(gst_total, Decimal)
 
 
-class TestInsurancePeriodRows:
-    def test_joins_driver_name(self):
-        """Regression: the drivers table's real column is `name`
-        (verified against real staging schema — `full_name` does not
-        exist and made this endpoint 500 on every call with a non-empty
-        result), not first_name/last_name concatenation alone."""
+class TestInsuranceBillingDetailRows:
+    """_insurance_billing_detail_rows backs both the SGI and Knight Archer
+    billing endpoints — reads driver_period_distances (GPS-measured
+    per-period distance), not rides.distance_km, so each phase shows its
+    own real leg distance rather than a de-duplicated ride total."""
+
+    def test_joins_driver_name_and_labels_phase(self):
+        """Regression: the drivers table's real column is `name` (verified
+        against real staging schema — `full_name` does not exist), not
+        first_name/last_name concatenation alone."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_insurance_periods":
+            if table == "driver_period_distances":
                 return [
                     {
-                        "id": "p1",
                         "driver_id": "d1",
-                        "period": 2,
-                        "started_at": "2026-07-01T09:00:00Z",
-                        "ended_at": None,
                         "ride_id": "r1",
+                        "period": 2,
+                        "distance_km": 1.5,
+                        "started_at": "2026-07-01T09:00:00Z",
                     }
                 ]
             if table == "drivers":
@@ -179,32 +182,36 @@ class TestInsurancePeriodRows:
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, truncated = asyncio.run(compliance._insurance_period_rows(_START, _END, None))
+            rows, grand_total_km, truncated = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
+            )
 
         assert not truncated
+        assert grand_total_km == Decimal("1.5")
         # driver_id/ride_id are intentionally excluded from the rendered
-        # report (product decision) -- driver_name already identifies the
-        # driver on the report itself.
+        # report (same product decision as the retired insurance-period-
+        # audit report) -- driver_name + trip_date already identify the row.
         assert rows == [
             {
                 "driver_name": "Jane Doe",
-                "period": "2 — En route to pickup (primary commercial)",
-                "started_at": "2026-07-01T09:00:00Z",
-                "ended_at": "(open)",
+                "trip_date": "2026-07-01 09:00 UTC",
+                "phase": "2 — En route to pickup (primary commercial)",
+                "phase_km": "1.500",
+                "rate_per_km": "$0.110",
+                "amount": "$0.16",
             }
         ]
 
     def test_falls_back_to_first_last_name_when_name_is_null(self):
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_insurance_periods":
+            if table == "driver_period_distances":
                 return [
                     {
-                        "id": "p1",
                         "driver_id": "d1",
-                        "period": 1,
-                        "started_at": "2026-07-01T09:00:00Z",
-                        "ended_at": "2026-07-01T10:00:00Z",
-                        "ride_id": None,
+                        "ride_id": "r1",
+                        "period": 3,
+                        "distance_km": 5.0,
+                        "started_at": "2026-07-01T09:10:00Z",
                     }
                 ]
             if table == "drivers":
@@ -212,55 +219,79 @@ class TestInsurancePeriodRows:
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, _truncated = asyncio.run(compliance._insurance_period_rows(_START, _END, None))
+            rows, *_rest = asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.011")))
 
         assert rows[0]["driver_name"] == "Jane Doe"
 
-    def test_driver_id_filter_is_forwarded(self):
-        captured_filters = {}
+    def test_each_phase_kept_as_its_own_row_not_summed(self):
+        """Regression vs. the retired aggregate report: a ride with both a
+        Period 2 leg and a Period 3 leg must produce TWO rows with their
+        own distances, not one de-duplicated/summed row."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_insurance_periods":
-                captured_filters.update(filters or {})
-                return []
+            if table == "driver_period_distances":
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r1",
+                        "period": 2,
+                        "distance_km": 1.5,
+                        "started_at": "2026-07-01T09:00:00Z",
+                    },
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r1",
+                        "period": 3,
+                        "distance_km": 12.5,
+                        "started_at": "2026-07-01T09:10:00Z",
+                    },
+                ]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe"}]
             return []
 
         with _patch_get_rows(get_rows_side):
-            asyncio.run(compliance._insurance_period_rows(_START, _END, "d1"))
+            rows, grand_total_km, _truncated = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
+            )
 
-        assert captured_filters.get("driver_id") == "d1"
+        assert len(rows) == 2
+        assert grand_total_km == Decimal("14.0")
+        assert {r["phase_km"] for r in rows} == {"1.500", "12.500"}
 
     def test_empty_result_returns_empty_list_not_error(self):
         async def get_rows_side(table, filters=None, **kw):
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, truncated = asyncio.run(compliance._insurance_period_rows(_START, _END, None))
+            rows, grand_total_km, truncated = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
+            )
 
         assert rows == []
+        assert grand_total_km == Decimal("0")
         assert truncated is False
 
     def test_unknown_driver_falls_back_to_id(self):
-        """A period row whose driver was hard-deleted (or the drivers batch
-        fetch missed it) must still show up in the audit export — never
-        silently dropped — using the raw driver_id as a fallback label."""
+        """A distance row whose driver was hard-deleted (or the drivers
+        batch fetch missed it) must still show up in the billing export —
+        never silently dropped — using the raw driver_id as a fallback."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_insurance_periods":
+            if table == "driver_period_distances":
                 return [
                     {
-                        "id": "p1",
                         "driver_id": "d-missing",
-                        "period": 1,
+                        "ride_id": "r1",
+                        "period": 2,
+                        "distance_km": 1.0,
                         "started_at": "2026-07-01T09:00:00Z",
-                        "ended_at": "2026-07-01T10:00:00Z",
-                        "ride_id": None,
                     }
                 ]
             return []  # drivers lookup returns nothing
 
         with _patch_get_rows(get_rows_side):
-            rows, _truncated = asyncio.run(compliance._insurance_period_rows(_START, _END, None))
+            rows, *_rest = asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11")))
 
         assert rows[0]["driver_name"] == "d-missing"
 

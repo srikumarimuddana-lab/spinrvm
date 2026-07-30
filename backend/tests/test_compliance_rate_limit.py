@@ -99,7 +99,7 @@ class TestGstPstRemittanceRateLimit:
         assert "Retry-After" in r.headers
 
 
-class TestInsurancePeriodAuditRateLimit:
+class TestInsuranceBillingSgiRateLimit:
     def test_eleventh_request_is_429(self):
         client = _client()
         with (
@@ -107,8 +107,8 @@ class TestInsurancePeriodAuditRateLimit:
             patch("db_supabase.insert_one", AsyncMock(return_value="audit-1")),
         ):
             for _ in range(10):
-                client.get("/compliance/insurance-period-audit")
-            r = client.get("/compliance/insurance-period-audit")
+                client.get("/compliance/insurance-billing-sgi")
+            r = client.get("/compliance/insurance-billing-sgi")
 
         assert r.status_code == 429
 

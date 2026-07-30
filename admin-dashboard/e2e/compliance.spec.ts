@@ -28,11 +28,11 @@ async function mockCompliance(page: any) {
         });
         return 'handled';
       }
-      if (url.includes('/api/admin/compliance/insurance-period-audit') && method === 'GET') {
+      if (url.includes('/api/admin/compliance/insurance-billing-sgi') && method === 'GET') {
         await route.fulfill({
           status: 200,
           contentType: 'application/pdf',
-          headers: { 'content-disposition': 'attachment; filename="insurance_period_audit.pdf"' },
+          headers: { 'content-disposition': 'attachment; filename="insurance_billing_sgi.pdf"' },
           body: FAKE_PDF_BYTES,
         });
         return 'handled';
@@ -51,11 +51,12 @@ test.describe('admin dashboard: compliance — interaction', () => {
     await expect(page.getByText('GST/PST Remittance Summary')).toBeVisible();
   });
 
-  test('date range and format selectors are present on the GST/PST tab', async ({ page }) => {
+  test('From/To date pickers and format selector are present on the GST/PST tab', async ({ page }) => {
     await mockCompliance(page);
     await page.goto('/dashboard/compliance');
     await expect(page.getByText('GST/PST Remittance Summary')).toBeVisible({ timeout: 20000 });
-    await expect(page.getByText('Date range', { exact: true })).toBeVisible();
+    await expect(page.getByText('From', { exact: true })).toBeVisible();
+    await expect(page.getByText('To', { exact: true })).toBeVisible();
     await expect(page.getByText('Format', { exact: true })).toBeVisible();
   });
 
@@ -70,35 +71,39 @@ test.describe('admin dashboard: compliance — interaction', () => {
     expect(download.suggestedFilename()).toBe('gst_pst_remittance.pdf');
   });
 
-  test('Insurance-Period Audit tab switches without crashing', async ({ page }) => {
+  test('SGI Insurance Billing tab switches without crashing', async ({ page }) => {
     await mockCompliance(page);
     await page.goto('/dashboard/compliance');
     await expect(page.getByText('Compliance & Tax Reporting')).toBeVisible({ timeout: 20000 });
-    await page.getByRole('tab', { name: /insurance-period audit/i }).click();
-    await expect(page.getByText('Driver Insurance-Period Audit')).toBeVisible();
+    await page.getByRole('tab', { name: /sgi insurance billing/i }).click();
+    await expect(page.getByText('$0.11/km', { exact: false })).toBeVisible();
   });
 
-  test('driver ID filter accepts input on the audit tab', async ({ page }) => {
+  test('SGI Insurance Billing tab has no rate input — rate is fixed server-side', async ({ page }) => {
     await mockCompliance(page);
     await page.goto('/dashboard/compliance');
-    await page.getByRole('tab', { name: /insurance-period audit/i }).click();
-    await expect(page.getByText('Driver Insurance-Period Audit')).toBeVisible({ timeout: 20000 });
-    const driverIdInput = page.getByPlaceholder('All drivers');
-    await expect(driverIdInput).toBeVisible();
-    await driverIdInput.fill('driver_e2e_1');
-    await expect(driverIdInput).toHaveValue('driver_e2e_1');
+    await page.getByRole('tab', { name: /sgi insurance billing/i }).click();
+    await expect(page.getByText('$0.11/km', { exact: false })).toBeVisible({ timeout: 20000 });
+    // The old "Insurance Usage Billing" tab had a "Rate (cents/km)" text
+    // input with this exact placeholder for the admin-entered rate; the
+    // rate is now fixed server-side, so no such field should exist. (Not
+    // asserting on the substring "rate" anywhere on the page — the
+    // CardDescription prose legitimately mentions "SGI's contracted rate"
+    // and the info hint does too, both case-insensitive matches for
+    // getByText, which is what made this test flaky before.)
+    await expect(page.getByPlaceholder('e.g. 45.00')).toHaveCount(0);
   });
 
-  test('Insurance-Period Audit Download button triggers a file download', async ({ page }) => {
+  test('SGI Insurance Billing Download button triggers a file download', async ({ page }) => {
     await mockCompliance(page);
     await page.goto('/dashboard/compliance');
-    await page.getByRole('tab', { name: /insurance-period audit/i }).click();
-    await expect(page.getByText('Driver Insurance-Period Audit')).toBeVisible({ timeout: 20000 });
+    await page.getByRole('tab', { name: /sgi insurance billing/i }).click();
+    await expect(page.getByText('$0.11/km', { exact: false })).toBeVisible({ timeout: 20000 });
 
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: /download/i }).click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toBe('insurance_period_audit.pdf');
+    expect(download.suggestedFilename()).toBe('insurance_billing_sgi.pdf');
   });
 
   test('failed report generation shows an error toast, not a crash', async ({ page }) => {

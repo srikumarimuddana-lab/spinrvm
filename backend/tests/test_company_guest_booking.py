@@ -19,6 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from backend.tests._factories import close_spawned_coro
+
 _COMPANY_ID = "company_gb"
 _BOOKER = {
     "id": "member_booker_gb",
@@ -175,7 +177,9 @@ def _booking_patches(
         _CBS + "evaluate_policy_for_ride": AsyncMock(return_value=policy_result or _policy_result()),
         "backend.routes.rides.booking._insert_ride_with_code": AsyncMock(side_effect=_insert),
         "backend.routes.rides.booking._prep_and_dispatch": MagicMock(name="prep"),
-        _CBS + "spawn": MagicMock(name="spawn"),
+        # side_effect closes the coroutine handed to spawn() instead of
+        # leaking it un-awaited (A8) -- doesn't affect call_count assertions.
+        _CBS + "spawn": MagicMock(name="spawn", side_effect=close_spawned_coro),
     }
 
 

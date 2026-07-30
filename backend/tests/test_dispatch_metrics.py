@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.tests._factories import close_spawned_coro
 from backend.utils import metrics
 
 RIDE_ID = "ride-metrics-001"
@@ -91,7 +92,8 @@ async def test_match_driver_to_ride_counts_offers_sent():
         patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
         patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
-        patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
+        # side_effect closes the spawned coroutine instead of leaking it (A8).
+        patch("backend.routes.rides._deps.asyncio.create_task", MagicMock(side_effect=close_spawned_coro)),
     ):
         try:
             await rides_mod.match_driver_to_ride(ride_id=RIDE_ID)

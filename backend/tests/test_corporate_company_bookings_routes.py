@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 
+from backend.tests._factories import close_spawned_coro
+
 _CCB = "backend.routes.corporate_company_bookings."
 _COMPANY_ID = "company_bk"
 
@@ -348,7 +350,9 @@ async def test_cancel_booking_admin_can_cancel_any_members_booking():
         patch(_CCB + "db_supabase.get_user_by_id", AsyncMock(return_value=guest_user)),
         patch("backend.routes.rides.cancel_ride_rider", AsyncMock(return_value={"success": True})) as m_cancel,
         patch("backend.services.guest_notification_service.notify_guest_cancelled", AsyncMock()),
-        patch("backend.utils.background.spawn") as m_spawn,
+        # side_effect closes the coroutine handed to spawn() instead of
+        # leaking it un-awaited (A8) -- doesn't affect call_count assertions.
+        patch("backend.utils.background.spawn", side_effect=close_spawned_coro) as m_spawn,
     ):
         result = await cancel_booking("r1", _fake_request(), _ADMIN_CTX)
 
@@ -378,7 +382,9 @@ async def test_cancel_booking_notifies_guest_and_delegates_to_rider_cancel():
             AsyncMock(return_value={"success": True, "status": "cancelled"}),
         ) as m_cancel,
         patch("backend.services.guest_notification_service.notify_guest_cancelled", AsyncMock()) as m_notify,
-        patch("backend.utils.background.spawn") as m_spawn,
+        # side_effect closes the coroutine handed to spawn() instead of
+        # leaking it un-awaited (A8) -- doesn't affect call_count assertions.
+        patch("backend.utils.background.spawn", side_effect=close_spawned_coro) as m_spawn,
     ):
         result = await cancel_booking("r1", _fake_request(), _MEMBER_CTX)
 

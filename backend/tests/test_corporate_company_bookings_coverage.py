@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from backend.tests._factories import close_spawned_coro
+
 _CCB = "backend.routes.corporate_company_bookings."
 _COMPANY_ID = "company_bk"
 
@@ -463,7 +465,9 @@ async def test_cancel_booking_admin_can_cancel_any_member():
         patch(_CCB + "db_supabase.get_user_by_id", AsyncMock(return_value=guest_user)),
         patch("backend.routes.rides.cancel_ride_rider", AsyncMock(return_value=cancel_result)) as cancel_mock,
         patch("backend.services.guest_notification_service.notify_guest_cancelled", AsyncMock()),
-        patch("backend.utils.background.spawn") as spawn_mock,
+        # side_effect closes the coroutine handed to spawn() instead of
+        # leaking it un-awaited (A8) -- doesn't affect call_count assertions.
+        patch("backend.utils.background.spawn", side_effect=close_spawned_coro) as spawn_mock,
     ):
         result = await cancel_booking("ride1", request, _ADMIN_CTX)
 

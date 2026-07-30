@@ -705,42 +705,111 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   regressions elsewhere.
 
 ### A8. Leaked un-awaited AsyncMock coroutines fail an arbitrary unrelated test under pytest 9
-- [ ] **Status:** open — diagnosed 2026-07-29 while verifying the admin driver
-  search fix (`claude/admin-driver-search-design-ryh7yc`). Not fixed there: the
-  leaks are in test files that change did not touch, and closing them is its own
-  scoped cleanup.
+- [x] **Status:** done (2026-07-30). Fixed on branch `claude/a8-asyncmock-leak-fix`
+  (5 commits). Diagnosed 2026-07-29 while verifying the admin driver search fix
+  (`claude/admin-driver-search-design-ryh7yc`); not fixed there since the leaks
+  were in test files that change didn't touch. Picked up as its own scoped task
+  2026-07-30, re-diagnosed from scratch with `PYTHONTRACEMALLOC=5` (captures the
+  real allocation site, not just the incidental GC-timing location the warning
+  surfaces at) rather than trusting the original diagnosis's file list, which
+  turned out not to match — see note below.
 - **Symptom:** a full-suite run fails one test that passes in isolation, and
-  *which* test fails changes between runs at the same commit. Observed:
-  `test_compliance_reports_http.py::test_knight_archer_report_filters_by_status`
-  failed one full-suite run and passed the next at an identical commit, while
-  passing 5/5 in isolation.
-- **Root cause:** several test files leave `AsyncMock` coroutines un-awaited
-  (`RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never
-  awaited`). The warning surfaces whenever the GC happens to collect the
-  coroutine — not where it was created. pytest 9's `_pytest/unraisableexception`
-  plugin **re-raises** collected unraisable errors (`raise errors[0]`), so the
-  test executing at that moment fails. Blame is therefore assigned by GC timing,
-  and *any* change to test count or ordering reshuffles the victim. Confirmed
-  present at baseline: `tests/test_ride_accept_flow.py` +
-  `tests/test_drivers_extended.py` alone emit 7 such warnings on an unmodified
-  checkout.
+  *which* test fails changes between runs at the same commit. Observed (2026-07-29):
+  `test_compliance_reports_http.py::test_knight_archer_report_filters_by_status`;
+  observed again independently (2026-07-30) as
+  `test_compliance_reports_http.py::test_driver_roster_filters_by_status` failing
+  on PR #2903's `backend-test` CI run — same file, same root cause, different
+  victim test, exactly matching the "any change to test count or ordering
+  reshuffles the victim" mechanism below.
+- **Root cause — two distinct bugs, not one:**
+  1. **Mock-shape mismatch.** `tests/conftest.py`'s `autouse=True` fixture
+     `mock_supabase_client` (applied to every test via `patch_external_dependencies`)
+     set `.rpc` and `.table().execute` as `AsyncMock`, but production code always
+     calls both **synchronously** — `repositories/_base.py`, `wallet_repo.py`,
+     `ride_repo.py`, and `core/lifespan.py` all do
+     `await run_sync(lambda: supabase.table(...).execute())`; the lambda body
+     itself is never awaited. The mismatch created a coroutine every time
+     synchronous code called the mocked method, which was then discarded
+     un-awaited. Fixing this also surfaced a second, independent pre-existing bug
+     it had been masking: the fixture's `.rpc` didn't model the real two-step
+     `.rpc(name, params).execute()` chain (unlike `.table()`, and unlike ~10
+     other test files that already correctly override
+     `mock.rpc.return_value.execute.return_value = ...`) — `test_credit_happy_path`
+     was silently relying on an earlier `AttributeError` from the async bug to
+     produce its (test-tolerated) 503 path; once that async bug was fixed, the
+     RPC chain's missing `.execute()` step surfaced as a real `decimal.InvalidOperation`
+     crash instead. Fixed both together.
+  2. **`spawn()`/`asyncio.create_task()` seam leaks.** Production fire-and-forget
+     dispatch (`_deps.spawn(some_coroutine(...))`, used for push notifications,
+     guest-booking notifications, quest progress, live-activity updates, batch
+     offer-timeout scheduling) evaluates `some_coroutine(...)` to build the
+     coroutine *before* `spawn()` — or, one layer deeper, `asyncio.create_task()`,
+     the seam `spawn()`'s own docstring says tests are expected to intercept — ever
+     runs. A bare `MagicMock()` standing in for either records the call and
+     returns without ever awaiting or closing that coroutine argument. Real
+     `asyncio.create_task()` takes ownership of it; the fix mirrors that by
+     explicitly closing it (`tests/_factories.py:close_spawned_coro`, a shared
+     `side_effect` helper — not `conftest.py`, since pytest loads conftest by
+     file path and `from tests.conftest import X` doesn't work from other test
+     modules, an existing convention already documented at the top of
+     `_factories.py`).
+  Both bugs independently produce the identical symptom (a leaked, un-awaited
+  coroutine, warned about at an arbitrary later GC point), which is why they
+  were investigated and fixed together as one item.
 - **Why it matters:** this makes the suite an unreliable merge gate — a green
   run does not mean the leaks are gone, and a red run points at an innocent
-  test. It also burns review time re-diagnosing the same thing each session
-  (this entry exists so the next session doesn't).
-- **Fix (proposed):** find every `AsyncMock` whose call result is never awaited
-  (`grep` for `AsyncMock(` used as a sync `side_effect`/`return_value` on a
-  method the code under test calls synchronously — e.g. `supabase.rpc(...)`
-  chains inside `run_sync` lambdas) and make the mock synchronous
-  (`MagicMock`) where the production call site is synchronous. Add
-  `-W error::RuntimeWarning` for the leak class once clean so it cannot
-  regress silently.
-- **Files (known leak sources, non-exhaustive):**
-  `backend/tests/test_ride_accept_flow.py`, `backend/tests/test_drivers_extended.py`,
-  `backend/tests/test_e2e_ride_lifecycle.py`, `backend/tests/test_estimate_ghost_driver_filter.py`
-- **Acceptance:** full backend suite produces zero
-  "coroutine ... was never awaited" warnings, and 3 consecutive full-suite runs
-  at the same commit fail no tests.
+  test. It also burns review time re-diagnosing the same thing each session.
+- **Files actually fixed (verified via `PYTHONTRACEMALLOC=5`, not the original
+  diagnosis's file list — see below):** `backend/tests/conftest.py`,
+  `backend/tests/test_auth.py`, `backend/tests/test_offer_timeout.py`,
+  `backend/tests/test_dispatch_metrics.py`,
+  `backend/tests/test_dispatch_presence_failopen.py`,
+  `backend/tests/test_company_guest_booking.py`,
+  `backend/tests/test_corporate_company_bookings_coverage.py`,
+  `backend/tests/test_corporate_company_bookings_routes.py`,
+  `backend/tests/test_coverage_rides.py` (14 individual leak sites total across
+  these 9 files), plus the new shared helper `backend/tests/_factories.py` and
+  the enforcement rule in `backend/pytest.ini`.
+- **Note on the original "known leak sources" list:** the 2026-07-29 diagnosis
+  named `test_ride_accept_flow.py` + `test_drivers_extended.py` (7 warnings on
+  an unmodified checkout) plus `test_e2e_ride_lifecycle.py` and
+  `test_estimate_ghost_driver_filter.py`. None of these four appeared in this
+  session's `PYTHONTRACEMALLOC=5` full-suite runs (multiple runs, zero
+  ambiguity — tracemalloc reports the true allocation site, not the GC-timing
+  victim). Given 3 consecutive full-suite runs at the current commit are
+  completely clean (see Acceptance below), those four files' leaks were most
+  likely already fixed independently between 2026-07-29 and this session — not
+  re-verified against that specific commit range, but the current, actual state
+  of `main` is confirmed clean regardless of how it got there.
+- **Enforcement (the "regress silently" half of the original fix proposal) —
+  also had a real bug, found and fixed.** The original proposal
+  ("Add `-W error::RuntimeWarning`... once clean") doesn't work as literally
+  written: the warning's actual category is
+  `pytest.PytestUnraisableExceptionWarning`, not `RuntimeWarning` — the
+  coroutine finalizer routes through `sys.unraisablehook`, which pytest's
+  `unraisableexception` plugin wraps and re-emits; the embedded traceback text
+  merely *mentions* "RuntimeWarning" inside the wrapped message. Confirmed with
+  a disposable scratch test (`m = AsyncMock(); m()`, never awaited): under a
+  bare `error::RuntimeWarning` filter it silently kept passing, 5/5 runs, no
+  visible error at all. The correct filter also needs the inline `(?s)` DOTALL
+  flag in its message regex — the wrapped message embeds a multi-line
+  traceback before the "was never awaited" text, and `.` doesn't match
+  newlines by default, so an otherwise-correct message pattern still silently
+  never matches without it. Fixed filter (in `backend/pytest.ini`), reverified
+  against the same scratch test: 5/5 runs correctly failed, each one correctly
+  attributed to the actual leaking test rather than an arbitrary later one.
+  Kept a second, narrower plain-`RuntimeWarning` rule too, since repeated runs
+  of the identical scratch leak showed both delivery paths occur depending on
+  GC timing on a given run — one rule alone isn't sufficient.
+- **Acceptance:** ✅ met. Full backend suite produces zero
+  "coroutine ... was never awaited" warnings (confirmed via
+  `PYTHONTRACEMALLOC=5` runs during the fix, and via 3 consecutive default runs
+  after), and 3 consecutive full-suite runs at the same final commit all show
+  identical results — `5953 passed, 8 skipped, 1 xfailed, 5 warnings` (checked
+  the content of all 5: one unrelated pre-existing `StarletteDeprecationWarning`
+  about `httpx`/`starlette.testclient`, and four `InsecureKeyLengthWarning`
+  from `test_auth.py`/`test_middleware_user_id.py` deliberately using
+  short JWT test keys — none are leaks), exit code 0 each — and fail no tests.
 
 ## P1 — Fix before launch (code)
 

@@ -1508,6 +1508,11 @@ class RefreshResponse(BaseModel):
 class LogoutRequest(BaseModel):
     # Optional — /auth/logout-all doesn't need the token, just auth.
     refresh_token: str | None = None
+    # Which app surface is signing out ("rider" / "driver"), mirroring
+    # POST /notifications/register-token. Decides which fcm_token_* column is
+    # detached so a dual-role user signing out of one app keeps the other's
+    # pushes. Absent on older builds — see _push_token_columns_to_clear.
+    client_type: str | None = None
 
 
 @api_router.post("/refresh", response_model=RefreshResponse)
@@ -1635,6 +1640,103 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     )
 
 
+def _push_token_columns_to_clear(user: Dict[str, Any], client_type: Optional[str]) -> Dict[str, None]:
+    """Which users.fcm_token* columns this logout should null out.
+
+    Mirrors the client_type inference in POST /notifications/register-token so
+    a token registered by one surface is detached by the same surface. A
+    dual-role user signing out of the driver app must keep fcm_token_rider.
+
+    The legacy generic `fcm_token` is cleared only when it still holds one of
+    the values we are clearing — otherwise a driver logout would silently kill
+    the rider app's pushes for a dual-role account.
+    """
+    normalized = client_type if client_type in ("rider", "driver") else None
+    if not normalized:
+        is_driver = bool(user.get("is_driver", False))
+        is_rider = bool(user.get("is_rider", True))
+        if is_driver and not is_rider:
+            normalized = "driver"
+        elif is_rider and not is_driver:
+            normalized = "rider"
+
+    columns = ["fcm_token_driver", "fcm_token_rider"] if normalized is None else [f"fcm_token_{normalized}"]
+    updates: Dict[str, None] = {col: None for col in columns if user.get(col)}
+
+    generic = user.get("fcm_token")
+    if not generic:
+        return updates
+
+    if updates:
+        # Clear the legacy column only when it still mirrors a surface we are
+        # clearing. Otherwise it belongs to the app that is staying signed in,
+        # and nulling it would kill that app's pushes for a dual-role account.
+        if generic in {user.get(col) for col in columns}:
+            updates["fcm_token"] = None
+        return updates
+
+    # No per-app column set at all: a row written before migration 102 added
+    # them, where `fcm_token` is the only token on file. It is still a live
+    # delivery target, so leaving it would defeat the whole point of clearing
+    # on logout — but it carries no client_type, so it can only be attributed
+    # when the account has a single role.
+    if not user.get("is_driver", False) or not user.get("is_rider", True):
+        return {"fcm_token": None}
+
+    # Genuinely ambiguous: dual-role account whose only token is the legacy
+    # one. Clearing it could silently kill the other app's pushes, so leave it
+    # and say so — the next registration from either app writes the per-app
+    # column and the ambiguity resolves itself.
+    logger.info(
+        "logout: leaving legacy fcm_token in place for dual-role user %s (no per-app token to attribute it to)",
+        user.get("id"),
+    )
+    return {}
+
+
+async def _clear_push_token_on_logout(user: Dict[str, Any], client_type: Optional[str]) -> None:
+    """Detach this device's push token so a signed-out app stops receiving pushes.
+
+    Gated on the `logout_clears_push_token` app setting, DEFAULT OFF. Shipped
+    dark on purpose: installed rider/driver binaries register their FCM token
+    once per app process (a `fcmRegisteredRef` useRef guard in each app's
+    _layout.tsx, never reset on sign-out). Against those builds, clearing the
+    token here would leave a user who signs out and back in without killing the
+    app with no push token at all — for a driver that means missed ride
+    offers, so the flag stays off until a build that re-registers on re-login
+    has rolled out.
+
+    Best-effort: a failure here must not fail the logout itself (the session is
+    already revoked by the time we get here), but it is logged at error level —
+    a stale token means the signed-out device keeps receiving pushes.
+    """
+    try:
+        settings = await get_app_settings()
+    except Exception:
+        logger.error("logout: failed to read app_settings for push-token clear", exc_info=True)
+        return
+    if not settings.get("logout_clears_push_token", False):
+        return
+
+    updates = _push_token_columns_to_clear(user, client_type)
+    if not updates:
+        return
+    try:
+        await db.update_one("users", {"id": user["id"]}, updates)
+        logger.info(
+            "logout: cleared push token columns %s for user %s",
+            sorted(updates),
+            user["id"],
+        )
+    except Exception as exc:
+        logger.error(
+            "logout: failed to clear push token columns %s: %s",
+            sorted(updates),
+            exc,
+            exc_info=True,
+        )
+
+
 @api_router.post("/logout")
 @limiter.limit("3/minute")
 async def logout(
@@ -1672,6 +1774,10 @@ async def logout(
     # to all replicas rather than waiting for the access-token TTL.
     if current_user:
         await redis_delete(f"session:{current_user['id']}")
+        # Stop server-driven pushes (onboarding reminders, promos) from
+        # reaching a device that has signed out. No-op unless the
+        # logout_clears_push_token flag is on — see the helper's docstring.
+        await _clear_push_token_on_logout(current_user, body.client_type if body else None)
         # Tombstone the signed-out session so opt-in ingest paths can reject the
         # still-valid access token instead of trusting it for the rest of its
         # exp. Absence of the key above is NOT usable for this — it is also

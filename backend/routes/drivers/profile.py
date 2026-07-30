@@ -215,6 +215,19 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     # actually online before this update, that's a 1→0 transition.
     if changed_vehicle and driver.get("status") == "active" and driver.get("is_online"):
         await _deps.record_period_transition(driver["id"], 0)
+    # This transition takes the driver offline. Without a notice the only
+    # signal is the Go-online toggle silently refusing them later, so tell
+    # them what happened and why. Best-effort: the status change is already
+    # committed and must not be rolled back by a push failure.
+    if updates.get("status") == "needs_review":
+        try:
+            from ...utils.driver_status_notifications import notify_driver_status_change, status_message
+        except ImportError:
+            from utils.driver_status_notifications import (  # type: ignore
+                notify_driver_status_change,
+                status_message,
+            )
+        await notify_driver_status_change(driver, status_message("needs_review"), "vehicle_edit")
     updated = await db_supabase.get_driver_by_id(driver["id"])
     return serialize_doc(await _shared._decrypt_driver_pii(updated))
 

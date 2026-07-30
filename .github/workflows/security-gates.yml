@@ -86,18 +86,25 @@ jobs:
         # allows --max-warnings 600). Module owners tune strictness in their own
         # package.json — this gate's job is to make sure the linter actually RAN.
         #
-        # `|| true` was removed 2026-07-30. It was hiding more than findings: as of
-        # that date `expo lint` fails to start in two of the three modules, and the
+        # `|| true` was removed 2026-07-30. It was hiding more than findings: at that
+        # point `expo lint` could not start in two of the three modules, and the
         # swallow reported both as green.
-        #   rider-app  — eslint pinned ^8.57.0 but the Expo flat-config runner
-        #                requires eslint 9's `eslint/config` export:
-        #                ERR_PACKAGE_PATH_NOT_EXPORTED for subpath './config'.
-        #   driver-app — minimatch.braceExpand crash inside @eslint/config-array
-        #                (transitive version conflict; eslint.config.js is fine).
-        # So JS/TS lint has not run for either app. Fixing those needs a dependency
-        # bump verified against each app's build, which is deliberately NOT bundled
-        # into a security-gates change (CLAUDE.md gate 8: do not force a check green
-        # with a version bump you have not verified). Tracked separately.
+        #   rider-app  — eslint pinned ^8.57.0 but eslint.config.js requires eslint
+        #                9's `eslint/config` export: ERR_PACKAGE_PATH_NOT_EXPORTED.
+        #   driver-app — "expand is not a function" inside minimatch 3.x, because a
+        #                blanket `brace-expansion: ^5.0.8` resolution forced every
+        #                consumer onto v5 (which exports an object, not a function).
+        #
+        # Both were fixed the same day — see
+        # docs/change-log/2026-07-30-mobile-eslint-could-not-start.md. Both apps now
+        # lint, and their finding counts are known for the first time:
+        #   rider-app   28 errors / 306 warnings
+        #   driver-app 178 errors / 225 warnings
+        # Those are NOT blocking yet, for the same reason the gitleaks history scan
+        # is not: a gate flipped onto a 178-error baseline is a permanently red gate,
+        # which decays into the thing `|| true` was. They are bounded instead (see
+        # the budget check below) so the counts cannot grow unnoticed while they are
+        # worked down.
         #
         # ESLint exit codes: 0 clean, 1 lint problems, 2+ fatal (bad config, missing
         # module, internal crash). Yarn propagates them. Distinguishing 2 from 1 is
@@ -105,8 +112,8 @@ jobs:
         # one.
         run: |
           rc=0
-          if [ -f yarn.lock ]; then yarn lint || rc=$?
-          elif [ -f package-lock.json ]; then npm run lint || rc=$?
+          if [ -f yarn.lock ]; then yarn lint 2>&1 | tee /tmp/lint.out; rc=${PIPESTATUS[0]}
+          elif [ -f package-lock.json ]; then npm run lint 2>&1 | tee /tmp/lint.out; rc=${PIPESTATUS[0]}
           else echo "No lockfile in ${{ matrix.module }}"; exit 0
           fi
 
@@ -123,11 +130,24 @@ jobs:
               echo "::error::admin-dashboard lint failed (errors, or warnings over the 600 budget)"
               exit 1
             fi
-            # rider-app / driver-app: their linters cannot currently start, so their
-            # finding counts are unknown. Blocking here would block on the tooling
-            # bug above, not on code. Flip these to `exit 1` in the same change that
-            # fixes the eslint versions.
-            echo "::warning::${{ matrix.module }} lint reported problems (not yet blocking — see the eslint tooling note above)"
+
+            # rider-app / driver-app: they lint now, but on an inherited baseline of
+            # 28 and 178 errors. Rather than block (permanently red) or wave through
+            # (the `|| true` failure mode), hold the line with an error budget. The
+            # numbers are the measured baselines as of 2026-07-30 — RATCHET THEM DOWN
+            # as errors are fixed, never up to accommodate new ones.
+            case "${{ matrix.module }}" in
+              rider-app)  budget=28  ;;
+              driver-app) budget=178 ;;
+              *)          budget=0   ;;
+            esac
+            found=$(grep -oE '[0-9]+ error' /tmp/lint.out | tail -1 | grep -oE '[0-9]+' || echo 0)
+            echo "${{ matrix.module }}: $found errors (budget $budget)"
+            if [ "$found" -gt "$budget" ]; then
+              echo "::error::${{ matrix.module }} lint errors rose to $found, over the $budget baseline. Fix the new ones — do not raise the budget."
+              exit 1
+            fi
+            echo "::warning::${{ matrix.module }} lint: $found errors within the $budget baseline budget (backlog, tracked in ACTION_ITEMS.md)"
           fi
 
   # G3 — Semgrep with Spinr-specific ruleset + public registry rules

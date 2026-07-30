@@ -325,6 +325,36 @@ class TestGetT4ASummary:
         assert float(result["total_earnings"]) == pytest.approx(70.00, abs=0.01)
         assert float(result["net_earnings"]) == pytest.approx(70.00, abs=0.01)
 
+    async def test_t4a_includes_stripe_synced_legacy_payouts(self):
+        """Synced legacy payout history (payout_type='stripe_sync', from
+        stripe_payout_sync_service) is income the OLD app paid through Stripe;
+        it folds into the slip total and is surfaced separately as
+        legacy_synced_earnings so the slip can be reconciled."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = _driver_row()
+        rides = [_ride_row(20.00)]
+
+        async def _get_rows(table, query=None, **kwargs):
+            if table == "drivers":
+                return [driver]
+            if table == "payouts":
+                assert query["payout_type"] == "stripe_sync"
+                assert query["created_at"]["$gte"].startswith("2025-01-01")
+                return [{"amount": 500.10, "payout_type": "stripe_sync"}]
+            return []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=rides)),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["total_earnings"] == "520.10"
+        assert result["net_earnings"] == "520.10"
+        assert result["legacy_synced_earnings"] == "500.10"
+        assert result["total_trips"] == 1  # synced payouts are not trips
+
     async def test_driver_not_found_raises_404(self):
         from fastapi import HTTPException
 

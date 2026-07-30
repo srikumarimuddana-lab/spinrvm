@@ -34,11 +34,16 @@ New periodic-statement pipeline, all additive:
 - **PDF** (`utils/driver_statement_pdf.py`): branded one-pager, same chrome
   as the T4A slip.
 - **Loop #17** (`utils/driver_statement_job.py`, wired in
-  `core/lifespan.py`): every 30 min ensures the latest completed weekly +
-  monthly periods have statements; builds, renders, emails.
-- **Ledger** (`migrations/272_driver_statements.sql`): one row per
-  (driver, period); the INSERT is the replay-safety claim (unique index), so
-  a statement can never email twice across replicas.
+  `core/lifespan.py`): every 30 min ensures recently completed weekly +
+  monthly periods have statements; builds, renders, emails. A period becomes
+  eligible only after a 2-day grace (weekly → Wednesday, monthly → the 3rd)
+  so late tips land first, and the previous period is re-checked each tick so
+  an outage cannot skip one permanently.
+- **Ledger** (`migrations/272_driver_statements.sql` +
+  `273_driver_statements_fk_cascade.sql`): one row per (driver, period); the
+  INSERT is the replay-safety claim (unique index), so a statement can never
+  email twice across replicas. 273 makes the driver FK `ON DELETE CASCADE`
+  (see the self-review findings below).
 - **Driver self-serve** (`POST /api/v1/drivers/statements/email`): re-request
   any anchored period, 6/hour rate limit (shared tax-doc limiter).
 - **Admin API** (`routes/admin/driver_statements.py`): ledger list, PDF
@@ -72,10 +77,12 @@ New periodic-statement pipeline, all additive:
 
 ## 5. User-experience effect
 
-- **Driver**: new weekly (Monday) and monthly (1st) statement emails with a
-  PDF — new outbound copy, written to the customer-tone standard; visible in
-  the inbox, not mid-session in-app. Drivers with no email on file are
-  recorded and skipped.
+- **Driver**: new weekly and monthly statement emails with a PDF. Weekly
+  covers Mon–Sun and arrives Wednesday; monthly arrives on the 3rd (a 2-day
+  grace after each period closes so late tips are included — see finding 2).
+  New outbound copy, written to the customer-tone standard; visible in the
+  inbox, not mid-session in-app. Drivers with no email on file are recorded
+  and skipped.
 - **Internal admin**: new "Earnings statements" panel in the driver detail
   Sheet's Payouts tab (between the Stripe/KYC block and the payout-history
   table) — list of sent statements, per-row Download/Resend, and a From/To
@@ -97,6 +104,7 @@ New periodic-statement pipeline, all additive:
 | `backend/utils/driver_statement_job.py` | NEW — 30-min loop, insert-claim, email | Scheduled delivery |
 | `backend/core/lifespan.py` | Spawn loop + watchdog registration | Loop #17 |
 | `backend/migrations/272_driver_statements.sql` | NEW table + unique claim index, RLS | Ledger + replay safety |
+| `backend/migrations/273_driver_statements_fk_cascade.sql` | NEW — FK → ON DELETE CASCADE | Unblock PIPEDA hard delete (finding 1) |
 | `backend/routes/drivers/tax_exports.py` | + self-serve statement email endpoint | Driver can always re-request |
 | `backend/routes/admin/driver_statements.py` | NEW — list / pdf / email endpoints | Admin download + send |
 | `backend/routes/admin/__init__.py` | Mount statements router (drivers module) | Routing |
@@ -174,6 +182,19 @@ driver_statements` (migration header).
 - [ ] Manual staging run: NOT performed (no staging environment in this
   session). Recommend: apply migration 272, let one tick run, verify one
   driver's `sent` row + received email before considering the loop live.
+
+## 9b. Self-review findings (found and fixed before merge)
+
+An adversarial pass over this diff surfaced four real defects. All are fixed
+in this branch with regression tests; recorded here because two of them are
+the kind that would only have shown up in production months later.
+
+| # | Finding | Severity | Fix |
+|---|---|---|---|
+| 1 | **`driver_statements` FK blocked the PIPEDA hard-delete purge.** Migration 272's plain (NO ACTION) FK to `drivers` is invisible to migration 216 Step H, whose eligibility check only looks at `driver_insurance_periods` / `payouts` / `bank_accounts`. Any driver with a statement row hits `foreign_key_violation`; Step H's handler catches and skips it, so the account becomes **permanently un-purgeable, silently**. Reachable for essentially every driver, because the job writes a `skipped_inactive` row even for drivers with no activity — exactly the signed-up-never-drove accounts Step H exists to purge. | **High** (PIPEDA right-to-delete) | New migration `273` sets `ON DELETE CASCADE`, matching `139_driver_onboarding_reminder_log.sql` (the other "log of things sent to a driver"). Written as DROP+ADD so it converges whether or not 272 was already applied. |
+| 2 | **Late tips never appeared on any statement.** `routes/rides/payments.add_tip` accepts a tip on any completed ride with no time window. A statement cut at midnight missed a tip added the next morning; the ledger row then blocked a redo, and the next period's window excludes that ride — so the tip was lost from every statement, permanently under-reporting driver income. | **Medium** (financial-document accuracy) | 2-day grace before a period is eligible (`_GRACE_DAYS`), plus `_CATCHUP_PERIODS` so an outage can't skip a period. Weekly now lands Wednesday, monthly on the 3rd. |
+| 3 | **Statement PDF silently truncated the payout table at 40 rows** while "Total paid out" summed all of them — on a document a driver may file for tax, the visible rows wouldn't add up to the stated total, with no indication anything was omitted (CLAUDE.md forbids silent caps). Reachable for instant-payout-heavy drivers. | **Medium** | The overflow is now stated on the document ("+N more payouts not shown… the total below includes all of them"), with a test that extracts the rendered text via `pypdf`. |
+| 4 | **Stripe payout sync silently processed at most ~1000 drivers.** `_fetch_sync_targets` called `.execute()` with no `.limit()`/`.range()`, so PostgREST's `db-max-rows` (1000 on Supabase) capped it **with no truncation signal** — drivers past the cap would never get their payout history synced, under-reporting their T4A. | **Medium** (CRA reporting) | Explicit `.order("id").range(...)` pagination. The test fake now models the server-side cap, and a new test with 1250 drivers proves every one is scanned. |
 
 ## What was NOT verified
 

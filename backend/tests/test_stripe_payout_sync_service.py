@@ -26,12 +26,19 @@ class _FakeUniqueViolation(Exception):
     code = "23505"
 
 
+# Supabase's PostgREST default db-max-rows. Kept low-ish here only as a
+# constant; the pagination test uses a driver count above it.
+_POSTGREST_MAX_ROWS = 1000
+
+
 class _FakeQuery:
     def __init__(self, table, store):
         self.table = table
         self.store = store
         self._filters = []
         self._insert = None
+        self._order = None
+        self._range = None
 
     def select(self, *_a, **_k):
         return self
@@ -51,6 +58,15 @@ class _FakeQuery:
     def limit(self, _n):
         return self
 
+    def order(self, col, desc=False):
+        self._order = (col, desc)
+        return self
+
+    def range(self, start, end):
+        # PostgREST .range() bounds are INCLUSIVE on both ends.
+        self._range = (start, end)
+        return self
+
     def execute(self):
         rows = self.store.setdefault(self.table, [])
         if self._insert is not None:
@@ -67,6 +83,18 @@ class _FakeQuery:
             elif op == "in":
                 allowed = {str(v) for v in val}
                 out = [r for r in out if str(r.get(col)) in allowed]
+        if self._order:
+            col, desc = self._order
+            out.sort(key=lambda r: r.get(col) or "", reverse=desc)
+        if self._range:
+            start, end = self._range
+            out = out[start : end + 1]
+        elif self._insert is None:
+            # An unbounded PostgREST select is capped at db-max-rows (1000 on
+            # Supabase) with NO truncation signal — model that, so a caller
+            # that forgets to page is caught by the tests instead of silently
+            # dropping rows in production.
+            out = out[:_POSTGREST_MAX_ROWS]
         return _FakeExecute(out)
 
 
@@ -259,6 +287,27 @@ async def test_commit_inserts_and_rerun_converges(store):
         plan2 = await svc.build_plan("sk_test_x", "batch2")
     assert plan2.payouts_to_insert == []
     assert plan2.stats["already_tracked"] == 1
+
+
+@pytest.mark.anyio
+async def test_all_drivers_are_paged_past_the_postgrest_row_cap(store):
+    """An unbounded PostgREST select silently stops at db-max-rows (1000).
+    Every mapped driver must still be scanned — a dropped driver would leave
+    their payout history unsynced and under-report their T4A."""
+    store["drivers"] = [
+        {"id": f"drv_{i:05d}", "stripe_account_id": f"acct_{i:05d}"} for i in range(_POSTGREST_MAX_ROWS + 250)
+    ]
+    seen: list[str] = []
+
+    def _list(**params):
+        seen.append(params.get("destination"))
+        return _FakeTransferList([])
+
+    with patch("stripe.Transfer.list", side_effect=_list):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert plan.stats["drivers_scanned"] == _POSTGREST_MAX_ROWS + 250
+    assert len(set(seen)) == _POSTGREST_MAX_ROWS + 250
 
 
 @pytest.mark.anyio

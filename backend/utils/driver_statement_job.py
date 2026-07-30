@@ -1,10 +1,16 @@
 """Periodic driver earnings-statement emails — weekly + monthly (Uber-style).
 
-Every 30 minutes each replica checks whether statements exist for the latest
-COMPLETED periods (prior Mon–Sun week, prior calendar month, America/Regina
-wall clock) and produces the missing ones: build the aggregates
+Every 30 minutes each replica checks whether statements exist for the recently
+COMPLETED periods (Mon–Sun weeks, calendar months, America/Regina wall clock)
+and produces the missing ones: build the aggregates
 (utils/driver_statement.py), render the branded PDF
 (utils/driver_statement_pdf.py), and email it to the driver.
+
+A period is only eligible once ``_GRACE_DAYS`` have passed since it closed, so
+tips added after the last ride of the period still land on the statement (see
+the constant's comment — without the grace such a tip appears on NO statement).
+In practice weekly statements go out Wednesday for the week ending Sunday, and
+monthly statements on the 3rd.
 
 Replay-safety (background-loop contract, claim-flag via insert idempotency):
 the ``driver_statements`` row is INSERTed with a deterministic id BEFORE any
@@ -23,20 +29,35 @@ period converges and is never rescanned for that driver.
 
 There is no time-of-day gate: the claim set makes every tick cheap once a
 period is complete, and the first tick after a deploy naturally catches up
-the latest periods (e.g. deploying on a Wednesday still sends that week's
-Monday statements).
+the eligible periods.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
 _LOOP_INTERVAL_SECONDS = 30 * 60
 _HEARTBEAT_NAME = "driver_statements (30min)"
+
+# Wait this many days after a period closes before producing its statement.
+#
+# Not cosmetic: routes/rides/payments.add_tip accepts a tip on ANY completed
+# ride with no time window, and a statement is keyed to ride_completed_at. A
+# statement cut at midnight would miss a tip added the next morning for the
+# last night's ride — and because the ledger row stops the period being
+# revisited, and the NEXT period's window excludes that ride, the tip would
+# never appear on any statement at all. The grace lets late tips land first.
+# (Uber/Lyft weekly statements arrive mid-week for the same reason.)
+_GRACE_DAYS = 2
+
+# Also re-check the period before the latest one. The ledger claim makes a
+# re-scan free, and without it a multi-day outage spanning a period boundary
+# would skip that period's statements permanently.
+_CATCHUP_PERIODS = 2
 
 try:
     from utils.loop_monitor import record_heartbeat as _record_heartbeat
@@ -85,11 +106,39 @@ def statement_id_for(period_type: str, period_start: date, driver_id: str) -> st
     return f"stmt-{period_type}-{period_start.isoformat()}-{driver_id}"
 
 
+def _grace_elapsed(period_end: date, today_local: date) -> bool:
+    """True once ``_GRACE_DAYS`` full days have passed since the period closed."""
+    return today_local >= period_end + timedelta(days=_GRACE_DAYS + 1)
+
+
+def _prior_month(month_start: date) -> tuple[date, date]:
+    end = month_start - timedelta(days=1)
+    return end.replace(day=1), end
+
+
 def _due_periods(today_local: date) -> list[tuple[str, date, date]]:
-    """The two periods every driver should currently have a statement for."""
+    """Periods that are closed AND past their grace window.
+
+    Returns the latest completed weekly/monthly periods plus ``_CATCHUP_PERIODS
+    - 1`` older ones, so an outage spanning a period boundary is recovered on
+    the next tick rather than silently skipping that period forever.
+    """
+    due: list[tuple[str, date, date]] = []
+
     w_start, w_end = latest_completed_weekly(today_local)
+    for i in range(_CATCHUP_PERIODS):
+        start = w_start - timedelta(days=7 * i)
+        end = w_end - timedelta(days=7 * i)
+        if _grace_elapsed(end, today_local):
+            due.append((WEEKLY, start, end))
+
     m_start, m_end = latest_completed_monthly(today_local)
-    return [(WEEKLY, w_start, w_end), (MONTHLY, m_start, m_end)]
+    for _ in range(_CATCHUP_PERIODS):
+        if _grace_elapsed(m_end, today_local):
+            due.append((MONTHLY, m_start, m_end))
+        m_start, m_end = _prior_month(m_start)
+
+    return due
 
 
 def _is_unique_violation(exc: Exception) -> bool:

@@ -37,6 +37,7 @@ class _Query:
         self.store = store
         self._filters = []
         self._insert = None
+        self._range = None
 
     def select(self, *_a, **_k):
         return self
@@ -56,6 +57,13 @@ class _Query:
     def limit(self, _n):
         return self
 
+    def order(self, _col, desc=False):
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)  # PostgREST bounds are inclusive
+        return self
+
     def execute(self):
         rows = self.store.setdefault(self.table, [])
         if self._insert is not None:
@@ -72,6 +80,9 @@ class _Query:
             elif op == "in":
                 allowed = {str(v) for v in val}
                 out = [r for r in out if str(r.get(col)) in allowed]
+        if self._range:
+            start, end = self._range
+            out = out[start : end + 1]
         return _Result(out)
 
 

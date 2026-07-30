@@ -26,9 +26,39 @@ def _stmt(active=True):
 
 
 def test_due_periods_covers_prior_week_and_month():
+    # Thu 2026-07-30: week ending Sun 07-26 is 4 days closed (grace elapsed),
+    # June closed a month ago.
     periods = job._due_periods(date(2026, 7, 30))
     assert (job.WEEKLY, date(2026, 7, 20), date(2026, 7, 26)) in periods
     assert (job.MONTHLY, date(2026, 6, 1), date(2026, 6, 30)) in periods
+
+
+def test_due_periods_withholds_a_period_inside_its_grace_window():
+    """A statement must not be cut the moment a period closes: add_tip accepts
+    a tip on any completed ride, and a tip landing after the cut would appear
+    on NO statement (the ledger blocks a redo; the next period excludes the
+    ride). Mon 2026-07-27 is 1 day after the week closed — still in grace."""
+    periods = job._due_periods(date(2026, 7, 27))
+    assert (job.WEEKLY, date(2026, 7, 20), date(2026, 7, 26)) not in periods
+    # ...and it becomes due once the grace has fully elapsed (Wed 07-29).
+    assert (job.WEEKLY, date(2026, 7, 20), date(2026, 7, 26)) in job._due_periods(date(2026, 7, 29))
+
+
+def test_due_periods_catches_up_the_previous_period_after_an_outage():
+    """A multi-day outage spanning a boundary must not skip a period forever —
+    the ledger claim makes the extra scan free."""
+    periods = job._due_periods(date(2026, 7, 30))
+    weekly = [p for p in periods if p[0] == job.WEEKLY]
+    assert (job.WEEKLY, date(2026, 7, 13), date(2026, 7, 19)) in weekly
+    monthly = [p for p in periods if p[0] == job.MONTHLY]
+    assert (job.MONTHLY, date(2026, 5, 1), date(2026, 5, 31)) in monthly
+
+
+def test_due_periods_monthly_grace_on_the_first_of_the_month():
+    """On the 1st the month just closed — inside grace, so not yet due."""
+    periods = job._due_periods(date(2026, 7, 1))
+    assert (job.MONTHLY, date(2026, 6, 1), date(2026, 6, 30)) not in periods
+    assert (job.MONTHLY, date(2026, 6, 1), date(2026, 6, 30)) in job._due_periods(date(2026, 7, 3))
 
 
 def test_statement_id_is_deterministic():

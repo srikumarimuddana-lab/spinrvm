@@ -1518,6 +1518,43 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
 
+### C6. `docker-image-scan` (Trivy) may be scanning a stale cached backend image, not this commit's build
+- [ ] **Status:** open — found 2026-07-30 while triaging `docker-image-scan` on
+  PR #2931 (a backend change, so this wasn't waved off as the usual
+  unrelated-base-image noise without checking). **Confirmed:** two real HIGH
+  findings — `msgpack` `GHSA-6v7p-g79w-8964` (installed 1.1.2, fixed in
+  1.2.1) and `setuptools` `CVE-2025-47273` (installed 70.3.0, fixed in
+  78.1.1) — in the scanned image `spinr-backend:ci-<sha>`. **Not** a case of
+  an outdated pin needing a bump (the A5/PyJWT pattern): `backend/requirements-locked.txt`
+  already pins `msgpack==1.2.1`, and `backend/Dockerfile` installs with
+  `pip install --require-hashes -r requirements-locked.txt`, which cannot
+  resolve to 1.1.2 from that lockfile by construction. `setuptools` isn't
+  pinned at all — the Dockerfile does a bare `pip install --upgrade pip
+  setuptools`, which should track current PyPI, not a version this far
+  behind.
+- **Hypothesis, not yet confirmed:** the image Trivy scans in this job is a
+  stale/cached build that predates recent dependency fixes, rather than a
+  fresh build of the actual commit under test — most likely a Docker
+  layer/BuildKit cache in the `docker-image-scan` job not invalidating on a
+  `requirements-locked.txt` change. Not verified against a real cache
+  hit/miss trace; flagging with the evidence gathered rather than guessing
+  further into workflow internals without being able to reproduce the
+  cache behavior directly.
+- **Why it matters if true:** every PR's `docker-image-scan` result would be
+  scanning old dependency state, meaning the gate can both (a) show stale
+  findings that are already fixed in the lockfile (noise, as here) and (b)
+  — worse — silently miss *new* vulnerabilities introduced by a real
+  dependency bump, since it's not actually scanning that bump's image.
+- **Files:** `.github/workflows/*.yml` (whichever defines the
+  `docker-image-scan` job — not yet located precisely), `backend/Dockerfile`.
+- **Approach:** find the `docker-image-scan` job definition, check its build
+  step for `cache-from`/`cache-to`/registry-cache config, and confirm
+  whether the image tag it scans is actually rebuilt per-commit or reused.
+  If confirmed stale, fix the cache key/invalidation; if not confirmed,
+  downgrade this to "explained, not actionable."
+- **Acceptance:** not yet defined — pending the cache-behavior investigation
+  above.
+
 ### B-AI1. Corporate rider booking via AI chat bypasses corporate billing
 - [x] **Status:** done (2026-07-29) — found by the 2026-07-28 AI guardrail
   audit (branch `claude/rider-ai-location-selection-yn0mem`), fixed on branch

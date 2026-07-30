@@ -11,7 +11,7 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
-    from ...routes.drivers._shared import _encrypt_driver_pii
+    from ...routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt
     from ...routes.users import store_profile_image
     from ...services import lms_service
     from ...utils.audit_logger import log_admin_action
@@ -27,7 +27,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
-    from routes.drivers._shared import _encrypt_driver_pii  # type: ignore
+    from routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
@@ -56,6 +56,91 @@ def _user_display_name(user: Optional[Dict]) -> str:
     fn = user.get("first_name") or ""
     ln = user.get("last_name") or ""
     return f"{fn} {ln}".strip() or user.get("email") or user.get("phone") or ""
+
+
+# ---------- Work authorization (single source of truth) ----------
+# `drivers.work_authorization_status` is the ONE field an operator picks. The
+# older `is_citizen` / `is_permanent_resident` booleans are kept as columns
+# (the bulk importer and the drivers export still read them) but they are now
+# strictly *derived* from the status — admins no longer set them independently,
+# which is what left every driver row showing three separate "Unknown"s.
+#
+# Categories are mutually exclusive, so exactly one of the derived flags can be
+# "yes"; the others report "not_applicable" rather than a misleading "no"/
+# "unknown". `unknown` status is the only case where the flags are genuinely
+# unknown.
+WORK_AUTHORIZATION_CHOICES: Dict[str, str] = {
+    "citizen": "Canadian citizen",
+    "permanent_resident": "Permanent resident",
+    "indefinite": "Work permit — no expiry",
+    "expiring": "Work permit — expires",
+    "unknown": "Unknown",
+}
+
+
+def normalize_work_authorization_status(value: Any) -> str:
+    """Coerce a stored/submitted status to a canonical key. Blank -> 'unknown'."""
+    key = str(value or "").strip().lower()
+    return key if key in WORK_AUTHORIZATION_CHOICES else "unknown"
+
+
+def derived_work_authorization_flags(status: str) -> Dict[str, Optional[bool]]:
+    """Map a canonical status onto the legacy boolean columns.
+
+    Returns ``None`` for both flags when the status is unknown so an unset
+    driver is not silently written as "not a citizen and not a PR".
+    """
+    status = normalize_work_authorization_status(status)
+    if status == "citizen":
+        return {"is_citizen": True, "is_permanent_resident": False}
+    if status == "permanent_resident":
+        return {"is_citizen": False, "is_permanent_resident": True}
+    if status in ("indefinite", "expiring"):
+        # On a work permit: neither flag applies.
+        return {"is_citizen": False, "is_permanent_resident": False}
+    return {"is_citizen": None, "is_permanent_resident": None}
+
+
+def work_authorization_view(driver: Dict[str, Any]) -> Dict[str, Any]:
+    """Admin-facing projection of a driver's work authorization.
+
+    One canonical status plus the derived flags rendered as
+    ``yes`` / ``not_applicable`` / ``unknown`` so the dashboard never has to
+    re-derive the relationship between the three columns.
+    """
+    status = normalize_work_authorization_status(driver.get("work_authorization_status"))
+    # Legacy rows imported before the status column existed only carry the
+    # booleans — promote them so those drivers do not read as "Unknown".
+    if status == "unknown":
+        if driver.get("is_citizen") is True:
+            status = "citizen"
+        elif driver.get("is_permanent_resident") is True:
+            status = "permanent_resident"
+    flags = derived_work_authorization_flags(status)
+
+    def _flag(value: Optional[bool]) -> str:
+        if value is None:
+            return "unknown"
+        return "yes" if value else "not_applicable"
+
+    return {
+        "status": status,
+        "label": WORK_AUTHORIZATION_CHOICES[status],
+        "citizen": _flag(flags["is_citizen"]),
+        "permanent_resident": _flag(flags["is_permanent_resident"]),
+        # Only an `expiring` permit has a meaningful end date.
+        "expires_at": driver.get("work_eligibility_expiry_date") if status == "expiring" else None,
+    }
+
+
+def _mask_license_number(plain: Optional[str]) -> Optional[str]:
+    """Last-4 mask for a decrypted licence number (never the full value)."""
+    if not plain:
+        return None
+    s = str(plain).strip()
+    if not s:
+        return None
+    return s[-4:] if len(s) > 4 else s
 
 
 async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
@@ -476,6 +561,9 @@ async def admin_get_drivers(
                 "subscription_status": _sub_status,
                 "subscription_plan": _sub_plan,
                 "subscription_expires_at": _sub_expires,
+                # Single consolidated work-authorization projection; the raw
+                # columns are still spread above for back-compat.
+                "work_authorization": work_authorization_view(d),
             }
         )
     return out
@@ -1283,21 +1371,26 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         new_last = driver_updates.get("last_name", existing.get("last_name")) or ""
         driver_updates["name"] = f"{new_first} {new_last}".strip()
 
-    # Keep import/compliance flags consistent when admins edit the normalized
-    # work authorization status manually. Explicit boolean updates still win,
-    # but choosing "citizen" or "permanent_resident" should not leave the
-    # separate flags stale.
+    # `work_authorization_status` is the single field an admin picks; the
+    # `is_citizen` / `is_permanent_resident` columns are strictly derived from
+    # it. They are still accepted on their own (bulk-import back-compat, and
+    # older clients), but whenever the status is present it WINS — previously
+    # this used setdefault, which let a stale explicit boolean contradict the
+    # status the operator had just chosen.
     if "work_authorization_status" in driver_updates:
-        status = str(driver_updates.get("work_authorization_status") or "").strip().lower()
-        if status == "citizen":
-            driver_updates.setdefault("is_citizen", True)
-            driver_updates.setdefault("is_permanent_resident", False)
-        elif status == "permanent_resident":
-            driver_updates.setdefault("is_permanent_resident", True)
-            driver_updates.setdefault("is_citizen", False)
-        elif status in {"expiring", "indefinite", "unknown", ""}:
-            driver_updates.setdefault("is_permanent_resident", False)
-            driver_updates.setdefault("is_citizen", False)
+        raw_status = driver_updates.get("work_authorization_status")
+        status = str(raw_status or "").strip().lower()
+        if status and status not in WORK_AUTHORIZATION_CHOICES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid work_authorization_status. Must be one of: "
+                    f"{', '.join(sorted(WORK_AUTHORIZATION_CHOICES))}"
+                ),
+            )
+        # Normalize "" / "unknown" to NULL so the column has one empty spelling.
+        driver_updates["work_authorization_status"] = None if status in ("", "unknown") else status
+        driver_updates.update(derived_work_authorization_flags(status))
 
     user_id = existing.get("user_id")
     # email/gender exist ONLY on `users`, so they cannot be persisted without a
@@ -1905,6 +1998,23 @@ async def admin_get_driver_live_stats(driver_id: str):
         user = await db_supabase.get_user_by_id(drv["user_id"])
         photo_url = (user or {}).get("profile_image")
 
+    # Licence number is Vault-encrypted at rest, so the bulk drivers list only
+    # ever carries the opaque token. Decrypt the single selected driver here and
+    # ship ONLY the last 4 — enough for an admin to confirm which licence is on
+    # file (and to see that one exists before editing it) without the full
+    # number crossing the wire. Same masking rule the drivers CSV export uses.
+    license_number_last4 = None
+    if drv and drv.get("license_number"):
+        token = str(drv["license_number"])
+        try:
+            plain = await _vault_decrypt(token, "license_admin_detail")
+        except Exception:
+            # _vault_decrypt already logs; a decrypt problem must not take down
+            # the whole stats card.
+            plain = None
+        # _vault_decrypt returns the raw token unchanged when it cannot decrypt.
+        license_number_last4 = _mask_license_number(plain) if plain and plain != token else None
+
     return {
         "total_rides": completed_count,
         "total_earnings": total_earnings,
@@ -1913,6 +2023,8 @@ async def admin_get_driver_live_stats(driver_id: str):
         "cancelled_by_driver": cancelled_by_driver,
         "total_assigned": total_assigned,
         "photo_url": photo_url,
+        "license_number_last4": license_number_last4,
+        "license_number_on_file": bool(drv and drv.get("license_number")),
     }
 
 

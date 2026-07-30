@@ -135,18 +135,21 @@ class TestCoordinates:
     def test_orchestrator_is_the_only_trip_pin_optin(self):
         # The keep_trip_pins exemption must never quietly spread to Sentry or
         # support scrubbing. Enumerate every call site: only the chat-message
-        # path (orchestrator) opts in.
+        # path (orchestrator) opts in — it may opt in more than once within
+        # that one file (e.g. once for the user message, once for the
+        # assistant reply), so this checks the *set* of files, not a raw
+        # occurrence count.
         import re as _re
         from pathlib import Path
 
         backend = Path(__file__).resolve().parents[1]
-        opt_ins = []
+        opt_in_files = set()
         for path in backend.rglob("*.py"):
             if "tests" in path.parts or "__pycache__" in path.parts:
                 continue
-            for match in _re.finditer(r"scrub_pii\([^)]*keep_trip_pins\s*=\s*True", path.read_text()):
-                opt_ins.append(path.relative_to(backend).as_posix())
-        assert opt_ins == ["ai/orchestrator.py"]
+            if _re.search(r"scrub_pii\([^)]*keep_trip_pins\s*=\s*True", path.read_text()):
+                opt_in_files.add(path.relative_to(backend).as_posix())
+        assert opt_in_files == {"ai/orchestrator.py"}
 
 
 class TestPostalCodes:

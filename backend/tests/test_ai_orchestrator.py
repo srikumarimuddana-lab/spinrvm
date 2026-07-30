@@ -167,6 +167,25 @@ class TestHappyPaths:
         assert assistant_call.kwargs["tool_names"] == ["get_wallet_balance"]
         assert assistant_call.kwargs["provider"] == "fake"
 
+    @pytest.mark.anyio
+    async def test_assistant_text_is_pii_scrubbed_before_persistence(self):
+        # AI2 regression: the model can echo tool-result data verbatim (e.g.
+        # a driver's phone number pulled from a dispatch tool result) — the
+        # persisted assistant row must be scrubbed the same as the user row,
+        # not treated as trusted first-party text.
+        adapter = FakeAdapter(
+            [[_text("Your driver's number is "), _text("306-555-1234, call anytime."), _end()]]
+        )
+        frames, mocks = await _run(adapter)
+        # the client still sees the raw text streamed this turn — only the
+        # persisted copy changes.
+        tokens = "".join(p["text"] for n, p in frames if n == "token")
+        assert "306-555-1234" in tokens
+        assistant_call = mocks["append"].await_args_list[1]
+        assert assistant_call.args[1] == "assistant"
+        assert "[PHONE]" in assistant_call.args[2]
+        assert "306-555-1234" not in assistant_call.args[2]
+
 
 # Rule 6c in the system prompt mentions the block by name, so the test
 # sentinel must be text only the INJECTED block carries.

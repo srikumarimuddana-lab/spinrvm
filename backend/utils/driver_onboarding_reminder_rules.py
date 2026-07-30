@@ -15,6 +15,26 @@ LOCAL_SEND_HOUR = 8
 VEHICLE_DETAILS = "vehicle_details"
 VEHICLE_DOCUMENTS = "vehicle_documents"
 
+# Only a driver still working through onboarding can act on "finish your
+# vehicle info". This is an ALLOWLIST, not a denylist: previously the loop
+# skipped only `banned`, so an approved (`active`) driver missing one vehicle
+# field — or a `rejected`/`suspended` one who cannot act at all — was nagged
+# every morning forever. A status we don't recognise must default to silence,
+# not to a daily push.
+#
+# Deliberately excluded:
+#   active        — already approved; nothing to finish
+#   needs_review  — submitted, waiting on admin; the ball is not with the driver
+#   rejected      — application declined; asking them to finish is misleading
+#   suspended     — cannot go online; reminder is noise
+#   banned        — terminal (was the only status skipped before)
+DEFAULT_REMINDABLE_STATUSES = frozenset({"pending"})
+
+# Stop after this many daily reminders per driver per reminder type. The old
+# loop had no terminal condition at all. Override via the
+# `driver_onboarding_reminder_max_days` app setting; <= 0 disables the cap.
+DEFAULT_MAX_REMINDERS_PER_TYPE = 7
+
 
 def as_utc(now: datetime | None) -> datetime:
     now = now or datetime.now(timezone.utc)
@@ -57,13 +77,61 @@ def open_send_windows(timezones: set[str] | list[str], now: datetime) -> set[str
     return keys
 
 
-def should_skip_driver(driver: dict[str, Any]) -> bool:
+def driver_status(driver: dict[str, Any]) -> str:
+    """Normalised driver status.
+
+    `drivers.status` is NOT NULL DEFAULT 'pending' (migration 12), so an empty
+    value only appears on rows written before that default landed — treat those
+    as 'pending', which is what the column would have defaulted to.
+    """
+    return str(driver.get("status") or "pending").strip().lower()
+
+
+def should_skip_driver(
+    driver: dict[str, Any],
+    remindable_statuses: frozenset[str] | set[str] | None = None,
+) -> bool:
+    statuses = DEFAULT_REMINDABLE_STATUSES if remindable_statuses is None else remindable_statuses
     return bool(
         not driver.get("id")
         or not driver.get("user_id")
         or driver.get("deleted_at")
-        or driver.get("status") == "banned"
+        or driver_status(driver) not in statuses
     )
+
+
+def reminder_cap_reached(already_sent: int, max_per_type: int) -> bool:
+    """True once a driver has had `max_per_type` daily reminders of one type.
+
+    Counts claim rows, not successful deliveries: a claim is written before the
+    push is attempted, so a driver whose device token is dead still exhausts the
+    cap instead of being retried forever. `max_per_type <= 0` means uncapped
+    (the pre-fix behaviour, kept reachable for rollback).
+    """
+    return max_per_type > 0 and already_sent >= max_per_type
+
+
+def parse_remindable_statuses(value: Any) -> frozenset[str]:
+    """Coerce the `driver_onboarding_reminder_statuses` app setting to a set.
+
+    Accepts a list, a JSON array string, or a CSV string. Anything empty or
+    unparseable falls back to the default so a malformed setting silences
+    nothing it shouldn't and — more importantly — never widens the audience.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                logger.warning("Invalid driver_onboarding_reminder_statuses %r; using default", value)
+                return frozenset(DEFAULT_REMINDABLE_STATUSES)
+        else:
+            value = text.split(",")
+    if not isinstance(value, list):
+        return frozenset(DEFAULT_REMINDABLE_STATUSES)
+    parsed = {str(item).strip().lower() for item in value if str(item).strip()}
+    return frozenset(parsed) if parsed else frozenset(DEFAULT_REMINDABLE_STATUSES)
 
 
 def reminder_message(driver_id: str, kind: str) -> tuple[str, str, dict[str, str]]:

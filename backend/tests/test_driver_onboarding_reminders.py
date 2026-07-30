@@ -12,6 +12,27 @@ def _reset_completed_windows(monkeypatch):
     monkeypatch.setattr(reminders, "_completed_windows", set())
 
 
+@pytest.fixture(autouse=True)
+def _default_app_settings(monkeypatch):
+    """No overrides configured → the built-in defaults apply.
+
+    Patched so the loop's app_settings read never reaches the real settings
+    table (or its in-process TTL cache) from a unit test.
+    """
+    from utils import driver_onboarding_reminders as reminders
+
+    monkeypatch.setattr(reminders, "_get_app_settings", AsyncMock(return_value={}))
+
+
+def _stats(scanned=1, claims=2, delivered=2, capped=0):
+    return {
+        "drivers_scanned": scanned,
+        "claims_attempted": claims,
+        "pushes_delivered": delivered,
+        "capped_skips": capped,
+    }
+
+
 class FakeReminderDB:
     def __init__(
         self,
@@ -20,7 +41,12 @@ class FakeReminderDB:
         raw_duplicate_claims: bool = False,
         service_unavailable_claims: bool = False,
         docs: list[dict] | None = None,
+        preexisting_log: list[dict] | None = None,
+        driver_status: str = "pending",
     ):
+        # Claim rows already in driver_onboarding_reminder_log from earlier
+        # days — what the repeat cap counts against.
+        self.preexisting_log = preexisting_log or []
         self.duplicate_claims = duplicate_claims
         # Simulate the duplicate surfacing as a generic exception whose text
         # carries the unique-violation (not the typed DuplicateRecordError) —
@@ -38,7 +64,7 @@ class FakeReminderDB:
         self.driver = {
             "id": "driver-1",
             "user_id": "user-1",
-            "status": "pending",
+            "status": driver_status,
             "deleted_at": None,
             "service_area_id": "area-1",
             "vehicle_type_id": None,
@@ -67,7 +93,26 @@ class FakeReminderDB:
             return [self.driver]
         if table == "driver_documents":
             return self.docs
+        if table == "driver_onboarding_reminder_log":
+            # Rows claimed on earlier days plus anything claimed this run —
+            # exactly what the repeat cap counts.
+            return self.preexisting_log + self.claims
         return []
+
+    async def rpc(self, func_name: str, params: dict):
+        """Mirror driver_onboarding_reminder_counts (migration 273).
+
+        Default path, matching production once the migration is applied. Tests
+        that need the client-side fallback break this explicitly.
+        """
+        assert func_name == "driver_onboarding_reminder_counts"
+        wanted = set(params["p_driver_ids"])
+        counts: dict[tuple[str, str], int] = {}
+        for row in self.preexisting_log + self.claims:
+            if str(row["driver_id"]) in wanted:
+                key = (str(row["driver_id"]), str(row["reminder_type"]))
+                counts[key] = counts.get(key, 0) + 1
+        return [{"driver_id": did, "reminder_type": kind, "sent_count": n} for (did, kind), n in counts.items()]
 
     async def insert_one(self, table: str, doc: dict):
         assert table == "driver_onboarding_reminder_log"
@@ -108,7 +153,7 @@ async def test_sends_vehicle_details_and_document_reminders_at_8am_local(monkeyp
     # America/Regina is UTC-6 year-round: 14:05 UTC is 08:05 local.
     stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
 
-    assert stats == {"drivers_scanned": 1, "claims_attempted": 2, "pushes_delivered": 2}
+    assert stats == _stats(claims=2, delivered=2)
     assert [claim["reminder_type"] for claim in fake_db.claims] == [
         reminders.VEHICLE_DETAILS,
         reminders.VEHICLE_DOCUMENTS,
@@ -133,7 +178,7 @@ async def test_duplicate_daily_claim_suppresses_duplicate_pushes(monkeypatch):
 
     stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
 
-    assert stats == {"drivers_scanned": 1, "claims_attempted": 2, "pushes_delivered": 0}
+    assert stats == _stats(claims=2, delivered=0)
     assert fake_db.claims == []
     assert fake_db.updates == []
     send_push.assert_not_awaited()
@@ -155,7 +200,7 @@ async def test_raw_unique_violation_treated_as_already_claimed(monkeypatch):
 
     # Same observable outcome as the typed-duplicate case: no push, no claim
     # row, no update — and crucially the window still completes (no _CLAIM_ERROR).
-    assert stats == {"drivers_scanned": 1, "claims_attempted": 2, "pushes_delivered": 0}
+    assert stats == _stats(claims=2, delivered=0)
     assert fake_db.claims == []
     assert fake_db.updates == []
     send_push.assert_not_awaited()
@@ -185,7 +230,7 @@ async def test_service_unavailable_aborts_scan_on_first_claim(monkeypatch):
     # Window incomplete → a later tick in the same hour rescans and delivers.
     fake_db.service_unavailable_claims = False
     second = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
-    assert second == {"drivers_scanned": 1, "claims_attempted": 2, "pushes_delivered": 2}
+    assert second == _stats(claims=2, delivered=2)
 
 
 @pytest.mark.asyncio
@@ -202,7 +247,7 @@ async def test_outside_send_window_skips_drivers_scan(monkeypatch):
     # 18:05 UTC is 12:05 in America/Regina — no window open.
     stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 18, 5, tzinfo=timezone.utc))
 
-    assert stats == {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+    assert stats == _stats(scanned=0, claims=0, delivered=0)
     assert fake_db.tables_read == ["service_areas"]
     send_push.assert_not_awaited()
 
@@ -223,7 +268,7 @@ async def test_scan_runs_once_per_send_window(monkeypatch):
 
     fake_db.tables_read.clear()
     second = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
-    assert second == {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+    assert second == _stats(scanned=0, claims=0, delivered=0)
     assert fake_db.tables_read == ["service_areas"]
 
     next_day = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 10, 14, 5, tzinfo=timezone.utc))
@@ -244,7 +289,7 @@ async def test_failed_scan_does_not_complete_window(monkeypatch):
     # First tick: the drivers read fails inside the 08:00 window.
     fake_db.failing_tables = {"drivers"}
     failed = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
-    assert failed == {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+    assert failed == _stats(scanned=0, claims=0, delivered=0)
     assert reminders._completed_windows == set()
     send_push.assert_not_awaited()
 
@@ -277,3 +322,247 @@ async def test_failed_claim_insert_does_not_complete_window(monkeypatch):
     retried = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
     assert retried["pushes_delivered"] == 2
     assert reminders._completed_windows != set()
+
+
+# ── Eligibility gating + repeat cap ─────────────────────────────────
+# Before these, the loop skipped only `banned` drivers and had no terminal
+# condition: an approved driver missing one vehicle field, or a rejected
+# applicant who could not act at all, was pushed every morning forever.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["active", "needs_review", "rejected", "suspended", "banned"])
+async def test_non_pending_driver_is_never_reminded(monkeypatch, status):
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB(driver_status=status)
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    assert stats == _stats(scanned=1, claims=0, delivered=0)
+    assert fake_db.claims == []
+    send_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pending_driver_with_blank_status_is_reminded(monkeypatch):
+    """drivers.status is NOT NULL DEFAULT 'pending'; a legacy blank row
+    predates that default and must be treated as pending, not silenced."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    fake_db.driver["status"] = None
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    assert stats == _stats(claims=2, delivered=2)
+
+
+@pytest.mark.asyncio
+async def test_reminders_stop_after_the_cap(monkeypatch):
+    from utils import driver_onboarding_reminders as reminders
+    from utils.driver_onboarding_reminder_rules import DEFAULT_MAX_REMINDERS_PER_TYPE as CAP
+
+    # Exactly CAP prior daily claims for the vehicle-details reminder; the
+    # documents reminder is one short of the cap.
+    prior = [
+        {"driver_id": "driver-1", "reminder_type": reminders.VEHICLE_DETAILS, "local_date": f"2026-06-{d:02d}"}
+        for d in range(1, CAP + 1)
+    ] + [
+        {"driver_id": "driver-1", "reminder_type": reminders.VEHICLE_DOCUMENTS, "local_date": f"2026-06-{d:02d}"}
+        for d in range(1, CAP)
+    ]
+    fake_db = FakeReminderDB(preexisting_log=prior)
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    # Vehicle-details is exhausted; documents gets its final reminder.
+    assert stats == _stats(claims=1, delivered=1, capped=1)
+    assert [c["reminder_type"] for c in fake_db.claims] == [reminders.VEHICLE_DOCUMENTS]
+    assert [call.args[1] for call in send_push.await_args_list] == ["Upload your vehicle documents"]
+
+
+@pytest.mark.asyncio
+async def test_cap_can_be_disabled_via_settings(monkeypatch):
+    """max_days <= 0 restores the uncapped pre-fix behaviour — the
+    config-only rollback path."""
+    from utils import driver_onboarding_reminders as reminders
+    from utils.driver_onboarding_reminder_rules import DEFAULT_MAX_REMINDERS_PER_TYPE as CAP
+
+    prior = [
+        {"driver_id": "driver-1", "reminder_type": reminders.VEHICLE_DETAILS, "local_date": f"2026-05-{d:02d}"}
+        for d in range(1, CAP + 5)
+    ]
+    fake_db = FakeReminderDB(preexisting_log=prior)
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+    monkeypatch.setattr(
+        reminders, "_get_app_settings", AsyncMock(return_value={"driver_onboarding_reminder_max_days": 0})
+    )
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    assert stats == _stats(claims=2, delivered=2)
+
+
+@pytest.mark.asyncio
+async def test_status_allowlist_can_be_widened_via_settings(monkeypatch):
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB(driver_status="active")
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+    monkeypatch.setattr(
+        reminders,
+        "_get_app_settings",
+        AsyncMock(return_value={"driver_onboarding_reminder_statuses": "pending, active"}),
+    )
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    assert stats == _stats(claims=2, delivered=2)
+
+
+@pytest.mark.asyncio
+async def test_failed_reminder_count_does_not_complete_window(monkeypatch):
+    """Without counts we can't tell a first reminder from a 40th, so the page
+    must not be processed and the window must stay incomplete. Both sources
+    have to be down — the RPC and the client-side fallback behind it."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    fake_db.rpc = AsyncMock(side_effect=RuntimeError("rpc down"))
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    fake_db.failing_tables = {"driver_onboarding_reminder_log"}
+    failed = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+    assert failed == _stats(scanned=0, claims=0, delivered=0)
+    assert reminders._completed_windows == set()
+    send_push.assert_not_awaited()
+
+    fake_db.failing_tables = set()
+    retried = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
+    assert retried["pushes_delivered"] == 2
+
+
+@pytest.mark.asyncio
+async def test_settings_read_failure_falls_back_to_safe_defaults(monkeypatch):
+    """A settings outage must not re-open the send-to-everyone behaviour."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB(driver_status="active")
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+    monkeypatch.setattr(reminders, "_get_app_settings", AsyncMock(side_effect=RuntimeError("settings down")))
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    assert stats == _stats(scanned=1, claims=0, delivered=0)
+    send_push.assert_not_awaited()
+
+
+# ── Reminder-count sourcing (review finding H1) ─────────────────────
+# The cap is only as good as the count behind it. A client-side count read
+# with a row limit under-reports once the log holds pre-cap rows, which would
+# push a capped driver again — the exact failure the cap exists to prevent.
+
+
+@pytest.mark.asyncio
+async def test_counts_come_from_the_rpc_when_available(monkeypatch):
+    from utils import driver_onboarding_reminders as reminders
+    from utils.driver_onboarding_reminder_rules import DEFAULT_MAX_REMINDERS_PER_TYPE as CAP
+
+    fake_db = FakeReminderDB()
+    fake_db.rpc = AsyncMock(
+        return_value=[{"driver_id": "driver-1", "reminder_type": reminders.VEHICLE_DETAILS, "sent_count": CAP}]
+    )
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    fake_db.rpc.assert_awaited_once_with(reminders.COUNTS_RPC, {"p_driver_ids": ["driver-1"]})
+    # The RPC says vehicle-details is exhausted; documents is untouched.
+    assert stats == _stats(claims=1, delivered=1, capped=1)
+    # The claim-log table is never read when the RPC answers.
+    assert "driver_onboarding_reminder_log" not in fake_db.tables_read
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_scan_when_rpc_missing(monkeypatch):
+    """Migration 273 not applied yet — the loop must still work."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    fake_db.rpc = AsyncMock(side_effect=RuntimeError('function "..." does not exist'))
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    assert "driver_onboarding_reminder_log" in fake_db.tables_read
+    assert stats == _stats(claims=2, delivered=2)
+
+
+@pytest.mark.asyncio
+async def test_truncated_fallback_read_suppresses_instead_of_overnotifying(monkeypatch):
+    """A truncated count under-reports, which would re-push a capped driver.
+    Fail closed: suppress the page rather than risk the spam this cap exists
+    to stop."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    fake_db.rpc = AsyncMock(side_effect=RuntimeError("no rpc"))
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    # Return exactly `limit` rows so the read looks truncated.
+    async def saturated_get_rows(table, filters=None, **kwargs):
+        if table == "driver_onboarding_reminder_log":
+            fake_db.tables_read.append(table)
+            return [{"driver_id": "driver-1", "reminder_type": reminders.VEHICLE_DETAILS}] * kwargs["limit"]
+        return await FakeReminderDB.get_rows(fake_db, table, filters, **kwargs)
+
+    fake_db.get_rows = saturated_get_rows
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    send_push.assert_not_awaited()
+    assert stats == _stats(claims=0, delivered=0, capped=2)
+
+
+@pytest.mark.asyncio
+async def test_rpc_failure_does_not_stop_the_loop_when_cap_disabled(monkeypatch):
+    """max_days<=0 short-circuits before any count is needed, so a missing
+    migration cannot block the uncapped rollback path."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    fake_db.rpc = AsyncMock(side_effect=AssertionError("must not be called"))
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+    monkeypatch.setattr(
+        reminders, "_get_app_settings", AsyncMock(return_value={"driver_onboarding_reminder_max_days": 0})
+    )
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    assert stats == _stats(claims=2, delivered=2)

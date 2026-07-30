@@ -166,21 +166,22 @@ jobs:
       # green while running none of the 10 Spinr rules. This check is a plain YAML
       # parse — no network, no registry — so it catches that exact class of
       # breakage even when semgrep.dev is unreachable.
+      #
+      # CR #2915: the semgrep/semgrep:latest image (Alpine-based) doesn't ship
+      # PyYAML, so this validation step itself failed with ModuleNotFoundError
+      # on every PR, before semgrep scan ever ran — the exact "gate silently
+      # never runs" failure mode this step exists to catch, just from a
+      # different cause. pip install here, not a separate step, so a failure
+      # to install still fails fast with a clear error instead of a confusing
+      # later ModuleNotFoundError.
       - name: Validate Spinr ruleset parses
         run: |
-          # semgrep/semgrep's image ships a python3 on PATH without PyYAML in its
-          # site-packages (semgrep's own YAML parsing lives in an interpreter this
-          # script doesn't share) — install it explicitly rather than assume it's
-          # there. The "Semgrep scan" step right after this one already requires
-          # network (pulling p/python, p/typescript, etc. from the registry), so
-          # this doesn't add a new dependency class to the job.
-          #
-          # --break-system-packages: the image's Alpine base marks the system
-          # python3 as PEP 668 externally-managed, so a bare `pip install`
-          # refuses to run (confirmed live in CI, not assumed). This container
-          # is recreated fresh every job — there's no persistent system to
-          # "break".
-          python3 -m pip install --quiet --disable-pip-version-check --break-system-packages pyyaml
+          # --break-system-packages: the semgrep/semgrep:latest image's
+          # system Python is PEP 668 "externally managed" (Alpine), so a
+          # bare `pip install` is refused outright. Safe here — this is an
+          # ephemeral CI container discarded after the job, not a shared or
+          # persistent environment a system-package conflict could affect.
+          pip install --quiet --no-cache-dir --break-system-packages pyyaml
           python3 - <<'PY'
           import sys, yaml
           path = ".semgrep/spinr-rules.yml"

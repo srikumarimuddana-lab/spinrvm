@@ -80,6 +80,28 @@ class TestPdfSafe:
         assert isinstance(result, str)
 
 
+class TestFormatReportTimestamp:
+    def test_formats_with_space_between_date_and_time(self):
+        # Regression: insurance-period audit's started_at/ended_at and
+        # Knight Archer's onboarded_at previously passed the raw DB ISO
+        # string straight into the report cell, rendering as one unbroken
+        # run of digits/punctuation ("continuous", per the reported bug) —
+        # no space between the date and time.
+        assert report_branding.format_report_timestamp("2026-07-29T14:32:10.123456+00:00") == "2026-07-29 14:32 UTC"
+
+    def test_handles_z_suffix(self):
+        assert report_branding.format_report_timestamp("2026-07-29T14:32:10Z") == "2026-07-29 14:32 UTC"
+
+    def test_none_uses_empty_default(self):
+        assert report_branding.format_report_timestamp(None) == ""
+        assert report_branding.format_report_timestamp(None, empty="(open)") == "(open)"
+
+    def test_unparseable_value_falls_back_to_raw_string(self):
+        # Degrade gracefully rather than hide a real data problem behind a
+        # blank cell.
+        assert report_branding.format_report_timestamp("not-a-real-date") == "not-a-real-date"
+
+
 class TestBrandedPdf:
     def test_new_branded_pdf_renders(self):
         pytest.importorskip("fpdf")
@@ -126,6 +148,27 @@ class TestBrandedPdf:
         pytest.importorskip("fpdf")
         pdf = report_branding.new_branded_pdf("Test Report")
         assert pdf.h > pdf.w  # portrait: taller than wide
+
+    def test_multiline_subtitle_renders_without_error(self):
+        # Regression: GST/PST remittance's subtitle previously crammed a
+        # date range and three dollar totals onto one line — reported as
+        # reading unprofessionally. subtitle now accepts a list of lines.
+        pytest.importorskip("fpdf")
+        pdf = report_branding.new_branded_pdf(
+            "GST/PST Remittance Summary",
+            ["2026-06-29 to 2026-07-29", "GST: $17.91    PST: $0.00    HST: $0.00"],
+        )
+        out = bytes(pdf.output())
+        assert out.startswith(b"%PDF")
+
+    def test_multiline_subtitle_grows_header_block(self):
+        # The divider rule (and content start y) must move down to fit a
+        # 2-line subtitle instead of overlapping it — same y as a 1-line
+        # subtitle would clip the second line.
+        pytest.importorskip("fpdf")
+        pdf_one_line = report_branding.new_branded_pdf("Test Report", "one line")
+        pdf_two_lines = report_branding.new_branded_pdf("Test Report", ["line one", "line two"])
+        assert pdf_two_lines.y > pdf_one_line.y
 
 
 class TestRenderPdfTable:

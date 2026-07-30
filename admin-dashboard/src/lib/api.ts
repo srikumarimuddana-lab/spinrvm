@@ -463,6 +463,7 @@ export {
     downloadGstPstRemittance,
     downloadInsurancePeriodAudit,
     downloadKnightArcherDriverOnboarding,
+    downloadT4aFilerHandoff,
     emailGstPstRemittance,
     emailInsurancePeriodAudit,
     emailKnightArcherDriverOnboarding,

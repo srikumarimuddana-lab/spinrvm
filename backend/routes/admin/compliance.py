@@ -25,8 +25,9 @@ from fastapi.responses import JSONResponse
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
-    from ...routes.drivers._shared import _decrypt_driver_pii
+    from ...routes.drivers._shared import _decrypt_driver_pii, _ride_income
     from ...services import admin_export_approvals
+    from ...services.stripe_kyc_sync import get_legal_name_and_address_from_stripe
     from ...settings_loader import get_app_settings
     from ...utils import metrics, report_branding
     from ...utils.email_provider import send_transactional_email
@@ -34,8 +35,9 @@ try:
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
-    from routes.drivers._shared import _decrypt_driver_pii
+    from routes.drivers._shared import _decrypt_driver_pii, _ride_income
     from services import admin_export_approvals  # type: ignore
+    from services.stripe_kyc_sync import get_legal_name_and_address_from_stripe  # type: ignore
     from settings_loader import get_app_settings
     from utils import metrics, report_branding
     from utils.email_provider import send_transactional_email
@@ -121,6 +123,12 @@ _ROW_LIMIT = 10000
 # _check_export_gate always returns None (ungated) and every report here
 # behaves exactly as it did before this gate existed.
 _APPROVAL_GATE_ROW_THRESHOLD = 1000
+
+# CRA T4A (Box 048, "Fees for Services") reporting threshold — matches
+# utils/t4a_annual_job.py's own _T4A_THRESHOLD constant (kept separate
+# rather than imported: that module owns the annual push-notification
+# job, a different concern from this admin-triggered export).
+_T4A_THRESHOLD = Decimal("500.00")
 
 
 async def _check_export_gate(
@@ -249,7 +257,7 @@ def _render_tabular_report(
     filename_base: str,
     fieldnames: list[str],
     rows: list[dict],
-    subtitle: str,
+    subtitle: "str | list[str]",
     format: str,
     pdf_landscape: bool = False,
     pdf_col_widths: list[float] | None = None,
@@ -391,12 +399,18 @@ async def get_gst_pst_remittance(
         return gate_response
 
     fieldnames = ["month", "gst", "pst", "hst", "unrecognized_tax", "total_tax"]
-    subtitle = (
-        f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — "
-        f"Total GST ${gst_total:.2f}, Total PST ${pst_total:.2f}, Total HST ${hst_total:.2f}"
-    )
+    # Two lines instead of one crammed sentence — date range/scope on its
+    # own line, tax totals on a second with even spacing (report_branding
+    # supports subtitle as list[str] specifically for this). Previously:
+    # "2026-06-29 to 2026-07-29 — Total GST $17.91, Total PST $0.00, Total
+    # HST $0.00" all run together, reported as reading unprofessionally.
+    totals_line = f"GST: ${gst_total:.2f}    PST: ${pst_total:.2f}    HST: ${hst_total:.2f}"
     if truncated:
-        subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
+        # Appended to the totals line, not a 3rd line — new_branded_workbook
+        # only renders the first 2 subtitle lines, and truncation is too
+        # important to risk dropping from the Excel format specifically.
+        totals_line += f"  — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
+    subtitle = [f"{start_date.date().isoformat()} to {end_date.date().isoformat()}", totals_line]
 
     await _log_compliance_export(
         admin,
@@ -466,8 +480,8 @@ async def _insurance_period_rows(
         {
             "driver_name": driver_names.get(p["driver_id"], p["driver_id"]),
             "period": _PERIOD_LABELS.get(p.get("period"), str(p.get("period"))),
-            "started_at": p.get("started_at") or "",
-            "ended_at": p.get("ended_at") or "(open)",
+            "started_at": report_branding.format_report_timestamp(p.get("started_at")),
+            "ended_at": report_branding.format_report_timestamp(p.get("ended_at"), empty="(open)"),
         }
         for p in periods
     ]
@@ -593,7 +607,7 @@ async def _knight_archer_driver_rows(status: Optional[str]) -> tuple[list[dict],
             "license_number": d.get("license_number") or "",
             "license_class": d.get("license_class") or "",
             "status": d.get("status") or "",
-            "onboarded_at": d.get("created_at") or "",
+            "onboarded_at": report_branding.format_report_timestamp(d.get("created_at")),
         }
         for d in drivers
     ]
@@ -654,3 +668,173 @@ async def get_knight_archer_driver_onboarding(
         pdf_col_widths=[2.5, 2.2, 1.6, 1.8, 2.0],
     )
     return await _deliver_report(resp, email_to, admin, "Knight Archer Insurance — Driver Onboarding Report")
+
+
+# ── T4A / Reportable Platform Operator Filer Handoff ─────────────────
+#
+# Spinr's drivers are independent contractors, which triggers two
+# separate CRA obligations: the traditional T4A (Box 048, "Fees for
+# Services", ≥$500/year threshold) and — since Jan 1 2024 — the
+# Reportable Platform Operator rules (Income Tax Act Part XX.1, Canada's
+# adoption of the OECD Model Reporting Rules for Digital Platforms,
+# "Personal Services" category), which additionally requires collecting
+# and verifying each qualifying driver's Tax ID (SIN/BN) and filing a
+# Platform Information Return by January 31.
+#
+# Decision (see ACTION_ITEMS.md): Spinr does not collect or store SIN.
+# It never has — migration 92's own docstring already establishes SIN
+# stays on Stripe Connect Express's side, retrievable one driver at a
+# time only via the audited POST /drivers/{id}/reveal-sin admin
+# endpoint (super_admin only, every reveal logged). Actual CRA filing
+# (T4A and/or the Platform Information Return — which one(s) apply is a
+# determination for a tax advisor, not this code) is expected to go
+# through a third-party filer. This export is exactly the SIN-free half
+# of that handoff: per-driver annual earnings plus Stripe-verified legal
+# name/address for every driver who crossed the threshold, so the filer
+# has everything except the SIN itself, which they collect directly from
+# the driver (or an admin retrieves per-driver via reveal-sin when
+# actually filing).
+
+
+async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
+    """Per-driver annual earnings (from completed rides, same
+    driver_earnings-first definition as routes/drivers/_shared.py's
+    _ride_income, used by the driver-facing T4A summary) for every driver
+    at or above the $500 CRA threshold in `year`, plus their Stripe-
+    verified legal name/mailing address. Reads all of the year's
+    completed rides in ONE query and aggregates in Python — avoids an
+    N+1 per-driver rides query for what could be hundreds of drivers."""
+    start = f"{year}-01-01"
+    end = f"{year + 1}-01-01"
+    rides = await db_supabase.get_rows(
+        "rides",
+        {"status": "completed", "ride_completed_at": {"$gte": start, "$lt": end}},
+        columns="driver_id,driver_earnings,base_fare,distance_fare,time_fare,tip_amount",
+        limit=_ROW_LIMIT,
+    )
+    truncated = _check_truncated(len(rides), "t4a_filer_handoff")
+
+    earnings_by_driver: dict[str, Decimal] = {}
+    trips_by_driver: dict[str, int] = {}
+    for r in rides:
+        driver_id = r.get("driver_id")
+        if not driver_id:
+            continue
+        earnings_by_driver[driver_id] = earnings_by_driver.get(driver_id, Decimal("0")) + _ride_income(r)
+        trips_by_driver[driver_id] = trips_by_driver.get(driver_id, 0) + 1
+
+    qualifying_ids = sorted(did for did, total in earnings_by_driver.items() if total >= _T4A_THRESHOLD)
+    if not qualifying_ids:
+        return [], truncated, 0
+
+    driver_rows: list[dict] = []
+    for i in range(0, len(qualifying_ids), 200):
+        batch = qualifying_ids[i : i + 200]
+        driver_rows.extend(
+            await db_supabase.get_rows(
+                "drivers",
+                {"id": {"$in": batch}},
+                columns="id,name,first_name,last_name,stripe_account_id,stripe_id_number_provided",
+                limit=len(batch),
+            )
+        )
+    by_id = {d["id"]: d for d in driver_rows}
+
+    rows: list[dict] = []
+    for driver_id in qualifying_ids:
+        d = by_id.get(driver_id, {})
+        # Live per-driver Stripe call — acceptable here: this is an
+        # admin-triggered, once-a-year batch operation over a bounded
+        # driver count, not a request-latency-sensitive hot path (unlike
+        # the SLA-bound paths CLAUDE.md's anti-pattern list warns about).
+        stripe_info = await get_legal_name_and_address_from_stripe(d) or {}
+        rows.append(
+            {
+                "driver_name": d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or driver_id,
+                "legal_name_stripe": stripe_info.get("legal_name") or "",
+                "address_line1": stripe_info.get("address_line1") or "",
+                "address_line2": stripe_info.get("address_line2") or "",
+                "city": stripe_info.get("city") or "",
+                "province": stripe_info.get("province") or "",
+                "postal_code": stripe_info.get("postal_code") or "",
+                "country": stripe_info.get("country") or "",
+                "total_trips": trips_by_driver.get(driver_id, 0),
+                "total_earnings": f"{earnings_by_driver[driver_id]:.2f}",
+                "sin_on_file_at_stripe": "Yes" if d.get("stripe_id_number_provided") else "No",
+            }
+        )
+    return rows, truncated, len(qualifying_ids)
+
+
+@api_router.get("/t4a-filer-handoff")
+@limiter.limit("10/minute")
+async def get_t4a_filer_handoff(
+    request: Request,
+    year: int = Query(..., ge=2020, le=2100),
+    format: str = Query("xlsx", pattern="^(pdf|csv|xlsx|docx)$"),
+    email_to: Optional[str] = Query(
+        None, description="Email the report to this @spinr.ca address instead of downloading it"
+    ),
+    admin: dict = Depends(get_admin_user),
+):
+    """Per-driver annual earnings + Stripe-verified legal name/address for
+    every driver who crossed the $500 CRA reporting threshold in `year` —
+    for handoff to a third-party tax filer. Never includes the SIN
+    itself (see the module-section docstring above). Restricted to
+    super_admin: unlike the other Compliance reports, this one surfaces
+    verified legal name + mailing address in bulk, a meaningfully more
+    sensitive combination than aggregate tax totals."""
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="t4a_filer_handoff requires super_admin role")
+    _require_spinr_ca(email_to)
+
+    try:
+        rows, truncated, qualifying_count = await _t4a_filer_handoff_rows(year)
+    except Exception as e:
+        logger.error(f"Failed to build T4A filer handoff export for {year}: {e}", exc_info=True)
+        _capture_export_failure("t4a_filer_handoff", e)
+        metrics.inc("spinr_admin_compliance_export_total", {"report_type": "t4a_filer_handoff", "outcome": "error"})
+        raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
+
+    gate_response = await _check_export_gate(
+        admin,
+        "compliance.t4a_filer_handoff",
+        {"year": year, "format": format, "email_to": email_to},
+        len(rows),
+    )
+    if gate_response is not None:
+        return gate_response
+
+    fieldnames = [
+        "driver_name",
+        "legal_name_stripe",
+        "address_line1",
+        "address_line2",
+        "city",
+        "province",
+        "postal_code",
+        "country",
+        "total_trips",
+        "total_earnings",
+        "sin_on_file_at_stripe",
+    ]
+    subtitle = (
+        f"Tax year {year} — {qualifying_count} driver(s) at or above the ${_T4A_THRESHOLD} CRA threshold. "
+        "SIN not included — retrieve per-driver via the audited reveal-sin admin endpoint when filing."
+    )
+    if truncated:
+        subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the query"
+
+    await _log_compliance_export(admin, "t4a_filer_handoff", {"year": year, "format": format}, len(rows))
+    metrics.inc("spinr_admin_compliance_export_total", {"report_type": "t4a_filer_handoff", "outcome": "success"})
+
+    resp = _render_tabular_report(
+        title=f"T4A Filer Handoff — Tax Year {year}",
+        filename_base=f"t4a_filer_handoff_{year}",
+        fieldnames=fieldnames,
+        rows=rows,
+        subtitle=subtitle,
+        format=format,
+        pdf_landscape=True,
+    )
+    return await _deliver_report(resp, email_to, admin, f"T4A Filer Handoff — Tax Year {year}")

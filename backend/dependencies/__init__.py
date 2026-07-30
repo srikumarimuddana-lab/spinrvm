@@ -529,6 +529,37 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return user
 
 
+async def get_token_session_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> Optional[str]:
+    """Best-effort ``session_id`` claim from the presented access token.
+
+    Returns None whenever there is nothing to read — no credentials, a Firebase
+    ID token (which carries no such claim), or an undecodable token. Callers
+    treat None as "no session information", never as a failure: this dependency
+    is only used to look up session-revocation tombstones, and every ambiguous
+    input there resolves to "allow".
+
+    Returns *only* the session id, deliberately not the decoded payload. Handing
+    a raw JWT payload to route code invites trusting claims that must come from
+    the DB instead — ``role`` above all (see the JWT trust model in CLAUDE.md).
+
+    This does NOT authenticate. Pair it with ``get_current_user``, which is what
+    verifies the token; a request reaching a route has already passed that.
+    """
+    if not credentials:
+        return None
+    try:
+        payload = verify_jwt_token(credentials.credentials)
+    except Exception:
+        # Includes the HTTPException verify_jwt_token raises on an expired or
+        # malformed token. get_current_user is the gate that rejects those; here
+        # it just means no session id is available.
+        return None
+    session_id = payload.get("session_id")
+    return str(session_id) if session_id else None
+
+
 # Safety-critical grace window: an SOS tap mid-trip must not bounce off a
 # 401 because the 15-minute access token lapsed before the client's
 # reactive refresh ran. 24h comfortably covers any plausible trip length

@@ -243,6 +243,19 @@ export async function downloadKnightArcherDriverOnboarding(
     return { blob, filename: `knight_archer_driver_onboarding.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
+/** T4A filer handoff — per-driver annual earnings + Stripe-verified legal
+ *  name/address for drivers at or above the $500 CRA threshold, for
+ *  handoff to a third-party tax filer. NEVER includes the SIN itself —
+ *  see routes/admin/compliance.py's module-section docstring for why. */
+export async function downloadT4aFilerHandoff(
+    year: number,
+    format: ComplianceReportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({ year: String(year), format });
+    const blob = await downloadComplianceReport(`/api/admin/compliance/t4a-filer-handoff?${sp.toString()}`, "t4a_filer_handoff");
+    return { blob, filename: `t4a_filer_handoff_${year}.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
 /** Email a compliance report to a @spinr.ca address instead of downloading
  * it — the backend hard-validates the domain, this just calls the same GET
  * endpoint with `email_to` set, which returns a small JSON confirmation

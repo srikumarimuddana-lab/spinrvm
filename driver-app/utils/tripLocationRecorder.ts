@@ -70,6 +70,7 @@ type TripLocationOutbox = Pick<
   | 'pendingCount'
   | 'closeSession'
   | 'latestPoint'
+  | 'purgeAll'
 >;
 
 export interface TripLocationRecorderOptions {
@@ -282,6 +283,34 @@ export class TripLocationRecorder {
       degraded: noRecentFix || uploadFailure,
       degradationReason: noRecentFix ? 'no_recent_fix' : uploadFailure ? 'upload_failure' : null,
     };
+  }
+
+  /**
+   * Discard all recorded location state for sign-out.
+   *
+   * Clears the durable outbox plus the in-memory and AsyncStorage pointers to
+   * the active ride, so a subsequent sign-in on the same device starts clean
+   * rather than resolving ACTIVE_RIDE_KEY to the previous driver's ride and
+   * attributing fresh fixes to it.
+   *
+   * Never throws: sign-out must complete even if SQLite is unavailable. A failed
+   * purge leaves coordinates on disk, which is logged as an error (PII retention
+   * is not a "recoverable anomaly") but must not strand the user in a
+   * half-signed-out state.
+   */
+  async purgeAll(): Promise<void> {
+    this.activeRideId = null;
+    this.activeRideStartedAt = null;
+    this.lastCaptureAt = null;
+    this.lastFlushAt = null;
+    this.lastFlushAttemptAt = null;
+    this.lastUploadFailureAt = null;
+    try {
+      await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+    } catch {
+      // Best-effort; the outbox purge below is what removes the coordinates.
+    }
+    await this.outbox.purgeAll();
   }
 
   async closeRide(rideId: string): Promise<void> {

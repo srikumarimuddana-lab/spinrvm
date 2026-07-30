@@ -777,7 +777,9 @@ const handleApiError = async (response: Response, method: string, url: string, r
       setInMemoryToken(null);
       try {
         const { useAuthStore } = require('../store/authStore');
-        useAuthStore.getState().logout();
+        // G2 backstop: this 401 is the credential being rejected, so there is
+        // nothing to revoke and the call would re-enter this interceptor.
+        useAuthStore.getState().logout({ revokeServerSession: false });
       } catch { /* store not yet initialised */ }
     }
     _refreshSubscribers = [];

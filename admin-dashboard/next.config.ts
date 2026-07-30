@@ -61,6 +61,20 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  async redirects() {
+    return [
+      // Records & Compliance consolidation: Data Transfer, Compliance,
+      // Bulk Operations, and Export Approvals used to be four separate
+      // sidebar entries; they're now tabs on one page. Redirect (not
+      // remove) the old routes so nothing bookmarked or linked from an
+      // old audit log/support ticket 404s — each old route's content is
+      // still the exact same component, just reached via a tab param now.
+      { source: "/dashboard/data-transfer", destination: "/dashboard/records?tab=data-transfer", permanent: false },
+      { source: "/dashboard/compliance", destination: "/dashboard/records?tab=compliance", permanent: false },
+      { source: "/dashboard/bulk-operations", destination: "/dashboard/records?tab=bulk-operations", permanent: false },
+      { source: "/dashboard/export-approvals", destination: "/dashboard/records?tab=export-approvals", permanent: false },
+    ];
+  },
   async rewrites() {
     return [
       // Local API routes (must be before the catch-all /api rewrite).

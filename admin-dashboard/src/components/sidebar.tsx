@@ -38,6 +38,12 @@ interface NavItem {
      *  nav entry, clicks it, and gets 403'd on every API call. `module` is
      *  still required by the type but ignored when this is set. */
     superAdminOnly?: boolean;
+    /** Gives the icon a distinct (amber) color even when not the active
+     *  route, instead of the default muted grey every other item shares.
+     *  Reserved for genuinely higher-severity destinations (currently just
+     *  Safety) that shouldn't visually blend into an otherwise flat list
+     *  of same-weight items like FAQs/Disputes in the same group. */
+    emphasize?: boolean;
 }
 
 interface NavGroup {
@@ -113,7 +119,10 @@ const NAV_GROUPS: NavGroup[] = [
                     { href: "/dashboard/support-tickets/trends", label: "Trends", icon: BarChart3, module: "support_tickets" },
                 ],
             },
-            { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support" },
+            // emphasize: Safety (SOS, insurance-period audit trail) is the
+            // one P0-severity destination in this group — visually flat
+            // next to FAQs/Disputes previously undersold what it's for.
+            { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support", emphasize: true },
             { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
             { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Notifications", icon: Cloud, module: "notifications" },
@@ -129,44 +138,29 @@ const NAV_GROUPS: NavGroup[] = [
             // the isSuperAdmin bypass this makes the entry super-admin-only;
             // the page and the backend re-check the role themselves.
             { href: "/dashboard/ai-console", label: "AI Console", icon: Sparkles, module: "ai_console" },
-            // Data Transfer and Bulk Operations both used to key off the
-            // "bulk_operations" module flag, but that flag was never
-            // actually grantable to any non-super_admin role (it's absent
-            // from AVAILABLE_MODULES/ALL_MODULES/ROLE_PRESETS — confirmed
-            // by grep, see ACTION_ITEMS.md B11/R-A) — so gating on it was
-            // fragile-by-omission rather than a deliberate super_admin-only
-            // control. The backend closed that gap by switching Data
-            // Transfer's 5 routers to an explicit require_super_admin
-            // dependency; this nav entry now matches that exactly via
-            // superAdminOnly instead of a phantom module grant. Consolidates
-            // the former rider-import section of Bulk Operations and the
-            // Drivers → Bulk Import page: search/select, export, import,
-            // and SGI compliance forms.
-            {
-                href: "/dashboard/data-transfer", label: "Data Transfer", icon: Upload,
-                module: "bulk_operations", superAdminOnly: true,
-            },
-            // Bulk Operations independently hard-codes role === "super_admin"
-            // in its own page component (see that page's file-header
-            // comment) — not gated by any module grant. Hosts the
-            // still-separate legacy Stripe mapping tool, out of Data
-            // Transfer's scope. `module` here is likewise unused/vestigial
-            // for the same reason; kept only because NavItem requires it.
-            {
-                href: "/dashboard/bulk-operations", label: "Bulk Operations", icon: Upload,
-                module: "bulk_operations", superAdminOnly: true,
-            },
-            // ACTION_ITEMS.md B10 dual-approval gate queue — backend gates
-            // approve/deny on require_super_admin (same posture as Data
-            // Transfer above), so this nav entry matches exactly.
-            {
-                href: "/dashboard/export-approvals", label: "Export Approvals", icon: Inbox,
-                module: "bulk_operations", superAdminOnly: true,
-            },
-            // GST/PST remittance + insurance-period audit exports. Granted
-            // via admin management, same pattern as every other module here
-            // — see backend routes/admin/compliance.py's require_module("compliance").
-            { href: "/dashboard/compliance", label: "Compliance", icon: FileText, module: "compliance" },
+            // Records & Compliance consolidates 4 formerly-separate entries
+            // (Data Transfer, Compliance, Bulk Operations, Export Approvals)
+            // into one page with 4 tabs — they all do the same underlying
+            // job (move or report on regulated driver/rider data) and were
+            // scattered across this System group with no obvious relation
+            // to each other. Old routes still work (next.config.ts redirects
+            // to /dashboard/records?tab=<slug>), so nothing bookmarked or
+            // linked from an old audit-log entry breaks.
+            //
+            // Tab-level permissions differ (Data Transfer/Bulk
+            // Operations/Export Approvals require strict super_admin; the
+            // Compliance tab is grantable to non-super-admin staff via the
+            // "compliance" module) — this single nav entry is intentionally
+            // visible to EITHER group, matching /dashboard/records/page.tsx's
+            // own per-tab visibility logic exactly: `module: "compliance"`
+            // with no `superAdminOnly` means isSuperAdmin (super_admin OR
+            // admin role, see NAV_GROUPS filter above) OR the compliance
+            // module makes this entry visible — the page itself then shows
+            // only the tabs that specific user can actually use, or a
+            // "no access" state if none apply (e.g. an "admin"-role user
+            // with no compliance module: sidebar shows the entry, page
+            // shows only the tabs their role satisfies).
+            { href: "/dashboard/records", label: "Records & Compliance", icon: Upload, module: "compliance" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
         ],
     },
@@ -326,7 +320,13 @@ export function Sidebar() {
                                                         : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                                 )}
                                             >
-                                                <item.icon className={cn("shrink-0", collapsed ? "h-[18px] w-[18px]" : "h-4 w-4")} />
+                                                <item.icon
+                                                    className={cn(
+                                                        "shrink-0",
+                                                        collapsed ? "h-[18px] w-[18px]" : "h-4 w-4",
+                                                        item.emphasize && !active && "text-amber-600 dark:text-amber-500",
+                                                    )}
+                                                />
                                                 {!collapsed && item.label}
                                             </Link>
                                             {/* Children. In expanded mode they're indented under

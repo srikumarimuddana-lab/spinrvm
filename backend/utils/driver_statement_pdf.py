@@ -125,7 +125,7 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
         cols = [28, 62, 28, 22, 28, 12]  # date, type, amount, fee, net, status marker
         pdf.set_font("Helvetica", "B", 8.5)
         pdf.set_fill_color(*header_bg)
-        for width, head in zip(cols, ["Date", "Type", "Amount", "Fee", "Net", ""]):
+        for width, head in zip(cols, ["Date", "Type", "Amount", "Fee", "Net", ""], strict=True):
             pdf.cell(width, 6.5, head, border=0, fill=True, align="R" if head in ("Amount", "Fee", "Net") else "L")
         pdf.ln()
         pdf.set_font("Helvetica", "", 8.5)

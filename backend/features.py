@@ -1611,14 +1611,23 @@ async def send_push_notification(
     so the Notifications page must reflect it even without a live device token.
     """
     _record_inbox_notification(user_id, title, body, data)
-    time_critical = priority in ("dispatch", "safety")
+    # Tiers that bypass the opt-out AND fall back to the retry queue.
+    # 'account' (driver rejected/suspended/banned) is not latency-critical like
+    # the other two — it is here for guaranteed delivery: a driver who can no
+    # longer earn must be told why, and discovering it via a 403 when they next
+    # tap "Go online" is not acceptable. Kept as literals rather than importing
+    # the constant from utils.driver_status_notifications, which imports this
+    # module. Mirrored by the push_retry_queue.priority CHECK (migration 272).
+    time_critical = priority in ("dispatch", "safety", "account")
 
     # Honor the user's push opt-out (Settings / Privacy → Push Notifications)
-    # for informational pushes. Dispatch offers and SOS/safety alerts bypass
-    # the preference: they're time-critical and tied to an action the user
-    # explicitly took (going online, triggering SOS). Fail-open on a lookup
-    # error — the preference is a delivery filter, so a prefs-table hiccup
-    # must not start dropping pushes; the error still surfaces at error level.
+    # for informational pushes. Dispatch offers, SOS/safety alerts and account
+    # -state notices bypass the preference: the first two are time-critical and
+    # tied to an action the user explicitly took (going online, triggering SOS);
+    # the third is a change to whether they can work at all. Fail-open on a
+    # lookup error — the preference is a delivery filter, so a prefs-table
+    # hiccup must not start dropping pushes; the error still surfaces at error
+    # level.
     if not time_critical:
         try:
             pref_rows = await db.get_rows("notification_preferences", {"user_id": user_id}, limit=1)

@@ -554,3 +554,111 @@ def test_t4a_filer_handoff_503_on_db_failure(admin_client):
     with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
         resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026")
     assert resp.status_code == 503
+
+
+# ── Insurance usage-based billing ────────────────────────────────────────────
+
+_UBI_PERIOD_2 = {"driver_id": "d1", "period": 2, "ride_id": "r1", "started_at": "2026-07-05T09:00:00Z"}
+_UBI_PERIOD_3 = {"driver_id": "d1", "period": 3, "ride_id": "r1", "started_at": "2026-07-05T09:10:00Z"}
+_UBI_RIDE = {"id": "r1", "distance_km": 12.5}
+_UBI_DRIVER = {"id": "d1", "name": "Jane Doe", "first_name": "Jane", "last_name": "Doe"}
+
+
+def _ubi_get_rows_side(table, filters=None, **kw):
+    if table == "driver_insurance_periods":
+        return [_UBI_PERIOD_2, _UBI_PERIOD_3]
+    if table == "rides":
+        return [_UBI_RIDE]
+    if table == "drivers":
+        return [_UBI_DRIVER]
+    return []
+
+
+def test_insurance_usage_billing_requires_admin_auth(test_client):
+    resp = test_client.get("/api/admin/compliance/insurance-usage-billing?rate_cents_per_km=45")
+    assert resp.status_code in (401, 403)
+
+
+def test_insurance_usage_billing_requires_rate_param(admin_client):
+    resp = admin_client.get("/api/admin/compliance/insurance-usage-billing")
+    assert resp.status_code == 422
+
+
+def test_insurance_usage_billing_counts_ride_once_across_periods(admin_client):
+    # Regression: a ride that has BOTH a Period 2 row (en route) and a
+    # Period 3 row (passenger aboard) — the normal lifecycle for every
+    # completed ride — must have its distance counted once, not twice.
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_ubi_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get(
+            "/api/admin/compliance/insurance-usage-billing?rate_cents_per_km=45&format=csv"
+        )
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+    assert "12.50" in body  # not 25.00 (double-counted)
+    assert "1" in body  # insured_trips = 1, not 2
+
+
+def test_insurance_usage_billing_503_on_db_failure(admin_client):
+    with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
+        resp = admin_client.get("/api/admin/compliance/insurance-usage-billing?rate_cents_per_km=45")
+    assert resp.status_code == 503
+
+
+# ── Airport trips ─────────────────────────────────────────────────────────
+
+_AIRPORT_RIDE = {
+    "id": "r1",
+    "driver_id": "d1",
+    "service_area_id": "sa1",
+    "pickup_address": "Regina International Airport",
+    "dropoff_address": "123 Main St, Regina",
+    "distance_km": 18.2,
+    "ride_completed_at": "2026-07-05T09:30:00Z",
+}
+_NON_AIRPORT_RIDE = {
+    "id": "r2",
+    "driver_id": "d1",
+    "service_area_id": "sa1",
+    "pickup_address": "456 Elm St, Regina",
+    "dropoff_address": "789 Oak St, Regina",
+    "distance_km": 5.0,
+    "ride_completed_at": "2026-07-05T10:00:00Z",
+}
+
+
+def _airport_get_rows_side(table, filters=None, **kw):
+    if table == "rides":
+        return [_AIRPORT_RIDE, _NON_AIRPORT_RIDE]
+    if table == "drivers":
+        return [_UBI_DRIVER]
+    if table == "service_areas":
+        return [{"id": "sa1", "name": "Regina"}]
+    return []
+
+
+def test_airport_trips_requires_admin_auth(test_client):
+    resp = test_client.get("/api/admin/compliance/airport-trips")
+    assert resp.status_code in (401, 403)
+
+
+def test_airport_trips_filters_out_non_airport_rides(admin_client):
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_airport_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/airport-trips?format=csv")
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+    assert "Regina International Airport" in body
+    assert "Airport Pickup" in body
+    assert "18.2" in body or "18.20" in body
+    assert "456 Elm St" not in body  # non-airport ride excluded
+
+
+def test_airport_trips_503_on_db_failure(admin_client):
+    with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
+        resp = admin_client.get("/api/admin/compliance/airport-trips")
+    assert resp.status_code == 503

@@ -48,11 +48,14 @@ import ExportApprovalsPage from "../export-approvals/page";
 
 type TabSlug = "data-transfer" | "compliance" | "bulk-operations" | "export-approvals";
 
+// Names chosen to say what an admin does on the tab, not what the old
+// standalone page used to be called — "Data Transfer" and "Bulk
+// Operations" described the tool's internal history, not its job.
 const TAB_META: Record<TabSlug, { label: string; Component: React.ComponentType }> = {
-    "data-transfer": { label: "Search & Export", Component: DataTransferPage },
-    compliance: { label: "Regulatory Reports", Component: CompliancePage },
+    "data-transfer": { label: "Search & Transfer", Component: DataTransferPage },
+    compliance: { label: "Compliance Reports", Component: CompliancePage },
     "bulk-operations": { label: "Bulk Import", Component: BulkOperationsPage },
-    "export-approvals": { label: "Approval Queue", Component: ExportApprovalsPage },
+    "export-approvals": { label: "Export Approvals", Component: ExportApprovalsPage },
 };
 
 const TAB_ORDER: TabSlug[] = ["data-transfer", "compliance", "bulk-operations", "export-approvals"];

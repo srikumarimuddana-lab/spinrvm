@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Download, Loader2, FileText, Mail, HelpCircle } from "lucide-react";
+import { Download, Loader2, FileText, Mail } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,13 +10,15 @@ import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
+import { InfoHint as Hint } from "@/components/info-hint";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useAuthStore } from "@/store/authStore";
 import {
+    downloadAirportTrips,
     downloadGstPstRemittance,
     downloadInsurancePeriodAudit,
+    downloadInsuranceUsageBilling,
     downloadKnightArcherDriverOnboarding,
     downloadT4aFilerHandoff,
     emailGstPstRemittance,
@@ -41,17 +43,6 @@ const FORMATS: { value: ComplianceReportFormat; label: string }[] = [
 ];
 
 const DRIVER_STATUSES = ["active", "pending", "needs_review", "suspended", "banned"];
-
-function Hint({ text }: { text: string }) {
-    return (
-        <Tooltip>
-            <TooltipTrigger asChild>
-                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0 cursor-help" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-[260px]">{text}</TooltipContent>
-        </Tooltip>
-    );
-}
 
 /** Inline "email to @spinr.ca" control shared by all three report cards —
  * a small text input + send button next to the existing Download button,
@@ -118,6 +109,15 @@ export default function CompliancePage() {
     const [t4aFormat, setT4aFormat] = useState<ComplianceReportFormat>("xlsx");
     const [t4aLoading, setT4aLoading] = useState(false);
     const isSuperAdmin = useAuthStore((s) => s.user?.role === "super_admin");
+
+    const [ubiRange, setUbiRange] = useState("30d");
+    const [ubiRate, setUbiRate] = useState("");
+    const [ubiFormat, setUbiFormat] = useState<ComplianceReportFormat>("pdf");
+    const [ubiLoading, setUbiLoading] = useState(false);
+
+    const [airportRange, setAirportRange] = useState("30d");
+    const [airportFormat, setAirportFormat] = useState<ComplianceReportFormat>("pdf");
+    const [airportLoading, setAirportLoading] = useState(false);
 
     if (!allowed) return null;
 
@@ -220,6 +220,31 @@ export default function CompliancePage() {
         }
     };
 
+    const ubiRateValid = /^\d+(\.\d{1,2})?$/.test(ubiRate.trim()) && Number(ubiRate) > 0;
+    const onDownloadUbi = async () => {
+        setUbiLoading(true);
+        try {
+            const { blob, filename } = await downloadInsuranceUsageBilling(ubiRange, Number(ubiRate), ubiFormat);
+            triggerBrowserDownload(blob, filename);
+        } catch (e: any) {
+            onError(e);
+        } finally {
+            setUbiLoading(false);
+        }
+    };
+
+    const onDownloadAirport = async () => {
+        setAirportLoading(true);
+        try {
+            const { blob, filename } = await downloadAirportTrips(airportRange, airportFormat);
+            triggerBrowserDownload(blob, filename);
+        } catch (e: any) {
+            onError(e);
+        } finally {
+            setAirportLoading(false);
+        }
+    };
+
     return (
         <div className="p-6 space-y-6">
             <div>
@@ -239,6 +264,8 @@ export default function CompliancePage() {
                     <TabsTrigger value="insurance-audit">Insurance-Period Audit</TabsTrigger>
                     <TabsTrigger value="knight-archer">Knight Archer Driver Onboarding</TabsTrigger>
                     {isSuperAdmin && <TabsTrigger value="t4a-filer">T4A Filer Handoff</TabsTrigger>}
+                    <TabsTrigger value="insurance-billing">Insurance Usage Billing</TabsTrigger>
+                    <TabsTrigger value="airport-trips">Airport Trips</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="gst-pst">
@@ -490,6 +517,135 @@ export default function CompliancePage() {
                         </Card>
                     </TabsContent>
                 )}
+
+                <TabsContent value="insurance-billing">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <FileText className="h-5 w-5" />
+                                Insurance Usage-Based Billing
+                            </CardTitle>
+                            <CardDescription className="flex items-start gap-1.5">
+                                <span>
+                                    Per-driver insured kilometres — driving time while a driver is in Period 2
+                                    (en route to pickup) or Period 3 (passenger aboard), Spinr&apos;s primary-
+                                    commercial insurance coverage — and the resulting bill at the rate you
+                                    enter below, for reconciling the insurer&apos;s usage-based invoice.
+                                </span>
+                                <Hint text="Only Periods 2 and 3 count — Period 1 (available, no assigned ride) is contingent-liability coverage, billed differently by most TNC insurance policies. There's no built-in rate: enter your contracted cents/km figure each time so a wrong number is obvious on the report before it's sent, not after the insurer disputes it." />
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex flex-wrap items-end gap-4">
+                                <div className="space-y-1.5">
+                                    <Label>Date range</Label>
+                                    <Select value={ubiRange} onValueChange={setUbiRange}>
+                                        <SelectTrigger className="w-32">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {DATE_RANGES.map((r) => (
+                                                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <Label>Rate (cents/km)</Label>
+                                    <Input
+                                        type="text"
+                                        inputMode="decimal"
+                                        placeholder="e.g. 45.00"
+                                        className="w-32"
+                                        value={ubiRate}
+                                        onChange={(e) => setUbiRate(e.target.value)}
+                                    />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <Label>Format</Label>
+                                    <Select value={ubiFormat} onValueChange={(v) => setUbiFormat(v as ComplianceReportFormat)}>
+                                        <SelectTrigger className="w-32">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {FORMATS.map((f) => (
+                                                <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <Button onClick={onDownloadUbi} disabled={!ubiRateValid || ubiLoading}>
+                                    {ubiLoading ? (
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Download className="h-4 w-4 mr-2" />
+                                    )}
+                                    Download
+                                </Button>
+                            </div>
+                            {!ubiRateValid && ubiRate.trim().length > 0 && (
+                                <p className="text-xs text-destructive">Enter a positive number, e.g. 45 or 45.00.</p>
+                            )}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="airport-trips">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <FileText className="h-5 w-5" />
+                                Airport Trips
+                            </CardTitle>
+                            <CardDescription className="flex items-start gap-1.5">
+                                <span>
+                                    Completed rides with &quot;airport&quot; in the pickup or dropoff address —
+                                    trip type, distance, driver, and service area — for airport ground-
+                                    transportation program reporting.
+                                </span>
+                                <Hint text="Matched by a text search on the pickup/dropoff address, not a dedicated airport flag — Spinr doesn't yet link rides to a specific pickup venue. Column set follows the general convention most North American airport TNC programs use (date/time, driver, pickup-vs-dropoff, distance) — confirm against your specific airport authority's actual reporting requirements before submitting." />
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex flex-wrap items-end gap-4">
+                                <div className="space-y-1.5">
+                                    <Label>Date range</Label>
+                                    <Select value={airportRange} onValueChange={setAirportRange}>
+                                        <SelectTrigger className="w-32">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {DATE_RANGES.map((r) => (
+                                                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <Label>Format</Label>
+                                    <Select value={airportFormat} onValueChange={(v) => setAirportFormat(v as ComplianceReportFormat)}>
+                                        <SelectTrigger className="w-32">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {FORMATS.map((f) => (
+                                                <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <Button onClick={onDownloadAirport} disabled={airportLoading}>
+                                    {airportLoading ? (
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Download className="h-4 w-4 mr-2" />
+                                    )}
+                                    Download
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
             </Tabs>
         </div>
     );

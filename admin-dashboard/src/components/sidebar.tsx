@@ -1,20 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     Flame, Building2, LifeBuoy, HelpCircle,
-    LogOut, Menu, X, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
+    Menu, X,
+    Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
     Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
-import { logoutAllAdmin, getApprovalQueue, getExpiringDocs } from "@/lib/api";
-import { useTheme } from "next-themes";
+import { useSidebarStore } from "@/store/sidebarStore";
+import { getApprovalQueue, getExpiringDocs } from "@/lib/api";
 
 interface NavItem {
     href: string;
@@ -168,11 +168,10 @@ const NAV_GROUPS: NavGroup[] = [
 
 export function Sidebar() {
     const pathname = usePathname();
-    const router = useRouter();
     const [mobileOpen, setMobileOpen] = useState(false);
-    const [collapsed, setCollapsed] = useState(false);
-    const { logout, user } = useAuthStore();
-    const { theme, setTheme } = useTheme();
+    const collapsed = useSidebarStore((s) => s.collapsed);
+    const hydrateSidebar = useSidebarStore((s) => s.hydrate);
+    const { user } = useAuthStore();
 
     const userModules = user?.modules || [];
     const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'admin';
@@ -185,9 +184,8 @@ export function Sidebar() {
     const [expiringCount, setExpiringCount] = useState<number | null>(null);
 
     useEffect(() => {
-        const sc = localStorage.getItem('spinr-sidebar-collapsed');
-        if (sc === 'true') setCollapsed(true);
-    }, []);
+        hydrateSidebar();
+    }, [hydrateSidebar]);
 
     useEffect(() => {
         const canSee = isSuperAdmin || userModules.includes("drivers");
@@ -218,42 +216,6 @@ export function Sidebar() {
         if (href === "/dashboard/drivers/queue") return approvalsCount;
         if (href === "/dashboard/drivers/expiring") return expiringCount;
         return null;
-    };
-
-    const toggleTheme = () => {
-        setTheme(theme === 'dark' ? 'light' : 'dark');
-    };
-
-    const toggleCollapse = () => {
-        const next = !collapsed;
-        setCollapsed(next);
-        localStorage.setItem('spinr-sidebar-collapsed', String(next));
-    };
-
-    useEffect(() => {
-        document.documentElement.style.setProperty('--sidebar-width', collapsed ? '68px' : '240px');
-    }, [collapsed]);
-
-    const handleLogout = () => { logout(); router.push('/login'); };
-
-    // Sign out of every admin session for this account. Bumps
-    // admin_staff.token_version (kills in-flight access tokens) and
-    // revokes every refresh token. Refused server-side for the env-var
-    // super admin (admin-001) — rotate ADMIN_PASSWORD instead.
-    // See docs/runbooks/auth-tokens.md for incident-response context.
-    const handleLogoutEverywhere = async () => {
-        if (!window.confirm('Sign out every admin session for this account? You will be signed out everywhere this admin is logged in. Use this if your laptop was lost or you suspect compromise.')) return;
-        try {
-            await logoutAllAdmin();
-        } catch (e: any) {
-            // Surface server-side rejection (e.g. super-admin guard) but
-            // still tear down the local session — leaving the operator on
-            // a screen that thinks they're signed in is the worse failure.
-            window.alert(e?.message || 'Sign-out-everywhere request failed; clearing this session anyway.');
-        } finally {
-            logout();
-            router.push('/login');
-        }
     };
 
     return (
@@ -409,48 +371,10 @@ export function Sidebar() {
                     })}
                 </div>
 
-                {/* Footer */}
-                <div className={cn("shrink-0 border-t border-sidebar-border", collapsed ? "p-1.5" : "p-2")}>
-                    <button onClick={toggleTheme}
-                        className={cn("flex w-full items-center rounded-lg text-[13px] font-medium text-sidebar-foreground/50 hover:bg-sidebar-accent transition-colors",
-                            collapsed ? "justify-center p-2.5" : "gap-2.5 px-2.5 py-[7px]")}>
-                        {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                        {!collapsed && (theme === 'dark' ? "Light Mode" : "Dark Mode")}
-                    </button>
-
-                    <button onClick={toggleCollapse}
-                        className={cn("hidden md:flex w-full items-center rounded-lg text-[13px] font-medium text-sidebar-foreground/50 hover:bg-sidebar-accent transition-colors",
-                            collapsed ? "justify-center p-2.5" : "gap-2.5 px-2.5 py-[7px]")}>
-                        {collapsed ? <ChevronRight className="h-4 w-4" /> : <><ChevronLeft className="h-4 w-4" />Collapse</>}
-                    </button>
-
-                    {!collapsed && (
-                        <div className="flex items-center gap-2 px-2.5 py-2 mt-1 rounded-lg bg-sidebar-accent/50">
-                            <div className="w-7 h-7 rounded-full bg-sidebar-primary/10 flex items-center justify-center text-sidebar-primary text-xs font-bold shrink-0">
-                                {user?.first_name?.[0] || user?.email?.[0]?.toUpperCase() || 'A'}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold text-sidebar-foreground truncate">{user?.first_name || user?.email}</p>
-                                <p className="text-[10px] text-sidebar-foreground-muted truncate">{user?.role?.replace('_', ' ')}</p>
-                            </div>
-                        </div>
-                    )}
-
-                    <button onClick={handleLogout}
-                        className={cn("flex w-full items-center rounded-lg text-[13px] font-medium text-sidebar-destructive hover:bg-sidebar-destructive/10 transition-colors mt-1",
-                            collapsed ? "justify-center p-2.5" : "gap-2.5 px-2.5 py-[7px]")}>
-                        <LogOut className="h-4 w-4" />
-                        {!collapsed && "Sign Out"}
-                    </button>
-                    {!collapsed && (
-                        <button onClick={handleLogoutEverywhere}
-                            className="flex w-full items-center gap-2.5 px-2.5 py-[6px] mt-0.5 rounded-lg text-[11px] font-medium text-sidebar-foreground/60 hover:bg-sidebar-destructive/10 hover:text-sidebar-destructive transition-colors"
-                            title="Bumps token_version + revokes all refresh tokens for this admin account">
-                            <Shield className="h-3.5 w-3.5" />
-                            Sign out everywhere
-                        </button>
-                    )}
-                </div>
+                {/* Account info, theme toggle, collapse control, and sign-out
+                    moved to Topbar (top-right / top-left of the header) —
+                    see components/topbar.tsx. Kept out of the sidebar
+                    footer entirely rather than duplicated in both places. */}
             </aside>
         </>
     );

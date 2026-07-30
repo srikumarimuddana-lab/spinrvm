@@ -96,8 +96,7 @@ async def _pinned_quote_context(conversation_id: str) -> str:
     if not all((pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)):
         return ""
     bits = [
-        "\n\nLAST QUOTE IN THIS CONVERSATION (you priced this trip — reuse it, "
-        "do NOT re-resolve it):",
+        "\n\nLAST QUOTE IN THIS CONVERSATION (you priced this trip — reuse it, do NOT re-resolve it):",
         f"- pickup: {pinned.get('pickup_address') or 'unnamed'} [{pickup_lat},{pickup_lng}]",
         f"- dropoff: {pinned.get('dropoff_address') or 'unnamed'} [{dropoff_lat},{dropoff_lng}]",
     ]
@@ -332,10 +331,20 @@ async def run_chat_turn(
         final_text = "I couldn't finish that one — could you rephrase, or tap Contact Support?"
         yield "token", {"text": final_text}
 
+    # AI2 / PIPEDA: the user's message is scrubbed before persistence (line
+    # ~186 above); the assistant's was not, despite the model being able to
+    # echo tool-result data verbatim (e.g. a driver's phone number from a
+    # dispatch tool result). Scrub only what's written to ai_messages / the
+    # FAQ cache — the raw text has already streamed to the client this turn,
+    # so the rider still sees the real reply; only stored/replayed copies
+    # change. keep_trip_pins mirrors the user-side call in case the model
+    # echoes a bracketed trip-endpoint pair back.
+    stored_text = scrub_pii(final_text, keep_trip_pins=True)
+
     assistant_row = await conversations.append_message(
         conversation,
         "assistant",
-        final_text,
+        stored_text,
         tool_names=used_tool_names or None,
         usage=total_usage,
         provider=getattr(adapter, "provider", None),
@@ -353,7 +362,7 @@ async def run_chat_turn(
             text=final_text,
         )
     ):
-        await response_cache.store_cached(audience, scrubbed, final_text, faq_cache_ttl)
+        await response_cache.store_cached(audience, scrubbed, stored_text, faq_cache_ttl)
         _metric_inc("spinr_ai_response_cache_total", {"outcome": "store"})
     _metric_inc("spinr_ai_chat_turns_total", {"outcome": "completed"})
     _metric_inc("spinr_ai_tokens_total", {"direction": "input"}, by=total_usage["input_tokens"])

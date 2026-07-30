@@ -151,19 +151,51 @@ class TestDriverAction:
             resp = self._post(test_client, "approve")
         assert resp.status_code == 404
 
-    def test_reject_action_is_documented_but_unimplemented(self, test_client, super_admin_override):
-        """KNOWN BUG (not fixed here, test-only task): the docstring and the
-        push-notification map both list 'reject' as a valid lifecycle action,
-        and the pydantic model's Literal accepts it, but the if/elif chain in
-        admin_driver_action has no 'reject' branch -- it falls through to the
-        `else: raise HTTPException(400, f"Unknown action: {req.action}")`.
-        This test pins current (broken) behavior; see PR description for the
-        bug report instead of a silent fix.
-        """
+    def test_reject_sets_rejected_and_takes_driver_offline(self, test_client, super_admin_override):
+        """Previously a KNOWN BUG: 'reject' was accepted by the pydantic Literal
+        and had push copy, but the if/elif chain had no branch for it, so it
+        fell through to `else: 400 Unknown action: reject` and `rejected` was
+        unreachable. Now implemented."""
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()) as upd,
+            patch("db_supabase.insert_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-r")),
+            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+        ):
+            resp = self._post(test_client, "reject", reason="Licence expired")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["new_status"] == "rejected"
+        updates = upd.await_args.args[2]
+        assert updates["status"] == "rejected"
+        assert updates["is_verified"] is False
+        assert updates["rejection_reason"] == "Licence expired"
+        assert updates["is_online"] is False
+        assert updates["is_available"] is False
+        # Account-state notices bypass the push opt-out.
+        assert push.await_args.kwargs["priority"] == "account"
+
+    def test_reject_requires_a_reason(self, test_client, super_admin_override):
+        """Same contract as suspend/ban — a rejection the driver can't act on
+        is worse than no rejection."""
         with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)):
             resp = self._post(test_client, "reject")
         assert resp.status_code == 400
-        assert "Unknown action: reject" in resp.json()["detail"]
+        assert "Reason is required" in resp.json()["detail"]
+
+    def test_soft_deleted_driver_is_not_pushed(self, test_client, super_admin_override):
+        """A tombstoned account is locked; a lifecycle push to it is noise."""
+        deleted = {**DRIVER, "deleted_at": "2026-07-30T00:00:00Z"}
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=deleted)),
+            patch("db_supabase.update_one", AsyncMock()),
+            patch("db_supabase.insert_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-d")),
+            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+        ):
+            resp = self._post(test_client, "ban", reason="fraud")
+        assert resp.status_code == 200, resp.text
+        push.assert_not_awaited()
 
     def test_unknown_action_returns_422_at_validation(self, test_client, super_admin_override):
         resp = test_client.post("/api/admin/drivers/drv-1/action", json={"action": "not_a_real_action"})
@@ -197,13 +229,71 @@ class TestDriverAction:
 
 
 class TestStatusOverride:
-    def test_invalid_status_rejected_by_endpoint_guard(self, test_client, super_admin_override):
-        """'rejected' passes the pydantic Literal but is not in the endpoint's
-        own `valid` set -- documents the existing 400 behavior."""
-        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)):
-            resp = test_client.put("/api/admin/drivers/drv-1/status-override", json={"status": "rejected"})
-        assert resp.status_code == 400
-        assert "Invalid status" in resp.json()["detail"]
+    def test_override_to_rejected_now_reachable(self, test_client, super_admin_override):
+        """Previously 'rejected' passed the pydantic Literal but was absent
+        from the endpoint's own `valid` set, so it 400'd — and 'needs_review'
+        had the mirror-image bug (in `valid`, missing from the Literal, so
+        422). Both sets now agree."""
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()) as upd,
+            patch("db_supabase.insert_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+        ):
+            resp = test_client.put(
+                "/api/admin/drivers/drv-1/status-override",
+                json={"status": "rejected", "reason": "Vehicle too old"},
+            )
+        assert resp.status_code == 200, resp.text
+        updates = upd.await_args.args[2]
+        assert updates["status"] == "rejected"
+        assert updates["rejection_reason"] == "Vehicle too old"
+
+    def test_override_to_needs_review_now_reachable(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()) as upd,
+            patch("db_supabase.insert_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+        ):
+            resp = test_client.put("/api/admin/drivers/drv-1/status-override", json={"status": "needs_review"})
+        assert resp.status_code == 200, resp.text
+        assert upd.await_args.args[2]["status"] == "needs_review"
+
+    def test_override_notifies_the_driver(self, test_client, super_admin_override):
+        """This endpoint previously notified nobody — an admin could suspend a
+        driver here and they'd only find out via a 403 on their next go-online."""
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()),
+            patch("db_supabase.insert_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+        ):
+            resp = test_client.put(
+                "/api/admin/drivers/drv-1/status-override",
+                json={"status": "suspended", "reason": "manual review"},
+            )
+        assert resp.status_code == 200, resp.text
+        push.assert_awaited_once()
+        assert push.await_args.kwargs["priority"] == "account"
+        assert "manual review" in push.await_args.args[2]
+
+    def test_override_to_same_status_does_not_notify(self, test_client, super_admin_override):
+        """No transition, no notice — avoids spamming a driver when an admin
+        re-saves the status they already have."""
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()),
+            patch("db_supabase.insert_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+        ):
+            resp = test_client.put("/api/admin/drivers/drv-1/status-override", json={"status": "pending"})
+        assert resp.status_code == 200, resp.text
+        push.assert_not_awaited()
 
     def test_driver_not_found_404(self, test_client, super_admin_override):
         with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):

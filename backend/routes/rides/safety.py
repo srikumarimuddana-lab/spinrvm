@@ -80,7 +80,22 @@ async def trigger_emergency(
         "created_at": now_iso,
     }
 
-    await _deps.db_supabase.insert_one("safety_incidents", incident)
+    try:
+        await _deps.db_supabase.insert_one("safety_incidents", incident)
+    except Exception as exc:
+        # Mirrors backend/routes/safety.py's submit_safety_report — a DB
+        # failure here must never look like a 500 the client can't react to.
+        # SOSButton.tsx retries 3x (1s/2s backoff) on any thrown error from
+        # this call and only shows its persistent FAILED/"call 911" state
+        # once all attempts are exhausted, so a clean 503 here is what makes
+        # that retry path actually fire instead of a bare unhandled 500.
+        logger.error(
+            f"[SOS] Failed to persist emergency incident ride_id={ride_id} user_id={current_user['id']}: {exc}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503, detail="Unable to send emergency alert. Please try again or call 911."
+        ) from exc
 
     # Notify admin dashboard via WebSocket. Keep the existing
     # emergency_alert event firing for backward compatibility with any

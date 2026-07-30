@@ -497,6 +497,32 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        well below the 70% admin-routes target — remaining gap is largely
        read/list/export/analytics endpoints; not pursued further in this
        pass.
+     - `routes/admin/support.py` (disputes, support-ticket CRUD, flags,
+       complaints) — was ~39%, now 97% (267 stmts, 8 missed: two narrow
+       DB-exception logging branches at 220/228, the `updated_at`-set
+       branches at 374/376/451, and line 177/551 filter edges). 40 new
+       tests in `backend/tests/test_admin_support_routes.py`, following the
+       `get_admin_user` dependency-override pattern from
+       `test_support_tickets_service_area_routes.py`. Bug found, not fixed
+       (test-only scope): `admin_get_dispute_stats` does
+       `Decimal(str(d.get("refund_amount") or 0))` inside a bare
+       `except (TypeError, ValueError)` — a non-numeric `refund_amount`
+       string raises `decimal.InvalidOperation`, which is not caught, so
+       the stats endpoint 500s instead of tolerating the bad row. See
+       `docs/change-log/2026-07-29-a1b-admin-support-coverage.md`.
+     - `routes/admin/support_tickets.py` (Zoho Desk proxy: config, sync,
+       dashboard, trends, ticket list/search/reply/comment/patch/tags) —
+       was ~43%, now 91% (357 stmts, 31 missed — mostly `ImportError`
+       fallback branches for the dual-import pattern, and a few narrow
+       Zoho-error edges not exercised: e.g. `update_config`'s no-op
+       `data_center` normalization skip, `/tickets/{id}/threads` error
+       paths already covered by other error-path tests but not every
+       endpoint's Zoho-error branch). 35 new tests in
+       `backend/tests/test_admin_support_tickets_routes.py` (service-area
+       and AI-suggest routes already had dedicated coverage in
+       `test_support_tickets_service_area_routes.py` /
+       `test_support_tickets_ai_suggest.py` and were intentionally not
+       duplicated).
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth

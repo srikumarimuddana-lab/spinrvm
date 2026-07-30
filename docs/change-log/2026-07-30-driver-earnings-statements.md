@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-07-30 |
 | Author | Claude Code (requested by operator) |
-| Surface(s) | backend |
+| Surface(s) | backend, admin-dashboard |
 | Domain (Sentry tag) | drivers (email/report), payments-adjacent (reads payouts) |
 | PR / commit link | branch `claude/stripe-sync-t4-generation-shcvce` (statements commits) |
 | Related issue or gap ID | Operator request: Uber-style periodic earnings/payout reports |
@@ -41,8 +41,12 @@ New periodic-statement pipeline, all additive:
   a statement can never email twice across replicas.
 - **Driver self-serve** (`POST /api/v1/drivers/statements/email`): re-request
   any anchored period, 6/hour rate limit (shared tax-doc limiter).
-- **Admin** (`routes/admin/driver_statements.py`): ledger list, PDF download
-  for anchored period or date-filtered range, and send-to-driver email.
+- **Admin API** (`routes/admin/driver_statements.py`): ledger list, PDF
+  download for anchored period or date-filtered range, send-to-driver email.
+- **Admin UI** (`admin-dashboard/.../driver-statements-panel.tsx`): a
+  statements panel inside the driver detail Sheet's **Payouts tab** — sent
+  statements with per-row Download/Resend, plus a From/To date filter with
+  Download PDF and Email-to-driver actions.
 
 ## 4. Risk & impact on existing functionality
 
@@ -72,8 +76,14 @@ New periodic-statement pipeline, all additive:
   PDF — new outbound copy, written to the customer-tone standard; visible in
   the inbox, not mid-session in-app. Drivers with no email on file are
   recorded and skipped.
-- **Internal admin**: new payout-section capabilities (list / date-filter →
-  download / send to driver).
+- **Internal admin**: new "Earnings statements" panel in the driver detail
+  Sheet's Payouts tab (between the Stripe/KYC block and the payout-history
+  table) — list of sent statements, per-row Download/Resend, and a From/To
+  date filter with Download PDF / Email-to-driver. Additive: no existing
+  control on that tab changed, and the tab's other data still loads through
+  the same `getDriverPayoutsSummary` call as before. The panel fetches its
+  own list on mount, so opening the Payouts tab now issues one extra
+  request per driver.
 - **Rider / corporate**: no change.
 - New notification copy: statement email subject/body (this log is its
   review record).
@@ -91,7 +101,11 @@ New periodic-statement pipeline, all additive:
 | `backend/routes/admin/driver_statements.py` | NEW — list / pdf / email endpoints | Admin download + send |
 | `backend/routes/admin/__init__.py` | Mount statements router (drivers module) | Routing |
 | `CLAUDE.md` | Loop inventory 16 → 17 | Keep doc accurate |
-| `backend/tests/…` (5 files) | 38 new tests | Regression pins |
+| `admin-dashboard/src/lib/api/drivers.ts` | + list/download/email statement client fns | API access |
+| `admin-dashboard/src/lib/api.ts` | Re-export the three fns + types | Barrel |
+| `admin-dashboard/.../_components/driver-statements-panel.tsx` | NEW — statements panel | Admin UI |
+| `admin-dashboard/.../drivers/page.tsx` | Render panel in Payouts tab; pass driverId + toast | Wiring |
+| `backend/tests/…` (5 files) + panel test | 38 backend + 8 UI tests | Regression pins |
 
 ## 7. Before / after
 
@@ -136,6 +150,21 @@ driver_statements` (migration header).
 - [x] Sample PDFs rendered and visually reviewed (two fpdf2 layout bugs found
   and fixed during review: right-margin note clipping, stray blank page from
   footer/auto-page-break interaction).
+- [x] **Admin-dashboard production build run** (`npm run build`) — passes.
+  (It first failed on a pre-existing unrelated error: `motion/react`
+  unresolved in `monitoring/alert-feed.tsx`. Root cause was a stale local
+  `node_modules` — `motion@^12.43.0` is declared in package.json but was not
+  installed; `npm install` fixed it. No code change was needed and none was
+  made to that file.) `npx tsc --noEmit` and `eslint` also run: zero errors
+  in the changed files. The one eslint warning in the new panel
+  (`react-hooks/set-state-in-effect` on the fetch-on-mount effect) is the
+  same warning the sibling `driver-notes.tsx` / `driver-timeline.tsx`
+  components already produce — matched the established pattern rather than
+  diverging.
+- [x] Admin UI unit tests (vitest, 8): list rendering with totals, per-row
+  download by anchored period, resend + list reload, custom-range download
+  using the date inputs, inverted-range guard (button disabled, no API
+  call), load-failure toast, download-failure toast, empty state.
 - [x] Blast-radius grep: consumers of `payouts`, `driver_bonuses`,
   `tax_doc_email_limit`, `_email_driver_document` enumerated in §4.
 - [x] Reviewed against CLAUDE.md conventions: background-loop replay-safety
@@ -151,6 +180,12 @@ driver_statements` (migration header).
 - Not tested against live Supabase/SES/Resend — mocked clients only (repo
   unit-test convention). Real email deliverability (attachment size, SES
   identity) needs the staging check above.
+- Admin UI was **not** exercised against a running backend or in a browser —
+  the panel's tests mock the API module, and no visual/snapshot regression
+  tooling exists for the admin dashboard (standing gap, `ACTION_ITEMS.md`),
+  so the rendered layout inside the Payouts tab was reasoned about, not
+  screenshotted. First staging pass should open a driver's Payouts tab and
+  confirm the panel renders and a download returns a valid PDF.
 - The DSAR export reads a `driver_payouts` table while payout flows write
   `payouts` — pre-existing inconsistency spotted during this work, NOT
   fixed here (out of scope); flagged for `ACTION_ITEMS.md`.

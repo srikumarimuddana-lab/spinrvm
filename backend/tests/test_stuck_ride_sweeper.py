@@ -165,12 +165,12 @@ def _run_sweep(rides, cancel_auth, update_one=None, metric=None, ws=None, push=N
     for cm in (
         patch("backend.db_supabase.run_sync", AsyncMock(return_value=rides)),
         patch("backend.utils.stuck_ride_sweeper.supabase", MagicMock()),
-        patch("backend.utils.stuck_ride_sweeper.cancel_authorization", cancel_auth),
+        patch("backend.utils.card_hold_release.cancel_authorization", cancel_auth),
         patch("backend.db_supabase.update_one", update_one),
         patch("backend.utils.stuck_ride_sweeper.manager.send_personal_message", ws or AsyncMock()),
         patch("backend.utils.stuck_ride_sweeper.send_push_notification", push or AsyncMock()),
         patch("backend.db_supabase.set_driver_available", AsyncMock()),
-        patch("backend.utils.stuck_ride_sweeper._metric_inc", metric),
+        patch("backend.utils.card_hold_release._metric_inc", metric),
     ):
         stack.enter_context(cm)
     return stack, update_one, metric

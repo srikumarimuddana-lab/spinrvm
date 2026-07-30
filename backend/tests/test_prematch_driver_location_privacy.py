@@ -28,6 +28,7 @@ from utils.driver_map_visibility import (
     map_settings,
     prematch_driver_list,
     prematch_driver_payload,
+    prematch_driver_pseudonym,
 )
 
 RIDER_LAT = 52.1332
@@ -89,7 +90,9 @@ def test_payload_keeps_what_the_map_actually_needs():
     out = prematch_driver_payload(driver, cell_m=500)
     assert out is not None
 
-    assert out["id"] == "drv_1"
+    # The marker key is a pseudonym now (see test_pseudonymous_marker_ids below),
+    # but it must still be present and stable enough to key a marker on.
+    assert out["id"] and out["id"] != "drv_1"
     assert out["vehicle_type_id"] == "vt_standard"
     assert out["vehicle_type_name"] == "Standard"
     assert out["marker_variant"] == "sedan"
@@ -145,8 +148,9 @@ def test_driver_without_a_position_is_dropped_not_reported_at_null_island():
         _driver_row("drv_null", None, None),
         _driver_row("drv_ok", DRIVER_A_LAT, DRIVER_A_LNG),
     ]
-    out = prematch_driver_list(rows, cell_m=500)
-    assert [d["id"] for d in out] == ["drv_ok"]
+    out = prematch_driver_list(rows, cell_m=500, viewer_id="rider_1")
+    assert len(out) == 1
+    assert out[0]["id"] == prematch_driver_pseudonym("drv_ok", "rider_1")
 
 
 def test_cell_floor_stops_a_settings_row_re_enabling_exact_positions():
@@ -257,7 +261,13 @@ async def test_rest_endpoint_still_lists_drivers_in_radius():
         _driver_row("drv_b", DRIVER_B_LAT, DRIVER_B_LNG),
     ]
     out = await _call_nearby(rows, {"search_radius_km": 10.0, "driver_map_cell_m": 500})
-    assert {d["id"] for d in out} == {"drv_a", "drv_b"}
+    # Compared by pseudonym, since the endpoint no longer emits row ids. The point
+    # of the assertion is unchanged: both drivers are still on the map.
+    assert {d["id"] for d in out} == {
+        prematch_driver_pseudonym("drv_a", "rider_1"),
+        prematch_driver_pseudonym("drv_b", "rider_1"),
+    }
+    assert "drv_a" not in {d["id"] for d in out}
 
 
 @pytest.mark.anyio
@@ -267,7 +277,7 @@ async def test_rest_endpoint_excludes_a_driver_outside_the_radius():
     far = _driver_row("drv_far", RIDER_LAT + 0.5, RIDER_LNG)  # ~55km north
     near = _driver_row("drv_near", DRIVER_A_LAT, DRIVER_A_LNG)
     out = await _call_nearby([far, near], {"search_radius_km": 10.0, "driver_map_cell_m": 500})
-    assert [d["id"] for d in out] == ["drv_near"]
+    assert [d["id"] for d in out] == [prematch_driver_pseudonym("drv_near", "rider_1")]
 
 
 # ── The WebSocket handler ───────────────────────────────────────────
@@ -367,3 +377,115 @@ def test_ws_and_rest_agree_on_the_same_input(ws_app):
     assert len(ws_out) == len(rest_out) == 1
     assert (ws_out[0]["lat"], ws_out[0]["lng"]) == (rest_out[0]["lat"], rest_out[0]["lng"])
     assert ws_out[0]["precision_m"] == rest_out[0]["precision_m"]
+
+
+# ---------------------------------------------------------------------------
+# Pseudonymous marker ids (T3b)
+#
+# Coarsening the position was not enough on its own. A stable `drivers.id` let any
+# authenticated rider poll on a timer and stitch one driver's coarse positions into a
+# movement trace — no exact coordinates required. At 500m a single sample says little;
+# a week of samples for a known id shows where that contractor starts and ends the day.
+# ---------------------------------------------------------------------------
+
+_T0 = 1_769_800_000.0  # fixed clock so bucket maths is deterministic
+
+
+def test_the_real_driver_id_never_reaches_a_prematch_rider():
+    """The core assertion. Everything else here is about how well the replacement
+    resists correlation."""
+    out = prematch_driver_payload(_driver_row("drv_secret", DRIVER_A_LAT, DRIVER_A_LNG), 500, "rider_1")
+    assert out is not None
+    assert "drv_secret" not in str(out), f"row id leaked somewhere in the payload: {out}"
+    assert out["id"] != "drv_secret"
+
+
+def test_pseudonym_is_stable_within_a_period():
+    """Stability is a hard requirement, not a nicety: the rider app uses this as a
+    React marker key, so a value that changed per request would remount every marker
+    on every poll."""
+    a = prematch_driver_pseudonym("drv_1", "rider_1", now=_T0)
+    b = prematch_driver_pseudonym("drv_1", "rider_1", now=_T0 + 1)
+    c = prematch_driver_pseudonym("drv_1", "rider_1", now=_T0 + 60)
+    assert a == b == c
+
+
+def test_pseudonym_rotates_across_periods():
+    """What actually caps a trace: whatever a client accumulates is bounded by one
+    period, however long it polls."""
+    period = 900
+    early = prematch_driver_pseudonym("drv_1", "rider_1", now=_T0, period_s=period)
+    # Two full periods later is unambiguously a different bucket regardless of the
+    # per-driver stagger offset.
+    later = prematch_driver_pseudonym("drv_1", "rider_1", now=_T0 + 2 * period, period_s=period)
+    assert early != later
+
+
+def test_two_riders_see_different_pseudonyms_for_the_same_driver():
+    """Per-viewer scoping. Without it, two accounts (or two colluding users) could
+    pool observations and rotation would only slow them down."""
+    a = prematch_driver_pseudonym("drv_1", "rider_1", now=_T0)
+    b = prematch_driver_pseudonym("drv_1", "rider_2", now=_T0)
+    assert a != b
+
+
+def test_one_rider_sees_different_pseudonyms_for_different_drivers():
+    """Anti-vacuity: distinct cars must remain distinguishable or the map collapses
+    into one marker."""
+    a = prematch_driver_pseudonym("drv_1", "rider_1", now=_T0)
+    b = prematch_driver_pseudonym("drv_2", "rider_1", now=_T0)
+    assert a != b
+
+
+def test_rotation_is_staggered_across_drivers():
+    """If every driver rotated on the same tick, a rider watching the map would see
+    all markers remount simultaneously. The offset is derived from the driver id, so
+    boundaries land at different moments.
+
+    Checked by finding, for each driver, the second within one period at which its
+    token changes, and asserting those moments are not all identical.
+    """
+    period = 900
+    boundaries = set()
+    for did in (f"drv_{i}" for i in range(12)):
+        base = prematch_driver_pseudonym(did, "rider_1", now=_T0, period_s=period)
+        for step in range(1, period + 1):
+            if prematch_driver_pseudonym(did, "rider_1", now=_T0 + step, period_s=period) != base:
+                boundaries.add(step)
+                break
+    assert len(boundaries) > 1, f"all drivers rotate at the same offset: {boundaries}"
+
+
+def test_pseudonyms_are_opaque_and_uniform():
+    """A token that embedded the row id (or its length) would leak what it replaces."""
+    for did in ("d", "drv_with_a_very_long_identifier_0123456789", "9f8e7d6c-1234-5678-9abc-def012345678"):
+        tok = prematch_driver_pseudonym(did, "rider_1", now=_T0)
+        assert len(tok) == 16, "token length must not vary with the input"
+        assert all(ch in "0123456789abcdef" for ch in tok)
+        assert did not in tok
+
+
+def test_the_endpoint_emits_pseudonyms_scoped_to_the_calling_rider():
+    """Wiring, not just the helper: a route that forgot to pass viewer_id would put
+    every rider in one shared pseudonym space, and this asserts it did not."""
+    row = _driver_row("drv_a", DRIVER_A_LAT, DRIVER_A_LNG)
+    mine = prematch_driver_payload(row, 500, "rider_1")["id"]
+    theirs = prematch_driver_payload(row, 500, "rider_2")["id"]
+    assert mine != theirs
+
+
+@pytest.mark.anyio
+async def test_rest_endpoint_scopes_pseudonyms_to_the_authenticated_caller():
+    rows = [_driver_row("drv_a", DRIVER_A_LAT, DRIVER_A_LNG)]
+    out = await _call_nearby(rows, {"search_radius_km": 10.0, "driver_map_cell_m": 500})
+    # _call_nearby authenticates as rider_1.
+    assert out[0]["id"] == prematch_driver_pseudonym("drv_a", "rider_1")
+    assert out[0]["id"] != prematch_driver_pseudonym("drv_a", "rider_2")
+
+
+def test_a_missing_viewer_degrades_to_a_pseudonym_not_the_row_id():
+    """Fail-safe direction. If a future caller forgets viewer_id, the result must
+    still not be the real driver id."""
+    out = prematch_driver_payload(_driver_row("drv_a", DRIVER_A_LAT, DRIVER_A_LNG), 500)
+    assert out["id"] != "drv_a"
+    assert len(out["id"]) == 16

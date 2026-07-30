@@ -332,6 +332,7 @@ def _render_tabular_report(
     # default: pdf
     pdf = report_branding.new_branded_pdf(title, subtitle, landscape=pdf_landscape)
     report_branding.render_pdf_table(pdf, fieldnames, rows, col_widths=pdf_col_widths)
+    report_branding.render_branded_pdf_footer(pdf)
     return Response(
         content=bytes(pdf.output()),
         media_type="application/pdf",
@@ -422,24 +423,34 @@ async def get_gst_pst_remittance(
         return gate_response
 
     fieldnames = ["month", "gst", "pst", "hst", "unrecognized_tax", "total_tax"]
-    # Two lines instead of one crammed sentence — date range/scope on its
-    # own line, tax totals on a second with even spacing (report_branding
-    # supports subtitle as list[str] specifically for this). Previously:
-    # "2026-06-29 to 2026-07-29 — Total GST $17.91, Total PST $0.00, Total
-    # HST $0.00" all run together, reported as reading unprofessionally.
-    totals_line = f"GST: ${gst_total:.2f}    PST: ${pst_total:.2f}    HST: ${hst_total:.2f}"
+    # The header states what the report is and what period it covers — the
+    # GST/PST/HST figures themselves belong in the table body (a TOTAL row
+    # below), not crammed under the title next to the date range. Previously
+    # this put a "GST: $x  PST: $y  HST: $z" line directly under the title,
+    # which read as a stray calculation rather than part of the document.
+    subtitle = report_branding.period_label(start_date, end_date)
     if truncated:
-        # Appended to the totals line, not a 3rd line — new_branded_workbook
-        # only renders the first 2 subtitle lines, and truncation is too
-        # important to risk dropping from the Excel format specifically.
-        totals_line += f"  — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
-    subtitle = [f"{start_date.date().isoformat()} to {end_date.date().isoformat()}", totals_line]
+        subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
+
+    month_row_count = len(rows)
+    if rows:
+        rows = [
+            *rows,
+            {
+                "month": "TOTAL",
+                "gst": f"{gst_total:.2f}",
+                "pst": f"{pst_total:.2f}",
+                "hst": f"{hst_total:.2f}",
+                "unrecognized_tax": f"{sum(_d(r['unrecognized_tax']) for r in rows):.2f}",
+                "total_tax": f"{(gst_total + pst_total + hst_total):.2f}",
+            },
+        ]
 
     await _log_compliance_export(
         admin,
         "gst_pst_remittance",
         {"format": format, "start": start_date.isoformat(), "end": end_date.isoformat()},
-        len(rows),
+        month_row_count,
     )
     metrics.inc("spinr_admin_compliance_export_total", {"report_type": "gst_pst_remittance", "outcome": "success"})
 
@@ -963,7 +974,7 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
             "status": "completed",
             "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
         },
-        columns="id,driver_id,service_area_id,pickup_address,dropoff_address,distance_km,ride_completed_at",
+        columns="id,rider_id,driver_id,service_area_id,pickup_address,dropoff_address,distance_km,ride_completed_at",
         limit=_ROW_LIMIT,
     )
     airport_rides = [
@@ -986,6 +997,16 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
             driver_names[d["id"]] = (
                 d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
             )
+
+    rider_ids = sorted({r["rider_id"] for r in airport_rides if r.get("rider_id")})
+    rider_names: dict[str, str] = {}
+    for i in range(0, len(rider_ids), 200):
+        batch = rider_ids[i : i + 200]
+        rider_rows = await db_supabase.get_rows(
+            "users", {"id": {"$in": batch}}, columns="id,first_name,last_name", limit=len(batch)
+        )
+        for u in rider_rows:
+            rider_names[u["id"]] = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or u["id"]
 
     area_ids = sorted({r["service_area_id"] for r in airport_rides if r.get("service_area_id")})
     area_names: dict[str, str] = {}
@@ -1011,6 +1032,7 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
                 "pickup_address": r.get("pickup_address") or "",
                 "dropoff_address": r.get("dropoff_address") or "",
                 "distance_km": f"{_d(r.get('distance_km')):.2f}",
+                "rider_name": rider_names.get(r.get("rider_id"), r.get("rider_id") or ""),
                 "driver_name": driver_names.get(r.get("driver_id"), r.get("driver_id") or ""),
                 "service_area": area_names.get(r.get("service_area_id"), ""),
             }
@@ -1063,12 +1085,13 @@ async def get_airport_trips(
         "pickup_address",
         "dropoff_address",
         "distance_km",
+        "rider_name",
         "driver_name",
         "service_area",
     ]
     total_km = sum((Decimal(r["distance_km"]) for r in rows), Decimal("0"))
     subtitle = [
-        f"{start_date.date().isoformat()} to {end_date.date().isoformat()}",
+        report_branding.period_label(start_date, end_date),
         f"{len(rows)} trip(s)  ·  {total_km:.2f} total km",
     ]
     if truncated:
@@ -1087,6 +1110,6 @@ async def get_airport_trips(
         subtitle=subtitle,
         format=format,
         pdf_landscape=True,
-        pdf_col_widths=[1.6, 1.4, 2.6, 2.6, 1.1, 1.8, 1.4],
+        pdf_col_widths=[1.6, 1.4, 2.4, 2.4, 1.0, 1.6, 1.6, 1.3],
     )
     return await _deliver_report(resp, email_to, admin, "Airport Trips Report")

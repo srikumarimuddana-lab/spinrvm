@@ -1,0 +1,54 @@
+{
+  "$comment": "Spinr MCP server scaffold. NONE of these are wired to live credentials — every value below is a placeholder or an ${ENV_VAR} reference. Fill in env vars locally (never commit real secrets here) before a server will actually connect. See per-server notes for the specific sandboxing rule each one requires before use against Spinr.",
+
+  "mcpServers": {
+    "stripe": {
+      "$comment": "OAuth-based, hosted by Stripe. Run `claude mcp add --transport http stripe https://mcp.stripe.com` and complete the browser login yourself. ONLY ever authenticate against a Stripe TEST-MODE account for this project — never the live Spinr Stripe account. This talks directly to routes/payments.py, wallet, and corporate billing flows.",
+      "type": "http",
+      "url": "https://mcp.stripe.com"
+    },
+
+    "sentry": {
+      "$comment": "OAuth-based, hosted by Sentry. Run `claude mcp add --transport http sentry https://mcp.sentry.dev` and complete the browser login to your Sentry org. Read-mostly (issues/traces/breadcrumbs). Scrub PII before pasting any stack trace into chat — raw GPS/phone/email/name are banned from Sentry payloads per CLAUDE.md and must not be re-introduced via chat.",
+      "type": "http",
+      "url": "https://mcp.sentry.dev"
+    },
+
+    "redis": {
+      "$comment": "Requires REDIS_URL. MUST point at a staging/read-only Redis instance — never Spinr's live redis.spinr.ca. A write-capable Redis MCP against production could corrupt live dispatch state (spinr:ws:dispatch pub/sub) or rate-limit/OTP-lockout counters.",
+      "command": "npx",
+      "args": ["-y", "@redis/mcp-redis"],
+      "env": {
+        "REDIS_URL": "${SPINR_STAGING_REDIS_URL}"
+      }
+    },
+
+    "twilio": {
+      "$comment": "Requires Twilio Account SID + Auth Token. MUST be scoped to Twilio test credentials / test phone numbers only. A Twilio MCP with live creds can send real SMS to real riders/drivers and burn real OTP-lockout state.",
+      "command": "npx",
+      "args": ["-y", "@twilio-labs/mcp"],
+      "env": {
+        "TWILIO_ACCOUNT_SID": "${SPINR_TWILIO_TEST_ACCOUNT_SID}",
+        "TWILIO_AUTH_TOKEN": "${SPINR_TWILIO_TEST_AUTH_TOKEN}"
+      }
+    },
+
+    "google-maps": {
+      "$comment": "Community-maintained (not an official Google/Anthropic server) — re-verify maintenance activity before trusting it with a real billed API key. Requires its own Google Maps API key with a spend cap set, separate from the rider-app/backend production key.",
+      "command": "npx",
+      "args": ["-y", "google-maps-mcp-server"],
+      "env": {
+        "GOOGLE_MAPS_API_KEY": "${SPINR_MAPS_MCP_API_KEY}"
+      }
+    },
+
+    "firebase": {
+      "$comment": "Requires a Firebase service account JSON scoped to a single Spinr project, NOT the org-wide account used by backend/core/lifespan.py. Broad scope (Auth users, Storage) — restrict to least privilege before pointing at anything beyond a dev/staging Firebase project.",
+      "command": "npx",
+      "args": ["-y", "firebase-tools", "experimental:mcp"],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "${SPINR_FIREBASE_MCP_SERVICE_ACCOUNT_PATH}"
+      }
+    }
+  }
+}

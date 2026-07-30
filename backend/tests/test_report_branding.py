@@ -124,11 +124,15 @@ class TestBrandedPdf:
         out = bytes(pdf.output())
         assert out.startswith(b"%PDF")
 
-    def test_footer_is_noop_without_letterhead(self):
+    def test_footer_renders_company_line_without_letterhead(self):
+        # The company contact line is unconditional — only the
+        # province/regulator line is gated on province_letterhead being
+        # supplied. Must not raise either way.
         pytest.importorskip("fpdf")
         pdf = report_branding.new_branded_pdf("Test Report")
-        # Must not raise when no province letterhead is supplied.
         report_branding.render_branded_pdf_footer(pdf, None)
+        out = bytes(pdf.output())
+        assert out.startswith(b"%PDF")
 
     def test_fill_color_reset_to_white_after_header_band(self):
         # Regression: new_branded_pdf() sets fill_color to brand red to draw

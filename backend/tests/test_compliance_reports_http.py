@@ -89,11 +89,10 @@ def test_gst_pst_remittance_returns_pdf_by_default(admin_client):
     assert log.call_args[0][1]["report_type"] == "gst_pst_remittance"
 
 
-def test_gst_pst_remittance_subtitle_splits_date_range_and_totals(admin_client):
-    # Regression: the subtitle previously crammed the date range and three
-    # dollar totals onto one line ("2026-06-29 to 2026-07-29 — Total GST
-    # $17.91, Total PST $0.00, Total HST $0.00"), reported as reading
-    # unprofessionally. Now passed as 2 separate lines to report_branding.
+def test_gst_pst_remittance_subtitle_is_period_label_and_totals_are_in_a_table_row(admin_client):
+    # The subtitle states only the covered period (report_branding.
+    # period_label) — GST/PST/HST totals now live in a TOTAL row in the
+    # table body instead of being crammed into the subtitle text.
     from backend.utils import report_branding as rb
 
     with (
@@ -104,10 +103,8 @@ def test_gst_pst_remittance_subtitle_splits_date_range_and_totals(admin_client):
         resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
     assert resp.status_code == 200
     subtitle_arg = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
-    assert isinstance(subtitle_arg, list)
-    assert len(subtitle_arg) == 2
-    assert "to" in subtitle_arg[0]  # date range line
-    assert "GST" in subtitle_arg[1] and "PST" in subtitle_arg[1] and "HST" in subtitle_arg[1]
+    assert isinstance(subtitle_arg, str)
+    assert subtitle_arg.startswith("Period:") and " to " in subtitle_arg
 
 
 def test_gst_pst_remittance_csv_format(admin_client):
@@ -169,8 +166,7 @@ def test_gst_pst_remittance_defaults_to_month_to_date(admin_client):
         resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
     assert resp.status_code == 200
     subtitle_arg = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
-    date_line = subtitle_arg[0]
-    start_str, _, end_str = date_line.partition(" to ")
+    start_str, _, _end_str = subtitle_arg.partition(" to ")
     assert start_str.endswith("-01")  # 1st of the month
 
 

@@ -598,10 +598,10 @@ export default function CompliancePage() {
                             <CardDescription className="flex items-start gap-1.5">
                                 <span>
                                     Completed rides with &quot;airport&quot; in the pickup or dropoff address —
-                                    trip type, distance, driver, and service area — for airport ground-
-                                    transportation program reporting.
+                                    trip type, distance, rider, driver, and service area — for airport
+                                    ground-transportation program reporting.
                                 </span>
-                                <Hint text="Matched by a text search on the pickup/dropoff address, not a dedicated airport flag — Spinr doesn't yet link rides to a specific pickup venue. Column set follows the general convention most North American airport TNC programs use (date/time, driver, pickup-vs-dropoff, distance) — confirm against your specific airport authority's actual reporting requirements before submitting." />
+                                <Hint text="Matched by a text search on the pickup/dropoff address, not a dedicated airport flag — Spinr doesn't yet link rides to a specific pickup venue. Column set follows the general convention most North American airport TNC programs use (date/time, rider, driver, pickup-vs-dropoff, distance) — confirm against your specific airport authority's actual reporting requirements before submitting." />
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">

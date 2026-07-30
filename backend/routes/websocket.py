@@ -1152,10 +1152,47 @@ async def websocket_endpoint(
             elif data.get("type") == "get_nearby_drivers":
                 lat = data.get("lat")
                 lng = data.get("lng")
-                radius = data.get("radius", 5)  # km
-                if lat and lng:
+                # `is not None`, not truthiness: a rider legitimately at lat=0 or
+                # lng=0 was silently getting an empty map. /drivers/nearby already
+                # fixed this; this handler had drifted.
+                if lat is not None and lng is not None:
+                    try:
+                        from ..settings_loader import get_app_settings
+                    except ImportError:
+                        from settings_loader import get_app_settings  # type: ignore
+                    try:
+                        from ..utils.driver_map_visibility import (
+                            clamp_radius,
+                            map_settings,
+                            prematch_driver_list,
+                        )
+                    except ImportError:
+                        from utils.driver_map_visibility import (  # type: ignore
+                            clamp_radius,
+                            map_settings,
+                            prematch_driver_list,
+                        )
+                    try:
+                        from ..services.dispatch_service import dispatch_geo_bounds
+                    except ImportError:
+                        from services.dispatch_service import dispatch_geo_bounds  # type: ignore
+
+                    _app_settings = await get_app_settings() or {}
+                    _show, _cell_m, _max_radius = map_settings(_app_settings)
+                    radius = clamp_radius(data.get("radius", 5), _max_radius, 5.0)
+
+                    # Kill switch — same one the REST endpoint honours.
+                    if not _show:
+                        await websocket.send_json({"type": "nearby_drivers", "drivers": []})
+                        continue
+
                     # is_verified + status='active' prevent unverified / suspended
                     # drivers from being broadcast to riders via the realtime map.
+                    #
+                    # Geo-bound the fetch like /drivers/nearby does. Without it this
+                    # pulled an arbitrary 100 online drivers province-wide and then
+                    # filtered in Python, so above 100 online drivers the realtime
+                    # map could omit cars that are actually nearby.
                     drivers = await db_supabase.get_rows(
                         "drivers",
                         {
@@ -1163,6 +1200,7 @@ async def websocket_endpoint(
                             "is_available": True,
                             "is_verified": True,
                             "status": "active",
+                            "$and": dispatch_geo_bounds(lat, lng, radius),
                         },
                         limit=100,
                     )
@@ -1177,7 +1215,7 @@ async def websocket_endpoint(
                     except ImportError:
                         from geo_utils import calculate_distance  # type: ignore
 
-                    nearby = []
+                    in_radius = []
                     for driver in drivers:
                         # Authoritative intent gate (migration 97): trust the
                         # went_online_at / went_offline_at timestamps over the
@@ -1190,19 +1228,21 @@ async def websocket_endpoint(
                         # Same (0, 0) registration-default guard as /drivers/nearby.
                         if d_lat is None or d_lng is None or (d_lat == 0 and d_lng == 0):
                             continue
-                        # Calculate distance
+                        # Distance filtering uses the TRUE position so the radius
+                        # stays accurate; only the coordinates sent back are coarse.
                         dist = calculate_distance(lat, lng, d_lat, d_lng)
                         if dist <= radius:
-                            nearby.append(
-                                {
-                                    "id": driver["id"],
-                                    "lat": d_lat,
-                                    "lng": d_lng,
-                                    "vehicle_type_id": driver["vehicle_type_id"],
-                                }
-                            )
+                            in_radius.append(driver)
 
-                    await websocket.send_json({"type": "nearby_drivers", "drivers": nearby})
+                    # Same projection as the REST endpoint, so the two cannot drift.
+                    await websocket.send_json(
+                        {
+                            "type": "nearby_drivers",
+                            "drivers": prematch_driver_list(
+                                in_radius, _cell_m, viewer_id=user.get("id")
+                            ),
+                        }
+                    )
 
             elif data.get("type") == "chat_message":
                 ride_id = data.get("ride_id")

@@ -286,7 +286,13 @@ Python:
 - Use `@pytest.mark.anyio` for async tests (loaded explicitly in `conftest.py`)
 - Mock Supabase via the `mock_supabase_client` fixture in `conftest.py` — don't hit the real DB in unit tests
 - Data factories live in `backend/tests/_factories.py` (kept out of `conftest.py` because pytest loads conftest by file path, which breaks `from tests.conftest import ...`)
-- Patch target for DB is always `backend.db_supabase.supabase` — match that path exactly
+- Patch target for DB is the `supabase` binding **in the module that defines the function under
+  test**, not `backend.db_supabase.supabase`. `db_supabase.py` only re-exports, so
+  `db_supabase.update_one` *is* `repositories._base.update_one` and reads `_base`'s globals —
+  rebinding `backend.db_supabase.supabase` has no effect on it. Use
+  `backend.repositories._base.supabase` for the generic CRUD helpers (`get_rows`, `update_one`,
+  `insert_one`, …) and the matching `repositories.<domain>_repo.supabase` for domain functions.
+  `conftest.py` patches all of them for this reason; see its comment on why both spellings exist.
 - Use `pytest -m unit` for fast local loop; `pytest -m "not slow"` in pre-push; full suite in CI
 
 Test tiers:

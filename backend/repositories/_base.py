@@ -45,6 +45,7 @@ try:
     from ..utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
     from ..utils.metrics import inc as _metric_inc  # type: ignore
     from ..utils.metrics import set_gauge as _metric_gauge
+    from ..utils.pii import geohash as _geohash  # type: ignore
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 except ImportError:
     from utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
@@ -52,6 +53,7 @@ except ImportError:
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import set_gauge as _metric_gauge
+    from utils.pii import geohash as _geohash  # type: ignore
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 
 from loguru import logger
@@ -164,6 +166,40 @@ def _record_db_queue_depth() -> None:
     queue = getattr(_DB_EXECUTOR, "_work_queue", None)
     if queue is not None:
         _metric_gauge("spinr_db_thread_pool_queue_depth", queue.qsize())
+
+
+# ── Error redaction ─────────────────────────────────────────────────
+# Postgres puts real column values in its error text, and this module is the
+# funnel every table's errors pass through. Redact before the string reaches a
+# log line OR a DatabaseError/DuplicateRecordError detail — CLAUDE.md tells
+# callers to log `e.details["original"]` when handling a DatabaseError, so the
+# details dict is a log sink in practice, not just an internal field.
+
+# Markers after which Postgres emits raw row/column data. Values have no fixed
+# terminator and may contain arbitrary punctuation (including parens), so we
+# truncate at the marker rather than trying to match balanced delimiters.
+_PG_VALUE_MARKERS = ("Failing row contains", "DETAIL:")
+
+
+def _redact_pg_error(exc_str: str) -> str:
+    """Strip row/column values from a PostgREST/Postgres error string.
+
+    Keeps the parts that make an error actionable — error class, constraint
+    name, column name — and drops the parts that are user data:
+
+    * ``Key (phone)=(+13065551234) already exists``
+      → ``Key (phone)=(<redacted>) already exists``
+    * ``... violates check constraint "x"  Failing row contains (Jane Doe, +1306..., 52.13, -106.67)``
+      → ``... violates check constraint "x" <values redacted>``
+    """
+    if not exc_str:
+        return exc_str
+    # Column name is schema (safe, and the useful half); the value is not.
+    redacted = _re.sub(r"Key \(([^)]*)\)=\([^)]*\)", r"Key (\1)=(<redacted>)", exc_str)
+    cut = min((i for i in (redacted.find(m) for m in _PG_VALUE_MARKERS) if i != -1), default=-1)
+    if cut != -1:
+        redacted = redacted[:cut].rstrip() + " <values redacted>"
+    return redacted
 
 
 # ── Retry policy ────────────────────────────────────────────────────
@@ -337,10 +373,11 @@ async def run_sync(
         {"state": _breaker._state},
     )
     assert last_exc is not None
-    exc_str = str(last_exc)
+    raw_exc_str = str(last_exc)
+    exc_str = _redact_pg_error(raw_exc_str)
     exc_name = type(last_exc).__name__
-    exc_str_lower = exc_str.lower()
-    if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
+    exc_str_lower = raw_exc_str.lower()
+    if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str_lower:
         _metric_inc("spinr_db_errors_total", {"kind": "duplicate_key"})
         raise DuplicateRecordError(details={"original": exc_str}) from last_exc
     _metric_inc("spinr_db_errors_total", {"kind": "database_error"})
@@ -444,7 +481,10 @@ async def _read_cached_row(key: str) -> Optional[Dict[str, Any]]:
         try:
             await redis_delete(key)
         except Exception:
-            logger.warning("Failed to evict corrupt cache key %s", key, exc_info=True)
+            # loguru formats with str.format, not %-interpolation, and takes
+            # `exception=`, not `exc_info=`. The previous stdlib-style call
+            # emitted a literal "%s" and no traceback at all.
+            logger.opt(exception=True).warning(f"Failed to evict corrupt cache key {key}")
         return None
 
 
@@ -776,10 +816,39 @@ async def insert_many_ignore_conflicts(
     )
 
 
+def _log_safe_write(table: str, filters: Dict[str, Any], payload: Dict[str, Any]) -> str:
+    """Describe a write for the log without emitting any value from it.
+
+    PIPEDA: filter and payload *values* are never safe to log. A ``drivers``
+    payload carries raw lat/lng, and the table's plaintext columns include
+    ``name``, ``phone``, and ``vehicle_vin`` — all on CLAUDE.md's never-log
+    list. So this emits key *names* only, plus a coarse geohash when the write
+    carries coordinates.
+
+    Deliberately an allowlist rather than a denylist: a new sensitive column
+    added to any table is safe here by default. The previous denylist approach
+    ("scrub lat/lng") is exactly why name/phone/VIN leaked for so long.
+
+    Mirrors the pattern already used by ``driver_repo.set_driver_available``
+    and ``ride_repo``'s insert path.
+    """
+    parts = [f"table={table}", f"filter_keys={sorted(filters)}", f"payload_keys={sorted(payload)}"]
+    lat, lng = payload.get("lat"), payload.get("lng")
+    if lat is not None and lng is not None:
+        parts.append(f"geohash={_geohash(lat, lng)}")
+    return " ".join(parts)
+
+
 async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
     if not supabase:
-        if table == "drivers":
-            logger.warning("[GO-ONLINE] db_supabase.update_one: supabase client is None!")
+        # NOTE: warn-and-return-None is a swallowed DB error that CLAUDE.md
+        # forbids, and it made every caller's write silently no-op. Promoting it
+        # to a raise is deliberately NOT done here: insert_many,
+        # insert_many_ignore_conflicts, delete_many, and
+        # driver_repo.claim_driver_atomic all swallow identically, and fixing one
+        # in isolation creates a worse inconsistency. Tracked as its own change
+        # so all five move together.
+        logger.warning(f"update_one({table}): supabase client is not configured — write skipped")
         return None
 
     await _pre_invalidate_for_table(table, filters)
@@ -789,17 +858,12 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
         if not isinstance(update_data, dict):
             # supabase-py .update(<non-dict>) fails deep inside as the opaque
             # "'str' object has no attribute 'items'". Name the table and the
-            # offending payload so the bad caller is identifiable from one log.
-            raise TypeError(
-                f"update_one({table!r}) payload must be a dict, got {type(update_data).__name__}: {update_data!r}"
-            )
+            # offending TYPE so the bad caller is identifiable — but never the
+            # payload itself: this message is logged at _base's catch-all error
+            # site and also rides into DatabaseError.details["original"], so a
+            # repr here would leak the very values this module must not emit.
+            raise TypeError(f"update_one({table!r}) payload must be a dict, got {type(update_data).__name__}")
         update_data = _serialize_for_api(update_data)
-
-        if table == "drivers":
-            logger.info(
-                f"[GO-ONLINE] db_supabase.update_one about to execute: "
-                f"table={table} filters={filters} payload={update_data} upsert={upsert}"
-            )
 
         if upsert:
             payload = {**filters, **update_data}
@@ -809,17 +873,19 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
             q = _apply_filters(q, filters)
             res = q.execute()
 
-        if table == "drivers":
-            raw_data = None
-            try:
-                raw_data = getattr(res, "data", None) if res else None
-            except Exception:
-                raw_data = "<error reading res.data>"
-            logger.info(
-                f"[GO-ONLINE] db_supabase.update_one executed: "
-                f"res_type={type(res).__name__ if res else 'None'} "
-                f"res_data={raw_data}"
-            )
+        # PIPEDA: log the shape of the write and whether it landed — never the
+        # values, and never res.data. PostgREST returns the full updated row by
+        # default, which for `drivers` carries plaintext name, phone, and
+        # vehicle_vin alongside raw lat/lng.
+        #
+        # This replaces a pair of [GO-ONLINE] debug lines that dumped both
+        # `payload` and `res_data` for every write to `drivers`. They were
+        # redundant as well as unsafe: routes/drivers/status.py already logs the
+        # pre-write state, the post-write re-read, and the RLS/service-role
+        # diagnosis for the silent-no-op case they were added to chase.
+        _rows = getattr(res, "data", None) or []
+        _n = len(_rows) if isinstance(_rows, list) else 0
+        logger.info(f"update_one executed: {_log_safe_write(table, filters, update_data)} rows_updated={_n}")
 
         return _single_row_from_res(res)
 

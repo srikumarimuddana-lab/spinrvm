@@ -29,6 +29,50 @@ class TestPhoneNumbers:
     def test_plain_numbers_not_redacted(self):
         assert scrub_pii("my ride was $18.50 on May 23") == "my ride was $18.50 on May 23"
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "+13065551234",  # E.164, how the system stores them
+            "13065551234",  # 11 digits with country code
+            "3065551234",  # bare 10-digit, valid NANP area code
+            "ph=+13065551234 ride_id=r1",  # embedded in a log line
+        ],
+    )
+    def test_separatorless_phone_shapes_redacted(self, text):
+        assert "[PHONE]" in scrub_pii(text)
+        assert "5551234" not in scrub_pii(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "ts=1769817600 ride_id=r1",  # unix timestamp — 10 digits until 2286
+            "duration_ms=1234567890",
+            "build 1769817600 version 10.2.4",
+            "spinr_dispatch_offer_to_accept_duration_ms=1847",
+            "stripe_event evt_1769817600 processed",
+        ],
+    )
+    def test_observability_values_are_not_mistaken_for_phones(self, text):
+        """Regression: the pattern was `(?<!\\d)\\+?1?\\d{10}(?!\\d)`, which matched
+        ANY bare 10-digit run — so every unix timestamp became `[PHONE]`.
+
+        This mattered beyond cosmetics: utils/sentry_scrub applies scrub_pii to
+        Sentry event text, so production events had their timestamps and
+        millisecond durations rewritten. A NANP area code cannot start with 0 or 1
+        and a plausible unix timestamp always does, which is the discriminator the
+        pattern now uses.
+        """
+        assert scrub_pii(text) == text, "an observability value was redacted as a phone number"
+
+    def test_a_10_digit_run_starting_with_1_is_never_a_phone(self):
+        """The precise invariant behind the fix — asserted directly so a future
+        pattern change that reintroduces the collision fails here."""
+        for ts in ("1000000000", "1769817600", "1999999999"):
+            assert scrub_pii(ts) == ts
+        # …while the same length starting 2-9 is a valid NANP number.
+        for phone in ("2065551234", "9995551234"):
+            assert scrub_pii(phone) == "[PHONE]"
+
 
 class TestEmails:
     def test_email_redacted(self):

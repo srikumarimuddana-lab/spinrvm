@@ -177,6 +177,30 @@ class AppSettings(BaseModel):
     driver_matching_algorithm: str = "nearest"
     min_driver_rating: float = 4.0
     search_radius_km: float = 10.0
+    # ── Pre-match driver map visibility (PIPEDA / launch gate) ───────────
+    # A driver's live position is personal information about a contractor's
+    # whereabouts. Before a ride is assigned there is no relationship that
+    # justifies exact coordinates, so the rider map gets a coarsened position;
+    # exact coordinates are reserved for the assigned-ride tracking path.
+    #
+    # These live here (DB-backed app_settings) rather than in .env so the
+    # granularity can be tuned, and the map killed, without a redeploy — the
+    # launch plan requires map visibility to sit behind a kill switch.
+    #
+    # driver_map_show_locations=False is the "disable" option: the endpoints
+    # return no driver positions at all. Riders still see availability counts
+    # from /rides/estimate, which never carried coordinates.
+    driver_map_show_locations: bool = True
+    # Grid cell for coarsening, in metres. 500m keeps the map useful at city
+    # zoom ("cars are around me, roughly there") while destroying the
+    # resolution needed to follow one vehicle. 0 would mean exact — deliberately
+    # not the default, and the pre-match callers clamp it to a floor so a
+    # misconfiguration cannot silently re-expose exact positions.
+    driver_map_cell_m: int = 500
+    # Server-side ceiling on the caller-supplied radius. Without this, one
+    # request with radius=1000 sweeps the province, which is the enumeration
+    # case the launch gate calls out.
+    driver_map_max_radius_km: float = 15.0
     cancellation_fee_admin: DecimalStr = Decimal("0.50")  # Admin gets $0.50
     cancellation_fee_driver: DecimalStr = Decimal("4.00")  # Driver gets $4.00
     platform_fee_percent: DecimalStr = Decimal("0.0")  # 0% commission - driver keeps all fare

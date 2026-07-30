@@ -272,6 +272,71 @@ async def test_a_raising_stripe_call_does_not_abort_the_tick():
 
 @pytest.mark.anyio
 @pytest.mark.unit
+async def test_released_unmarked_is_not_counted_as_a_failure():
+    """The Finding-1 regression. RELEASED_UNMARKED means the Stripe cancel SUCCEEDED
+    (the rider's money is freed) but the auth_status bookkeeping write did not land.
+
+    It must NOT fall into `failed`: the operator CLI reports `failed` as "money may
+    still be held — investigate" and exits non-zero, and there is nothing held and
+    nothing to investigate here. card_hold_release defines the distinct outcome
+    precisely so the two never merge; the reconciler must preserve that.
+    """
+
+    async def _update(table, filters, update, *a, **k):
+        # Two writes hit this one mock. The claim CAS carries only {updated_at} and
+        # must succeed (else the ride is `not_claimed` and release is never tried).
+        # The release-marking write carries auth_status='released' — fail THAT one to
+        # produce RELEASED_UNMARKED (Stripe already cancelled, DB write lost).
+        if "auth_status" in update:
+            raise RuntimeError("bookkeeping write failed")
+        return {"id": filters.get("id")}
+
+    stack, cancel, _, _ = _stack(
+        [_orphan()],
+        cancel=AsyncMock(return_value=True),
+        update_one=AsyncMock(side_effect=_update),
+    )
+    with stack:
+        from backend.utils.orphaned_hold_reconciler import reconcile_tick
+
+        summary = await reconcile_tick()
+
+    cancel.assert_awaited_once()  # the money WAS freed
+    assert summary["released_unmarked"] == 1
+    assert summary["failed"] == 0, "freed money must never be reported as a failure"
+    assert summary["released"] == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.unit
+async def test_released_unmarked_emits_its_own_metric_not_a_failure_metric():
+    """The dashboard must see released_unmarked as its own outcome, so bookkeeping
+    drift is visible without masquerading as held money."""
+
+    async def _update(table, filters, update, *a, **k):
+        if "auth_status" in update:
+            raise RuntimeError("bookkeeping write failed")
+        return {"id": filters.get("id")}
+
+    metric = MagicMock()
+    stack, _, _, _ = _stack(
+        [_orphan()],
+        cancel=AsyncMock(return_value=True),
+        update_one=AsyncMock(side_effect=_update),
+        metric=metric,
+    )
+    with stack:
+        from backend.utils.orphaned_hold_reconciler import reconcile_tick
+
+        await reconcile_tick()
+
+    outcomes = [c.args[1].get("outcome") for c in metric.call_args_list if len(c.args) > 1 and c.args[1]]
+    assert "released_unmarked" in outcomes
+    assert "failed" not in outcomes
+
+
+@pytest.mark.anyio
+@pytest.mark.unit
 async def test_a_failing_candidate_query_reports_instead_of_raising():
     stack = ExitStack()
     stack.enter_context(patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))))
@@ -297,6 +362,7 @@ async def test_empty_backlog_is_a_cheap_no_op():
     assert summary == {
         "found": 0,
         "released": 0,
+        "released_unmarked": 0,
         "skipped": 0,
         "not_claimed": 0,
         "failed": 0,

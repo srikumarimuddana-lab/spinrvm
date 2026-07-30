@@ -62,7 +62,7 @@ except ImportError:
 
 try:
     from .. import db_supabase as db
-    from .card_hold_release import OPEN_AUTH_STATES, RELEASED, has_open_hold, release_open_hold
+    from .card_hold_release import OPEN_AUTH_STATES, RELEASED, RELEASED_UNMARKED, has_open_hold, release_open_hold
     from .metrics import inc as _metric_inc
     from .redis_client import redis_set_nx
 except ImportError:  # pragma: no cover - dual import
@@ -70,6 +70,7 @@ except ImportError:  # pragma: no cover - dual import
     from utils.card_hold_release import (  # type: ignore
         OPEN_AUTH_STATES,
         RELEASED,
+        RELEASED_UNMARKED,
         has_open_hold,
         release_open_hold,
     )
@@ -145,7 +146,21 @@ async def reconcile_tick(*, dry_run: bool = False, limit: int = _BATCH_LIMIT) ->
     ``dry_run=True`` finds and reports without claiming, cancelling, or writing —
     which is how an operator sizes the backlog before touching real money.
     """
-    summary: dict = {"found": 0, "released": 0, "skipped": 0, "not_claimed": 0, "failed": 0, "dry_run": dry_run}
+    summary: dict = {
+        "found": 0,
+        "released": 0,
+        # RELEASED_UNMARKED is tracked separately from `failed` on purpose. It means
+        # the Stripe cancel SUCCEEDED (money is freed) but the auth_status bookkeeping
+        # write did not land. Folding it into `failed` would make the operator CLI
+        # report freed money as "may still be held — investigate" and exit non-zero,
+        # which is exactly the confusion card_hold_release's distinct outcomes exist
+        # to prevent. No rider impact; the 15-min loop re-marks it when the DB recovers.
+        "released_unmarked": 0,
+        "skipped": 0,
+        "not_claimed": 0,
+        "failed": 0,
+        "dry_run": dry_run,
+    }
 
     try:
         orphans = await find_orphaned_holds(limit=limit)
@@ -179,7 +194,12 @@ async def reconcile_tick(*, dry_run: bool = False, limit: int = _BATCH_LIMIT) ->
             outcome = await release_open_hold(ride, source="reconciler")
             if outcome == RELEASED:
                 summary["released"] += 1
+            elif outcome == RELEASED_UNMARKED:
+                # Money freed, bookkeeping write deferred to the next tick. Not a failure.
+                summary["released_unmarked"] += 1
             else:
+                # FAILED (Stripe cancel returned False → money may still be held) or
+                # ERROR (unexpected). Both warrant operator attention.
                 summary["failed"] += 1
         except Exception as exc:
             # One rider's failure must not strand the next rider's funds.
@@ -189,7 +209,14 @@ async def reconcile_tick(*, dry_run: bool = False, limit: int = _BATCH_LIMIT) ->
             )
             summary["failed"] += 1
 
-    _metric_inc("spinr_orphaned_hold_reconciled_total", {"outcome": "released"}, by=summary["released"] or 0)
+    if summary["released"]:
+        _metric_inc("spinr_orphaned_hold_reconciled_total", {"outcome": "released"}, by=summary["released"])
+    if summary["released_unmarked"]:
+        _metric_inc(
+            "spinr_orphaned_hold_reconciled_total",
+            {"outcome": "released_unmarked"},
+            by=summary["released_unmarked"],
+        )
     if summary["failed"]:
         _metric_inc("spinr_orphaned_hold_reconciled_total", {"outcome": "failed"}, by=summary["failed"])
     return summary

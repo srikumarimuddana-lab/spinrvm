@@ -72,7 +72,27 @@ You audit, you do not edit. Your output is a report. If the user wants fixes, th
 - CORS origins explicit, no `*` in production
 - Security headers middleware intact (`strict-transport-security`, `content-security-policy`, `x-frame-options`)
 
-## 11. Declared Impact vs diff (cross-check)
+## 11. Framework auth-enforcement wiring (admin-dashboard)
+- Real incident (`sprint-current.md` PR #310): Next.js silently ignored a
+  misnamed `proxy.ts` instead of `middleware.ts`, leaving every
+  `/dashboard/*` route unauthenticated with no error, no CI failure, no log
+  — the file just never ran. This class of bug is invisible to normal
+  code review because the broken file *looks* correct in isolation.
+- Any diff that adds, renames, or moves `admin-dashboard/src/middleware.ts`
+  (or an equivalent Next.js convention file) — flag as a blocker requiring
+  manual verification that the framework actually picks it up. Don't take
+  "it compiles" as evidence; this bug compiled fine.
+- Any diff that upgrades Next.js, changes `admin-dashboard/next.config.*`,
+  or restructures the `admin-dashboard/src/app/` directory — flag as a
+  warning to manually re-verify `/dashboard/*` still 401s an unauthenticated
+  request after the change, since framework convention-file discovery rules
+  can shift between versions silently
+- If `admin-dashboard/src/middleware.ts` itself is in the diff, check its
+  exported function name matches what the installed Next.js version expects
+  (`export function middleware`, not `proxy` or another name) — this is
+  exactly the string that broke last time
+
+## 12. Declared Impact vs diff (cross-check)
 
 The PR template forces the author to declare which compliance areas they touched. A dishonest or missing declaration is itself a security defect — it hides review routing and produces a false audit trail. Cross-check the PR body against the diff whenever both are available.
 

@@ -55,6 +55,50 @@ scheduled ──► searching ──► driver_assigned ──► driver_accepte
 - Flag N+1 Supabase reads in matching loops (should batch via `.in_()`)
 - Flag any inline `await` on Twilio/FCM inside the dispatch hot path — should be `asyncio.create_task` or background worker
 
+## 9. Never re-offer to a driver who already declined this search cycle
+- `.claude/context/domain-dispatch.md` step 6: "Driver ignores/declines → release, loop step 3 with next driver" — the loop must exclude drivers already offered-and-declined/timed-out in the current search cycle for this ride
+- Flag any re-matching path that re-queries "online drivers within radius" without excluding the ride's own already-declined set — a driver who explicitly declined (or whose offer timed out) getting re-offered the same ride is a real UX bug, not just inefficient matching
+- Look for how the declined/timed-out set is tracked (e.g. an in-memory set, a `declined_driver_ids` column, a Redis set keyed by ride) — its absence entirely is a blocker, not a style nit
+
+## 10. Re-verify driver online status at acceptance time
+- `.claude/context/domain-dispatch.md`: "Driver going offline mid-offer — Check `drivers.status == 'online'` at acceptance time"
+- The acceptance handler must re-read the driver's current online status, not trust the value from when the offer was sent — a driver who went offline during the ~15s offer window must not be able to accept
+- Flag any acceptance path that only checks `ride.status == 'searching'` (the race guard in rule #2) without also confirming the accepting driver is still online
+
+## 11. Declared Impact vs diff (cross-check)
+
+The PR template forces the author to declare which surfaces/risk a diff
+touches. A dispatch/state-machine change that under-declares its risk hides
+the exact review routing this domain needs.
+
+Sources for the PR body, in order of preference:
+1. Caller passes the PR body as context (preferred — CI does this).
+2. `gh pr view <N> --json body -q .body` if `gh` is on PATH and the PR is known.
+3. If neither is available, note `IMPACT CROSS-CHECK: skipped — no PR body supplied` in the report and continue with the normal audit.
+
+Mismatches that are **blockers**:
+- Diff touches `backend/services/dispatch_service.py`, the acceptance
+  endpoint in `backend/routes/rides.py`, or `backend/utils/scheduled_rides.py`
+  but `Risk` is declared `low` — dispatch races are exactly the class of bug
+  that reads as low-risk in a diff and strands a rider or double-books a
+  driver in production
+- Diff removes or narrows a WS event emission (`socket_manager|ws_pubsub`
+  call site deleted or gated behind a new condition) but `API contract
+  change: none` — a removed event is a contract break for the client even if
+  no REST/type signature changed
+- Diff modifies `backend/core/lifespan.py`'s scheduled-dispatch loop
+  registration but `Background job change: none`
+
+Mismatches that are **warnings**:
+- `Rollback plan: git-revert-safe` on a diff that changes the offer-timeout
+  duration or driver-release logic — a bad revert here can leave drivers
+  stuck `is_available = False` until the next natural state transition;
+  worth a one-line note on how a revert actually recovers stuck drivers
+- `Blast radius: isolated` but the diff touches both the rider-facing WS
+  event and the driver-facing one for the same transition
+
+Output these under a new `IMPACT MISMATCHES` section — see the output format below.
+
 # How to audit
 
 1. Scope: `git diff --cached -- 'backend/services/dispatch_service.py' 'backend/routes/rides.py' 'backend/utils/scheduled_rides.py' | head -2000`
@@ -64,6 +108,8 @@ scheduled ──► searching ──► driver_assigned ──► driver_accepte
    - `is_available\s*=\s*True` — confirm co-located with an `is_online` check
    - `socket_manager|ws_pubsub|emit|broadcast` — confirm coverage on every transition branch
    - `await.*twilio|await.*fcm|await.*push` inside dispatch-path functions — inline blocking call red flag
+   - `declined|already_offered|excluded_driver` near the re-matching query — confirm a declined/timed-out driver is excluded from re-offer in the same search cycle
+   - `drivers.status|is_online` near the acceptance handler — confirm re-checked at accept time, not just at offer time
 
 # Output format
 
@@ -75,6 +121,9 @@ BLOCKERS  (strands riders, double-books drivers, or breaks the state machine)
 
 WARNINGS  (SLA risk or replay-safety gap)
   - [rule #N] <file>:<line> — <one-line problem>
+
+IMPACT MISMATCHES  (declared in PR body vs actual diff)
+  - [blocker|warning] <declared X> but diff <actually does Y> → <fix: widen risk / tick API-contract box / note rollback recovery path>
 
 VERIFIED  (checked and clean)
   - <e.g. "Acceptance update correctly filters {'status': 'searching'}">

@@ -40,6 +40,41 @@ Audit only. You report; the user fixes. Load `@.claude/context/regulatory-sk.md`
 ## 5. Transition completeness
 - Every ride state transition that crosses a period boundary (e.g. `searching → driver_assigned` is a Period 1→2 boundary; `driver_arrived → in_progress` is Period 2→3) must write a period-transition row in the same logical operation — flag any transition handler that updates `ride.status` without a corresponding insurance-period write
 
+## 6. Declared Impact vs diff (cross-check)
+
+The PR template forces the author to declare Safety-domain and SK
+Transportation Act compliance impact. A dispatch/ride-state diff that
+crosses a period boundary but doesn't tick these hides the exact review
+routing insurance-period regressions need.
+
+Sources for the PR body, in order of preference:
+1. Caller passes the PR body as context (preferred — CI does this).
+2. `gh pr view <N> --json body -q .body` if `gh` is on PATH and the PR is known.
+3. If neither is available, note `IMPACT CROSS-CHECK: skipped — no PR body supplied` in the report and continue with the normal audit.
+
+Mismatches that are **blockers**:
+- Diff touches `driver_insurance_periods` writes, `go_online` eligibility
+  logic, or a ride-state transition that crosses a period boundary, but the
+  `Safety` compliance box is unticked
+- Diff is declared `Risk: low` but changes where/when a period-transition
+  row is written — a silently-dropped period row is a regulatory audit gap,
+  not a low-risk change by this domain's own standard (see rule #5)
+- Diff touches insurance-period retention/purge logic but `SK Transportation
+  Act` compliance box is unticked (7-year retention is a hard rule, not this
+  PR's judgment call)
+
+Mismatches that are **warnings**:
+- `Rollback plan: git-revert-safe` on a diff that changes period-boundary
+  logic — a revert doesn't retroactively fix a coverage gap already written
+  (or not written) during the bad window; worth a one-line note on whether
+  affected trips need a manual backfill after revert
+- Diff refactors the ride state machine generically (not insurance-specific)
+  but doesn't mention period-boundary impact anywhere — period classification
+  is derived from `ride.status`, so a state-machine refactor can silently
+  break it even when insurance code itself is untouched
+
+Output these under a new `IMPACT MISMATCHES` section — see the output format below.
+
 # How to audit
 
 1. Scope: `git diff --cached -- 'backend/routes/rides.py' 'backend/routes/drivers.py' 'backend/services/dispatch_service.py' | grep -n -i 'insurance\|period\|go_online' `
@@ -60,6 +95,9 @@ BLOCKERS  (regulatory/liability gap — wrong period, mutated audit row, missing
 
 WARNINGS  (retention or expiry-check risk)
   - [rule #N] <file>:<line> — <one-line problem>
+
+IMPACT MISMATCHES  (declared in PR body vs actual diff)
+  - [blocker|warning] <declared X> but diff <actually does Y> → <fix: tick Safety/SK-Act box / widen risk / note backfill plan>
 
 VERIFIED  (checked and clean)
   - <e.g. "Period 2 correctly starts at driver_assigned, not driver_accepted">

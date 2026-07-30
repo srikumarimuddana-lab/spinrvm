@@ -43,8 +43,54 @@ Audit only. You report; the user fixes.
 - Surge must **never** apply to scheduled rides booked outside the surge window — verify scheduled-ride fare calc doesn't inherit a surge value computed at booking time if the ride departs outside that window
 
 ## 6. Fare-breakdown interaction (cross-reference with money-auditor rules)
-- Surge applies to the ride subtotal, **not** to the booking fee
+
+Source of truth: `.claude/context/domain-payments.md` — mirror it exactly.
+Surge multiplies **only the distance and time components**, not the ride
+subtotal as a whole:
+
+```
+distance_fare = (per_km  * distance_km)  * surge_multiplier
+time_fare     = (per_min * duration_min) * surge_multiplier
+subtotal      = base_fare + distance_fare + time_fare + booking_fee + airport_fee
+```
+
+- Surge multiplies `distance_fare` and `time_fare` only — flag any code that
+  multiplies `base_fare` by `surge_multiplier`, not just booking fee; "surge
+  applies to the subtotal" is imprecise enough to miss that class of bug
+- Surge is never applied to `booking_fee` **or** `airport_fee`
 - Surge is applied **before** tax (GST/PST computed on the surged amount, not the reverse)
+
+## 7. Declared Impact vs diff (cross-check)
+
+The PR template requires a `Money-touching` box and a rollback plan. Surge
+is the single most reputationally/regulatory-sensitive number in the fare
+calc, so an under-declared surge diff is a blocker in its own right.
+
+Sources for the PR body, in order of preference:
+1. Caller passes the PR body as context (preferred — CI does this).
+2. `gh pr view <N> --json body -q .body` if `gh` is on PATH and the PR is known.
+3. If neither is available, note `IMPACT CROSS-CHECK: skipped — no PR body supplied` in the report and continue with the normal audit.
+
+Mismatches that are **blockers**:
+- Diff touches `utils/surge_engine.py`, `routes/admin/*surge*`, or surge
+  application in `fare_service.py` but `Money-touching` is unticked
+- Diff raises `SURGE_CAP` above `2.5` or widens an auto-mode tier without an
+  ADR link in the PR body — this mirrors `spinr-money-auditor`'s own rule,
+  restated here because a surge-only diff might not otherwise trip that
+  agent's file-scope trigger
+- `Risk: low` on a diff that changes the admin manual-override validation
+  (the >2.5× justification-required path) — a broken validation here lets
+  an unjustified >2.5× charge reach a rider
+
+Mismatches that are **warnings**:
+- `Rollback plan: git-revert-safe` on a diff that changes the surge engine's
+  2-minute cadence or its `surge_source == 'auto'` scoping — a bad revert
+  mid-cycle can leave a service area's multiplier stale; worth a one-line
+  note on recovery
+- Diff touches scheduled-ride fare calc but doesn't mention the
+  never-outside-surge-window exclusion anywhere in the PR body
+
+Output these under a new `IMPACT MISMATCHES` section — see the output format below.
 
 # How to audit
 
@@ -66,6 +112,9 @@ BLOCKERS  (cap breach, retroactive surge, surge on corporate/scheduled rides)
 
 WARNINGS  (missing justification field, engine-scope risk)
   - [rule #N] <file>:<line> — <one-line problem>
+
+IMPACT MISMATCHES  (declared in PR body vs actual diff)
+  - [blocker|warning] <declared X> but diff <actually does Y> → <fix: tick money box / cite ADR / widen rollback plan>
 
 VERIFIED  (checked and clean)
   - <e.g. "Corporate payment branch excludes surge_multiplier before total calc">

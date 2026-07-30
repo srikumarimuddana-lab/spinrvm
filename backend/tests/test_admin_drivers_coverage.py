@@ -65,7 +65,7 @@ class TestDriverAction:
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-1")),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock()),
         ):
             resp = self._post(test_client, "approve")
         assert resp.status_code == 200, resp.text
@@ -88,7 +88,7 @@ class TestDriverAction:
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-2")),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock()),
         ):
             resp = self._post(test_client, "suspend", reason="fraud report")
         assert resp.status_code == 200, resp.text
@@ -109,7 +109,7 @@ class TestDriverAction:
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-3")),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock()),
         ):
             resp = self._post(test_client, "ban", reason="safety violation")
         assert resp.status_code == 200, resp.text
@@ -124,7 +124,7 @@ class TestDriverAction:
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-4")),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock()),
         ):
             resp = self._post(test_client, "unban")
         assert resp.status_code == 200, resp.text
@@ -139,7 +139,7 @@ class TestDriverAction:
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-5")),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock()),
         ):
             resp = self._post(test_client, "reactivate")
         assert resp.status_code == 200, resp.text
@@ -217,7 +217,7 @@ class TestDriverAction:
             patch("db_supabase.update_one", AsyncMock()),
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-6")),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock(side_effect=RuntimeError("fcm down"))),
+            patch("features.send_push_notification", AsyncMock(side_effect=RuntimeError("fcm down"))),
         ):
             resp = self._post(test_client, "approve")
         assert resp.status_code == 200, resp.text
@@ -239,7 +239,7 @@ class TestStatusOverride:
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock()),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock()),
         ):
             resp = test_client.put(
                 "/api/admin/drivers/drv-1/status-override",
@@ -256,7 +256,7 @@ class TestStatusOverride:
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("db_supabase.insert_one", AsyncMock()),
             patch("routes.admin.drivers.log_admin_action", AsyncMock()),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock()),
         ):
             resp = test_client.put("/api/admin/drivers/drv-1/status-override", json={"status": "needs_review"})
         assert resp.status_code == 200, resp.text

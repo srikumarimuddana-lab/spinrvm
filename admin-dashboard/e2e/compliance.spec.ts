@@ -84,7 +84,14 @@ test.describe('admin dashboard: compliance — interaction', () => {
     await page.goto('/dashboard/compliance');
     await page.getByRole('tab', { name: /sgi insurance billing/i }).click();
     await expect(page.getByText('$0.11/km', { exact: false })).toBeVisible({ timeout: 20000 });
-    await expect(page.getByText('Rate', { exact: false })).toHaveCount(0);
+    // The old "Insurance Usage Billing" tab had a "Rate (cents/km)" text
+    // input with this exact placeholder for the admin-entered rate; the
+    // rate is now fixed server-side, so no such field should exist. (Not
+    // asserting on the substring "rate" anywhere on the page — the
+    // CardDescription prose legitimately mentions "SGI's contracted rate"
+    // and the info hint does too, both case-insensitive matches for
+    // getByText, which is what made this test flaky before.)
+    await expect(page.getByPlaceholder('e.g. 45.00')).toHaveCount(0);
   });
 
   test('SGI Insurance Billing Download button triggers a file download', async ({ page }) => {

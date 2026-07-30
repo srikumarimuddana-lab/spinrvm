@@ -16,24 +16,56 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 import { useAuthStore } from "@/store/authStore";
 import {
     downloadAirportTrips,
+    downloadDriverRoster,
     downloadGstPstRemittance,
-    downloadInsurancePeriodAudit,
-    downloadInsuranceUsageBilling,
-    downloadKnightArcherDriverOnboarding,
+    downloadInsuranceBillingKnightArcher,
+    downloadInsuranceBillingSgi,
     downloadT4aFilerHandoff,
+    emailDriverRoster,
     emailGstPstRemittance,
-    emailInsurancePeriodAudit,
-    emailKnightArcherDriverOnboarding,
+    emailInsuranceBillingKnightArcher,
+    emailInsuranceBillingSgi,
     type ComplianceReportFormat,
 } from "@/lib/api";
 
-const DATE_RANGES = [
-    { value: "today", label: "Today" },
-    { value: "7d", label: "7 Days" },
-    { value: "30d", label: "30 Days" },
-    { value: "90d", label: "90 Days" },
-    { value: "1y", label: "1 Year" },
-];
+/** 1st of the current month, and today — the default window every
+ * date-ranged Compliance report uses when an admin hasn't picked their
+ * own From/To. YYYY-MM-DD, matching the backend's date_from/date_to. */
+function monthToDateDefaults(): { from: string; to: string } {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth(), 1);
+    const toIso = (d: Date) => d.toISOString().slice(0, 10);
+    return { from: toIso(from), to: toIso(now) };
+}
+
+/** Shared From/To date-range control for every date-ranged Compliance
+ * report — replaces the old rolling-N-days shorthand dropdown. Defaults
+ * to the current calendar month, matching the backend's own default when
+ * date_from/date_to are omitted. */
+function DateRangeFields({
+    from,
+    to,
+    onFromChange,
+    onToChange,
+}: {
+    from: string;
+    to: string;
+    onFromChange: (v: string) => void;
+    onToChange: (v: string) => void;
+}) {
+    return (
+        <>
+            <div className="space-y-1.5">
+                <Label>From</Label>
+                <Input type="date" className="w-40" value={from} onChange={(e) => onFromChange(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+                <Label>To</Label>
+                <Input type="date" className="w-40" value={to} onChange={(e) => onToChange(e.target.value)} />
+            </div>
+        </>
+    );
+}
 
 const FORMATS: { value: ComplianceReportFormat; label: string }[] = [
     { value: "pdf", label: "PDF" },
@@ -89,33 +121,38 @@ export default function CompliancePage() {
     const { allowed } = useRequireModule("compliance");
     const { toast } = useToast();
 
-    const [gstPstRange, setGstPstRange] = useState("30d");
+    const monthDefaults = monthToDateDefaults();
+
+    const [gstPstFrom, setGstPstFrom] = useState(monthDefaults.from);
+    const [gstPstTo, setGstPstTo] = useState(monthDefaults.to);
     const [gstPstFormat, setGstPstFormat] = useState<ComplianceReportFormat>("pdf");
     const [gstPstLoading, setGstPstLoading] = useState(false);
     const [gstPstEmailLoading, setGstPstEmailLoading] = useState(false);
 
-    const [auditRange, setAuditRange] = useState("30d");
-    const [auditFormat, setAuditFormat] = useState<ComplianceReportFormat>("pdf");
-    const [auditDriverId, setAuditDriverId] = useState("");
-    const [auditLoading, setAuditLoading] = useState(false);
-    const [auditEmailLoading, setAuditEmailLoading] = useState(false);
-
-    const [kaFormat, setKaFormat] = useState<ComplianceReportFormat>("pdf");
-    const [kaStatus, setKaStatus] = useState("all");
-    const [kaLoading, setKaLoading] = useState(false);
-    const [kaEmailLoading, setKaEmailLoading] = useState(false);
+    const [rosterFormat, setRosterFormat] = useState<ComplianceReportFormat>("pdf");
+    const [rosterStatus, setRosterStatus] = useState("all");
+    const [rosterLoading, setRosterLoading] = useState(false);
+    const [rosterEmailLoading, setRosterEmailLoading] = useState(false);
 
     const [t4aYear, setT4aYear] = useState(new Date().getFullYear() - 1);
     const [t4aFormat, setT4aFormat] = useState<ComplianceReportFormat>("xlsx");
     const [t4aLoading, setT4aLoading] = useState(false);
     const isSuperAdmin = useAuthStore((s) => s.user?.role === "super_admin");
 
-    const [ubiRange, setUbiRange] = useState("30d");
-    const [ubiRate, setUbiRate] = useState("");
-    const [ubiFormat, setUbiFormat] = useState<ComplianceReportFormat>("pdf");
-    const [ubiLoading, setUbiLoading] = useState(false);
+    const [sgiFrom, setSgiFrom] = useState(monthDefaults.from);
+    const [sgiTo, setSgiTo] = useState(monthDefaults.to);
+    const [sgiFormat, setSgiFormat] = useState<ComplianceReportFormat>("pdf");
+    const [sgiLoading, setSgiLoading] = useState(false);
+    const [sgiEmailLoading, setSgiEmailLoading] = useState(false);
 
-    const [airportRange, setAirportRange] = useState("30d");
+    const [kaFrom, setKaFrom] = useState(monthDefaults.from);
+    const [kaTo, setKaTo] = useState(monthDefaults.to);
+    const [kaFormat, setKaFormat] = useState<ComplianceReportFormat>("pdf");
+    const [kaLoading, setKaLoading] = useState(false);
+    const [kaEmailLoading, setKaEmailLoading] = useState(false);
+
+    const [airportFrom, setAirportFrom] = useState(monthDefaults.from);
+    const [airportTo, setAirportTo] = useState(monthDefaults.to);
     const [airportFormat, setAirportFormat] = useState<ComplianceReportFormat>("pdf");
     const [airportLoading, setAirportLoading] = useState(false);
 
@@ -135,7 +172,7 @@ export default function CompliancePage() {
     const onDownloadGstPst = async () => {
         setGstPstLoading(true);
         try {
-            const { blob, filename } = await downloadGstPstRemittance(gstPstRange, gstPstFormat);
+            const { blob, filename } = await downloadGstPstRemittance(gstPstFormat, gstPstFrom, gstPstTo);
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -146,7 +183,7 @@ export default function CompliancePage() {
     const onEmailGstPst = async (email: string) => {
         setGstPstEmailLoading(true);
         try {
-            await emailGstPstRemittance(gstPstRange, gstPstFormat, email);
+            await emailGstPstRemittance(gstPstFormat, email, gstPstFrom, gstPstTo);
             onEmailed(email);
         } catch (e: any) {
             onEmailError(e);
@@ -155,56 +192,29 @@ export default function CompliancePage() {
         }
     };
 
-    const onDownloadAudit = async () => {
-        setAuditLoading(true);
+    const onDownloadRoster = async () => {
+        setRosterLoading(true);
         try {
-            const { blob, filename } = await downloadInsurancePeriodAudit(
-                auditRange,
-                auditFormat,
-                auditDriverId.trim() || undefined,
+            const { blob, filename } = await downloadDriverRoster(
+                rosterFormat,
+                rosterStatus === "all" ? undefined : rosterStatus,
             );
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
         } finally {
-            setAuditLoading(false);
+            setRosterLoading(false);
         }
     };
-    const onEmailAudit = async (email: string) => {
-        setAuditEmailLoading(true);
+    const onEmailRoster = async (email: string) => {
+        setRosterEmailLoading(true);
         try {
-            await emailInsurancePeriodAudit(auditRange, auditFormat, email, auditDriverId.trim() || undefined);
+            await emailDriverRoster(rosterFormat, email, rosterStatus === "all" ? undefined : rosterStatus);
             onEmailed(email);
         } catch (e: any) {
             onEmailError(e);
         } finally {
-            setAuditEmailLoading(false);
-        }
-    };
-
-    const onDownloadKa = async () => {
-        setKaLoading(true);
-        try {
-            const { blob, filename } = await downloadKnightArcherDriverOnboarding(
-                kaFormat,
-                kaStatus === "all" ? undefined : kaStatus,
-            );
-            triggerBrowserDownload(blob, filename);
-        } catch (e: any) {
-            onError(e);
-        } finally {
-            setKaLoading(false);
-        }
-    };
-    const onEmailKa = async (email: string) => {
-        setKaEmailLoading(true);
-        try {
-            await emailKnightArcherDriverOnboarding(kaFormat, email, kaStatus === "all" ? undefined : kaStatus);
-            onEmailed(email);
-        } catch (e: any) {
-            onEmailError(e);
-        } finally {
-            setKaEmailLoading(false);
+            setRosterEmailLoading(false);
         }
     };
 
@@ -220,23 +230,56 @@ export default function CompliancePage() {
         }
     };
 
-    const ubiRateValid = /^\d+(\.\d{1,2})?$/.test(ubiRate.trim()) && Number(ubiRate) > 0;
-    const onDownloadUbi = async () => {
-        setUbiLoading(true);
+    const onDownloadSgi = async () => {
+        setSgiLoading(true);
         try {
-            const { blob, filename } = await downloadInsuranceUsageBilling(ubiRange, Number(ubiRate), ubiFormat);
+            const { blob, filename } = await downloadInsuranceBillingSgi(sgiFormat, sgiFrom, sgiTo);
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
         } finally {
-            setUbiLoading(false);
+            setSgiLoading(false);
+        }
+    };
+    const onEmailSgi = async (email: string) => {
+        setSgiEmailLoading(true);
+        try {
+            await emailInsuranceBillingSgi(sgiFormat, email, sgiFrom, sgiTo);
+            onEmailed(email);
+        } catch (e: any) {
+            onEmailError(e);
+        } finally {
+            setSgiEmailLoading(false);
+        }
+    };
+
+    const onDownloadKa = async () => {
+        setKaLoading(true);
+        try {
+            const { blob, filename } = await downloadInsuranceBillingKnightArcher(kaFormat, kaFrom, kaTo);
+            triggerBrowserDownload(blob, filename);
+        } catch (e: any) {
+            onError(e);
+        } finally {
+            setKaLoading(false);
+        }
+    };
+    const onEmailKa = async (email: string) => {
+        setKaEmailLoading(true);
+        try {
+            await emailInsuranceBillingKnightArcher(kaFormat, email, kaFrom, kaTo);
+            onEmailed(email);
+        } catch (e: any) {
+            onEmailError(e);
+        } finally {
+            setKaEmailLoading(false);
         }
     };
 
     const onDownloadAirport = async () => {
         setAirportLoading(true);
         try {
-            const { blob, filename } = await downloadAirportTrips(airportRange, airportFormat);
+            const { blob, filename } = await downloadAirportTrips(airportFormat, airportFrom, airportTo);
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -250,21 +293,21 @@ export default function CompliancePage() {
             <div>
                 <h1 className="text-2xl font-semibold">Compliance & Tax Reporting</h1>
                 <p className="text-muted-foreground">
-                    Spinr-branded regulatory and tax exports — GST/PST remittance and insurance-period
-                    audit trails. Every export here is logged with the requesting admin, date range, and
-                    row count for a future privacy/regulatory audit. Fixed-format regulator documents
-                    (SGI D00032/D00033) live under Data Transfer instead — this module never re-styles
-                    those into Spinr branding.
+                    Spinr-branded regulatory and tax exports — GST/PST remittance, per-insurer usage-based
+                    billing, and driver roster. Every export here is logged with the requesting admin, date
+                    range, and row count for a future privacy/regulatory audit. Fixed-format regulator
+                    documents (SGI D00032/D00033) live under Data Transfer instead — this module never
+                    re-styles those into Spinr branding.
                 </p>
             </div>
 
             <Tabs defaultValue="gst-pst">
                 <TabsList>
                     <TabsTrigger value="gst-pst">GST/PST Remittance</TabsTrigger>
-                    <TabsTrigger value="insurance-audit">Insurance-Period Audit</TabsTrigger>
-                    <TabsTrigger value="knight-archer">Knight Archer Driver Onboarding</TabsTrigger>
+                    <TabsTrigger value="insurance-billing-sgi">SGI Insurance Billing</TabsTrigger>
+                    <TabsTrigger value="insurance-billing-ka">Knight Archer Insurance Billing</TabsTrigger>
+                    <TabsTrigger value="driver-roster">Driver Roster</TabsTrigger>
                     {isSuperAdmin && <TabsTrigger value="t4a-filer">T4A Filer Handoff</TabsTrigger>}
-                    <TabsTrigger value="insurance-billing">Insurance Usage Billing</TabsTrigger>
                     <TabsTrigger value="airport-trips">Airport Trips</TabsTrigger>
                 </TabsList>
 
@@ -282,19 +325,12 @@ export default function CompliancePage() {
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
-                                <div className="space-y-1.5">
-                                    <Label>Date range</Label>
-                                    <Select value={gstPstRange} onValueChange={setGstPstRange}>
-                                        <SelectTrigger className="w-40">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {DATE_RANGES.map((r) => (
-                                                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                                <DateRangeFields
+                                    from={gstPstFrom}
+                                    to={gstPstTo}
+                                    onFromChange={setGstPstFrom}
+                                    onToChange={setGstPstTo}
+                                />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select
@@ -325,50 +361,34 @@ export default function CompliancePage() {
                     </Card>
                 </TabsContent>
 
-                <TabsContent value="insurance-audit">
+                <TabsContent value="insurance-billing-sgi">
                     <Card>
                         <CardHeader>
                             <CardTitle className="flex items-center gap-2">
                                 <FileText className="h-5 w-5" />
-                                Driver Insurance-Period Audit
+                                SGI Insurance Billing
                             </CardTitle>
-                            <CardDescription>
-                                Every driver insurance-period transition (offline / available / en-route /
-                                passenger-aboard) in the requested window — for an SGI or future province&apos;s
-                                regulator audit of TNC insurance-period classification. Leave driver ID blank
-                                for all drivers.
+                            <CardDescription className="flex items-start gap-1.5">
+                                <span>
+                                    Per-trip, per-phase insured kilometres for every driver in Period 2 (en
+                                    route to pickup) or Period 3 (passenger aboard), Spinr&apos;s primary-
+                                    commercial insurance coverage — billed at SGI&apos;s contracted rate,
+                                    $0.11/km. Monthly cadence by default.
+                                </span>
+                                <Hint text="Rate is fixed at $0.11/km, not entered per-report — SGI's contracted rate doesn't change report to report, and a fixed rate removes the chance of a typo misstating the invoice. Each row is one trip's one phase, showing that phase's own GPS-measured distance, not a per-driver total, so SGI can audit down to the trip." />
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
-                                <div className="space-y-1.5">
-                                    <Label>Date range</Label>
-                                    <Select value={auditRange} onValueChange={setAuditRange}>
-                                        <SelectTrigger className="w-40">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {DATE_RANGES.map((r) => (
-                                                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <Label>Driver ID (optional)</Label>
-                                    <Input
-                                        className="w-56"
-                                        placeholder="All drivers"
-                                        value={auditDriverId}
-                                        onChange={(e) => setAuditDriverId(e.target.value)}
-                                    />
-                                </div>
+                                <DateRangeFields
+                                    from={sgiFrom}
+                                    to={sgiTo}
+                                    onFromChange={setSgiFrom}
+                                    onToChange={setSgiTo}
+                                />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
-                                    <Select
-                                        value={auditFormat}
-                                        onValueChange={(v) => setAuditFormat(v as ComplianceReportFormat)}
-                                    >
+                                    <Select value={sgiFormat} onValueChange={(v) => setSgiFormat(v as ComplianceReportFormat)}>
                                         <SelectTrigger className="w-32">
                                             <SelectValue />
                                         </SelectTrigger>
@@ -379,52 +399,39 @@ export default function CompliancePage() {
                                         </SelectContent>
                                     </Select>
                                 </div>
-                                <Button onClick={onDownloadAudit} disabled={auditLoading}>
-                                    {auditLoading ? (
+                                <Button onClick={onDownloadSgi} disabled={sgiLoading}>
+                                    {sgiLoading ? (
                                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                     ) : (
                                         <Download className="h-4 w-4 mr-2" />
                                     )}
                                     Download
                                 </Button>
-                                <EmailReportControl onSend={onEmailAudit} loading={auditEmailLoading} />
+                                <EmailReportControl onSend={onEmailSgi} loading={sgiEmailLoading} />
                             </div>
                         </CardContent>
                     </Card>
                 </TabsContent>
 
-                <TabsContent value="knight-archer">
+                <TabsContent value="insurance-billing-ka">
                     <Card>
                         <CardHeader>
                             <CardTitle className="flex items-center gap-2">
                                 <FileText className="h-5 w-5" />
-                                Knight Archer Insurance — Driver Onboarding
+                                Knight Archer Insurance Billing
                             </CardTitle>
                             <CardDescription className="flex items-start gap-1.5">
                                 <span>
-                                    Driver name, license number, license class, and current status for every
-                                    onboarded driver — sent to Knight Archer Insurance. Includes drivers of
-                                    every status by default (not just active) unless you filter below.
+                                    Same per-trip, per-phase insured kilometres as the SGI report, billed at
+                                    Knight Archer&apos;s contracted rate, $0.011/km. Monthly cadence by
+                                    default.
                                 </span>
-                                <Hint text="Knight Archer needs the full roster including pending/needs_review/suspended/banned drivers, not just active ones — that's why 'All statuses' is the default here." />
+                                <Hint text="Rate is fixed at $0.011/km, not entered per-report. Only Periods 2 and 3 count — Period 1 (available, no assigned ride) is contingent-liability coverage, billed differently." />
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
-                                <div className="space-y-1.5">
-                                    <Label>Status</Label>
-                                    <Select value={kaStatus} onValueChange={setKaStatus}>
-                                        <SelectTrigger className="w-44">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="all">All statuses</SelectItem>
-                                            {DRIVER_STATUSES.map((s) => (
-                                                <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                                <DateRangeFields from={kaFrom} to={kaTo} onFromChange={setKaFrom} onToChange={setKaTo} />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={kaFormat} onValueChange={(v) => setKaFormat(v as ComplianceReportFormat)}>
@@ -447,6 +454,69 @@ export default function CompliancePage() {
                                     Download
                                 </Button>
                                 <EmailReportControl onSend={onEmailKa} loading={kaEmailLoading} />
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="driver-roster">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <FileText className="h-5 w-5" />
+                                Driver Roster
+                            </CardTitle>
+                            <CardDescription className="flex items-start gap-1.5">
+                                <span>
+                                    Driver name, license number, license class, and current status for every
+                                    onboarded driver. Originally built to keep Knight Archer Insurance current
+                                    on active drivers monthly — includes every status by default (not just
+                                    active) unless you filter below.
+                                </span>
+                                <Hint text="Knight Archer needs the full roster including pending/needs_review/suspended/banned drivers, not just active ones — that's why 'All statuses' is the default here." />
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex flex-wrap items-end gap-4">
+                                <div className="space-y-1.5">
+                                    <Label>Status</Label>
+                                    <Select value={rosterStatus} onValueChange={setRosterStatus}>
+                                        <SelectTrigger className="w-44">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All statuses</SelectItem>
+                                            {DRIVER_STATUSES.map((s) => (
+                                                <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <Label>Format</Label>
+                                    <Select
+                                        value={rosterFormat}
+                                        onValueChange={(v) => setRosterFormat(v as ComplianceReportFormat)}
+                                    >
+                                        <SelectTrigger className="w-32">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {FORMATS.map((f) => (
+                                                <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <Button onClick={onDownloadRoster} disabled={rosterLoading}>
+                                    {rosterLoading ? (
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Download className="h-4 w-4 mr-2" />
+                                    )}
+                                    Download
+                                </Button>
+                                <EmailReportControl onSend={onEmailRoster} loading={rosterEmailLoading} />
                             </div>
                         </CardContent>
                     </Card>
@@ -518,78 +588,6 @@ export default function CompliancePage() {
                     </TabsContent>
                 )}
 
-                <TabsContent value="insurance-billing">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <FileText className="h-5 w-5" />
-                                Insurance Usage-Based Billing
-                            </CardTitle>
-                            <CardDescription className="flex items-start gap-1.5">
-                                <span>
-                                    Per-driver insured kilometres — driving time while a driver is in Period 2
-                                    (en route to pickup) or Period 3 (passenger aboard), Spinr&apos;s primary-
-                                    commercial insurance coverage — and the resulting bill at the rate you
-                                    enter below, for reconciling the insurer&apos;s usage-based invoice.
-                                </span>
-                                <Hint text="Only Periods 2 and 3 count — Period 1 (available, no assigned ride) is contingent-liability coverage, billed differently by most TNC insurance policies. There's no built-in rate: enter your contracted cents/km figure each time so a wrong number is obvious on the report before it's sent, not after the insurer disputes it." />
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="flex flex-wrap items-end gap-4">
-                                <div className="space-y-1.5">
-                                    <Label>Date range</Label>
-                                    <Select value={ubiRange} onValueChange={setUbiRange}>
-                                        <SelectTrigger className="w-32">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {DATE_RANGES.map((r) => (
-                                                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <Label>Rate (cents/km)</Label>
-                                    <Input
-                                        type="text"
-                                        inputMode="decimal"
-                                        placeholder="e.g. 45.00"
-                                        className="w-32"
-                                        value={ubiRate}
-                                        onChange={(e) => setUbiRate(e.target.value)}
-                                    />
-                                </div>
-                                <div className="space-y-1.5">
-                                    <Label>Format</Label>
-                                    <Select value={ubiFormat} onValueChange={(v) => setUbiFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {FORMATS.map((f) => (
-                                                <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <Button onClick={onDownloadUbi} disabled={!ubiRateValid || ubiLoading}>
-                                    {ubiLoading ? (
-                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                    ) : (
-                                        <Download className="h-4 w-4 mr-2" />
-                                    )}
-                                    Download
-                                </Button>
-                            </div>
-                            {!ubiRateValid && ubiRate.trim().length > 0 && (
-                                <p className="text-xs text-destructive">Enter a positive number, e.g. 45 or 45.00.</p>
-                            )}
-                        </CardContent>
-                    </Card>
-                </TabsContent>
-
                 <TabsContent value="airport-trips">
                     <Card>
                         <CardHeader>
@@ -608,19 +606,12 @@ export default function CompliancePage() {
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
-                                <div className="space-y-1.5">
-                                    <Label>Date range</Label>
-                                    <Select value={airportRange} onValueChange={setAirportRange}>
-                                        <SelectTrigger className="w-32">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {DATE_RANGES.map((r) => (
-                                                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                                <DateRangeFields
+                                    from={airportFrom}
+                                    to={airportTo}
+                                    onFromChange={setAirportFrom}
+                                    onToChange={setAirportTo}
+                                />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={airportFormat} onValueChange={(v) => setAirportFormat(v as ComplianceReportFormat)}>

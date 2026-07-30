@@ -24,7 +24,9 @@ class TestReportFormatRegistry:
 
     def test_compliance_reports_are_branded(self):
         assert report_branding.report_mode("gst_pst_remittance") == "branded"
-        assert report_branding.report_mode("insurance_period_audit") == "branded"
+        assert report_branding.report_mode("insurance_billing_sgi") == "branded"
+        assert report_branding.report_mode("insurance_billing_knight_archer") == "branded"
+        assert report_branding.report_mode("driver_roster") == "branded"
         assert report_branding.report_mode("dsar_lookup") == "branded"
 
     def test_unregistered_report_type_raises(self):

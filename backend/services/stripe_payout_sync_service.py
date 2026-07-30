@@ -114,16 +114,36 @@ def _transfer_created_iso(created_epoch: int) -> str:
     return datetime.fromtimestamp(int(created_epoch), tz=timezone.utc).isoformat()
 
 
+# PostgREST caps an unbounded select at its db-max-rows setting (1000 on
+# Supabase by default) WITHOUT signalling truncation. Paging explicitly is the
+# only way to be sure every mapped driver is considered — a silently dropped
+# driver would leave their payout history unsynced and under-report their T4A.
+_PAGE_SIZE = 500
+
+
 def _fetch_sync_targets(driver_ids: list[str] | None) -> list[dict[str, Any]]:
     """Drivers that have a Stripe Connect account mapped (sync candidates)."""
-    query = supabase.table("drivers").select("id,stripe_account_id")
+    rows: list[dict[str, Any]] = []
     if driver_ids:
-        rows: list[dict[str, Any]] = []
         for i in range(0, len(driver_ids), 200):
             batch = driver_ids[i : i + 200]
             rows.extend(supabase.table("drivers").select("id,stripe_account_id").in_("id", batch).execute().data or [])
     else:
-        rows = query.execute().data or []
+        offset = 0
+        while True:
+            page = (
+                supabase.table("drivers")
+                .select("id,stripe_account_id")
+                .order("id")
+                .range(offset, offset + _PAGE_SIZE - 1)
+                .execute()
+                .data
+                or []
+            )
+            rows.extend(page)
+            if len(page) < _PAGE_SIZE:
+                break
+            offset += _PAGE_SIZE
     return [d for d in rows if d.get("stripe_account_id")]
 
 

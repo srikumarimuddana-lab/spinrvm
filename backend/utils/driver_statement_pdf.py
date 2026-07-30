@@ -16,6 +16,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+# Payout rows rendered before the table is capped. Overflow is disclosed in the
+# document (see the "+N more" line) — never silently dropped, since the total
+# underneath always covers every payout.
+_MAX_PAYOUT_ROWS = 40
+
 
 def generate_driver_statement_pdf(statement: dict) -> bytes:
     """Return the statement PDF as raw bytes (starts with b'%PDF')."""
@@ -129,7 +134,7 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
             pdf.cell(width, 6.5, head, border=0, fill=True, align="R" if head in ("Amount", "Fee", "Net") else "L")
         pdf.ln()
         pdf.set_font("Helvetica", "", 8.5)
-        for p in payouts[:40]:  # one page worth; the app has the full list
+        for p in payouts[:_MAX_PAYOUT_ROWS]:
             status = str(p.get("status") or "")
             marker = "" if status in ("completed", "paid") else f"({status})"
             pdf.cell(cols[0], 6, str(p.get("date") or ""), border=0)
@@ -141,6 +146,23 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
             pdf.cell(cols[5], 6, marker, border=0)
             pdf.set_font("Helvetica", "", 8.5)
             pdf.ln()
+        # Never let the row cap be silent: the total below covers EVERY payout,
+        # so a truncated table without this line would look like the numbers
+        # don't add up on a document a driver may file for tax.
+        hidden = len(payouts) - _MAX_PAYOUT_ROWS
+        if hidden > 0:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.set_text_color(*muted)
+            pdf.cell(
+                W,
+                5.5,
+                f"+ {hidden} more payout{'' if hidden == 1 else 's'} not shown "
+                f"(showing the first {_MAX_PAYOUT_ROWS} of {len(payouts)}). "
+                "The total below includes all of them; the full list is in the app.",
+                border=0,
+                ln=True,
+            )
+            pdf.set_text_color(*ink)
         pdf.ln(1)
         pdf.set_draw_color(*rule)
         pdf.line(15, pdf.get_y(), 15 + W, pdf.get_y())

@@ -184,6 +184,20 @@ Stripe-side remediation.
   compare `stats.sum_by_year` against the Stripe dashboard's transfer totals
   before committing.
 
+## 9b. Self-review finding (found and fixed before merge)
+
+**`_fetch_sync_targets` silently processed at most ~1000 drivers.** The
+all-drivers branch called `.execute()` with no `.limit()` / `.range()`, so
+PostgREST's `db-max-rows` (1000 on Supabase) capped the result **with no
+truncation signal**. Every driver past the cap would have been skipped
+without appearing in the report's `drivers_scanned` as missing — leaving
+their legacy payout history unsynced and, because this feeds the T4A slip,
+under-reporting their income to the CRA. Fixed with explicit
+`.order("id").range(...)` pagination; the test fake now models the
+server-side cap and a new test with 1250 drivers proves all are scanned.
+Severity: medium (CRA reporting), reachable as soon as driver count exceeds
+1000 — the legacy import alone brought in ~900.
+
 ## What was NOT verified
 
 - Not tested against live Supabase or live Stripe — only mocked clients

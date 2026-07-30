@@ -27,14 +27,6 @@ _RIDE_ROW = {
     "ride_completed_at": "2026-07-05T10:00:00Z",
     "tax_breakdown": {"GST": {"amount": 5.0}, "PST": {"amount": 6.0}},
 }
-_PERIOD_ROW = {
-    "id": "p1",
-    "driver_id": "d1",
-    "period": 2,
-    "started_at": "2026-07-01T09:00:00Z",
-    "ended_at": None,
-    "ride_id": "r1",
-}
 _DRIVER_ROW = {"id": "d1", "name": "Jane Doe", "first_name": "Jane", "last_name": "Doe"}
 
 
@@ -51,8 +43,6 @@ def admin_client(test_client):
 def _get_rows_side(table, filters=None, **kw):
     if table == "rides":
         return [_RIDE_ROW]
-    if table == "driver_insurance_periods":
-        return [_PERIOD_ROW]
     if table == "drivers":
         return [_DRIVER_ROW]
     return []
@@ -63,9 +53,9 @@ def _get_rows_side(table, filters=None, **kw):
 
 def test_compliance_routes_require_admin_auth(test_client):
     gst = test_client.get("/api/admin/compliance/gst-pst-remittance")
-    audit = test_client.get("/api/admin/compliance/insurance-period-audit")
+    billing = test_client.get("/api/admin/compliance/insurance-billing-sgi")
     assert gst.status_code in (401, 403)
-    assert audit.status_code in (401, 403)
+    assert billing.status_code in (401, 403)
 
 
 def test_compliance_routes_denied_without_module_grant(test_client):
@@ -156,9 +146,32 @@ def test_gst_pst_remittance_rejects_invalid_format(admin_client):
     assert resp.status_code == 422
 
 
-def test_gst_pst_remittance_rejects_invalid_date_range(admin_client):
-    resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?date_range=lifetime")
+def test_gst_pst_remittance_rejects_invalid_date_from(admin_client):
+    resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?date_from=not-a-date")
     assert resp.status_code == 422
+
+
+def test_gst_pst_remittance_rejects_date_from_after_date_to(admin_client):
+    resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?date_from=2026-07-20&date_to=2026-07-01")
+    assert resp.status_code == 422
+
+
+def test_gst_pst_remittance_defaults_to_month_to_date(admin_client):
+    # No date_from/date_to supplied -> window defaults to the 1st of the
+    # current month through today, not an unbounded/all-time query.
+    from backend.utils import report_branding as rb
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("backend.routes.admin.compliance.report_branding.new_branded_pdf", wraps=rb.new_branded_pdf) as new_pdf,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 200
+    subtitle_arg = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
+    date_line = subtitle_arg[0]
+    start_str, _, end_str = date_line.partition(" to ")
+    assert start_str.endswith("-01")  # 1st of the month
 
 
 def test_gst_pst_remittance_503_on_db_failure(admin_client):
@@ -270,80 +283,9 @@ def test_gst_pst_remittance_gate_consumes_approved_grant_and_proceeds(admin_clie
     consume.assert_awaited_once_with("req-approved")
 
 
-def test_insurance_period_audit_gate_blocks_without_approval(admin_client):
-    with (
-        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
-        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
-        patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
-        patch(
-            "routes.admin.compliance.admin_export_approvals.find_approved_grant", AsyncMock(return_value=None)
-        ),
-        patch(
-            "routes.admin.compliance.admin_export_approvals.find_pending_request", AsyncMock(return_value=None)
-        ),
-        patch(
-            "routes.admin.compliance.admin_export_approvals.create_request",
-            AsyncMock(return_value={"id": "req-2", "status": "pending"}),
-        ) as create,
-    ):
-        resp = admin_client.get("/api/admin/compliance/insurance-period-audit")
-    assert resp.status_code == 202
-    assert resp.json()["request_id"] == "req-2"
-    assert create.call_args.kwargs["route_key"] == "compliance.insurance_period_audit"
+# ── driver-roster (formerly knight-archer-driver-onboarding) ────────────────
 
-
-# ── insurance-period-audit ──────────────────────────────────────────────────
-
-
-def test_insurance_period_audit_returns_pdf_by_default(admin_client):
-    with (
-        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
-        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")) as log,
-    ):
-        resp = admin_client.get("/api/admin/compliance/insurance-period-audit")
-    assert resp.status_code == 200
-    assert resp.content.startswith(b"%PDF")
-    assert log.call_args[0][1]["report_type"] == "insurance_period_audit"
-
-
-def test_insurance_period_audit_filters_by_driver_id(admin_client):
-    captured = {}
-
-    async def get_rows_side(table, filters=None, **kw):
-        if table == "driver_insurance_periods":
-            captured.update(filters or {})
-            return [_PERIOD_ROW]
-        if table == "drivers":
-            return [_DRIVER_ROW]
-        return []
-
-    with (
-        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
-        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
-    ):
-        resp = admin_client.get("/api/admin/compliance/insurance-period-audit?driver_id=d1")
-    assert resp.status_code == 200
-    assert captured.get("driver_id") == "d1"
-
-
-def test_insurance_period_audit_503_on_db_failure(admin_client):
-    with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
-        resp = admin_client.get("/api/admin/compliance/insurance-period-audit")
-    assert resp.status_code == 503
-
-
-def test_insurance_period_audit_empty_result_still_200(admin_client):
-    with (
-        patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
-        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
-    ):
-        resp = admin_client.get("/api/admin/compliance/insurance-period-audit")
-    assert resp.status_code == 200
-
-
-# ── knight-archer-driver-onboarding ─────────────────────────────────────────
-
-_KA_DRIVER_ROW = {
+_ROSTER_DRIVER_ROW = {
     "id": "d1",
     "name": "Jane Doe",
     "first_name": "Jane",
@@ -355,45 +297,45 @@ _KA_DRIVER_ROW = {
 }
 
 
-def test_knight_archer_report_requires_admin_auth(test_client):
-    resp = test_client.get("/api/admin/compliance/knight-archer-driver-onboarding")
+def test_driver_roster_requires_admin_auth(test_client):
+    resp = test_client.get("/api/admin/compliance/driver-roster")
     assert resp.status_code in (401, 403)
 
 
-def test_knight_archer_report_returns_pdf_and_includes_all_statuses(admin_client):
+def test_driver_roster_returns_pdf_and_includes_all_statuses(admin_client):
     with (
-        patch("backend.db_supabase.get_rows", AsyncMock(return_value=[_KA_DRIVER_ROW])),
+        patch("backend.db_supabase.get_rows", AsyncMock(return_value=[_ROSTER_DRIVER_ROW])),
         patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
         patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")) as log,
     ):
-        resp = admin_client.get("/api/admin/compliance/knight-archer-driver-onboarding")
+        resp = admin_client.get("/api/admin/compliance/driver-roster")
     assert resp.status_code == 200
     assert resp.content.startswith(b"%PDF")
-    assert log.call_args[0][1]["report_type"] == "knight_archer_driver_onboarding"
+    assert log.call_args[0][1]["report_type"] == "driver_roster"
     # no status filter passed -> every status is included, not just active
     assert log.call_args[0][1]["params"]["status"] is None
 
 
-def test_knight_archer_report_filters_by_status(admin_client):
+def test_driver_roster_filters_by_status(admin_client):
     captured = {}
 
     async def get_rows_side(table, filters=None, **kw):
         captured["filters"] = filters
-        return [_KA_DRIVER_ROW]
+        return [_ROSTER_DRIVER_ROW]
 
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
         patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
         patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
     ):
-        resp = admin_client.get("/api/admin/compliance/knight-archer-driver-onboarding?status=pending")
+        resp = admin_client.get("/api/admin/compliance/driver-roster?status=pending")
     assert resp.status_code == 200
     assert captured["filters"] == {"status": "pending"}
 
 
-def test_knight_archer_report_503_on_db_failure(admin_client):
+def test_driver_roster_503_on_db_failure(admin_client):
     with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
-        resp = admin_client.get("/api/admin/compliance/knight-archer-driver-onboarding")
+        resp = admin_client.get("/api/admin/compliance/driver-roster")
     assert resp.status_code == 503
 
 
@@ -556,54 +498,59 @@ def test_t4a_filer_handoff_503_on_db_failure(admin_client):
     assert resp.status_code == 503
 
 
-# ── Insurance usage-based billing ────────────────────────────────────────────
+# ── Insurance billing (SGI / Knight Archer, per-trip per-phase) ─────────────
 
-_UBI_PERIOD_2 = {"driver_id": "d1", "period": 2, "ride_id": "r1", "started_at": "2026-07-05T09:00:00Z"}
-_UBI_PERIOD_3 = {"driver_id": "d1", "period": 3, "ride_id": "r1", "started_at": "2026-07-05T09:10:00Z"}
-_UBI_RIDE = {"id": "r1", "distance_km": 12.5}
-_UBI_DRIVER = {"id": "d1", "name": "Jane Doe", "first_name": "Jane", "last_name": "Doe"}
+_PD_PERIOD_2 = {"driver_id": "d1", "period": 2, "ride_id": "r1", "distance_km": 1.5, "started_at": "2026-07-05T09:00:00Z"}
+_PD_PERIOD_3 = {"driver_id": "d1", "period": 3, "ride_id": "r1", "distance_km": 12.5, "started_at": "2026-07-05T09:10:00Z"}
+_PD_DRIVER = {"id": "d1", "name": "Jane Doe", "first_name": "Jane", "last_name": "Doe"}
 
 
-def _ubi_get_rows_side(table, filters=None, **kw):
-    if table == "driver_insurance_periods":
-        return [_UBI_PERIOD_2, _UBI_PERIOD_3]
-    if table == "rides":
-        return [_UBI_RIDE]
+def _period_distance_get_rows_side(table, filters=None, **kw):
+    if table == "driver_period_distances":
+        return [_PD_PERIOD_2, _PD_PERIOD_3]
     if table == "drivers":
-        return [_UBI_DRIVER]
+        return [_PD_DRIVER]
     return []
 
 
-def test_insurance_usage_billing_requires_admin_auth(test_client):
-    resp = test_client.get("/api/admin/compliance/insurance-usage-billing?rate_cents_per_km=45")
+def test_insurance_billing_sgi_requires_admin_auth(test_client):
+    resp = test_client.get("/api/admin/compliance/insurance-billing-sgi")
     assert resp.status_code in (401, 403)
 
 
-def test_insurance_usage_billing_requires_rate_param(admin_client):
-    resp = admin_client.get("/api/admin/compliance/insurance-usage-billing")
-    assert resp.status_code == 422
-
-
-def test_insurance_usage_billing_counts_ride_once_across_periods(admin_client):
-    # Regression: a ride that has BOTH a Period 2 row (en route) and a
-    # Period 3 row (passenger aboard) — the normal lifecycle for every
-    # completed ride — must have its distance counted once, not twice.
+def test_insurance_billing_sgi_uses_fixed_rate_and_shows_each_phase_separately(admin_client):
+    # Regression vs. the retired aggregate report: Period 2 and Period 3
+    # each show their own GPS-measured leg distance (1.5 km, 12.5 km), not
+    # a de-duplicated/summed total — the whole point of the per-trip,
+    # per-phase detail rows. Rate is fixed at $0.11/km, no query param.
     with (
-        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_ubi_get_rows_side)),
-        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_period_distance_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")) as log,
     ):
-        resp = admin_client.get(
-            "/api/admin/compliance/insurance-usage-billing?rate_cents_per_km=45&format=csv"
-        )
+        resp = admin_client.get("/api/admin/compliance/insurance-billing-sgi?format=csv")
     assert resp.status_code == 200
     body = resp.content.decode("utf-8-sig")
-    assert "12.50" in body  # not 25.00 (double-counted)
-    assert "1" in body  # insured_trips = 1, not 2
+    assert "1.500" in body
+    assert "12.500" in body
+    assert "0.11" in body  # rate_per_km column
+    assert "Jane Doe" in body
+    assert log.call_args[0][1]["report_type"] == "insurance_billing_sgi"
 
 
-def test_insurance_usage_billing_503_on_db_failure(admin_client):
+def test_insurance_billing_knight_archer_uses_its_own_fixed_rate(admin_client):
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_period_distance_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/insurance-billing-knight-archer?format=csv")
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+    assert "0.011" in body  # rate_per_km column, Knight Archer's rate
+
+
+def test_insurance_billing_sgi_503_on_db_failure(admin_client):
     with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
-        resp = admin_client.get("/api/admin/compliance/insurance-usage-billing?rate_cents_per_km=45")
+        resp = admin_client.get("/api/admin/compliance/insurance-billing-sgi")
     assert resp.status_code == 503
 
 
@@ -633,7 +580,7 @@ def _airport_get_rows_side(table, filters=None, **kw):
     if table == "rides":
         return [_AIRPORT_RIDE, _NON_AIRPORT_RIDE]
     if table == "drivers":
-        return [_UBI_DRIVER]
+        return [_PD_DRIVER]
     if table == "service_areas":
         return [{"id": "sa1", "name": "Regina"}]
     return []

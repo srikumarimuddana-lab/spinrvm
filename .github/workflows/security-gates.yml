@@ -83,11 +83,51 @@ jobs:
       - name: Lint
         working-directory: ${{ matrix.module }}
         # Respects the repo's own lint script (e.g. admin-dashboard intentionally
-        # allows --max-warnings 600). Security gates are baselining — module
-        # owners tune strictness in their own package.json.
+        # allows --max-warnings 600). Module owners tune strictness in their own
+        # package.json — this gate's job is to make sure the linter actually RAN.
+        #
+        # `|| true` was removed 2026-07-30. It was hiding more than findings: as of
+        # that date `expo lint` fails to start in two of the three modules, and the
+        # swallow reported both as green.
+        #   rider-app  — eslint pinned ^8.57.0 but the Expo flat-config runner
+        #                requires eslint 9's `eslint/config` export:
+        #                ERR_PACKAGE_PATH_NOT_EXPORTED for subpath './config'.
+        #   driver-app — minimatch.braceExpand crash inside @eslint/config-array
+        #                (transitive version conflict; eslint.config.js is fine).
+        # So JS/TS lint has not run for either app. Fixing those needs a dependency
+        # bump verified against each app's build, which is deliberately NOT bundled
+        # into a security-gates change (CLAUDE.md gate 8: do not force a check green
+        # with a version bump you have not verified). Tracked separately.
+        #
+        # ESLint exit codes: 0 clean, 1 lint problems, 2+ fatal (bad config, missing
+        # module, internal crash). Yarn propagates them. Distinguishing 2 from 1 is
+        # the whole point — a linter that cannot start must never look like a clean
+        # one.
         run: |
-          if [ -f yarn.lock ]; then yarn lint || true
-          elif [ -f package-lock.json ]; then npm run lint || true
+          rc=0
+          if [ -f yarn.lock ]; then yarn lint || rc=$?
+          elif [ -f package-lock.json ]; then npm run lint || rc=$?
+          else echo "No lockfile in ${{ matrix.module }}"; exit 0
+          fi
+
+          if [ "$rc" -ge 2 ]; then
+            echo "::error::${{ matrix.module }}: the linter FAILED TO RUN (exit $rc) — broken tooling, not clean code."
+            exit "$rc"
+          fi
+
+          if [ "$rc" -eq 1 ]; then
+            # admin-dashboard is verified enforceable: its own script already
+            # thresholds at --max-warnings 600, and it currently sits at 0 errors /
+            # 319 warnings, so a non-zero exit there is a real regression.
+            if [ "${{ matrix.module }}" = "admin-dashboard" ]; then
+              echo "::error::admin-dashboard lint failed (errors, or warnings over the 600 budget)"
+              exit 1
+            fi
+            # rider-app / driver-app: their linters cannot currently start, so their
+            # finding counts are unknown. Blocking here would block on the tooling
+            # bug above, not on code. Flip these to `exit 1` in the same change that
+            # fixes the eslint versions.
+            echo "::warning::${{ matrix.module }} lint reported problems (not yet blocking — see the eslint tooling note above)"
           fi
 
   # G3 — Semgrep with Spinr-specific ruleset + public registry rules
@@ -244,6 +284,25 @@ jobs:
   gitleaks:
     name: G5a · Gitleaks (git history)
     runs-on: ubuntu-latest
+    # NOT blocking yet — and the reason is important, so do not "clean this up".
+    #
+    # This was briefly flipped to false on the strength of a full-history scan
+    # reporting "no leaks found". That result was worthless: .gitleaks.toml had no
+    # [extend] stanza, so passing --config REPLACED gitleaks' ruleset with zero
+    # rules and the scan could not report anything (fixed 2026-07-30 — see the
+    # comment at the top of .gitleaks.toml). Re-running with rules actually loaded
+    # returned 44,492 findings, so enforcing here would simply have made the
+    # default branch permanently red.
+    #
+    # 44,487 of those are gitleaks' `generic-api-key` entropy heuristic firing on
+    # the committed frontend/.metro-cache build cache, now excluded. The remaining
+    # handful are triaged in
+    # docs/change-log/2026-07-30-secret-scanning-gate-was-vacuous.md — and one of
+    # them is a real, still-valid Supabase service_role key in git history, which
+    # needs rotation before this gate can be honestly enforced.
+    #
+    # Flip to false once the baseline is genuinely clean; do not flip it to make
+    # the gate look enforced.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6

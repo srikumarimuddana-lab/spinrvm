@@ -51,6 +51,26 @@ rules:
           - pattern: float($X)
           - pattern: $AMOUNT * 1.0
           - pattern: $AMOUNT / 1.0
+      # A bare `float($X)` exclusion list, because this rule cited CLAUDE.md's
+      # money convention while flagging the very helpers that convention MANDATES:
+      # "Helpers _d(), _round(), _f() must be used before any DB write or API
+      # response." fare_service._f() is literally `return float(v)` and _fd() is
+      # `return float(_round(_d(v)))`, so the rule fired on the prescribed pattern
+      # and blocking on it would have forced removing it. The risk CLAUDE.md
+      # describes is float *arithmetic*, not the Decimal->float conversion at the
+      # response boundary.
+      - pattern-not-inside: |
+          def _f(...):
+              ...
+      - pattern-not-inside: |
+          def _fd(...):
+              ...
+      # float() wrapping an already-Decimal-rounded value IS the response
+      # boundary. Anything that rounds first has not done float arithmetic.
+      - pattern-not: float(_round(...))
+      - pattern-not: float(_d(...))
+      - pattern-not: float($X.quantize(...))
+      - pattern-not: float(Decimal(...).quantize(...))
     paths:
       include:
         - "backend/routes/fares.py"
@@ -131,7 +151,35 @@ rules:
   # SR-08: JWT role trusted for non-admin (CLAUDE.md rule)
   - id: spinr-jwt-role-must-reread
     patterns:
+      # $TOKEN was unconstrained, which made this rule fire on ANY `.get("role")`
+      # — including `user.get("role")` on a users-table row, which is the exact
+      # pattern CLAUDE.md *prescribes*. That produced 62 findings on its first
+      # real run (the ruleset had never parsed; see the header of this file), all
+      # of them false positives: 31 on `admin`, 18 on DB rows
+      # (user/current_user/updated_user/me/u/actor/reporter), 10 on unrelated
+      # objects (m/s/incident), and 3 on `payload` inside admin-audience checks.
+      #
+      # Constrain to token-shaped receivers so the rule expresses its actual
+      # intent: reading the role claim off a decoded token rather than re-reading
+      # it from the database.
       - pattern: $TOKEN.get("role")
+      - metavariable-regex:
+          metavariable: $TOKEN
+          regex: ^(payload|claims|jwt|jwt_payload|token|token_payload|decoded|decoded_token)$
+      # Admin JWTs are fully trusted by design — role, email and modules live in
+      # the claims (CLAUDE.md "JWT trust model"), so reading them from an admin
+      # token is correct, not a violation. Exclude scopes that have already
+      # established the token is an admin one.
+      - pattern-not-inside: |
+          def $F(...):
+              ...
+              JWT_AUD_ADMIN
+              ...
+      - pattern-not-inside: |
+          def $F(...):
+              ...
+              _admin_roles
+              ...
       - pattern-not-inside: |
           def _verify_admin_token(...):
               ...

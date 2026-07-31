@@ -485,6 +485,18 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        validation at the >500/<=0 Pydantic gate and the 503-on-DB-error path
        for every write endpoint). Test-only, no bugs found. See
        `docs/change-log/2026-07-29-a1b-admin-analytics-incentives-coverage.md`.
+     - `backend/routes/admin/rides.py` — **improved ~34% → 42%** (1190
+       statements, 687 remaining uncovered; measured via full `pytest
+       tests/ -q`, real pytest-cov output). Added
+       `tests/test_admin_rides_coverage.py` (57 tests) covering the
+       highest-consequence admin ride-mutation and inspection endpoints
+       (validation-error paths, not-found 404s, DB-failure propagation,
+       success-path shape assertions). No application code changed, no
+       bugs found. See
+       `docs/change-log/2026-07-30-a1b-admin-rides-coverage.md`. Still
+       well below the 70% admin-routes target — remaining gap is largely
+       read/list/export/analytics endpoints; not pursued further in this
+       pass.
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth

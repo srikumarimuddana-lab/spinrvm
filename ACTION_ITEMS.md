@@ -464,6 +464,23 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        endpoint's own `valid` set does not (and vice versa for
        `"needs_review"`), so some pydantic-valid status values 400 at the
        handler's internal guard.
+     - `backend/routes/admin/analytics.py` — **done, 91%** (was ~24%, lowest
+       -covered file in `routes/admin/`). Added `tests/test_admin_analytics_
+       coverage.py` (24 tests) covering `cancellation-reasons`,
+       `driver-acceptance`, `overview` (incl. Redis cache hit/corrupt-cache/
+       set-failure paths), `dashboard`, `demand-forecast`(+summary), and
+       `driver-offer-stats`/`-trends` — happy path, empty/zero-division
+       guards, and the 503-on-DB-error path for each. `surge-history` was
+       already covered by `test_admin_surge_history.py`. Test-only, no bugs
+       found. See `docs/change-log/2026-07-29-a1b-admin-analytics-incentives-coverage.md`.
+     - `backend/routes/admin/incentives.py` — **done, 98%** (was ~34%).
+       Driver-incentive/bonus program management is money-adjacent (bonus
+       payouts to drivers), so create/update/toggle/delete were prioritized
+       over the read-only list/stats endpoints. Added `tests/test_admin_
+       incentives_coverage.py` (24 tests, incl. `bonus_amount` boundary
+       validation at the >500/<=0 Pydantic gate and the 503-on-DB-error path
+       for every write endpoint). Test-only, no bugs found. See
+       `docs/change-log/2026-07-29-a1b-admin-analytics-incentives-coverage.md`.
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth

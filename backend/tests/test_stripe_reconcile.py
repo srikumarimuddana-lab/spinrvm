@@ -820,6 +820,93 @@ async def test_stuck_processing_query_failure_returns_empty():
     assert out == []
 
 
+# ── Stuck stripe_events backstop (ACTION_ITEMS.md C10) ──────────────────────
+
+
+def _stripe_event_row(event_id: str, *, minutes_ago: int, event_type: str = "payment_intent.succeeded") -> dict:
+    ts = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    return {
+        "event_id": event_id,
+        "event_type": event_type,
+        "received_at": ts,
+        "processed_at": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stuck_stripe_events_flags_only_aged_rows():
+    """Only rows past the 5-minute grace window are flagged; a just-claimed
+    row (may still be mid-processing) is left alone, and nothing is mutated."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [
+        _stripe_event_row("evt_stuck", minutes_ago=30),  # well past the 5-min grace window
+        _stripe_event_row("evt_fresh", minutes_ago=1),  # may still be in flight
+    ]
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _reconcile_stuck_stripe_events
+
+        out = await _reconcile_stuck_stripe_events()
+
+    assert {d["event_id"] for d in out} == {"evt_stuck"}
+    assert out[0]["type"] == "STRIPE_EVENT_STUCK_UNPROCESSED"
+    assert out[0]["event_type"] == "payment_intent.succeeded"
+    filters = db_mock.get_rows.await_args.args[1]
+    assert filters == {"processed_at": None}
+    # Detection only — never mutates/replays the row.
+    db_mock.update_one.assert_not_awaited()
+    db_mock.insert_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stuck_stripe_events_surfaces_row_with_no_timestamp():
+    """A row with no received_at is surfaced (over-report rather than hide a
+    potentially stuck payment event)."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [
+        {"event_id": "evt_no_ts", "event_type": "charge.refunded", "processed_at": None},
+    ]
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _reconcile_stuck_stripe_events
+
+        out = await _reconcile_stuck_stripe_events()
+
+    assert [d["event_id"] for d in out] == ["evt_no_ts"]
+
+
+@pytest.mark.asyncio
+async def test_stuck_stripe_events_query_failure_returns_empty():
+    """A failed query is logged and yields no discrepancies (never raises)."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.side_effect = RuntimeError("DB down")
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _reconcile_stuck_stripe_events
+
+        out = await _reconcile_stuck_stripe_events()
+
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_stuck_stripe_events_ignores_row_processed_between_query_and_check():
+    """Defensive re-assert: if the fetched row already shows processed_at set
+    (e.g. a concurrent write landed between the query and this check), it is
+    not flagged even though the query filter should have excluded it."""
+    db_mock = AsyncMock()
+    row = _stripe_event_row("evt_race", minutes_ago=30)
+    row["processed_at"] = "2026-08-01T00:00:00+00:00"
+    db_mock.get_rows.return_value = [row]
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _reconcile_stuck_stripe_events
+
+        out = await _reconcile_stuck_stripe_events()
+
+    assert out == []
+
+
 # ── Flag-gated auto-heal (default OFF) ──────────────────────────────────────
 
 

@@ -64,7 +64,7 @@ jobs:
     name: Vendor inventory freshness
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need full history so `git log` can find the inventory's last
           # human commit (depth=1 only gives the latest commit overall).

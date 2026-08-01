@@ -75,7 +75,7 @@ jobs:
 
       - name: Checkout PR code
         if: env.HAS_ANTHROPIC_KEY == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

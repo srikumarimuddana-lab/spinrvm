@@ -99,12 +99,12 @@ jobs:
       error_summary: ${{ steps.parse.outputs.error_summary }}
       top_severity:  ${{ steps.parse.outputs.top_severity }}  # C1/H8: needed by notify-critical
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -164,13 +164,13 @@ jobs:
       report_file: ${{ steps.generate-report.outputs.report_file }}
     steps:
       # C4: checkout the FAILING commit so git diff / impact analysis is correct
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ needs.check-trigger.outputs.head_sha || github.sha }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -250,10 +250,10 @@ jobs:
       needs.check-trigger.outputs.should_run == 'true' &&
       needs.run-audit.result == 'success'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 

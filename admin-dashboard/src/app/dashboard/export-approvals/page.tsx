@@ -28,7 +28,9 @@ import { approveExportRequest, denyExportRequest, getPendingExportApprovals, typ
 
 const ROUTE_LABELS: Record<string, string> = {
     "compliance.gst_pst_remittance": "Compliance — GST/PST Remittance",
-    "compliance.insurance_period_audit": "Compliance — Insurance Period Audit",
+    "compliance.insurance_billing_sgi": "Compliance — SGI Insurance Billing",
+    "compliance.insurance_billing_knight_archer": "Compliance — Knight Archer Insurance Billing",
+    "compliance.airport_trips": "Compliance — Airport Trips",
     "data_transfer.export": "Data Transfer — Export",
 };
 

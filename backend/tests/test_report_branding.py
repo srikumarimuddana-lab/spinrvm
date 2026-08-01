@@ -240,6 +240,37 @@ class TestBrandedExcel:
         report_branding.write_branded_table(ws, ["value"], [{"value": "=SUM(A1)"}])
         assert ws["A7"].value == "'=SUM(A1)"
 
+    def test_write_branded_grouped_table_collapses_children_by_default(self):
+        pytest.importorskip("openpyxl")
+        _, ws = report_branding.new_branded_workbook("SGI Insurance Billing")
+        parent = {"driver_name": "Jane Doe", "phase": "All phases", "phase_km": "14.000"}
+        children = [
+            {"driver_name": "Jane Doe", "phase": "2 — En route", "phase_km": "1.500"},
+            {"driver_name": "Jane Doe", "phase": "3 — Passenger aboard", "phase_km": "12.500"},
+        ]
+        report_branding.write_branded_grouped_table(ws, ["driver_name", "phase", "phase_km"], [(parent, children)])
+
+        # Parent (row 7, right after the header at row 6) is expanded and
+        # not part of the outline group.
+        assert ws["B7"].value == "All phases"
+        assert ws.row_dimensions[7].outlineLevel == 0
+        assert ws.row_dimensions[7].hidden is not True
+
+        # Both children (rows 8-9) are collapsed (hidden) by default at
+        # outline level 1 -- expanding them is the admin's action, via
+        # Excel's native [+] group control.
+        assert ws["B8"].value == "2 — En route"
+        assert ws["B9"].value == "3 — Passenger aboard"
+        assert ws.row_dimensions[8].outlineLevel == 1
+        assert ws.row_dimensions[8].hidden is True
+        assert ws.row_dimensions[9].outlineLevel == 1
+        assert ws.row_dimensions[9].hidden is True
+
+        # Summary (parent) row sits above its detail rows -- required so
+        # the collapse control lands next to the parent, not below the
+        # last child.
+        assert ws.sheet_properties.outlinePr.summaryBelow is False
+
 
 class TestBrandedWord:
     def test_new_branded_document_and_table(self):

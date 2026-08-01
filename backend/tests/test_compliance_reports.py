@@ -182,7 +182,7 @@ class TestInsuranceBillingDetailRows:
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, grand_total_km, truncated = asyncio.run(
+            rows, grand_total_km, truncated, _groups = asyncio.run(
                 compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
             )
 
@@ -251,7 +251,7 @@ class TestInsuranceBillingDetailRows:
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, grand_total_km, _truncated = asyncio.run(
+            rows, grand_total_km, _truncated, groups = asyncio.run(
                 compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
             )
 
@@ -259,18 +259,31 @@ class TestInsuranceBillingDetailRows:
         assert grand_total_km == Decimal("14.0")
         assert {r["phase_km"] for r in rows} == {"1.500", "12.500"}
 
+        # Both phase rows share one ride_id -> one group, with a parent
+        # ("All phases") row summing both legs' km/amount, and both phase
+        # rows as its children -- this is what backs the xlsx collapsible
+        # view (report_branding.write_branded_grouped_table).
+        assert len(groups) == 1
+        parent, children = groups[0]
+        assert parent["phase"] == "All phases"
+        assert parent["phase_km"] == "14.000"
+        assert parent["amount"] == f"${(Decimal('14.0') * Decimal('0.11')).quantize(Decimal('0.01'))}"
+        assert len(children) == 2
+        assert children == [r for r in rows]
+
     def test_empty_result_returns_empty_list_not_error(self):
         async def get_rows_side(table, filters=None, **kw):
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, grand_total_km, truncated = asyncio.run(
+            rows, grand_total_km, truncated, groups = asyncio.run(
                 compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
             )
 
         assert rows == []
         assert grand_total_km == Decimal("0")
         assert truncated is False
+        assert groups == []
 
     def test_unknown_driver_falls_back_to_id(self):
         """A distance row whose driver was hard-deleted (or the drivers

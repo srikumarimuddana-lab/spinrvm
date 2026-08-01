@@ -2036,32 +2036,55 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   strongest verification available here. Also not exercised against a real
   backend/Supabase instance or a live corporate membership.
 
-### C7. `review` check fails repo-wide — `ANTHROPIC_API_KEY` unset (no automated review is running on any PR)
-- [ ] **Status:** open — the `review` job (Claude Code review action) exits
-  without reviewing on every PR because its API key is empty. Confirmed
-  2026-08-01 by reading the job log for
+### C7. AI PR review is off by design (cost); decide whether to enable it on money/safety/migration surfaces
+- [ ] **Status:** open as a **decision**, not a defect. **Amended 2026-08-01
+  — the original wording of this entry was wrong** and is corrected here.
+  It claimed the missing `ANTHROPIC_API_KEY` was an invisible capability
+  gap. It is not: `.github/workflows/claude-review.yml:44-47` documents
+  keyless operation explicitly — *"Review is advisory — a missing/invalid
+  ANTHROPIC_API_KEY or model error should never block merging… until then
+  PRs proceed without it"* — with `continue-on-error: true` to match. The
+  key is unset deliberately, to avoid per-PR API spend. That is a
+  legitimate call, and this entry now tracks the trade-off rather than
+  reporting a fault.
+- **What is factually true:** the job runs and exits without reviewing.
+  Confirmed from job logs
   [`91408169618`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30714687039/job/91408169618)
-  on PR #3037: the env block prints `ANTHROPIC_API_KEY:` with no value, the
-  action logs `No buffered inline comments`, and the job concludes
-  `failure`. Reproduced identically on the next commit
-  (job `91408494259`).
-- **Why this matters more than a red check:** PR #3037 received **zero**
-  review comments across its entire life and merged without any automated
-  review. The gate is not merely noisy — it is silently absent. A
-  permanently-red check reads as background noise, which is exactly how a
-  missing review capability stays invisible: nobody investigates the check
-  that is always red. `CLAUDE.md`'s PR-review-handling section assumes an
-  automated reviewer exists and instructs agents to act on its findings;
-  that instruction currently has nothing to act on.
-- **Action:** set the `ANTHROPIC_API_KEY` secret for the repository (or for
-  the environment the `review` workflow runs in), then confirm on the next
-  PR that the job posts at least one review comment rather than just
-  turning green. A green `review` job with no comments is not proof it
-  worked — check for actual review output.
-- **Owner / follow-up:** needs someone with repo-secret access; cannot be
-  fixed from a PR branch. Found while triaging CI on #3037 (docs handoff);
-  recorded there in the merged PR body, which is not a durable tracking
-  location — hence this entry.
+  and `91408494259` (PR #3037) and again on #3070 — the env block prints
+  `ANTHROPIC_API_KEY:` with no value. PRs #3037, #3070 and #3074 each merged
+  with zero automated review.
+- **The reporting bug (fixed 2026-08-01):** `continue-on-error` stops a
+  failed run blocking the merge but does **not** stop the check reporting
+  `failure`, so the advisory gate showed permanently red. That is an active
+  harm independent of the cost question — a check that is always red trains
+  reviewers to ignore red, and it demonstrably did: the C8 entry below was
+  filed because red gates had become background noise. The keyless case now
+  skips cleanly with a notice instead of failing.
+- **What is actually lost while it stays off:** narrow but well-placed. The
+  static gates (Bandit, Semgrep ×2, Gitleaks ×2, pip-audit, yarn/npm audit,
+  ESLint security, plus the 7 guardrails) cannot check Spinr's *semantic*
+  rules — `Decimal`-only money arithmetic, `claim_stripe_event` before
+  webhook processing, ride state-machine transition guards, the
+  `is_available ⇒ is_online` invariant, Period 2 starting at
+  `driver_assigned`, the 2.5× surge cap, GPS/PII in logs. The three agents
+  this workflow runs (`spinr-security-auditor`, `spinr-money-auditor`,
+  `spinr-migration-reviewer`) exist for exactly that, and it is the class of
+  bug that costs most during live app testing.
+- **Why it was expensive:** ~24 PRs/day merge to `main`, and the workflow
+  triggered on `synchronize` — every push, not every PR — so real volume was
+  roughly 50–80 runs/day. Each run paid a large fixed cost (three agents
+  each loading `CLAUDE.md` plus domain context) regardless of diff size, so
+  a one-line markdown PR cost about what a payments refactor did.
+- **Action / decision:** trigger scoping has been applied (drop
+  `synchronize`, `paths-ignore` for markdown/`docs/`/`.claude/`), which
+  removes most of the wasted volume while keeping coverage on code. What
+  remains is a business decision: **set the key with a capped spend limit and
+  billing alert, run one week, and price it from real numbers** — or leave
+  it off permanently, in which case also drop `CLAUDE.md`'s
+  PR-review-handling assumption that an automated reviewer exists, so the
+  docs stop describing a reviewer that does not run.
+- **Owner / follow-up:** needs someone with repo-secret and billing access;
+  not fixable from a PR branch.
 
 ### C8. ~~`driver-app-test` reported success while its test fails locally~~ — RESOLVED, was my own measurement error (no gate defect)
 - [x] **Status:** closed 2026-08-01, same day it was filed. **There is no gate

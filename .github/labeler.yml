@@ -106,6 +106,14 @@ area:rls:
           - 'backend/migrations/**/*rls*.sql'
           - 'backend/migrations/**/*policy*.sql'
 
+area:ai:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/ai/**'
+          - 'backend/routes/ai.py'
+          - 'backend/routes/admin/ai_console.py'
+          - 'rider-app/app/ai-assistant.tsx'
+
 area:ci:
   - changed-files:
       - any-glob-to-any-file:

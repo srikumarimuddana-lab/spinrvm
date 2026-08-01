@@ -24,7 +24,7 @@ them — you don't need to add them manually.
 
 ## Tier 2 — Impact
 
-- **Surfaces touched** [required]: `[ ]` backend  `[ ]` rider-app  `[ ]` driver-app  `[ ]` admin  `[ ]` shared  `[ ]` migrations  `[ ]` infra  `[ ]` CI
+- **Surfaces touched** [required]: `[ ]` backend  `[ ]` rider-app  `[ ]` driver-app  `[ ]` admin  `[ ]` shared  `[ ]` migrations  `[ ]` infra  `[ ]` CI  `[ ]` docs
 - **Blast radius** [required]: `isolated` | `single-surface` | `multi-surface` | `cross-cutting`
 - **Data schema change** [required]: `none` | `additive` | `breaking` | `coordinated-deploy`
 - **API contract change** [required]: `none` | `additive` | `breaking` | `versioned`

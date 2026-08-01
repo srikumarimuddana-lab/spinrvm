@@ -2360,9 +2360,10 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
   #3096.
 
 ### C10. No reconciliation job for `stripe_events` rows stuck at `processed_at IS NULL`
-- [ ] **Status:** open — found 2026-08-01 while fixing the
-  `mark_stripe_event_processed` silent-error-swallow bug flagged by the
-  `repositories/wallet_repo.py` coverage pass (PR #3098).
+- [x] **Status:** closed 2026-08-01, same day it was filed — found while
+  fixing the `mark_stripe_event_processed` silent-error-swallow bug flagged
+  by the `repositories/wallet_repo.py` coverage pass (PR #3098), fixed in
+  the same session.
 - **What's wrong:** two places in this codebase claim, in comments, that a
   background job reconciles `stripe_events` rows left with
   `processed_at IS NULL` — `repositories/wallet_repo.py`'s old
@@ -2399,23 +2400,54 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
   live, alongside its existing Stripe-reconciliation responsibilities),
   `backend/repositories/wallet_repo.py` (`mark_stripe_event_processed`),
   `backend/routes/webhooks.py` (~line 1578, the unhandled-event-type path).
-- **Interim mitigation (applied 2026-08-01, see PR fixing
-  `mark_stripe_event_processed`):** the DB-write-failure case (row class 1
-  above) now logs at `logger.error` with `extra={"domain": "payments", ...}`,
-  which trips the loguru→Sentry bridge (`backend/server.py`'s
-  `_loguru_sentry_sink`, `level="ERROR"`) — so it's no longer *silent*, just
-  still not *self-healing*. Row class 2 (unhandled event types) has no
-  mitigation yet — still silent.
-- **Approach:** add a periodic sweep to `utils/stripe_reconcile.py` (or a new
-  loop, replay-safe per `CLAUDE.md`'s background-task-safety rule) that
-  queries `stripe_events` for `processed_at IS NULL` rows older than some
-  grace window (long enough that an in-flight webhook isn't falsely flagged)
-  and either replays them (if the event type is now actionable) or pages
-  on-call for manual review. Use the `spinr-background-loop` skill's recipe
-  for the replay-safety contract before adding a new loop.
-- **Acceptance:** a deliberately-stuck `stripe_events` row (either class) is
-  detected and surfaced (replayed or alerted) within one sweep interval,
-  with a regression test proving it.
+- **Fix:** added `_reconcile_stuck_stripe_events()` to
+  `backend/utils/stripe_reconcile.py`, called from the existing daily
+  `_run_reconciliation_tick()` (02:00 UTC, same Redis leader lock as the
+  rest of that file — no new loop, reuses existing replay-safety
+  infrastructure rather than adding an 18th startup loop). Queries
+  `stripe_events` for `processed_at IS NULL` rows older than a 5-minute
+  grace window (matching `migrations/22_stripe_events.sql`'s own original
+  design comment) and surfaces each as a `STRIPE_EVENT_STUCK_UNPROCESSED`
+  discrepancy: `logger.error` (Sentry-bridged, `domain=payments`) plus the
+  existing `audit_logs` summary row this file already writes daily.
+- **Scope decision — detection/alert only, deliberately not auto-replay:**
+  the original migration comment and both stale code comments this item
+  found said a job "should replay" stuck events. Did not build that.
+  `utils/stripe_reconcile.py`'s own established pattern for every other
+  discrepancy type in this file (`STRIPE_ORPHAN`, `RIDE_PAYMENT_STUCK_PROCESSING`,
+  payout discrepancies) is detection-only, with auto-heal — where it exists
+  at all (`_maybe_heal_stuck_processing`) — behind an explicit, default-OFF
+  app-setting flag. Matched that convention: for a stuck `stripe_events` row,
+  "replay" would mean re-running webhook business logic against a stored
+  payload, which risks double-processing a row whose side effects already
+  succeeded (the DB-write-failure case is exactly that — only the final
+  stamp failed, everything else already happened). Distinguishing
+  "safe to replay" from "already done" would require trusting the payload's
+  own claims, which this job does not do. Surfaced for manual review instead.
+- **Both row classes now covered:** the DB-write-failure case (row class 1)
+  also still logs `logger.error` at the point of failure itself
+  (`mark_stripe_event_processed`, fixed earlier the same session) as the
+  fast/loud signal; this sweep is the daily backstop in case that signal is
+  ever missed. The unhandled-event-type case (row class 2) had no prior
+  signal at all — this sweep is its only coverage, so it will typically
+  surface up to ~24h after the event, not immediately (acceptable: `CLAUDE.md`
+  itself notes ~24h daily cadence matches the bar already set for the
+  other discrepancy types in this same file).
+- **Files:** `backend/utils/stripe_reconcile.py` (new function
+  `_reconcile_stuck_stripe_events`, new `_STUCK_STRIPE_EVENT_AFTER` constant,
+  wired into `_run_reconciliation_tick`'s summary), `backend/tests/test_stripe_reconcile.py`
+  (4 new tests), `backend/repositories/wallet_repo.py` and
+  `backend/routes/webhooks.py` (comments corrected to point at the sweep
+  instead of describing a job that didn't exist).
+- **Verification:** `pytest tests/test_stripe_reconcile.py -q` → 45 passed
+  (41 pre-existing + 4 new); new function individually measured at 100%
+  coverage (`--cov=utils.stripe_reconcile`, no missed lines in its range).
+  Full suite re-run — see the fix's own change-log for the exact count.
+- **Acceptance:** met — a deliberately-stuck `stripe_events` row is detected
+  and surfaced (alerted, not replayed — see scope decision above) within
+  one daily sweep, with 4 regression tests proving it (aged-row flagged,
+  fresh-row skipped, missing-timestamp over-reported rather than hidden,
+  query-failure never raises).
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

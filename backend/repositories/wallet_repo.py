@@ -397,14 +397,13 @@ async def mark_stripe_event_processed(event_id: str) -> None:
     Called after the handler has finished the business-logic work for an
     event. Stripe will not retry since we already returned 2xx, so a
     failure here cannot self-heal via the retry path — the row is left
-    stuck at processed_at=NULL. There is currently no background job that
-    scans for and replays such rows (verified: nothing outside this file
-    queries stripe_events by processed_at IS NULL other than the
-    reactive, retry-triggered check in claim_stripe_event above, which
-    only fires if Stripe happens to retry this exact event_id again). A
-    stuck row here is effectively silent without this log/Sentry signal.
-    Not fixed here — tracked as ACTION_ITEMS.md C10 (add a reconciliation
-    sweep for stripe_events rows with processed_at IS NULL).
+    stuck at processed_at=NULL. `utils/stripe_reconcile.py`'s daily tick
+    (`_reconcile_stuck_stripe_events`, ACTION_ITEMS.md C10) surfaces rows
+    like this to the audit log for manual review — detection only, it
+    deliberately does not re-run business logic (this row's side effects
+    already happened; replaying risks double-processing). The
+    `logger.error` below is still the fast/loud signal (Sentry-bridged);
+    the daily sweep is the backstop in case that signal is ever missed.
     """
     if not supabase:
         return
@@ -419,10 +418,10 @@ async def mark_stripe_event_processed(event_id: str) -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             f"Failed to stamp processed_at on stripe event {event_id}: {e!r}. "
-            "This event will remain stuck at processed_at=NULL indefinitely -- "
-            "Stripe already got a 2xx and will not retry, and no automated "
-            "reconciliation currently scans for this state (ACTION_ITEMS.md C10). "
-            "Manual DB check required if this fires.",
+            "This event will remain stuck at processed_at=NULL until the "
+            "daily stripe_reconcile sweep surfaces it for manual review "
+            "(Stripe already got a 2xx and will not retry) -- "
+            "see ACTION_ITEMS.md C10.",
             extra={"domain": "payments", "event_id": event_id},
         )
 

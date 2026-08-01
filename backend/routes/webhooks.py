@@ -542,8 +542,11 @@ async def stripe_webhook(request: Request):
 
     # ── Dispatch ─────────────────────────────────────────────────────
     # Any exception raised below propagates as 5xx, leaving processed_at
-    # NULL so either (a) Stripe retries, or (b) the nightly reconciliation
-    # job replays the event from the persisted payload.
+    # NULL so Stripe retries. If Stripe's own retry window is exhausted
+    # before this succeeds, utils/stripe_reconcile.py's daily sweep
+    # (_reconcile_stuck_stripe_events, ACTION_ITEMS.md C10) will surface
+    # the row for manual review -- it does not auto-replay the payload
+    # (see that function's docstring for why).
     if event_type == "payment_intent.succeeded":
         meta = data_object.get("metadata") or {}
 
@@ -1575,8 +1578,10 @@ async def stripe_webhook(request: Request):
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
-        # Leave processed_at NULL for unknown/unhandled events so the nightly
-        # reconciliation job can replay them if they later become actionable.
+        # Leave processed_at NULL for unknown/unhandled events so
+        # utils/stripe_reconcile.py's daily sweep surfaces them for manual
+        # review if they later become actionable (it does not auto-replay
+        # -- see _reconcile_stuck_stripe_events, ACTION_ITEMS.md C10).
         # Return 200 to Stripe so it does not retry indefinitely.
         return {"received": True, "unhandled": True, "event_id": event_id}
 

@@ -15,6 +15,9 @@ Discrepancy types detected:
   STRIPE_ORPHAN            — Stripe PI has no matching ride in DB and is not
                              in a terminal failed state (succeeded PIs with
                              no ride row require manual review)
+  STRIPE_EVENT_STUCK_UNPROCESSED — stripe_events row still processed_at=NULL
+                             past the grace window (ACTION_ITEMS.md C10);
+                             see _reconcile_stuck_stripe_events
 
 Design:
   - Redis SET NX EX leader lock so only one replica runs per 23h window.
@@ -102,6 +105,10 @@ _STUCK_PROCESSING_AFTER = timedelta(minutes=15)
 # App-setting flag (default OFF) gating the auto-heal of stuck-processing rides.
 # OFF → detection only; ON → mark-paid from Stripe truth (see _maybe_heal_*).
 _AUTO_HEAL_SETTING = "stripe_auto_heal_processing"
+# migrations/22_stripe_events.sql's own original comment: "received_at older
+# than ~5 minutes but processed_at = NULL indicate events that crashed
+# mid-processing". Matches that original design intent.
+_STUCK_STRIPE_EVENT_AFTER = timedelta(minutes=5)
 
 
 def _pod_id() -> str:
@@ -317,6 +324,19 @@ async def _run_reconciliation_tick() -> None:
     # Default OFF — ships dark; see _maybe_heal_stuck_processing.
     heal_stats = await _maybe_heal_stuck_processing(stuck_processing, _stripe, settings)
 
+    # ── 3f. Stuck stripe_events backstop (ACTION_ITEMS.md C10) ───────────
+    # stripe_events rows left at processed_at=NULL: either an unhandled
+    # event type (routes/webhooks.py's `else` branch — deliberate, and
+    # already 2xx'd, so Stripe will never retry it) or a handler that
+    # crashed/failed the final processed_at stamp after finishing its
+    # business logic (the mark_stripe_event_processed bug fixed 2026-08-01
+    # — also already 2xx'd). Detection only, same as 3c/3d — this never
+    # re-runs webhook business logic (that would risk double-processing a
+    # row where the side effects already happened), it only surfaces the
+    # row for manual review. See _reconcile_stuck_stripe_events.
+    stuck_stripe_events = await _reconcile_stuck_stripe_events()
+    discrepancies.extend(stuck_stripe_events)
+
     # ── 4. Write summary to audit_logs ──────────────────────────────────
     summary = {
         "date": yesterday.isoformat(),
@@ -327,6 +347,7 @@ async def _run_reconciliation_tick() -> None:
         "auto_heal_enabled": heal_stats["enabled"],
         "rides_healed": heal_stats["healed"],
         "healed_ride_ids": heal_stats["healed_ride_ids"][:50],
+        "stripe_events_stuck_unprocessed": len(stuck_stripe_events),
         "discrepancies": len(discrepancies),
         "discrepancy_detail": discrepancies[:50],  # cap at 50 to avoid huge rows
     }
@@ -467,6 +488,83 @@ async def _reconcile_stuck_processing_rides() -> List[Dict[str, Any]]:
             row.get("payment_intent_id"),
             row.get("status"),
             extra={"domain": "payments"},
+        )
+    return discrepancies
+
+
+async def _reconcile_stuck_stripe_events() -> List[Dict[str, Any]]:
+    """Detect stripe_events rows left at processed_at=NULL past the grace
+    window (ACTION_ITEMS.md C10).
+
+    migrations/22_stripe_events.sql's own top comment described this exact
+    scan ("a nightly reconciliation job should replay them") when the table
+    was created but no job ever implemented it — this closes that gap.
+
+    Two ways a row ends up here, both already 2xx'd to Stripe (so Stripe's
+    own retry mechanism will never revisit them):
+      - an unhandled event type (routes/webhooks.py's `else` branch
+        deliberately leaves processed_at NULL "so [this job] can replay
+        them if they later become actionable")
+      - the handler finished its business logic but the final
+        mark_stripe_event_processed stamp write itself failed
+        (repositories/wallet_repo.py, fixed 2026-08-01 to log loudly
+        instead of swallowing silently)
+
+    A third case — a handler that raised mid-processing — is excluded by
+    design: that path returns 5xx (not 2xx), so Stripe's own retry
+    mechanism is still live for it and it is not "stuck" in the same
+    permanent sense; the grace window below still catches it eventually if
+    Stripe's own retries also don't succeed within it, which is
+    conservative rather than a gap.
+
+    Detection only — deliberately does NOT attempt to replay/re-run the
+    stored event through the webhook business logic. For the
+    already-succeeded-but-unstamped case, replay would risk re-running side
+    effects that already happened (double wallet credit, double
+    notification). Distinguishing that case from the never-ran case would
+    require trusting the payload's own claims, which this job does not do.
+    Surfaced for manual review instead — see the row's event_type / event_id
+    in the audit_logs detail to decide the right remediation by hand.
+    """
+    discrepancies: List[Dict[str, Any]] = []
+    cutoff = datetime.now(timezone.utc) - _STUCK_STRIPE_EVENT_AFTER
+    try:
+        rows = (
+            await db_supabase.get_rows(
+                "stripe_events",
+                {"processed_at": None},
+                columns="event_id,event_type,received_at,processed_at",
+                limit=500,
+            )
+            or []
+        )
+    except Exception:
+        logger.error("stripe_reconcile: stuck-stripe-events query failed", exc_info=True)
+        return discrepancies
+
+    for row in rows:
+        # Defensive: re-assert the state, never trust the query filter alone.
+        # event_id presence also guards against a shared/blanket-mocked
+        # get_rows in tests returning an unrelated table's rows here.
+        if not row.get("event_id") or row.get("processed_at") is not None:
+            continue
+        ts = row.get("received_at")
+        if ts and not _is_older_than(ts, cutoff):
+            continue  # still within the grace window — may still be in flight
+        discrepancies.append(
+            {
+                "type": "STRIPE_EVENT_STUCK_UNPROCESSED",
+                "event_id": row.get("event_id"),
+                "event_type": row.get("event_type"),
+                "received_at": row.get("received_at"),
+            }
+        )
+        logger.error(
+            "stripe_reconcile: STRIPE_EVENT_STUCK_UNPROCESSED event_id=%s event_type=%s received_at=%s",
+            row.get("event_id"),
+            row.get("event_type"),
+            row.get("received_at"),
+            extra={"domain": "payments", "event_id": row.get("event_id")},
         )
     return discrepancies
 

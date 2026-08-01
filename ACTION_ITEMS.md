@@ -623,7 +623,69 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth
   picking up once Track 1 is done or if a specific file becomes a live
-  incident source.
+  incident source. First item picked up 2026-08-01 (below); no other files
+  itemized yet — a future session should measure before assuming any other
+  file's current percentage.
+  - `backend/repositories/wallet_repo.py` (444 lines — wallet & Stripe
+    repository: atomic wallet RPCs, promo application, fare-split, Stripe
+    event helpers; extracted from `db_supabase.py` per Phase 4 god-object
+    decomposition) — **40% → 99%** (2026-08-01, both numbers measured via
+    the full `pytest tests/ -q --cov=repositories.wallet_repo`, not a
+    keyword-filtered subset — 169 stmts, 102→2 missed). Had no dedicated
+    test file; only indirect coverage as a side effect of route-level tests
+    (`test_wallet.py`, `test_p2_promo_wallet_loyalty.py`,
+    `test_p3_wallet_concurrency.py`, `test_p3_promo_concurrency.py`,
+    `test_webhooks_main.py`, etc.) and `test_wallet_apply_delta_contract.py`
+    (SQL-migration-text assertions only, no Python execution). Treated as
+    money-adjacent per CLAUDE.md's Critical Conventions (wallet deltas,
+    Decimal handling, Stripe idempotency), so targeted the same ≥80%+ bar
+    as Track 1. Added `backend/tests/test_wallet_repo.py` (67 tests): happy
+    path + DB-error-propagation for all 12 public functions
+    (`wallet_increment_balance`, `wallet_apply_credit`, `wallet_apply_delta`
+    incl. floor/clamp_to_floor branches, `wallet_pay_for_ride` incl. all 4
+    typed `ValueError` translations, `wallet_transfer` incl. list-vs-dict
+    RPC-row shape, `increment_promo_uses`/`claim_promo_user_slot`
+    (parametrized True/1/list/False/None/empty branches),
+    `release_promo_user_slot`, `fare_split_pay_share`, `claim_stripe_event`
+    (all 3 duplicate-detection message-pattern branches + the stuck-vs-
+    processed distinction), `mark_stripe_event_processed`,
+    `unclaim_stripe_event`). Remaining 2 uncovered lines are the dual-import
+    `except ImportError` fallback (structurally untestable in a single
+    process, per this repo's own documented convention). Test-only PR — no
+    application code changed. **Bug found, not fixed (test-only scope):**
+    `mark_stripe_event_processed` swallows a DB/payment error via
+    `logger.warning(...)` + continue and always returns `None` regardless of
+    success or failure, matching the exact pattern CLAUDE.md's "Do not
+    silently swallow errors" section forbids for payment errors — the
+    caller cannot detect the stamp failed short of grepping logs. Contrast
+    with the sibling `unclaim_stripe_event`, which signals the same class of
+    failure to its caller via a boolean return (documented as "the caller
+    must escalate on False") — not a swallow. `mark_stripe_event_processed`'s
+    docstring argues the trade-off is bounded (Stripe already got its 2xx;
+    a reconciliation job distinguishes stuck-vs-processed rows via
+    `stripe_events.processed_at`), so it is likely not a live financial-
+    correctness bug today, but it is a real deviation from the documented
+    convention and worth a follow-up decision (fix vs. formally accept).
+    **Second finding, also not fixed (pre-existing test-suite reliability
+    bug, not application code):** running the new test file as part of the
+    full suite (not in isolation) initially produced 53 failures, all
+    `ServiceUnavailableException("database")` from `repositories/_base.py`'s
+    deadline-exhausted guard — root-caused to `tests/test_utils_extended.py`'s
+    `TestDeadline*` class, several of whose tests call
+    `utils/deadline.py:set_request_deadline(...)` directly and never reset
+    the `contextvars.ContextVar` afterward (no `reset_token` cleanup), so a
+    permanently-past deadline leaks into every later test in the same pytest
+    process that calls `run_sync` — order-dependent, same failure class as
+    the already-tracked A8 (leaked-coroutine test pollution). Worked around
+    locally with an autouse fixture in `test_wallet_repo.py` that resets the
+    contextvar to `None` before each test (see the file's `_clear_request_deadline`
+    fixture for the full writeup); did not touch `test_utils_extended.py`
+    itself since that's a different file/feature, out of scope for a
+    wallet_repo-coverage PR. A future session should either fix
+    `test_utils_extended.py`'s cleanup or add a session-scoped autouse
+    contextvar reset to `conftest.py` so no other file has to defend against
+    this individually.
+    See `docs/change-log/2026-08-01-a1b-wallet-repo-coverage.md`.
 - **Explicitly NOT recommended:** raising the CI floor to 80% uniformly
   across the whole backend in one move. Many low-risk files (CSV export
   helpers, LMS integration, one-off admin scripts) would cost

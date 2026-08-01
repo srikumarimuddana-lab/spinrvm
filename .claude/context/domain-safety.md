@@ -14,11 +14,14 @@ _Load when working on: SOS flow, emergency contacts, insurance period transition
 
 Spinr SOS is an **assist**, not a replacement for 911.
 
-1. User holds SOS button 3 s (prevents accidental trigger)
+1. User holds SOS button 1.2 s (`SOS_HOLD_MS` in `shared/components/SOSButton.tsx`; prevents accidental trigger)
 2. Client posts `/safety/sos` with `{ride_id?, lat, lng, user_id}` — fire-and-forget, retry 3×
 3. Backend creates `safety_incidents` row (append-only) and in parallel:
    - Notifies all emergency contacts via SMS (Twilio) with rider name + last-known location link
-   - Pages on-call safety team (PagerDuty → Slack `#safety-incidents`)
+   - Broadcasts a WS event to the admin dashboard, emails the safety distribution list, and logs a
+     `logger.critical()` line (no real on-call paging today — there is no PagerDuty/Opsgenie
+     integration anywhere in the backend; whether to build one is an open product/infra decision,
+     tracked in `ACTION_ITEMS.md` B15)
    - Pushes `sos_acknowledged` WS event back to the user app
 4. App shows a one-tap **"Call 911"** button — we never auto-dial
 5. Safety team opens live view of ride (driver ID, vehicle, route trace, audio recording if enabled)
@@ -27,7 +30,7 @@ Hard rules:
 - **Never auto-dial 911.** Jurisdictional routing is unreliable; wrong PSAP wastes seconds.
 - **Never claim to replace emergency services** in UX copy. Use "We'll alert your emergency contacts and our safety team."
 - **Never gate SOS behind auth refresh.** If the JWT is expired, still accept the request with the user_id claim and flag for review.
-- **Never silently drop an SOS** on DB failure — fall back to direct Twilio + PagerDuty call with best-effort data.
+- **Never silently drop an SOS** on DB failure. `trigger_emergency` (`backend/routes/rides/safety.py`) wraps the `safety_incidents` insert in a try/except (mirrors `backend/routes/safety.py`'s `POST /safety/report`, PR #2931) and returns a clean 503 instead of a 500 so the client's retry logic (see step 2) can recover. There is no non-DB-dependent fallback path today (e.g. a direct Twilio SMS bypassing the DB write) — a sustained outage across all client retries still means zero emergency-contact SMS and zero safety-team notification fire. Building that fallback is an open decision, tracked in `ACTION_ITEMS.md` B15.
 
 ## Emergency contacts
 
@@ -82,5 +85,5 @@ Rules specific to safety domain:
 - Don't log raw GPS coordinates in incident narratives — geohashed area only (PIPEDA)
 - Don't expose emergency contact phone numbers in any API response to the driver or other party
 - Don't mark an SOS as "resolved" automatically — requires safety team acknowledgment
-- Don't skip the 3-second hold on SOS — accidental triggers erode response trust
+- Don't skip the 1.2-second hold on SOS — accidental triggers erode response trust
 - Don't reuse `safety_incidents.id` as a public reference — use a separate opaque `incident_ref` for user-facing correspondence

@@ -750,19 +750,26 @@ async def test_claim_stripe_event_non_duplicate_error_propagates():
 # ─────────────────────────────────────────────────────────────────────────────
 # mark_stripe_event_processed
 #
-# NOTE (bug found, not fixed -- test-only scope per this backlog item):
-# This function has an explicit `if not supabase: return` no-op AND a bare
-# `except Exception: logger.warning(...); ` swallow around the DB update,
-# with return type `None` in both the success and failure case -- the caller
-# has no way to detect that the stamp failed short of grepping logs. The
-# docstring argues this is an intentional, bounded trade-off (Stripe already
-# got its 2xx, a reconciliation job distinguishes stuck vs processed events
-# via the stripe_events table), so it is not a correctness bug for the
-# wallet/payment data itself. But it does match the literal pattern
-# CLAUDE.md's "Do not silently swallow errors" section calls out as
-# forbidden for payment errors ("Never `logger.warning(...)` and continue on
-# a DB/auth/payment error"). Documented here and in the PR/change-log per
-# this task's instructions; NOT fixed (test-only PR).
+# NOTE (bug found in PR #3098, fixed here): this function had an explicit
+# `if not supabase: return` no-op AND a bare `except Exception:
+# logger.warning(...)` swallow around the DB update, with return type `None`
+# in both the success and failure case -- the caller has no way to detect
+# that the stamp failed short of grepping logs. The old docstring argued
+# this was an intentional, bounded trade-off because "a reconciliation job
+# distinguishes stuck vs processed events via the stripe_events table" --
+# that claim was checked while fixing this and found to be false: nothing
+# in this codebase actually scans stripe_events for processed_at IS NULL
+# rows (grepped; only the reactive, retry-triggered check inside
+# claim_stripe_event above references processed_at, and that only fires if
+# Stripe retries the *same* event_id, which it won't for an already-2xx'd
+# event). Fix: `logger.warning` -> `logger.error` with `extra={"domain":
+# "payments", ...}` so the failure trips the loguru->Sentry bridge
+# (`backend/server.py`'s `_loguru_sentry_sink`, level=ERROR) instead of
+# vanishing into a log line nobody greps. The return type is intentionally
+# left as `None` (not changed to `bool`) -- there is still no retry/replay
+# lever a caller could pull today, so a signature change would be dead
+# weight; building the actual reconciliation sweep is tracked separately as
+# ACTION_ITEMS.md C10, not bundled into this fix.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -791,11 +798,13 @@ async def test_mark_stripe_event_processed_happy_path_updates_row():
 
 
 @pytest.mark.asyncio
-async def test_mark_stripe_event_processed_swallows_db_error_and_logs_warning():
-    """Pins the documented (see NOTE above) swallow-and-log behavior: the
-    caller gets None back either way, so this test exists to make any future
-    change to that contract (e.g. if someone fixes the bug) show up as an
-    intentional diff here rather than a silent behavior change."""
+async def test_mark_stripe_event_processed_swallows_db_error_but_logs_loudly():
+    """The caller still gets None back either way (Stripe already has its
+    2xx, there is no retry lever to pull from here) -- but the failure must
+    surface loudly, not silently, per CLAUDE.md's "do not silently swallow
+    a payment error" rule. Was `logger.warning`; fixed to `logger.error` so
+    it trips the loguru->Sentry bridge (backend/server.py's
+    `_loguru_sentry_sink`, level=ERROR) with the payments domain tag."""
     mock_sb = MagicMock()
     mock_sb.table.return_value.update.return_value.eq.return_value.execute.side_effect = RuntimeError("db down")
     with (
@@ -807,7 +816,10 @@ async def test_mark_stripe_event_processed_swallows_db_error_and_logs_warning():
         result = await mark_stripe_event_processed("evt_1")
 
     assert result is None
-    mock_logger.warning.assert_called_once()
+    mock_logger.error.assert_called_once()
+    _, kwargs = mock_logger.error.call_args
+    assert kwargs["extra"]["domain"] == "payments"
+    assert kwargs["extra"]["event_id"] == "evt_1"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -2271,6 +2271,64 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   a workflow nobody runs — the same cleanup done for the Claude reviewer in
   #3096.
 
+### C10. No reconciliation job for `stripe_events` rows stuck at `processed_at IS NULL`
+- [ ] **Status:** open — found 2026-08-01 while fixing the
+  `mark_stripe_event_processed` silent-error-swallow bug flagged by the
+  `repositories/wallet_repo.py` coverage pass (PR #3098).
+- **What's wrong:** two places in this codebase claim, in comments, that a
+  background job reconciles `stripe_events` rows left with
+  `processed_at IS NULL` — `repositories/wallet_repo.py`'s old
+  `mark_stripe_event_processed` docstring ("the reconciliation job can still
+  distinguish processed vs. stuck events") and `routes/webhooks.py:1578`
+  ("Leave processed_at NULL for unknown/unhandled events so the nightly
+  reconciliation job can replay them"). **Neither job exists.** Verified via
+  `grep -rn "processed_at" backend/ --include="*.py"` and
+  `grep -n "processed_at\|stripe_events" backend/utils/stripe_reconcile.py`
+  (0 hits) — `utils/stripe_reconcile.py` (one of the 17 startup loops per
+  `CLAUDE.md`) does not reference `stripe_events` or `processed_at` at all.
+  The only code that ever reads `processed_at` back is the reactive,
+  retry-triggered check inside `claim_stripe_event` (logs
+  `logger.critical(...STUCK...)` on a duplicate-key insert) — which only
+  fires if Stripe retries the *same* `event_id`, and Stripe won't retry an
+  event that already got a 2xx response.
+- **Two distinct row classes are affected, both silently unreconciled:**
+  1. Rows where the webhook handler finished all side effects and returned
+     2xx, but the final `mark_stripe_event_processed` DB write itself then
+     failed (now logged loudly as of the fix below, but still never
+     replayed/re-stamped).
+  2. Rows for unknown/unhandled Stripe event types (`routes/webhooks.py`
+     `else` branch, ~line 1571) — deliberately left `processed_at IS NULL`
+     "so the nightly reconciliation job can replay them if they later
+     become actionable." No such nightly job exists to do that replay.
+- **Why it matters:** both comments describe a safety net for exactly the
+  kind of state-inconsistency `CLAUDE.md`'s money/payments rules exist to
+  prevent, and neither safety net is real. Low likelihood (requires a DB
+  write to fail at exactly the wrong moment, or a new/renamed Stripe event
+  type to arrive), but silent and undetectable if it happens — there's
+  currently no dashboard, admin query, or alert that would ever surface a
+  `stripe_events` row stuck at `processed_at IS NULL`.
+- **Files:** `backend/utils/stripe_reconcile.py` (where the sweep would
+  live, alongside its existing Stripe-reconciliation responsibilities),
+  `backend/repositories/wallet_repo.py` (`mark_stripe_event_processed`),
+  `backend/routes/webhooks.py` (~line 1578, the unhandled-event-type path).
+- **Interim mitigation (applied 2026-08-01, see PR fixing
+  `mark_stripe_event_processed`):** the DB-write-failure case (row class 1
+  above) now logs at `logger.error` with `extra={"domain": "payments", ...}`,
+  which trips the loguru→Sentry bridge (`backend/server.py`'s
+  `_loguru_sentry_sink`, `level="ERROR"`) — so it's no longer *silent*, just
+  still not *self-healing*. Row class 2 (unhandled event types) has no
+  mitigation yet — still silent.
+- **Approach:** add a periodic sweep to `utils/stripe_reconcile.py` (or a new
+  loop, replay-safe per `CLAUDE.md`'s background-task-safety rule) that
+  queries `stripe_events` for `processed_at IS NULL` rows older than some
+  grace window (long enough that an in-flight webhook isn't falsely flagged)
+  and either replays them (if the event type is now actionable) or pages
+  on-call for manual review. Use the `spinr-background-loop` skill's recipe
+  for the replay-safety contract before adding a new loop.
+- **Acceptance:** a deliberately-stuck `stripe_events` row (either class) is
+  detected and surfaced (replayed or alerted) within one sweep interval,
+  with a regression test proving it.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)

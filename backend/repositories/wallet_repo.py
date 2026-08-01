@@ -394,11 +394,17 @@ async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, 
 async def mark_stripe_event_processed(event_id: str) -> None:
     """Stamp processed_at=now() on a previously claimed stripe event row.
 
-    Called after the handler has finished the business-logic work for
-    an event. Failure here is non-fatal — the reconciliation job can
-    still distinguish processed vs. stuck events by the presence of
-    the updated_at stamp, and Stripe will not retry since we returned
-    2xx. Log and swallow.
+    Called after the handler has finished the business-logic work for an
+    event. Stripe will not retry since we already returned 2xx, so a
+    failure here cannot self-heal via the retry path — the row is left
+    stuck at processed_at=NULL. There is currently no background job that
+    scans for and replays such rows (verified: nothing outside this file
+    queries stripe_events by processed_at IS NULL other than the
+    reactive, retry-triggered check in claim_stripe_event above, which
+    only fires if Stripe happens to retry this exact event_id again). A
+    stuck row here is effectively silent without this log/Sentry signal.
+    Not fixed here — tracked as ACTION_ITEMS.md C10 (add a reconciliation
+    sweep for stripe_events rows with processed_at IS NULL).
     """
     if not supabase:
         return
@@ -411,7 +417,14 @@ async def mark_stripe_event_processed(event_id: str) -> None:
     try:
         await run_sync(_fn)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"Failed to stamp processed_at on stripe event {event_id}: {e}")
+        logger.error(
+            f"Failed to stamp processed_at on stripe event {event_id}: {e!r}. "
+            "This event will remain stuck at processed_at=NULL indefinitely -- "
+            "Stripe already got a 2xx and will not retry, and no automated "
+            "reconciliation currently scans for this state (ACTION_ITEMS.md C10). "
+            "Manual DB check required if this fires.",
+            extra={"domain": "payments", "event_id": event_id},
+        )
 
 
 async def unclaim_stripe_event(event_id: str) -> bool:

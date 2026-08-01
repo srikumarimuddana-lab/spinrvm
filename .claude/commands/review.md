@@ -120,4 +120,4 @@ says `FIX BLOCKERS` regardless of what anything else found.
 For a single-domain deep dive instead of the full router: `/fare-audit`
 (money), `/migration-check` (migrations), `/security-check`,
 `/dispatch-check`, `/surge-check`, `/corporate-check`, `/insurance-check`,
-`/compliance-check`.
+`/compliance-check`, `/ai-check` (AI/LLM surface).

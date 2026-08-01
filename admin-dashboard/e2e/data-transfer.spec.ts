@@ -136,9 +136,22 @@ test.describe('admin dashboard: bulk-operations (legacy, super-admin-only) — i
     await expect(page.getByText(/requires the super admin role/i)).toHaveCount(0);
   });
 
-  test('denies a non-super-admin with a denial card, not the tool UI', async ({ page }) => {
+  // /dashboard/bulk-operations now redirects into /dashboard/records's tab
+  // shell (next.config.ts), which hides the TabsTrigger for any tab the
+  // current user can't view and falls back to their first visible tab
+  // instead — it never mounts BulkOperationsPage at all for a
+  // non-super-admin, so that component's own inline "requires the super
+  // admin role" denial card (rendered only past its `if (!isSuperAdmin)`
+  // guard) is unreachable via this URL. The real, current security
+  // invariant this test protects is that the CSV tool UI itself never
+  // renders for a non-super-admin — verified below by asserting its
+  // super-admin-only marker text is absent, plus pinning the actual
+  // fallback (the Compliance tab, the only one `role: 'admin'` can view)
+  // so a change to that fallback shows up here instead of silently.
+  test('hides the Bulk Operations tool UI from a non-super-admin (falls back to their default tab)', async ({ page }) => {
     await setupAdminMocks(page, { user: { role: 'admin', modules: ['bulk_operations'] } });
     await page.goto('/dashboard/bulk-operations');
-    await expect(page.getByText(/requires the super admin role/i)).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText(/Super-admin CSV tools/i)).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Compliance & Tax Reporting' })).toBeVisible({ timeout: 20000 });
   });
 });

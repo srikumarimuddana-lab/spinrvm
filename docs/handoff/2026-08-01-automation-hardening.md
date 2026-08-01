@@ -134,6 +134,14 @@ Commit with a conventional-commit message and report what you changed.
 | Line 217: "access tokens: 15 min (rider/driver), **12 hr (admin)**" | `backend/core/config.py:55` → `ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 1`. The rider/driver value is correct (`ACCESS_TOKEN_EXPIRE_MINUTES: int = 15`, config.py:52). **Only the admin figure is wrong.** |
 | Observability section: "`utils/metrics.py` is the source of truth" for `spinr_*` metric names | `backend/utils/metrics.py` is a 186-line generic in-process counter registry and defines **no** `spinr_*` names. Actual metric names are emitted at call sites: `services/dispatch_service.py`, `services/payment_service.py`, `utils/stripe_reconcile.py`, `services/data_transfer/observability.py`. |
 
+**Related third error, same class — in the PR template, not `CLAUDE.md`:**
+`.github/pull_request_template.md` (Tier 4, "Metrics / logs introduced") instructs
+contributors to confirm naming follows `` `spinr.<domain>.<metric>.<unit>` `` — the
+**dotted** spelling. `CLAUDE.md` explicitly states the dotted form is *not* what the
+code emits and that alerts must never be written against it; the emitted form is
+underscored (`spinr_dispatch_offer_sent_total`). The template is actively instructing
+every contributor to use the wrong convention.
+
 `.claude/context/sprint-current.md` records A-P0-2 as "Admin access token TTL 1 h
 confirmed end-to-end" — i.e. the sprint file was right and `CLAUDE.md` was never updated.
 
@@ -170,18 +178,32 @@ Fix: reword so it says the exposition format and helpers live in
 call sites. Keep the existing list of canonical metric names and keep the existing
 warning that the older dotted `spinr.<domain>...` spelling is NOT what the code emits.
 
+ERROR 3 — PR template teaches the wrong metric naming convention
+`.github/pull_request_template.md`, Tier 4 "Metrics / logs introduced", tells
+contributors to confirm naming follows `spinr.<domain>.<metric>.<unit>` (DOTTED).
+CLAUDE.md's Observability Conventions state plainly that the dotted spelling is NOT
+what the code emits and that dashboards/alerts must not be written against it — the
+emitted form is underscored, e.g. `spinr_dispatch_offer_sent_total`. The template is
+therefore instructing every contributor to use the wrong convention.
+
+Fix: change the dotted example in the PR template to the underscored form, matching
+CLAUDE.md and the actual emitted metric names.
+
 CONSTRAINTS:
-- Only CLAUDE.md changes. Do not modify config.py, metrics.py, or the sprint file.
-- Make these two edits as ONE commit (both are "correct CLAUDE.md to match code").
+- Only CLAUDE.md and .github/pull_request_template.md change. Do not modify
+  config.py, metrics.py, or the sprint file.
+- Make all three edits as ONE commit — they are a single logical change:
+  "correct documented conventions to match what the code actually does".
 - Docs only, no live-tested runtime surface touched, so NO Change Impact & Risk Log
   entry is required. Do not create one.
 
-Report both before/after strings in your summary.
+Report each before/after string in your summary.
 ```
 
 ### Acceptance
 - `CLAUDE.md` states 1 hr admin TTL; 15 min rider/driver untouched.
 - Metrics wording no longer claims `metrics.py` defines the names.
+- PR template uses the underscored metric form.
 - No code files modified.
 
 ---

@@ -347,6 +347,23 @@ admin_staff_delete_limit = default_limiter.limit("5/minute")
 # third-party quota; cap per-IP to stop budget/quota exhaustion by an agent.
 admin_ai_suggest_limit = default_limiter.limit("20/minute")
 
+# Admin AI console (routes/admin/ai_console.py, super-admin-only + audited) —
+# each turn runs the same paid-LLM orchestrator path as the rider-facing
+# /ai/chat (ai_chat_limit, 10/minute), and the orchestrator deliberately
+# EXEMPTS admin-console turns from the impersonated user's daily message cap
+# (backend/ai/orchestrator.py `_over_daily_cap`, gated on
+# `admin_actor_id is None`) so heavy console testing doesn't drain the
+# target rider/driver's quota. That exemption removes the one ceiling that
+# would otherwise bound LLM spend on this path, so the endpoint needs its
+# own limit as a defensive ceiling — not because the caller is untrusted
+# (super_admin JWTs are fully trusted and every call is audit-logged), but
+# against a compromised/malicious admin session or a runaway automation
+# script hammering the endpoint. Matches admin_ai_suggest_limit's value:
+# same class of endpoint (admin-only, paid-LLM-backed), and looser than the
+# rider-facing 10/minute cap is appropriate given the lower risk profile
+# (ACTION_ITEMS.md AI12).
+admin_ai_console_limit = default_limiter.limit("20/minute")
+
 
 # ============================================================================
 # Rate Limit Exceeded Handler

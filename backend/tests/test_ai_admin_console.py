@@ -171,6 +171,50 @@ class TestReads:
         get_messages.assert_awaited_once_with("other-users-conv", "rider-1")
 
 
+class TestRateLimit:
+    """AI12: admin-console turns are exempt from the impersonated user's
+    daily message cap (orchestrator.py `_over_daily_cap`, gated on
+    `admin_actor_id is None`), so admin_ai_console_limit (20/minute,
+    utils/rate_limiter.py) is the only per-request ceiling on this path.
+    Mirrors test_data_transfer_rate_limit.py's "locally re-enable the
+    globally-disabled default_limiter" strategy — the conftest autouse
+    fixture disables it for every other test in this file so a chatty
+    test class doesn't trip 429s incidentally.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _enable_real_limiter(self):
+        import asyncio
+
+        from utils.rate_limiter import default_limiter
+
+        default_limiter.enabled = True
+        inner = getattr(default_limiter, "_limiter", None)
+        storage = getattr(inner, "storage", None) if inner is not None else None
+        if storage is not None and callable(getattr(storage, "reset", None)):
+            result = storage.reset()
+            if result is not None:
+                asyncio.run(result)
+        yield
+        default_limiter.enabled = False
+
+    def test_requests_within_limit_succeed(self, super_admin_client):
+        p1, p2, p3 = _patches()
+        with p1, p2, p3:
+            for i in range(20):
+                resp = super_admin_client.post("/api/v1/admin/ai/chat", json={"user_id": "rider-1", "message": "hi"})
+                assert resp.status_code == 200, f"request {i + 1}/20 got {resp.status_code}: {resp.text}"
+
+    def test_twenty_first_request_is_429(self, super_admin_client):
+        p1, p2, p3 = _patches()
+        with p1, p2, p3:
+            for _ in range(20):
+                super_admin_client.post("/api/v1/admin/ai/chat", json={"user_id": "rider-1", "message": "hi"})
+            resp = super_admin_client.post("/api/v1/admin/ai/chat", json={"user_id": "rider-1", "message": "hi"})
+        assert resp.status_code == 429
+        assert resp.json().get("error") == "rate_limit_exceeded"
+
+
 SECURITY_EVENTS = [
     {"id": "e1", "user_id": "rider-1", "event_type": "impersonation", "severity": "critical", "source": "message"},
     {"id": "e2", "user_id": "rider-1", "event_type": "prompt_injection", "severity": "high", "source": "message"},

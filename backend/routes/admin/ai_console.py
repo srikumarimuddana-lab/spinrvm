@@ -5,11 +5,19 @@ GET  /admin/ai/users/{user_id}/conversations            — what the user sees
 GET  /admin/ai/users/{user_id}/conversations/{id}/messages
 
 The conversation is REAL: it persists under the target user's account (the
-rider sees it in their app), runs the same orchestrator/tool path with the
-target user's data scoping, and counts against their daily cap — a true
-end-to-end test. Strictly super_admin (admin module grants are not enough:
-this both impersonates a user and reads their chat history), and every
-action writes an audit_logs row.
+rider sees it in their app) and runs the same orchestrator/tool path with
+the target user's data scoping — a true end-to-end test. Unlike the
+rider-facing /ai/chat path, admin-console turns are deliberately EXEMPT from
+the target user's daily message cap (backend/ai/orchestrator.py
+`_over_daily_cap`, gated on `admin_actor_id is None`) so heavy console
+testing doesn't silently drain the impersonated rider/driver's quota — turns
+run here do NOT count against it. That exemption removes the ceiling that
+would otherwise bound LLM spend on this path, so /ai/chat below carries its
+own `admin_ai_console_limit` (utils/rate_limiter.py) as a defensive ceiling
+against a compromised/malicious admin session or a runaway automation
+script (ACTION_ITEMS.md AI12). Strictly super_admin (admin module grants are
+not enough: this both impersonates a user and reads their chat history), and
+every action writes an audit_logs row.
 """
 
 import logging
@@ -17,7 +25,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 try:
@@ -25,11 +33,13 @@ try:
     from ...ai import conversations
     from ...ai.orchestrator import run_chat_turn
     from ...dependencies import get_admin_user
+    from ...utils.rate_limiter import admin_ai_console_limit
 except ImportError:
     import db_supabase
     from ai import conversations
     from ai.orchestrator import run_chat_turn
     from dependencies import get_admin_user
+    from utils.rate_limiter import admin_ai_console_limit
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +99,15 @@ async def _target_user(user_id: str) -> Dict[str, Any]:
 
 
 @router.post("/ai/chat")
-async def admin_ai_chat(body: AdminAiChatRequest, admin: dict = Depends(get_admin_user)):
-    """Run one assistant turn as the target user (non-streaming)."""
+@admin_ai_console_limit
+async def admin_ai_chat(request: Request, body: AdminAiChatRequest, admin: dict = Depends(get_admin_user)):
+    """Run one assistant turn as the target user (non-streaming).
+
+    Rate-limited (admin_ai_console_limit, 20/minute — see
+    utils/rate_limiter.py) as a defensive ceiling: admin-console turns are
+    exempt from the impersonated user's daily message cap (see module
+    docstring), so this is the only per-request bound on LLM spend here.
+    """
     _require_super_admin(admin)
     target = await _target_user(body.user_id)
     audience = body.audience or ("driver" if target.get("is_driver") else "rider")

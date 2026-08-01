@@ -274,6 +274,19 @@ class AppSettings(BaseModel):
     # Distribution list for safety-incident transactional emails. See
     # migration 95 + the _notify_safety_team helper in features.py.
     safety_alert_emails: str = ""
+    # ── SOS on-call paging (ACTION_ITEMS.md B15(b)) ───────────────────────
+    # Real on-call paging for rider/driver SOS, on top of the admin WS
+    # broadcast + safety_alert_emails above. Lives here (not .env) for the
+    # same rotation-without-redeploy reason as the Stripe/Twilio/Meta
+    # credentials. Empty webhook URL = disabled — the safe, correct default
+    # until an admin pastes real PagerDuty/Opsgenie credentials in; see
+    # utils/safety_paging.py, which every call site tolerates staying empty.
+    # Shape defaults to PagerDuty Events API v2
+    # ({"routing_key", "event_action", "payload": {...}}); pointing this at
+    # an Opsgenie (or other) webhook that accepts/adapts that shape is a
+    # config change here, not a code change.
+    sos_paging_webhook_url: str = ""
+    sos_paging_routing_key: str = ""
     # Hours of app unreachability before the stale-intent reconciler flips
     # a driver's is_online=false (utils/stale_intent_reconciler.py,
     # migration 146). Range 1-48 enforced by the admin API + DB CHECK.

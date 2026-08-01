@@ -19,6 +19,7 @@ from ._deps import (  # noqa: F401
     get_current_user_allow_expired,
     logger,
     notify_safety_team,
+    page_sos_on_call,
     ride_action_limit,
     timezone,
     uuid,
@@ -117,6 +118,23 @@ async def trigger_emergency(
     except Exception:  # pragma: no cover — best effort, never block the SMS path below
         logger.error(
             f"notify_safety_team failed for rider SOS ride={ride_id} incident={incident['id']}",
+            exc_info=True,
+        )
+
+    # Real on-call paging (ACTION_ITEMS.md B15(b)). Additive fourth channel
+    # alongside the admin WS broadcast + safety-team email + CRITICAL log
+    # above — none of which reaches an on-call person not already watching
+    # the dashboard or a log stream. page_on_call is itself best-effort and
+    # never raises (see utils/safety_paging.py); this try/except is belt-
+    # and-suspenders so a bug in that module can never block the SMS path
+    # below, matching the error-handling posture of every other side effect
+    # in this function. No-ops (logs at debug, returns False) until an admin
+    # configures sos_paging_webhook_url in app_settings — ships dark.
+    try:
+        await page_sos_on_call(incident)
+    except Exception:  # pragma: no cover — best effort, never block the SMS path below
+        logger.error(
+            f"page_sos_on_call failed for rider SOS ride={ride_id} incident={incident['id']}",
             exc_info=True,
         )
 

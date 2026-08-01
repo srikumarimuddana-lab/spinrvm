@@ -1542,20 +1542,38 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   returns a clean 503 instead of an unhandled 500. The two documentation
   inaccuracies noted below (PagerDuty claim, 3s hold duration) are also
   **fixed** in `.claude/context/domain-safety.md` (2026-08-01,
-  `docs/change-log/2026-08-01-b15-doc-cleanup.md`) — the doc now describes
-  the real DB-failure notification path (admin WS broadcast + safety
-  distribution-list email + `logger.critical()`, no paging) and the real
-  1200ms hold duration. Checkbox stays `[ ]` because two parts of this entry
-  are still genuinely open and are product/infra decisions, not engineering
-  tasks the doc fix or the try/except resolved: (1) whether a non-DB-dependent
-  fallback (e.g. direct Twilio SMS bypassing the DB write) should be built
-  for the sustained-outage case — a DB outage spanning all 3 client retries
-  still means zero emergency-contact SMS and zero safety-team notification;
-  (2) whether real on-call paging (PagerDuty/Opsgenie) should be built at
-  all, since none exists today. Neither needs re-litigating the parts already
-  marked done below — see "Also noted" for the separate rideless-SOS-path
-  finding, also still open and also a product decision, untouched by this
-  update.
+  `docs/change-log/2026-08-01-b15-doc-cleanup.md`). The three remaining
+  sub-decisions from the original finding are now resolved as follows
+  (product calls, relayed via engineering 2026-08-01 — **not** directly
+  reviewed against the design docs by the product owner, noted explicitly
+  per that relay):
+  - **(a) Non-DB-dependent fallback (e.g. direct Twilio SMS bypassing the
+    DB write) for the sustained-outage case: DECIDED — not building it.**
+    Rationale: the existing 3× client retry (1s/2s backoff) plus the
+    persistent amber "Not Sent — Call 911 directly" fallback UI is judged
+    sufficient residual-risk mitigation for the ~3-4s outage window a
+    sustained failure across all retries implies. `.claude/context/domain-safety.md`
+    updated 2026-08-01 to record this as a closed decision rather than an
+    open question.
+  - **(b) Real on-call paging (PagerDuty/Opsgenie): DECIDED — build it,
+    and it is now built**, shipped dark/disabled by default
+    (`docs/change-log/2026-08-01-b15b-sos-paging.md`). New
+    `backend/utils/safety_paging.py::page_on_call`, called from
+    `trigger_emergency` right alongside the existing `notify_safety_team`
+    call, best-effort/non-blocking (never raises, a failure is logged and
+    swallowed like every other SOS side effect in that function). Config
+    (`sos_paging_webhook_url`, `sos_paging_routing_key`) lives in
+    `app_settings`, same pattern as Stripe/Twilio/Meta credentials —
+    empty `sos_paging_webhook_url` (the shipped default, since no real
+    PagerDuty/Opsgenie account exists yet) means zero HTTP calls and zero
+    behavior change. `.claude/context/domain-safety.md` updated to
+    describe the new channel as dark/disabled.
+  - **(c) Rideless/standalone SOS path (see "Also noted" below): STILL
+    UNDECIDED.** No product call has been made on this one — explicitly
+    not addressed by this update, not silently dropped. Remains open.
+  Checkbox stays `[ ]` solely because of (c) — (a) and (b) are both closed
+  decisions now (one "won't build", one "built"), but the entry as a whole
+  isn't done until (c) gets a product call too.
 - **Why (original finding, now fixed by PR #2931 — kept for record):**
   `trigger_emergency` (`backend/routes/rides/safety.py:38-83`) —
   the rider/driver in-ride SOS endpoint — called
@@ -1580,8 +1598,8 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   watching the dashboard or a log stream. The doc described intended
   behavior that was either never built or removed without a doc update;
   `.claude/context/domain-safety.md` has since been corrected (2026-08-01)
-  to describe the actual channels. Whether real paging should be built is
-  still an open decision — see Status above.
+  to describe the actual channels. Real paging has since been decided and
+  built — see Status (b) above and `docs/change-log/2026-08-01-b15b-sos-paging.md`.
 - **Severity note (calibrated, not worst-case):** the client
   (`shared/components/SOSButton.tsx`) retries 3× (1s/2s backoff) and never
   shows a false "Alert Sent" — it only confirms success after a real 200,
@@ -1609,26 +1627,46 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   - `backend/routes/rides/safety.py` — **done**, PR #2931 wrapped the
     `insert_one` in a try/except mirroring
     `backend/routes/safety.py:98-105`'s pattern (503 on failure, full
-    exception logged, never a silent 500).
+    exception logged, never a silent 500). **2026-08-01:** also gained the
+    (b) paging call — see below.
   - `.claude/context/domain-safety.md` — **done**, 2026-08-01: corrected the
     PagerDuty claim to match actual notification channels (admin WS
     broadcast + safety distribution-list email + `logger.critical()`, noted
     as a known gap rather than invented as fixed) and corrected hold
     duration 3s → 1.2s. The ride-required constraint (rideless SOS) was
     intentionally **not** touched — see "Also noted" above, it's a product
-    decision, not a doc-accuracy issue.
-- **Approach:** insert-wrap step is done. Still needed, as separate
-  follow-ups requiring a product/infra decision before any engineering work:
-  (a) whether SOS needs a non-DB-dependent fallback path for the
-  sustained-outage case (e.g. direct Twilio SMS to safety on-call using only
-  in-memory ride/user context, bypassing the DB write); (b) whether real
-  paging (PagerDuty/Opsgenie) should be built, now that the doc no longer
-  claims it exists; (c) whether a rideless/standalone SOS path should exist
-  at all (see "Also noted").
+    decision, not a doc-accuracy issue. **2026-08-01 (same day, follow-up
+    commit):** updated again to describe the new (b) paging channel and
+    record the (a) "not building it" decision.
+  - `backend/utils/safety_paging.py` — **new, 2026-08-01 (b):**
+    `page_on_call` helper, provider-agnostic webhook POST (PagerDuty Events
+    API v2 shape by default), reads `sos_paging_webhook_url` /
+    `sos_paging_routing_key` from `app_settings`, defaults to disabled
+    no-op, never raises.
+  - `backend/schemas.py`, `backend/routes/admin/settings.py` — **new,
+    2026-08-01 (b):** `sos_paging_webhook_url` / `sos_paging_routing_key`
+    added to `AppSettings` + the admin settings API (masked routing key,
+    `super_admin`-only to change, `https://` required on the webhook URL —
+    same treatment as the `lms_api_base_url`/`lms_api_key` pair).
+  - `backend/tests/test_sos_paging.py`, `backend/tests/test_admin_settings_lms_gate.py`
+    — **new/extended, 2026-08-01 (b):** unit + integration coverage for the
+    paging helper and its admin-settings gating.
+  - Full before/after, risk, and rollback detail:
+    `docs/change-log/2026-08-01-b15b-sos-paging.md`.
+- **Approach:** insert-wrap step is done. (a) and (b) are now decided (see
+  Status above — (a) won't build, (b) built dark). Only (c) remains open,
+  requiring a product decision before any engineering work: whether a
+  rideless/standalone SOS path should exist at all (see "Also noted").
 - **Acceptance:** insert-wrap + doc-accuracy sub-items are done (PR #2931 +
-  2026-08-01 doc cleanup). The remaining three items under Approach need
-  scoping and acceptance criteria once a product/infra decision is made —
-  not yet defined, this entry stays open until then.
+  2026-08-01 doc cleanup). (a) is done (decision recorded, no code
+  required). (b) is done: `page_on_call` fires with the correct payload
+  shape when `app_settings` has paging configured, is a no-op when it
+  doesn't, and a paging HTTP failure never blocks the SOS response — all
+  three covered by `backend/tests/test_sos_paging.py`; see the change-log
+  for full verification detail including what was **not** verified (no real
+  PagerDuty/Opsgenie account to test against). (c) has no acceptance
+  criteria yet — still undecided, entry stays open until a product call is
+  made.
 
 ### B16. Driver SOS UX doesn't implement the discretion the design sketch chose it for
 - [ ] **Status:** open — found 2026-07-30, same trace session as B15, this
@@ -1636,7 +1674,20 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   doc: `.planning/sketches/010-rider-sos/index.html` and
   `.planning/sketches/011-driver-sos/index.html`. Product/design call, not
   a pure code bug — logging as a tracked finding per user instruction
-  rather than redesigning inline.
+  rather than redesigning inline. **2026-08-01 update (product call,
+  relayed via engineering — not directly reviewed against the sketch by the
+  product owner, noted explicitly per that relay): design intent
+  confirmed — the discreet-hold-shield design is still wanted for the
+  driver surface. Implementation is explicitly deferred to its own
+  dedicated follow-up, not scheduled as part of this task.** Rationale for
+  the deferral (not the design call itself): this is real mobile
+  safety-UX work — new component, hold-vs-tap duality, a Safety overlay
+  screen, per-contact notified list, discreet-mode toggle — and bundling
+  live UI changes to a safety-critical surface into the same
+  CI-usage-constrained combined change as B15(b)'s backend paging work
+  would be irresponsible. No code changed for B16 by this update — see
+  Approach below for the scoping note carried forward for whoever picks
+  this up next.
 - **Why:** sketch 011's stated design question is *"Can a driver call for
   help with one hand while driving [without alerting a threatening
   passenger]?"* It mocks 3 variants and explicitly rejects the
@@ -1668,18 +1719,18 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   `shared/components/SOSButton.tsx`, `driver-app/app/driver/(tabs)/index.tsx`,
   `.planning/sketches/010-rider-sos/index.html`,
   `.planning/sketches/011-driver-sos/index.html`.
-- **Approach:** needs a product decision before any code: (a) confirm the
-  discreet-hold-shield design is still wanted for the driver surface (it
-  may have been deprioritized after the sketch phase — worth confirming
-  rather than assuming), (b) if yes, scope it as its own feature build
-  (new component or a `discreet` prop on `SOSButton` that swaps the
-  success path from `Alert.alert()` to a silent toast, plus the tap-opens-
-  overlay affordance) rather than folding it into B15's DB-fallback fix,
-  since this is UX surface area, not a backend reliability fix, (c) if the
-  rider/driver split was intentionally abandoned in favor of one shared
-  component, update the sketches or archive them so they stop describing
-  intent nobody plans to build.
-- **Acceptance:** not yet defined — pending the product decision above.
+- **Approach:** (a) is now **decided** — design intent confirmed, see Status
+  above. Still needed before any code, carried forward for the dedicated
+  follow-up: (b) scope it as its own feature build (new component or a
+  `discreet` prop on `SOSButton` that swaps the success path from
+  `Alert.alert()` to a silent toast, plus the tap-opens-overlay affordance)
+  rather than folding it into B15's DB-fallback fix, since this is UX
+  surface area, not a backend reliability fix, (c) if the rider/driver split
+  was intentionally abandoned in favor of one shared component, update the
+  sketches or archive them so they stop describing intent nobody plans to
+  build.
+- **Acceptance:** not yet defined — pending the dedicated follow-up
+  scoping (b)/(c) above into concrete acceptance criteria.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

@@ -671,15 +671,15 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Area Name</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Area Name</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">City</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">City</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.city} onChange={e => setForm({ ...form, city: e.target.value })} />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Province</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Province</label>
           <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.province} onChange={e => {
             const province = e.target.value;
             const defaults = regulatoryDefaultsForProvince(province);
@@ -689,44 +689,44 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           </select>
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Authority</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Regulatory Authority</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_authority} onChange={e => setForm({ ...form, regulatory_authority: e.target.value })} placeholder="e.g. SGI, Calgary Livery, Toronto PTC" />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Region</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Regulatory Region</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_region} onChange={e => setForm({ ...form, regulatory_region: e.target.value })} placeholder="e.g. SK, AB, Calgary, Toronto" />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Requirements URL</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Requirements URL</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_requirements_url} onChange={e => setForm({ ...form, regulatory_requirements_url: e.target.value })} placeholder="Official local requirements link" />
         </div>
         <div className="md:col-span-3">
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Notes</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Regulatory Notes</label>
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[80px]" value={form.regulatory_notes} onChange={e => setForm({ ...form, regulatory_notes: e.target.value })} placeholder="Summarize local driver approval/licensing rules for this service area" />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Pickup Radius (km)</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Pickup Radius (km)</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.5" value={form.max_pickup_radius_km} onChange={e => setForm({ ...form, max_pickup_radius_km: e.target.value as any })} />
         </div>
         <div className="flex items-center gap-2 pt-5">
-          <label className="text-xs font-semibold text-gray-500">Active</label>
+          <label className="text-xs font-semibold text-muted-foreground">Active</label>
           <button onClick={() => setForm({ ...form, is_active: !form.is_active })}>
-            {form.is_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+            {form.is_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
         </div>
         <div className="flex items-center gap-2 pt-5">
-          <label className="text-xs font-semibold text-gray-500">Demand Heatmap</label>
+          <label className="text-xs font-semibold text-muted-foreground">Demand Heatmap</label>
           <button onClick={() => setForm({ ...form, show_demand_heatmap: !form.show_demand_heatmap })}>
-            {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+            {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
-          <span className="text-xs text-gray-400">Show ride demand overlay to drivers</span>
+          <span className="text-xs text-muted-foreground">Show ride demand overlay to drivers</span>
         </div>
       </div>
 
       {/* Surge pricing — lives here now, no separate /dashboard/pricing page */}
       <div>
         <div className="flex items-center justify-between mb-2">
-          <h4 className="font-bold text-gray-800">Surge Pricing</h4>
+          <h4 className="font-bold text-foreground">Surge Pricing</h4>
           {area.surge_source === "manual" && (
             <button
               type="button"
@@ -747,7 +747,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             </button>
           )}
         </div>
-        <p className="text-sm text-gray-500 mb-3">
+        <p className="text-sm text-muted-foreground mb-3">
           Temporarily raise fares in this area during high-demand periods. When active,
           every vehicle&apos;s fare is multiplied by the surge factor.
           {area.surge_source === "auto" && (
@@ -759,9 +759,9 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
         </p>
         <div className="flex items-center gap-2 pt-1">
           <button type="button" onClick={() => setForm({ ...form, surge_enabled: !form.surge_enabled })}>
-            {form.surge_enabled ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+            {form.surge_enabled ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
-          <label className="text-xs font-semibold text-gray-500">
+          <label className="text-xs font-semibold text-muted-foreground">
             Surge {form.surge_enabled ? "ON" : "off"}
           </label>
         </div>
@@ -769,7 +769,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end mt-3">
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Surge Multiplier</label>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">Surge Multiplier</label>
                 <input
                   className="w-full border rounded-lg px-3 py-2 text-sm"
                   type="number"
@@ -780,7 +780,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
                   onChange={e => setForm({ ...form, surge_multiplier: e.target.value as any })}
                 />
               </div>
-              <p className="text-[11px] text-gray-400 pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double · Auto cap = 2.5×</p>
+              <p className="text-[11px] text-muted-foreground pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double · Auto cap = 2.5×</p>
             </div>
             {needsJustification && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 mt-3">
@@ -802,11 +802,11 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
 
       {/* Driver Matching */}
       <div>
-        <h4 className="font-bold text-gray-800 mb-2">Driver Matching</h4>
-        <p className="text-sm text-gray-500 mb-3">Configure how drivers are matched to rides in this area.</p>
+        <h4 className="font-bold text-foreground mb-2">Driver Matching</h4>
+        <p className="text-sm text-muted-foreground mb-3">Configure how drivers are matched to rides in this area.</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Matching Algorithm</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Matching Algorithm</label>
             <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.driver_matching_algorithm} onChange={e => setForm({ ...form, driver_matching_algorithm: e.target.value })}>
               <option value="nearest">Nearest</option>
               <option value="rating_based">Rating Based</option>
@@ -815,30 +815,30 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             </select>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Search Radius (km)</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Search Radius (km)</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.5" value={form.search_radius_km} onChange={e => setForm({ ...form, search_radius_km: e.target.value as any })} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Min Driver Rating</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Min Driver Rating</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.1" min="1" max="5" value={form.min_driver_rating} onChange={e => setForm({ ...form, min_driver_rating: e.target.value as any })} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Simultaneous Offers</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Simultaneous Offers</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" min="1" max="10" value={form.max_simultaneous_offers} onChange={e => setForm({ ...form, max_simultaneous_offers: e.target.value as any })} />
           </div>
           <div className="flex items-center gap-2 pt-5">
             <input type="checkbox" id="use_eta" checked={form.use_eta_ranking} onChange={e => setForm({ ...form, use_eta_ranking: e.target.checked })} />
-            <label htmlFor="use_eta" className="text-sm font-medium text-gray-700">ETA Ranking</label>
+            <label htmlFor="use_eta" className="text-sm font-medium text-foreground">ETA Ranking</label>
           </div>
         </div>
       </div>
 
       {/* Geofence Editor */}
       <div>
-        <h4 className="font-bold text-gray-800 mb-2">Service Area Boundary</h4>
-        <p className="text-sm text-gray-500 mb-3">Draw or edit the polygon to define the service area boundary.</p>
+        <h4 className="font-bold text-foreground mb-2">Service Area Boundary</h4>
+        <p className="text-sm text-muted-foreground mb-3">Draw or edit the polygon to define the service area boundary.</p>
         <div className="h-80 rounded-xl overflow-hidden border">
-          <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+          <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
             <GeofenceMap
               key={`edit-${area.id}`}
               polygon={pendingPolygon ? pendingPolygon.coordinates[0].map((c: number[]) => ({ lat: c[1], lng: c[0] })) : getAreaPolygon(area)}
@@ -861,7 +861,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       <div className="flex items-center justify-between pt-2 border-t">
         <button onClick={onDelete} className="text-sm text-red-500 hover:underline">Delete this area</button>
         <button onClick={handleSave} disabled={saving}
-          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : 'bg-red-500 text-white hover:bg-red-600'} disabled:opacity-50`}>
+          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground hover:bg-primary/90'} disabled:opacity-50`}>
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save General Settings'}
         </button>
       </div>
@@ -875,11 +875,11 @@ function FieldInput({ label, value, type = "text", onSave }: { label: string; va
   useEffect(() => { setVal(String(value)); setDirty(false); }, [value]);
   return (
     <div>
-      <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
+      <label className="block text-xs font-semibold text-muted-foreground mb-1">{label}</label>
       <div className="flex gap-2">
         <input className="flex-1 border rounded-lg px-3 py-2 text-sm" type={type} step={type === 'number' ? '0.01' : undefined} value={val}
           onChange={e => { setVal(e.target.value); setDirty(true); }} />
-        {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="px-3 py-1 bg-red-500 text-white text-xs rounded-lg font-semibold">Save</button>}
+        {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="px-3 py-1 bg-primary text-primary-foreground text-xs rounded-lg font-semibold">Save</button>}
       </div>
     </div>
   );
@@ -891,10 +891,10 @@ function FieldTextarea({ label, value, placeholder, onSave }: { label: string; v
   useEffect(() => { setVal(String(value ?? '')); setDirty(false); }, [value]);
   return (
     <div>
-      <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
+      <label className="block text-xs font-semibold text-muted-foreground mb-1">{label}</label>
       <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={3} value={val} placeholder={placeholder}
         onChange={e => { setVal(e.target.value); setDirty(true); }} />
-      {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="mt-1 px-3 py-1 bg-red-500 text-white text-xs rounded-lg font-semibold">Save</button>}
+      {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="mt-1 px-3 py-1 bg-primary text-primary-foreground text-xs rounded-lg font-semibold">Save</button>}
     </div>
   );
 }
@@ -902,7 +902,7 @@ function FieldTextarea({ label, value, placeholder, onSave }: { label: string; v
 function _FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
   return (
     <div>
-      <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
+      <label className="block text-xs font-semibold text-muted-foreground mb-1">{label}</label>
       <select className="w-full border rounded-lg px-3 py-2 text-sm" value={value} onChange={e => onSave(e.target.value)}>
         {options.map(o => <option key={o} value={o}>{o}</option>)}
       </select>
@@ -913,9 +913,9 @@ function _FieldSelect({ label, value, options, onSave }: { label: string; value:
 function FieldToggle({ label, value, onSave }: { label: string; value: boolean; onSave: (v: boolean) => void }) {
   return (
     <div className="flex items-center gap-2">
-      <label className="text-xs font-semibold text-gray-500">{label}</label>
+      <label className="text-xs font-semibold text-muted-foreground">{label}</label>
       <button onClick={() => onSave(!value)}>
-        {value ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+        {value ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
       </button>
     </div>
   );
@@ -1448,26 +1448,26 @@ function FeeEditForm({ fee, feeTypes, calcModes, onSave, onCancel }: {
         <div className="mt-3 pt-3 border-t space-y-3">
             <div className="grid grid-cols-2 gap-3">
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Fee Name</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">Fee Name</label>
                     <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.fee_name}
                         onChange={e => setForm({ ...form, fee_name: e.target.value })} />
                 </div>
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Fee Type</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">Fee Type</label>
                     <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.fee_type}
                         onChange={e => setForm({ ...form, fee_type: e.target.value })}>
                         {feeTypes.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                     </select>
                 </div>
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Calculation Mode</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">Calculation Mode</label>
                     <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.calc_mode}
                         onChange={e => setForm({ ...form, calc_mode: e.target.value })}>
                         {calcModes.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                     </select>
                 </div>
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">
                         Amount {form.calc_mode === 'percentage' ? '(%)' : form.calc_mode === 'per_km' ? '($/km)' : '($)'}
                     </label>
                     <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.01"
@@ -1475,20 +1475,20 @@ function FeeEditForm({ fee, feeTypes, calcModes, onSave, onCancel }: {
                 </div>
             </div>
             <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Description (optional)</label>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">Description (optional)</label>
                 <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.description}
                     onChange={e => setForm({ ...form, description: e.target.value })} />
             </div>
             {form.fee_type === 'night' && (
                 <div className="grid grid-cols-2 gap-3">
                     <div>
-                        <label className="block text-xs font-semibold text-gray-500 mb-1">Start Hour (0-23)</label>
+                        <label className="block text-xs font-semibold text-muted-foreground mb-1">Start Hour (0-23)</label>
                         <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" min="0" max="23"
                             value={form.conditions.start_hour ?? 23}
                             onChange={e => setForm({ ...form, conditions: { ...form.conditions, start_hour: parseInt(e.target.value) } })} />
                     </div>
                     <div>
-                        <label className="block text-xs font-semibold text-gray-500 mb-1">End Hour (0-23)</label>
+                        <label className="block text-xs font-semibold text-muted-foreground mb-1">End Hour (0-23)</label>
                         <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" min="0" max="23"
                             value={form.conditions.end_hour ?? 5}
                             onChange={e => setForm({ ...form, conditions: { ...form.conditions, end_hour: parseInt(e.target.value) } })} />
@@ -1614,15 +1614,15 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
           <h5 className="font-bold mb-3">{editingId ? "Edit Plan" : "New Plan"}</h5>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Plan Name *</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Plan Name *</label>
               <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. Basic" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Price (CAD) *</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Price (CAD) *</label>
               <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.01" placeholder="19.99" value={form.price} onChange={e => setForm({...form, price: e.target.value})} />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Duration</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Duration</label>
               <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.duration_days} onChange={e => setForm({...form, duration_days: parseInt(e.target.value)})}>
                 {DURATION_OPTIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
               </select>
@@ -1630,7 +1630,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Rides Per Day</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Rides Per Day</label>
               <div className="flex gap-1.5 flex-wrap">
                 <button onClick={() => setForm({...form, rides_per_day: -1})} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${form.rides_per_day === -1 ? "bg-red-500 text-white border-red-500" : "bg-white border-gray-200"}`}>Unlimited</button>
                 {[4, 8, 12, 20].map(n => (
@@ -1639,12 +1639,12 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
               </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Description</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Description</label>
               <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Brief description" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
             </div>
           </div>
           <div className="mb-3">
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Features (comma-separated)</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Features (comma-separated)</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Priority support, Surge protection" value={form.features} onChange={e => setForm({...form, features: e.target.value})} />
           </div>
           <div className="flex items-center gap-4 mb-4">
@@ -1855,7 +1855,7 @@ function CascadeEditor({
               <div key={idx} className="rounded-xl border bg-white p-4">
                 <div className="flex items-start gap-4">
                   <div className="flex-1">
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">When booked type is</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">When booked type is</label>
                     <select
                       className="w-full border rounded-lg px-3 py-2 text-sm"
                       value={rule.from}
@@ -1874,7 +1874,7 @@ function CascadeEditor({
                   </div>
 
                   <div className="flex-1">
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Also offer to drivers of</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">Also offer to drivers of</label>
                     <div className="border rounded-lg p-2 space-y-1 min-h-[42px]">
                       {toOptions.length === 0 ? (
                         <p className="text-xs text-gray-400 px-1 py-1">No other vehicle types available</p>

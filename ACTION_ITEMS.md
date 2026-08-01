@@ -534,6 +534,17 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        notification-broadcast audiences (all/riders/drivers).
      - `venues.py`: 43% → 100% via new `tests/test_admin_venues_crud.py` —
        venue CRUD, 404-not-found and 503-db-error branches, audit logging.
+     - `backend/routes/admin/wallet.py` — **99%** (was low, exact baseline
+       not separately tracked). Added `tests/test_admin_wallet_endpoints.py`
+       (rider-wallet admin read/adjust endpoints).
+     - `backend/routes/admin/rider_import.py` — **89%**. Added
+       `tests/test_admin_rider_import.py`.
+     - `backend/routes/admin/users.py` — **74%**. Added
+       `tests/test_admin_users_management.py`.
+       All three: no application code changed, no bugs found. Full suite
+       not re-run locally this pass (relying on this PR's CI as the
+       regression gate — see
+       `docs/change-log/2026-07-30-a1b-admin-wallet-users-coverage.md`).
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth

@@ -93,9 +93,9 @@ Always log the deletion request in `user_deletion_requests` with the scope appli
 
 ## Provincial reporting (periodic)
 
-- **Quarterly** ride volume + incident count to SGI (template in `docs/compliance/sgi-quarterly.md` — to be created)
-- **Annual** driver roster with license + insurance status
-- **On-demand** trip record production within 14 days of subpoena or regulator request, target run < 30 min against prod — **not yet built**: `scripts/compliance_export.py` is referenced here but doesn't exist; see `docs/compliance/sgi-quarterly.md` §7 for the confirmed format/definition-of-done and its tracking status before assuming this tooling is live
+- **Quarterly** ride volume + incident count to SGI — gap write-up in `docs/compliance/sgi-quarterly.md`; submission format/aggregation grain still unconfirmed (§5), no export tooling yet
+- **Annual** driver roster with license + insurance status — SGI's own D00032/D00033 AcroForm PDFs can be filled from `drivers` data (`backend/services/data_transfer/sgi_form_filler.py` + `sgi_field_maps.py`), but there is no scheduled/on-demand job driving them yet
+- **On-demand** trip record production within 14 days of subpoena or regulator request, target run < 30 min against prod — built: `scripts/compliance_export.py` (see `docs/compliance/sgi-quarterly.md` §1/§6 for the PII boundary and export shape it implements)
 
 ## Common pitfalls
 

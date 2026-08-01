@@ -178,6 +178,30 @@ class Settings(BaseSettings):
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
 
+    # Sentry Web API — powers the super-admin "Sentry Issues" viewer in the
+    # admin dashboard (routes/admin/sentry.py). Optional: the route reports
+    # "not configured" cleanly when the token / org / all project slugs are
+    # unset. Kept as deploy secrets alongside sentry_dsn (not app_settings)
+    # because this is a read/resolve credential for an external service, the
+    # same posture as the DSN.
+    #   - SENTRY_API_TOKEN needs org-level `event:read` + `event:write`
+    #     (write is only used to mark an issue resolved). Prefer an
+    #     Organization Auth Token or an Internal Integration token.
+    #   - SENTRY_ORG_SLUG is the organization slug (e.g. "spinr").
+    #   - SENTRY_API_BASE_URL defaults to sentry.io; override for the EU
+    #     region ("https://de.sentry.io") or self-hosted. The frontend Sentry
+    #     DSNs already route to the EU region for PIPEDA residency, so set this
+    #     to the matching regional API host in production.
+    #   - SENTRY_PROJECT_* map each Spinr surface to its Sentry project slug.
+    #     Whichever are set define which surfaces appear in the viewer.
+    SENTRY_API_TOKEN: Optional[str] = None
+    SENTRY_ORG_SLUG: Optional[str] = None
+    SENTRY_API_BASE_URL: str = "https://sentry.io"
+    SENTRY_PROJECT_BACKEND: Optional[str] = None
+    SENTRY_PROJECT_RIDER: Optional[str] = None
+    SENTRY_PROJECT_DRIVER: Optional[str] = None
+    SENTRY_PROJECT_ADMIN: Optional[str] = None
+
     # Operational alerting — Slack-compatible incoming webhook URL.
     # When set, the loop watchdog posts a message here whenever a background
     # loop goes stale.  Leave unset in development; required in production.

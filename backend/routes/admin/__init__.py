@@ -78,6 +78,7 @@ from .promotions import router as promotions_router
 from .rider_import import router as rider_import_router
 from .rides import router as rides_router
 from .safety import router as safety_router
+from .sentry import router as sentry_router
 from .service_areas import router as service_areas_router
 from .settings import router as settings_router
 from .sgi_forms import router as sgi_forms_router
@@ -179,5 +180,9 @@ admin_router.include_router(wallet_router, dependencies=[Depends(require_module(
 admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])
+# Live Sentry issue viewer (read production errors across surfaces + resolve
+# them). Raw production error data is super_admin-only — same posture as the
+# data-transfer / booking-import surfaces above.
+admin_router.include_router(sentry_router, dependencies=[Depends(require_super_admin)])
 
 __all__ = ["admin_router", "admin_auth_router"]

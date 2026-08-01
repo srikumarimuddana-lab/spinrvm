@@ -95,7 +95,7 @@ Always log the deletion request in `user_deletion_requests` with the scope appli
 
 - **Quarterly** ride volume + incident count to SGI (template in `docs/compliance/sgi-quarterly.md` — to be created)
 - **Annual** driver roster with license + insurance status
-- **On-demand** trip record production within 14 days of subpoena or regulator request — ensure `scripts/compliance_export.py` runs in < 30 min against prod
+- **On-demand** trip record production within 14 days of subpoena or regulator request, target run < 30 min against prod — **not yet built**: `scripts/compliance_export.py` is referenced here but doesn't exist; see `docs/compliance/sgi-quarterly.md` §7 for the confirmed format/definition-of-done and its tracking status before assuming this tooling is live
 
 ## Common pitfalls
 

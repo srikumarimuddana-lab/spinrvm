@@ -2063,33 +2063,42 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   recorded there in the merged PR body, which is not a durable tracking
   location — hence this entry.
 
-### C8. `driver-app-test` reported success while its test fails locally (gate signal may be unreliable)
-- [ ] **Status:** open — **distinct from the fixture bug in
-  [#3041](https://github.com/srikumarimuddana-lab/spinrvm/issues/3041)**,
-  which is separately real and reproducible. The issue here is that CI and a
-  local run disagreed about the same test on the same calendar day.
-  On 2026-08-01 `driver-app-test` failed on PR #3037 commits `1b22c59`,
-  `8f1b863` and `5d84857`, then **passed** on `4a5c976` (job
+### C8. ~~`driver-app-test` reported success while its test fails locally~~ — RESOLVED, was my own measurement error (no gate defect)
+- [x] **Status:** closed 2026-08-01, same day it was filed. **There is no gate
+  reliability problem. The entry as originally written was wrong** and is
+  corrected here rather than deleted, because the reasoning error is the
+  useful part.
+- **What the original entry claimed:** that `driver-app-test` concluded
+  `success` on PR #3037 commit `4a5c976` (job
   [`91408494120`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30714809531/job/91408494120),
-  19:29 UTC) — with no change to `driver-app/` between them; the only diff
-  was one line added to `.github/pull_request_template.md`. A local run
-  immediately after that green CI result still failed:
-  `Tests: 1 failed, 5 passed` at `ActivityView.test.tsx:173`.
-- **Why this matters:** a blocking gate that reports success while the
-  underlying test fails is worse than one that fails noisily — it removes
-  the signal instead of degrading it. #3041's fixture bug explains the
-  *failures*; nothing yet explains the *pass*.
-- **Action:** determine why the job's conclusion diverged from the test
-  result. Not yet ruled out: a retry or `continue-on-error` path in the
-  `driver-app-test` job definition, path-based conditional execution of the
-  test step, or a caching effect. Deliberately not guessed at — needs
-  someone to read the job definition in `.github/workflows/ci.yml` and the
-  full run log rather than infer. Fixing #3041's fixture will make this
-  harder to observe, so investigate before or alongside that fix, not after.
-- **Note for whoever picks this up:** the #3041 fixture failure only
-  reproduces on the 1st of a month unless you fake the clock
-  (`jest.useFakeTimers().setSystemTime(...)`). A green `driver-app-test` on
-  any other day tells you nothing about either item.
+  19:29 UTC) while the same test failed locally on the same day, and that
+  nothing explained the pass.
+- **Actual explanation:** GitHub Actions `pull_request` workflows check out
+  the **merge ref** (`refs/pull/N/merge` — branch merged with base), not the
+  branch head. `.github/workflows/ci.yml` does not override this with an
+  explicit `ref:`, so it gets the default. The fixture fix
+  [#3042](https://github.com/srikumarimuddana-lab/spinrvm/pull/3042)
+  (`0bb951e`) merged to `main` at **19:05 UTC**. Every `driver-app-test` run
+  before that time tested a merge with a `main` that lacked the fix and
+  failed; the 19:29 run tested a merge with a `main` that had it and passed.
+  My local run failed because my working tree was #3037's branch, based on
+  pre-#3042 `main` — so I was comparing CI's *merged* tree against a *stale
+  unmerged* one and reading the difference as a CI defect.
+- **Verification:** on `main` at `7a53caa`,
+  `cd driver-app && TZ=UTC npx jest __tests__/components/ActivityView.test.tsx`
+  → **6 passed, 6 total**, on 2026-08-01 (the 1st, the day the old fixture
+  was supposed to fail).
+- **Lesson worth keeping:** "CI disagrees with my local run" is not evidence
+  of a CI defect until the two are known to be testing the same tree. For
+  `pull_request` workflows they are not the same tree by default. Check what
+  landed on the base branch between the two runs before escalating —
+  `git log --oneline <base>` over the relevant window would have caught this
+  in one command.
+- **Related:** [#3041](https://github.com/srikumarimuddana-lab/spinrvm/issues/3041)
+  (the fixture bug itself) was already fixed by #3042 and is closed. The
+  diagnosis recorded in that issue — `Math.max(1, getDate() - 10)` collapsing
+  the fixture date onto today when today is the 1st — was correct; only my
+  later claim that it was still unfixed was wrong.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

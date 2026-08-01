@@ -722,6 +722,59 @@ jobs:
             --tag spinr-backend:ci-${{ github.sha }} \
             backend/
 
+      # ── TEMPORARY DIAGNOSTIC — CR-2026-002 / issue #3048 ──────────────────
+      # Remove once the msgpack/setuptools finding is explained.
+      #
+      # Trivy reports msgpack 1.1.2 (HIGH) and setuptools 70.3.0 (HIGH) while
+      # its own per-file inventory of the SAME image lists msgpack 1.2.1 and
+      # setuptools 83.0.0. Two hypotheses remain; static analysis has already
+      # ruled out the others:
+      #   - ruled out: a lockfile downgrade. requirements-locked.txt pins
+      #     msgpack==1.2.1 and does not pin setuptools at all, so the install
+      #     after `pip install --upgrade setuptools` cannot pull either back.
+      #   - ruled out: stale files entering via `COPY . .`. .dockerignore
+      #     excludes venv/.venv/*.egg-info and no site-packages or .dist-info
+      #     is committed under backend/.
+      #   - still open (A): a SECOND copy of each package exists in the image
+      #     (e.g. pip vendors its own msgpack) and Trivy reports that one.
+      #   - still open (B): Trivy is preferring an embedded/third-party SBOM
+      #     over its live filesystem scan, as its own WARN in the log suggests.
+      #
+      # The `find` below discriminates: if it prints a 1.1.2/70.3.0 path, it is
+      # (A) and the fix is to remove or exclude that copy. If the only versions
+      # present are 1.2.1/83.0.0, it is (B) and the fix is a scan-invocation
+      # change. Never fails the job — diagnostic only.
+      - name: "DIAGNOSTIC (CR-2026-002): locate every msgpack/setuptools copy"
+        continue-on-error: true
+        run: |
+          IMG=spinr-backend:ci-${{ github.sha }}
+
+          echo "::group::pip list — authoritative installed versions"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "pip list 2>/dev/null | grep -Ei '^(msgpack|setuptools|pip)[[:space:]]'" || true
+          echo "::endgroup::"
+
+          echo "::group::every msgpack/setuptools metadata dir on the filesystem"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "find / -xdev \( -iname 'msgpack*' -o -iname 'setuptools*' \) \
+               \( -name '*.dist-info' -o -name '*.egg-info' \) -print 2>/dev/null" || true
+          echo "::endgroup::"
+
+          echo "::group::pip's vendored packages — pip bundles its own msgpack"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "cat /usr/local/lib/python3.12/site-packages/pip/_vendor/vendor.txt 2>/dev/null || \
+             ls /usr/local/lib/python3.12/site-packages/pip/_vendor/ 2>/dev/null" || true
+          echo "::endgroup::"
+
+          echo "::group::any other python installation on the image"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "ls -d /usr/lib/python3*/dist-packages /usr/local/lib/python3*/site-packages 2>/dev/null" || true
+          echo "::endgroup::"
+
+          echo "::group::SBOM/attestation surface — hypothesis (B)"
+          docker image inspect "$IMG" --format '{{json .Config.Labels}}' || true
+          echo "::endgroup::"
+
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:

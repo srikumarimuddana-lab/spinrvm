@@ -25,9 +25,11 @@ from backend.utils.trip_distance import compute_trip_distances
 
 pytestmark = pytest.mark.integration
 
-_DSN = os.environ.get(
-    "SPINR_PG_TEST_DSN",
-    "host=127.0.0.1 dbname=spinr_parity_test user=spinr_test password=spinr_test",
+_DSN = (
+    os.environ.get("SPINR_PG_TEST_DSN")
+    or os.environ.get("DATABASE_URL")
+    or os.environ.get("PG_CONNECTION_STRING")
+    or "host=127.0.0.1 dbname=spinr_parity_test user=spinr_test password=spinr_test"
 )
 _MIGRATION = os.path.join(os.path.dirname(__file__), "..", "migrations", "54_gps_daily_rollup_fn.sql")
 

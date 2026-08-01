@@ -1,9 +1,10 @@
 // Data Transfer module (backend/routes/admin/data_transfer_export.py):
 // cross-entity search/export/import, SGI forms, compliance report
-// downloads/emails (GST/PST remittance, insurance period audit, driver
-// onboarding), and background export job tracking. Extracted from the
+// downloads (GST/PST remittance, insurance billing, driver roster,
+// airport trips), and background export job tracking. Extracted from the
 // monolithic lib/api.ts as part of the per-domain split — this was the
-// last remaining section.
+// last remaining section. Reports are download-only (no email-delivery
+// option) — an admin downloads and forwards through their own channel.
 
 import { request } from "./client";
 import { useAuthStore } from "@/store/authStore";
@@ -298,69 +299,6 @@ export async function downloadAirportTrips(
     const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`, "airport_trips");
     return { blob, filename: `airport_trips.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
-
-/** Email a compliance report to a @spinr.ca address instead of downloading
- * it — the backend hard-validates the domain, this just calls the same GET
- * endpoint with `email_to` set, which returns a small JSON confirmation
- * instead of a file. */
-async function emailComplianceReport(path: string, emailTo: string): Promise<{ emailed_to: string }> {
-    const store = useAuthStore.getState();
-    const headers: Record<string, string> = {};
-    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
-    const sep = path.includes("?") ? "&" : "?";
-    const res = await fetch(`${path}${sep}email_to=${encodeURIComponent(emailTo)}`, { headers });
-    if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `Could not email report (${res.status})`);
-    }
-    const body = await res.json();
-    // ACTION_ITEMS.md B10: a 202 approval-required body is also `res.ok`
-    // and JSON-shaped like a real {"emailed_to": ...} success response --
-    // without this check, an admin would be told the report was emailed
-    // when nothing was sent.
-    if (body?.approval_required) {
-        throw new Error(
-            "This report needs a different admin's approval before it can be generated or emailed — it's been added to the Export Approvals queue.",
-        );
-    }
-    return body;
-}
-
-export const emailGstPstRemittance = (
-    format: ComplianceReportFormat,
-    emailTo: string,
-    dateFrom?: string,
-    dateTo?: string,
-) =>
-    emailComplianceReport(
-        `/api/admin/compliance/gst-pst-remittance?${new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format }).toString()}`,
-        emailTo,
-    );
-export const emailDriverRoster = (format: ComplianceReportFormat, emailTo: string, status?: string) => {
-    const sp = new URLSearchParams({ format });
-    if (status) sp.set("status", status);
-    return emailComplianceReport(`/api/admin/compliance/driver-roster?${sp.toString()}`, emailTo);
-};
-export const emailInsuranceBillingSgi = (
-    format: ComplianceReportFormat,
-    emailTo: string,
-    dateFrom?: string,
-    dateTo?: string,
-) =>
-    emailComplianceReport(
-        `/api/admin/compliance/insurance-billing-sgi?${new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format }).toString()}`,
-        emailTo,
-    );
-export const emailInsuranceBillingKnightArcher = (
-    format: ComplianceReportFormat,
-    emailTo: string,
-    dateFrom?: string,
-    dateTo?: string,
-) =>
-    emailComplianceReport(
-        `/api/admin/compliance/insurance-billing-knight-archer?${new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format }).toString()}`,
-        emailTo,
-    );
 
 export interface DataTransferJob {
     id: string;

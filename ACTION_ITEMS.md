@@ -557,6 +557,14 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        not re-run locally this pass (relying on this PR's CI as the
        regression gate — see
        `docs/change-log/2026-07-30-a1b-admin-maintenance-fleet-staff-coverage.md`).
+     - `backend/routes/admin/subscriptions.py` — 68.42% → **98%**. Added
+       `tests/test_admin_subscriptions_coverage.py` (32 tests: Spinr Pass
+       plan CRUD, subscription-stats aggregation, subscription-payments
+       pagination/date-filter/legacy-tax-row branches, tax-config update,
+       offer-analytics pagination/truncation/date-parsing, invoice
+       download/resend 404/429/502 branches). No application code changed,
+       no bugs found. See
+       `docs/change-log/2026-08-01-a1b-admin-subscriptions-coverage.md`.
      - `routes/admin/monitoring.py`: 54% → 96% (live-map driver/ride
        fetchers, Redis health/connectivity/flush-prefix, WebSocket health,
        infrastructure snapshot). See

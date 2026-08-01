@@ -2036,8 +2036,35 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   strongest verification available here. Also not exercised against a real
   backend/Supabase instance or a live corporate membership.
 
-### C7. AI PR review is off by design (cost); decide whether to enable it on money/safety/migration surfaces
-- [ ] **Status:** open as a **decision**, not a defect. **Amended 2026-08-01
+### C7. AI PR review is off by design (cost) — DECIDED 2026-08-01: stays off
+- [x] **Status:** closed — **decision taken: leave `ANTHROPIC_API_KEY` unset.**
+  The per-PR API spend is not justified at this repo's volume (~24 merged
+  PRs/day). The workflow remains in the repo, scoped and skipping cleanly;
+  setting the secret is the only step needed to reverse this, so nothing is
+  lost but the running cost. Docs corrected to match in the same change:
+  `.claude/README.md` previously told readers to set the secret and described
+  the deep agent audit as part of the PR pipeline — it now states the review
+  is off and points at the on-demand path instead.
+- **Compensating control (important):** the `spinr-*` audit agents still
+  exist and still work — they are just not automatic. For any diff touching
+  money, auth, migrations, dispatch, or safety, invoke
+  `spinr-security-auditor` / `spinr-money-auditor` /
+  `spinr-migration-reviewer` **manually** via the Agent tool before merge.
+  The semantic rules listed below are the ones no static gate can catch, so
+  skipping the manual pass on those surfaces is where the real exposure sits.
+- **Correction to this entry's earlier wording:** it previously said
+  `CLAUDE.md`'s PR-review-handling section "assumes an automated reviewer
+  exists and has nothing to act on". That conflated two different reviewers.
+  `CLAUDE.md:55-63` is about **Codex** (`chatgpt-codex-connector`), a
+  separate GitHub App unaffected by `ANTHROPIC_API_KEY`; it was never
+  describing this workflow. Nothing in `CLAUDE.md` referenced the Claude
+  review at all — the inaccurate claims were in `.claude/README.md`.
+- **Separately worth checking (not part of this decision):** no Codex review
+  appeared on #3037, #3070, #3074 or #3086 either. If Codex is also inactive,
+  `CLAUDE.md:55-63` is instructing agents to act on findings that never
+  arrive — but that is a different integration with a different cause, and
+  was not investigated here rather than assumed.
+- **Prior analysis retained below.** **Amended 2026-08-01
   — the original wording of this entry was wrong** and is corrected here.
   It claimed the missing `ANTHROPIC_API_KEY` was an invisible capability
   gap. It is not: `.github/workflows/claude-review.yml:44-47` documents

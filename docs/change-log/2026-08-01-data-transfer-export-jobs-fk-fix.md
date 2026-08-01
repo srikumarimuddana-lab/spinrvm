@@ -31,7 +31,7 @@ except Exception:
 
 ## 3. Fix / remediation
 
-`backend/migrations/272_data_transfer_export_jobs_admin_id_no_fk.sql` — drops `data_transfer_export_jobs_requested_by_admin_id_fkey`. No column type change (already `TEXT`), no data migration needed (the column was always populated correctly, just unable to satisfy an FK that was never satisfiable). Applied directly to production via Supabase MCP with explicit user confirmation this session, verified via a follow-up `pg_constraint` query showing only the primary key remains on the table.
+`backend/migrations/274_data_transfer_export_jobs_admin_id_no_fk.sql` — drops `data_transfer_export_jobs_requested_by_admin_id_fkey`. No column type change (already `TEXT`), no data migration needed (the column was always populated correctly, just unable to satisfy an FK that was never satisfiable). Applied directly to production via Supabase MCP with explicit user confirmation this session, verified via a follow-up `pg_constraint` query showing only the primary key remains on the table.
 
 ## 4. Risk & impact on existing functionality
 
@@ -47,7 +47,7 @@ except Exception:
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/272_data_transfer_export_jobs_admin_id_no_fk.sql` | Drops the broken FK | Root-cause fix |
+| `backend/migrations/274_data_transfer_export_jobs_admin_id_no_fk.sql` | Drops the broken FK | Root-cause fix |
 
 ## 7. Before / after
 

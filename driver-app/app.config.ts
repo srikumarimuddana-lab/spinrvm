@@ -33,7 +33,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     ios: ({
         supportsTablet: true,
-        minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54 (now in ExpoConfig types)
+        minimumOsVersion: '16.4', // expo-build-properties 57.x requires ios.deploymentTarget >= 16.4 (was 16.0 under 55.0.14); SDK 55 itself only required 16.0
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         // No ios.config.googleMapsApiKey on purpose: iOS uses Apple Maps. Every
@@ -248,7 +248,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 kotlinVersion: '2.2.21',
             },
             ios: {
-                deploymentTarget: '16.0', // match ios.minimumOsVersion; Firebase pods need >= 15
+                deploymentTarget: '16.4', // match ios.minimumOsVersion; expo-build-properties 57.x hard-validates this must be >= 16.4 (was 16.0, valid under 55.0.14 -- see maybeThrowInvalidVersions in expo-build-properties/build/pluginConfig.js); Firebase pods need >= 15
                 // Compile React Native from source instead of the prebuilt
                 // ReactNativeCore.xcframework. On SDK 55 the prebuilt 0.85.2 core
                 // exposes a 4-arg RCTDevMenuConfiguration(...,bundleConfiguration:)

@@ -2036,6 +2036,61 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   strongest verification available here. Also not exercised against a real
   backend/Supabase instance or a live corporate membership.
 
+### C7. `review` check fails repo-wide — `ANTHROPIC_API_KEY` unset (no automated review is running on any PR)
+- [ ] **Status:** open — the `review` job (Claude Code review action) exits
+  without reviewing on every PR because its API key is empty. Confirmed
+  2026-08-01 by reading the job log for
+  [`91408169618`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30714687039/job/91408169618)
+  on PR #3037: the env block prints `ANTHROPIC_API_KEY:` with no value, the
+  action logs `No buffered inline comments`, and the job concludes
+  `failure`. Reproduced identically on the next commit
+  (job `91408494259`).
+- **Why this matters more than a red check:** PR #3037 received **zero**
+  review comments across its entire life and merged without any automated
+  review. The gate is not merely noisy — it is silently absent. A
+  permanently-red check reads as background noise, which is exactly how a
+  missing review capability stays invisible: nobody investigates the check
+  that is always red. `CLAUDE.md`'s PR-review-handling section assumes an
+  automated reviewer exists and instructs agents to act on its findings;
+  that instruction currently has nothing to act on.
+- **Action:** set the `ANTHROPIC_API_KEY` secret for the repository (or for
+  the environment the `review` workflow runs in), then confirm on the next
+  PR that the job posts at least one review comment rather than just
+  turning green. A green `review` job with no comments is not proof it
+  worked — check for actual review output.
+- **Owner / follow-up:** needs someone with repo-secret access; cannot be
+  fixed from a PR branch. Found while triaging CI on #3037 (docs handoff);
+  recorded there in the merged PR body, which is not a durable tracking
+  location — hence this entry.
+
+### C8. `driver-app-test` reported success while its test fails locally (gate signal may be unreliable)
+- [ ] **Status:** open — **distinct from the fixture bug in
+  [#3041](https://github.com/srikumarimuddana-lab/spinrvm/issues/3041)**,
+  which is separately real and reproducible. The issue here is that CI and a
+  local run disagreed about the same test on the same calendar day.
+  On 2026-08-01 `driver-app-test` failed on PR #3037 commits `1b22c59`,
+  `8f1b863` and `5d84857`, then **passed** on `4a5c976` (job
+  [`91408494120`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30714809531/job/91408494120),
+  19:29 UTC) — with no change to `driver-app/` between them; the only diff
+  was one line added to `.github/pull_request_template.md`. A local run
+  immediately after that green CI result still failed:
+  `Tests: 1 failed, 5 passed` at `ActivityView.test.tsx:173`.
+- **Why this matters:** a blocking gate that reports success while the
+  underlying test fails is worse than one that fails noisily — it removes
+  the signal instead of degrading it. #3041's fixture bug explains the
+  *failures*; nothing yet explains the *pass*.
+- **Action:** determine why the job's conclusion diverged from the test
+  result. Not yet ruled out: a retry or `continue-on-error` path in the
+  `driver-app-test` job definition, path-based conditional execution of the
+  test step, or a caching effect. Deliberately not guessed at — needs
+  someone to read the job definition in `.github/workflows/ci.yml` and the
+  full run log rather than infer. Fixing #3041's fixture will make this
+  harder to observe, so investigate before or alongside that fix, not after.
+- **Note for whoever picks this up:** the #3041 fixture failure only
+  reproduces on the 1st of a month unless you fake the clock
+  (`jest.useFakeTimers().setSystemTime(...)`). A green `driver-app-test` on
+  any other day tells you nothing about either item.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)

@@ -24,7 +24,13 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: process.env.CI ? 'github' : 'html',
+  // 'github' alone gives inline annotations in the Actions UI but never
+  // writes playwright-report/ — the path ci.yml's "Upload Playwright
+  // report" step expects, so every CI run had nothing to upload and a
+  // failure would have no downloadable HTML report to debug from.
+  // Keep the annotations, add 'html' so the artifact actually exists.
+  // Same fix as admin-dashboard/playwright.config.ts (#3115).
+  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'html',
   timeout: 30_000,
   expect: { timeout: 8_000 },
   use: {

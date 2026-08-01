@@ -1363,6 +1363,42 @@ async def _reconcile_pickup(
     return geocoded["lat"], geocoded["lng"], geocoded.get("address") or pickup_address, True, True, drift_km
 
 
+# A hallucinated or already-past scheduled_time must never reach the
+# confirmation card (AI4): the model can put essentially any <=80-char string
+# in this field, and until now it only failed at Confirm
+# (schemas.CreateRideRequest.validate_scheduled_time), after the rider had
+# already seen it rendered. This mirrors that rule's shape (ISO-8601 +
+# >=5-min lead) here, earlier — the Confirm-time check is unchanged and
+# still the authoritative guard (defense in depth).
+_MIN_SCHEDULE_LEAD_MINUTES = 5
+
+
+def _validate_scheduled_time(value: str) -> tuple:
+    """Parse + validate a model-supplied scheduled_time before it reaches the
+    proposal card. Returns ``(parsed_utc_datetime, None)`` on success or
+    ``(None, error_message)`` on failure. Never raises — a bad value must
+    become a normal tool result the model can relay and re-prompt on, not an
+    unhandled exception that kills the tool call.
+    """
+    from datetime import timedelta
+
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None, (
+            f"'{value}' is not a valid ISO-8601 date/time — ask the rider for the date "
+            "and time again and pass it as ISO-8601 (e.g. '2026-08-01T15:30:00-06:00')."
+        )
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    if parsed < datetime.now(timezone.utc) + timedelta(minutes=_MIN_SCHEDULE_LEAD_MINUTES):
+        return None, (
+            f"'{value}' is not far enough in the future — a scheduled pickup must be at "
+            f"least {_MIN_SCHEDULE_LEAD_MINUTES} minutes from now. Ask the rider for a later time."
+        )
+    return parsed, None
+
+
 async def propose_ride_booking(
     user: Dict[str, Any],
     pickup_lat: float,
@@ -1378,6 +1414,13 @@ async def propose_ride_booking(
     confirm_same_location: bool = False,
     quoted_total: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # Cheap and synchronous — check before any Maps spend or card is built,
+    # so a hallucinated/past time never triggers wasted geocoding.
+    if scheduled_time:
+        _parsed_schedule, schedule_error = _validate_scheduled_time(scheduled_time)
+        if schedule_error:
+            return {"error": schedule_error}
+
     # The card is the last stop before dispatch — a Walmart label over
     # Southland Mall coordinates must die here even if the quote step was
     # skipped or passed a different pair. Runs concurrently with the pickup
@@ -1625,7 +1668,9 @@ register(
                 "scheduled_time": {
                     "type": "string",
                     "maxLength": 80,
-                    "description": "ISO-8601 pickup time for scheduled rides. Omit for now.",
+                    "description": (
+                        "ISO-8601 pickup time for scheduled rides, at least 5 minutes from now. Omit for now."
+                    ),
                 },
                 "payment_method": {
                     "type": "string",

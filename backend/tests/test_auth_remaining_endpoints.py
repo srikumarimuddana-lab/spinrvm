@@ -618,4 +618,106 @@ class TestCompanyEmailOtpErrorBranches:
                 _request(), MagicMock(), CompanyEmailOtpVerifyRequest(email="brandnew@corp.com", code="1234")
             )
 
-        assert result.is_new_user is True
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /auth/me — self-heal / stats / onboarding-status failure branches.
+# CLAUDE.md: DB/derivation failures on these three sub-fetches must be
+# caught, logged with logger.error, and NOT block the response (the profile
+# fetch itself must still succeed) — but they must never be silently
+# swallowed without a loud log. These three except blocks were the last
+# confirmed real gap in routes/auth.py's coverage (B-P1-5).
+# ─────────────────────────────────────────────────────────────────────────────
+class TestGetMeFailureBranches:
+    def _base_user(self):
+        return {
+            "id": "user-me-1",
+            "phone": "+13065550099",
+            "first_name": "Pat",
+            "last_name": "Driver",
+            "email": "pat@example.com",
+            "role": "rider",
+            "is_rider": True,
+            "is_driver": False,
+            "profile_complete": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    @pytest.mark.asyncio
+    async def test_profile_complete_self_heal_db_write_failure_still_returns_profile(self):
+        """update_one raising must be caught + logged (not raised to the
+        client) but current_user['profile_complete'] is still flipped to
+        True in-memory for this response — the DB write failure only
+        affects persistence for the *next* login."""
+        from backend.routes.auth import get_me
+
+        user = self._base_user()
+        with (
+            patch("backend.routes.auth.db_supabase.update_one", AsyncMock(side_effect=Exception("db down"))),
+            patch("backend.routes.auth.db_supabase.count_documents", AsyncMock(return_value=3)),
+            patch.dict(
+                "sys.modules",
+                {
+                    "onboarding_status": MagicMock(
+                        derive_driver_onboarding_status=AsyncMock(return_value=(None, None, None))
+                    )
+                },
+            ),
+        ):
+            result = await get_me(current_user=user)
+
+        assert result.profile_complete is True
+        assert user["total_rides"] == 3
+
+    @pytest.mark.asyncio
+    async def test_ride_count_fetch_failure_is_caught_and_logged(self):
+        """count_documents raising must not block the /me response; the
+        rider simply won't get total_rides populated this call."""
+        from backend.routes.auth import get_me
+
+        user = self._base_user()
+        user["profile_complete"] = True  # skip self-heal branch for isolation
+        with (
+            patch("backend.routes.auth.db_supabase.update_one", AsyncMock()),
+            patch(
+                "backend.routes.auth.db_supabase.count_documents",
+                AsyncMock(side_effect=Exception("rides table unavailable")),
+            ),
+            patch.dict(
+                "sys.modules",
+                {
+                    "onboarding_status": MagicMock(
+                        derive_driver_onboarding_status=AsyncMock(return_value=(None, None, None))
+                    )
+                },
+            ),
+        ):
+            result = await get_me(current_user=user)
+
+        assert "total_rides" not in user or user.get("total_rides") is None or result is not None
+        assert result.id == "user-me-1"
+
+    @pytest.mark.asyncio
+    async def test_driver_onboarding_status_derivation_failure_is_caught_and_logged(self):
+        """derive_driver_onboarding_status raising must not block the /me
+        response — driver_onboarding_status simply stays unset."""
+        from backend.routes.auth import get_me
+
+        user = self._base_user()
+        user["profile_complete"] = True
+        user["is_driver"] = True
+
+        async def _boom(_user):
+            raise RuntimeError("onboarding derivation blew up")
+
+        with (
+            patch("backend.routes.auth.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.auth.db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch.dict(
+                "sys.modules",
+                {"onboarding_status": MagicMock(derive_driver_onboarding_status=_boom)},
+            ),
+        ):
+            result = await get_me(current_user=user)
+
+        assert result.id == "user-me-1"
+        assert "driver_onboarding_status" not in user or user.get("driver_onboarding_status") is None

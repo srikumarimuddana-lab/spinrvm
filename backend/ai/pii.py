@@ -7,7 +7,10 @@ share one implementation.
 
 Names cannot be scrubbed reliably with regex; mitigate via data-minimization:
 system prompts never ask for names, and the patterns below cover the
-highest-risk identifiers (phones, emails, GPS coordinates, postal codes).
+highest-risk identifiers (phones, emails, GPS coordinates, postal codes,
+payment card numbers, grouped SINs). Driver's license numbers are similarly
+unmitigated by regex (no fixed cross-provincial format) and rely on the same
+data-minimization mitigation — see the pattern list below for specifics.
 """
 
 import re
@@ -69,6 +72,50 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
     ),
     # Canadian postal codes (A1A 1A1 or A1A1A1)
     (re.compile(r"\b[A-Za-z]\d[A-Za-z][\s-]?\d[A-Za-z]\d\b"), "[POSTAL]"),
+    # Payment card numbers (PAN). Prefix-gated the same way the NANP phone fix
+    # above is: an ungated 13-19 digit run would collide with this codebase's
+    # own ride/order/session ids (the exact regression documented above for
+    # phones), so a recognized card-network IIN prefix is the discriminator —
+    # Visa (4, 13 or 16 digits), Mastercard (51-55 or the 2221-2720 range, 16
+    # digits), Amex (34/37, 15 digits), Discover (6011 or 65, 16 digits). Each
+    # brand's remaining digits after the prefix are chunked into groups of up
+    # to 4 with an optional space/dash between groups, matching how a card
+    # number is conventionally displayed — Amex's real 4-6-5 grouping is NOT
+    # matched when dash/space-separated (chunked here as 4-4-4-3 instead); a
+    # bare, unseparated Amex number is still caught, which is the common case
+    # for a rider troubleshooting a decline in chat.
+    # CLAUDE.md: "Payment card numbers — Stripe handles; never log even masked
+    # PANs." Spinr never stores or transmits a PAN server-side; this exists
+    # for the case a rider pastes one into an AI chat message or support
+    # ticket while troubleshooting a declined card.
+    (
+        re.compile(
+            r"(?<!\d)(?:"
+            r"4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Visa 16
+            r"|4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{1}"  # Visa 13
+            r"|5[1-5]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Mastercard (legacy range)
+            r"|2(?:22[1-9]|2[3-9]\d|[3-6]\d{2}|7[01]\d|720)[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Mastercard (2-series)
+            r"|3[47]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{3}"  # Amex
+            r"|6011[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Discover (6011)
+            r"|65\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Discover (65)
+            r")(?!\d)"
+        ),
+        "[CARD]",
+    ),
+    # Canadian Social Insurance Number — grouped 3-3-3 only ("123-456-789" /
+    # "123 456 789"). A bare ungrouped 9-digit run is deliberately NOT matched:
+    # unlike the card-prefix gate above, there is no reliable discriminator for
+    # 9 bare digits in this codebase's own log/id shapes, so matching on digit
+    # count alone would repeat the timestamp-collision regression documented
+    # above for phones. The separator is the discriminator instead — it is how
+    # a SIN is conventionally written, and not how this codebase's ids are
+    # formatted.
+    #
+    # Driver's license numbers are NOT covered: format varies by province (see
+    # regulatory-sk.md) with no fixed shape to gate on. Mitigated the same way
+    # as names (see module docstring): prompts.py never asks for a SIN, DL
+    # number, or other government ID.
+    (re.compile(r"(?<!\d)\d{3}[\s-]\d{3}[\s-]\d{3}(?!\d)"), "[GOVID]"),
 ]
 
 # App-generated trip-endpoint coordinates — "[50.40790,-104.65010]" — written

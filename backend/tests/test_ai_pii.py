@@ -163,6 +163,65 @@ class TestPostalCodes:
         assert scrub_pii(text) == text
 
 
+class TestCardNumbers:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "my card is 4111111111111111",  # Visa, bare
+            "my card is 4111-1111-1111-1111",  # Visa, dashed
+            "my card is 4111 1111 1111 1111",  # Visa, spaced
+            "card 5500000000000004 declined",  # Mastercard (legacy range)
+            "card 2223000048400011 declined",  # Mastercard (2-series range)
+            "amex 340000000000009 was charged twice",  # Amex, 15 digits
+            "discover 6011000000000004 keeps failing",  # Discover
+        ],
+    )
+    def test_card_variants_redacted(self, text):
+        scrubbed = scrub_pii(text)
+        assert "[CARD]" in scrubbed
+        assert "1111" not in scrubbed and "0004" not in scrubbed and "0009" not in scrubbed
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "ride reference 9999888877776666",  # 16 digits, not a recognized IIN prefix
+            "session token 1234567890123456",  # ditto — starts with 1, no brand starts there
+            "spinr_dispatch_offer_to_accept_duration_ms=1234567890123",  # long metric value
+        ],
+    )
+    def test_unprefixed_long_digit_runs_are_not_mistaken_for_cards(self, text):
+        """Same discriminator principle as the NANP phone fix: gate on a
+        recognized card-network prefix, not digit count alone, or every long
+        internal id becomes a false positive."""
+        assert scrub_pii(text) == text
+
+
+class TestGovernmentIds:
+    @pytest.mark.parametrize("sin", ["123-456-789", "123 456 789"])
+    def test_grouped_sin_redacted(self, sin):
+        scrubbed = scrub_pii(f"my SIN is {sin}")
+        assert "[GOVID]" in scrubbed
+        assert "456" not in scrubbed
+
+    def test_bare_ungrouped_nine_digits_is_not_redacted(self):
+        """Deliberate scope limit, documented in pii.py: an ungrouped 9-digit
+        run has no reliable discriminator (unlike the card-prefix gate), so
+        matching on digit count alone would repeat the timestamp-collision
+        regression. Only the separated 3-3-3 form is covered."""
+        assert scrub_pii("order number 123456789") == "order number 123456789"
+
+    def test_extra_leading_digit_is_not_mistaken_for_a_sin(self):
+        # A 3-3-3 shape immediately preceded by another digit (no separator)
+        # must be rejected by the (?<!\d) lookbehind, not matched starting one
+        # character in. Deliberately NOT using a trailing-digit variant here:
+        # any 3-3-4 digit shape (e.g. "123-456-7890") is caught first by the
+        # pre-existing, unrelated phone-separator pattern earlier in
+        # _PII_PATTERNS (it doesn't validate area codes), so it isn't a clean
+        # test of the SIN pattern's own boundary.
+        text = "ref 9123-456-789 open"
+        assert scrub_pii(text) == text
+
+
 class TestComposite:
     def test_multiple_identifiers_in_one_message(self):
         scrubbed = scrub_pii("I'm Jane, 306-555-1234, jane@x.ca, at 52.1318,-106.6608, S7K 3R5")

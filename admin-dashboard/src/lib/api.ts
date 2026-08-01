@@ -497,6 +497,25 @@ export type {
     DataTransferJob,
 } from "./api/data-transfer";
 export {
+    getSentryConfig,
+    getSentryIssues,
+    getSentryIssueDetail,
+    updateSentryIssueStatus,
+} from "./api/sentry";
+export type {
+    SentrySurface,
+    SentryIssueStatus,
+    SentryIssue,
+    SentrySurfaceConfig,
+    SentryConfig,
+    SentryIssuesResponse,
+    SentryStackFrame,
+    SentryException,
+    SentryTag,
+    SentryIssueDetail,
+    SentryStatusUpdateResponse,
+} from "./api/sentry";
+export {
     getApprovalQueue,
     getExpiringDocs,
     nudgeDriverExpiry,

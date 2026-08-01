@@ -8,7 +8,7 @@ import {
     Flame, Building2, LifeBuoy, HelpCircle,
     Menu, X,
     Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText,
+    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText, Bug,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -132,6 +132,10 @@ const NAV_GROUPS: NavGroup[] = [
         title: "System",
         items: [
             { href: "/dashboard/monitoring/redis", label: "Redis & Infra", icon: Activity, module: "settings" },
+            // superAdminOnly: the backend mounts /api/admin/sentry under
+            // require_super_admin (raw production error data), so an
+            // "admin"-role user would see the entry and 403 on every call.
+            { href: "/dashboard/sentry-logs", label: "Sentry Issues", icon: Bug, module: "settings", superAdminOnly: true },
             { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "settings" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
             // module "ai_console" is granted to no staff role — combined with

@@ -41,13 +41,20 @@ function monthToDateDefaults(): { from: string; to: string } {
 /** Shared From/To date-range control for every date-ranged Compliance
  * report — replaces the old rolling-N-days shorthand dropdown. Defaults
  * to the current calendar month, matching the backend's own default when
- * date_from/date_to are omitted. */
+ * date_from/date_to are omitted.
+ *
+ * `idPrefix` keeps each call site's From/To ids unique — only one
+ * TabsContent is mounted at a time (Radix doesn't forceMount here), so
+ * literal collisions can't happen today, but four call sites share this
+ * component and ids are cheap to keep unique regardless. */
 function DateRangeFields({
+    idPrefix,
     from,
     to,
     onFromChange,
     onToChange,
 }: {
+    idPrefix: string;
     from: string;
     to: string;
     onFromChange: (v: string) => void;
@@ -56,12 +63,12 @@ function DateRangeFields({
     return (
         <>
             <div className="space-y-1.5">
-                <Label>From</Label>
-                <Input type="date" className="w-40" value={from} onChange={(e) => onFromChange(e.target.value)} />
+                <Label htmlFor={`${idPrefix}-from`}>From</Label>
+                <Input id={`${idPrefix}-from`} type="date" className="w-40" value={from} onChange={(e) => onFromChange(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-                <Label>To</Label>
-                <Input type="date" className="w-40" value={to} onChange={(e) => onToChange(e.target.value)} />
+                <Label htmlFor={`${idPrefix}-to`}>To</Label>
+                <Input id={`${idPrefix}-to`} type="date" className="w-40" value={to} onChange={(e) => onToChange(e.target.value)} />
             </div>
         </>
     );
@@ -326,6 +333,7 @@ export default function CompliancePage() {
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
                                 <DateRangeFields
+                                    idPrefix="gst-pst"
                                     from={gstPstFrom}
                                     to={gstPstTo}
                                     onFromChange={setGstPstFrom}
@@ -337,7 +345,7 @@ export default function CompliancePage() {
                                         value={gstPstFormat}
                                         onValueChange={(v) => setGstPstFormat(v as ComplianceReportFormat)}
                                     >
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -381,6 +389,7 @@ export default function CompliancePage() {
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
                                 <DateRangeFields
+                                    idPrefix="sgi"
                                     from={sgiFrom}
                                     to={sgiTo}
                                     onFromChange={setSgiFrom}
@@ -389,7 +398,7 @@ export default function CompliancePage() {
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={sgiFormat} onValueChange={(v) => setSgiFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -431,11 +440,11 @@ export default function CompliancePage() {
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
-                                <DateRangeFields from={kaFrom} to={kaTo} onFromChange={setKaFrom} onToChange={setKaTo} />
+                                <DateRangeFields idPrefix="ka" from={kaFrom} to={kaTo} onFromChange={setKaFrom} onToChange={setKaTo} />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={kaFormat} onValueChange={(v) => setKaFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -481,7 +490,7 @@ export default function CompliancePage() {
                                 <div className="space-y-1.5">
                                     <Label>Status</Label>
                                     <Select value={rosterStatus} onValueChange={setRosterStatus}>
-                                        <SelectTrigger className="w-44">
+                                        <SelectTrigger className="w-44" aria-label="Status">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -498,7 +507,7 @@ export default function CompliancePage() {
                                         value={rosterFormat}
                                         onValueChange={(v) => setRosterFormat(v as ComplianceReportFormat)}
                                     >
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -545,8 +554,9 @@ export default function CompliancePage() {
                             <CardContent className="space-y-4">
                                 <div className="flex flex-wrap items-end gap-4">
                                     <div className="space-y-1.5">
-                                        <Label>Tax year</Label>
+                                        <Label htmlFor="t4a-tax-year">Tax year</Label>
                                         <Input
+                                            id="t4a-tax-year"
                                             type="number"
                                             className="w-28"
                                             value={t4aYear}
@@ -558,7 +568,7 @@ export default function CompliancePage() {
                                     <div className="space-y-1.5">
                                         <Label>Format</Label>
                                         <Select value={t4aFormat} onValueChange={(v) => setT4aFormat(v as ComplianceReportFormat)}>
-                                            <SelectTrigger className="w-32">
+                                            <SelectTrigger className="w-32" aria-label="Format">
                                                 <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent>
@@ -607,6 +617,7 @@ export default function CompliancePage() {
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
                                 <DateRangeFields
+                                    idPrefix="airport"
                                     from={airportFrom}
                                     to={airportTo}
                                     onFromChange={setAirportFrom}
@@ -615,7 +626,7 @@ export default function CompliancePage() {
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={airportFormat} onValueChange={(v) => setAirportFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>

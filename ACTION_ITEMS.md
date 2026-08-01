@@ -545,6 +545,18 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        not re-run locally this pass (relying on this PR's CI as the
        regression gate — see
        `docs/change-log/2026-07-30-a1b-admin-wallet-users-coverage.md`).
+     - `backend/routes/admin/maintenance.py` — **99%**. Added
+       `tests/test_admin_maintenance_coverage.py`.
+     - `backend/routes/admin/vehicle_fleet.py` — **94%**. Added
+       `tests/test_admin_vehicle_fleet_coverage.py`.
+     - `backend/routes/admin/staff.py` — **89%**. Added
+       `tests/test_admin_staff_coverage.py` (internal-staff account CRUD:
+       password validation, role presets, super_admin demotion guard,
+       session revoke on deactivation, credential stripping).
+       All three: no application code changed, no bugs found. Full suite
+       not re-run locally this pass (relying on this PR's CI as the
+       regression gate — see
+       `docs/change-log/2026-07-30-a1b-admin-maintenance-fleet-staff-coverage.md`).
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth

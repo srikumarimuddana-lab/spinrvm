@@ -24,6 +24,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 PHONE = "+13065203304"
 
@@ -217,3 +218,102 @@ class TestVerifyOtpDbErrorIsNotAWrongCode:
         assert excinfo.value.status_code == 503
         # The correct-code-during-a-DB-blip user must NOT be penalised.
         record_failure.assert_not_called()
+
+
+class TestEnforceOtpSendCap:
+    """_enforce_otp_send_cap fail-CLOSED behavior (C5 real-SMS send
+    throttle): a 30s min-interval + hourly cap, and 503 on Redis errors
+    so an outage can't be used to bypass the SMS cap."""
+
+    def test_min_interval_returns_429(self):
+        from backend.routes.auth import _enforce_otp_send_cap
+
+        with patch("backend.routes.auth.redis_get", AsyncMock(return_value="1")):
+            with pytest.raises(HTTPException) as excinfo:
+                asyncio.run(_enforce_otp_send_cap(PHONE))
+        assert excinfo.value.status_code == 429
+        assert "Retry-After" in excinfo.value.headers
+
+    def test_hourly_cap_returns_429(self):
+        from backend.routes.auth import _OTP_SEND_MAX_PER_HOUR, _enforce_otp_send_cap
+
+        with (
+            patch("backend.routes.auth.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.auth.redis_incr", AsyncMock(return_value=_OTP_SEND_MAX_PER_HOUR + 1)),
+            patch("backend.routes.auth.redis_expire", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as excinfo:
+                asyncio.run(_enforce_otp_send_cap(PHONE))
+        assert excinfo.value.status_code == 429
+
+    def test_redis_error_fails_closed_503(self):
+        """Redis unavailable during the send-cap check must not silently
+        allow unlimited SMS sends — fail closed with 503."""
+        from backend.routes.auth import _enforce_otp_send_cap
+
+        with patch("backend.routes.auth.redis_get", AsyncMock(side_effect=RuntimeError("redis down"))):
+            with pytest.raises(HTTPException) as excinfo:
+                asyncio.run(_enforce_otp_send_cap(PHONE))
+        assert excinfo.value.status_code == 503
+
+    def test_under_cap_allows_send(self):
+        from backend.routes.auth import _enforce_otp_send_cap
+
+        with (
+            patch("backend.routes.auth.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.auth.redis_incr", AsyncMock(return_value=1)),
+            patch("backend.routes.auth.redis_expire", AsyncMock()),
+            patch("backend.routes.auth.redis_set", AsyncMock()) as set_mock,
+        ):
+            asyncio.run(_enforce_otp_send_cap(PHONE))
+        set_mock.assert_called_once()
+
+
+class TestSendOtpProductionNoTwilioRefuses:
+    """Production with Twilio not configured must refuse to issue an OTP
+    (no static-code dev bypass in production) — 503, not a silent 200
+    with an unusable code."""
+
+    def test_production_without_twilio_returns_503(self):
+        from backend.routes.auth import send_otp
+        from backend.schemas import SendOTPRequest
+        from backend.utils.error_handling import SpinrException
+
+        body = SendOTPRequest(phone=PHONE)
+        request = MagicMock()
+        request.client = MagicMock(host="127.0.0.1")
+
+        with (
+            patch("backend.routes.auth.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.auth.settings.ENV", "production"),
+        ):
+            inner = _resolve_inner(send_otp)
+            with pytest.raises(SpinrException) as excinfo:
+                asyncio.run(inner(request, body))
+        assert excinfo.value.status_code == 503
+
+
+class TestSendOtpDbStoreFailure:
+    """If storing the OTP record fails, /send-otp must surface a 503
+    rather than returning success='True' — a missing OTP row makes every
+    subsequent /verify-otp fail, so silently returning 200 would strand
+    the user."""
+
+    def test_otp_store_failure_returns_503(self):
+        from backend.routes.auth import send_otp
+        from backend.schemas import SendOTPRequest
+        from backend.utils.error_handling import SpinrException
+
+        body = SendOTPRequest(phone=PHONE)
+        request = MagicMock()
+        request.client = MagicMock(host="127.0.0.1")
+
+        with (
+            patch("backend.routes.auth.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.auth.settings.ENV", "development"),
+            patch("backend.routes.auth.db_supabase.delete_many", AsyncMock(side_effect=Exception("db down"))),
+        ):
+            inner = _resolve_inner(send_otp)
+            with pytest.raises(SpinrException) as excinfo:
+                asyncio.run(inner(request, body))
+        assert excinfo.value.status_code == 503

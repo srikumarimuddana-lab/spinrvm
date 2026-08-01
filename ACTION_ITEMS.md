@@ -404,6 +404,27 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        found. Remaining gap is deeper validation branches and the
        dual-import fallback. See
        `docs/change-log/2026-07-30-a1b-auth-remaining-endpoints-coverage.md`.
+       **Update 2026-08-01 — done, 84.6%**: closed the last real gap —
+       `GET /me`'s three failure branches (`profile_complete` self-heal DB
+       write, rider ride-count fetch, driver-onboarding-status derivation)
+       had zero coverage despite each being explicitly commented as a
+       "must log, never silently swallow" path (one citing B-P1-5 /
+       CLAUDE.md directly). Added `TestGetMeFailureBranches` (3 tests,
+       `tests/test_auth_remaining_endpoints.py`) confirming all three
+       already correctly log-and-continue — no bug found, closes coverage
+       on already-correct behavior. Also added 6 tests to
+       `tests/test_auth_send_otp.py` for `send_otp`'s rate-limit (per-
+       minute/hourly 429), Redis-fail-closed 503, production-without-
+       Twilio 503, and OTP-store-write-failure 503 branches. No
+       application code changed. Full suite: `6715 passed, 8 skipped,
+       1 xfailed, 0 failed`. Remaining 15.4% is dual-import fallback plus
+       lower-value validation/log-only branches — diminishing returns, not
+       pursued further. See
+       `docs/change-log/2026-08-01-a1b-routes-auth-coverage-finish.md`.
+       **This closes Track 1 item 3 (auth/RLS-adjacent code) — every file
+       in this item is now at or above its target, and with items 1
+       (corporate), 2 (safety), and 4 (`backend/routes/admin/`) already
+       closed, Track 1 of A1b is now fully complete.**
      - `routes/admin/auth.py` — **done, 94%** (was 70%, re-measured fresh
        against the full suite — the previously-tracked 64-70% figure was in
        the right ballpark). The endpoint was well-covered for login/MFA/

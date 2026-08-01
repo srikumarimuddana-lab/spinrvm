@@ -22,9 +22,28 @@ Phases 1–4 are independent and may run **in any order or in parallel branches*
 Phases 5–6 are research/design deliverables. Phases 7–11 are follow-on work —
 except **Phase 11 (CI gate health audit), which should be treated as high
 priority**, on a par with Phases 1–4. It was added after observing four of five
-non-guardrail CI gates go red on a docs-only PR, and it contains the one unresolved
-question that could outrank everything else here: whether `backend-test` is
-currently green on `main`.
+non-guardrail CI gates go red on a docs-only PR.
+
+> **Update 2026-08-01 — the "is `backend-test` green on `main`?" question is
+> answered, and several gates below are already fixed.**
+> `backend-test` was never flaky and had no DSN bug. It was failing on
+> [#3029](https://github.com/srikumarimuddana-lab/spinrvm/issues/3029), a
+> deterministic test failure on `main`, fixed by #3030 (`5097854`) at 18:15 UTC.
+> `pull_request` jobs run on the **merge ref**, so commits pushed before that
+> tested a broken `main` and commits after did not — which is what looked like
+> flakiness. The same mechanism explains the `driver-app-test` flip (fixed by
+> #3042) and is written up as `ACTION_ITEMS.md` C8.
+>
+> Also since fixed: `G4b · yarn audit (shared)` (#3109 — the lockfile described
+> a peer-dependency tree nothing installs), the G4b matrix cancelling its three
+> sibling legs (#3109 — `fail-fast: false`), and `Visual regression` (#3113 —
+> it was red *by design* pending baselines).
+>
+> Phase 11 remains high priority, but its core question is now narrower: a
+> recurring misuse of `continue-on-error` as if it means "do not report
+> failure". It does not — it only stops a job blocking a merge, so any job
+> marked that way sits permanently red. That single misunderstanding accounts
+> for most of the red gates this document was written about.
 
 ---
 
@@ -611,7 +630,7 @@ PR #3037 added **one markdown file, 614 lines, zero code**. Five checks went red
 
 | Check | Cause | Caused by the diff? |
 |---|---|---|
-| `backend-test` | Postgres service logged `role "spinr_test" does not exist` while `ci.yml` sets `POSTGRES_USER: postgres` / `POSTGRES_DB: spinr_test` — a swapped user/database in a DSN built somewhere in the test path | No |
+| `backend-test` | **CORRECTED 2026-08-01** — the original entry here blamed a swapped user/database in a test DSN, inferred from `role "spinr_test" does not exist` in the Postgres *service container* log. That was wrong: it is benign service-container noise, and `ci.yml` is internally consistent — the service block and the test step's `DATABASE_URL` both use user `postgres` against database `spinr_test` on `localhost:5432` (see `ci.yml` for the literal values; not pasted here because the pre-commit secret scanner correctly flags DSN-shaped strings). The actual failure was [#3029](https://github.com/srikumarimuddana-lab/spinrvm/issues/3029) — `test_3d_warning_skipped_when_flag_already_set`, deterministic on `main`, fixed by #3030 (`5097854`) at 18:15 UTC. It was also **not flaky**: `pull_request` jobs run on the merge ref, so the two commits pushed before 18:15 tested a broken `main` and the one pushed after did not. | No |
 | `driver-app-test` | `__tests__/components/ActivityView.test.tsx:173` expects `No Rides Found`; component renders ride rows. Reproduced locally: 1 failed, 5 passed | No |
 | `G6 · Trivy container scan` | Scan step reported success and SARIF uploaded cleanly; no `##[error]` found in the retrievable log. Related known finding tracked as ACTION_ITEMS **C6** | No |
 | `G4b · yarn audit (shared)` | Dependency audit | No |
@@ -707,7 +726,7 @@ CONSTRAINTS:
 
 #### Two follow-on tickets this will generate (do not fix inside Phase 11)
 - **`ActivityView` period-filter empty state** — test asserts `No Rides Found`; component renders ride rows. Either the fixture is stale or there is a real driver-app bug. Someone who owns the period-stats behaviour must decide which, because "fixing" the assertion could bury a user-visible defect.
-- **Swapped Postgres user/database in the backend test DSN** — something authenticates as user `spinr_test` when that is the database name and `postgres` is the user.
+- ~~**Swapped Postgres user/database in the backend test DSN**~~ — **WITHDRAWN 2026-08-01. Do not chase this; there is no such bug.** `ci.yml` is internally consistent: the service sets `POSTGRES_USER: postgres` / `POSTGRES_DB: spinr_test`, and the test step's `DATABASE_URL` connects as user `postgres` to database `spinr_test` — user and database are correct in both, not swapped. The `role "spinr_test" does not exist` line came from the Postgres *service container's own* log, which is benign startup/healthcheck noise, not the job's failure. The real failure was #3029, fixed by #3030. This item existed only because I read a service-container log line as the job's root cause without checking `ci.yml` — the same class of error as C8 in `ACTION_ITEMS.md`.
 
 ---
 

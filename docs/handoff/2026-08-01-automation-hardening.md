@@ -19,7 +19,12 @@ session with no prior context** — every prompt restates the evidence it needs.
 one logical change each, per the `CLAUDE.md` rule "one logical change per commit".
 
 Phases 1–4 are independent and may run **in any order or in parallel branches**.
-Phases 5–6 are research/design deliverables. Phases 7–10 are follow-on work.
+Phases 5–6 are research/design deliverables. Phases 7–11 are follow-on work —
+except **Phase 11 (CI gate health audit), which should be treated as high
+priority**, on a par with Phases 1–4. It was added after observing four of five
+non-guardrail CI gates go red on a docs-only PR, and it contains the one unresolved
+question that could outrank everything else here: whether `backend-test` is
+currently green on `main`.
 
 ---
 
@@ -123,7 +128,7 @@ Commit with a conventional-commit message and report what you changed.
 
 ---
 
-# Phase 2 — Correct two factual errors in CLAUDE.md
+# Phase 2 — Correct three documented-convention errors
 
 **Priority: high (one is a security control). Effort: XS.**
 
@@ -148,7 +153,7 @@ confirmed end-to-end" — i.e. the sprint file was right and `CLAUDE.md` was nev
 ### Prompt
 
 ```
-Correct two verified factual errors in Spinr's CLAUDE.md.
+Correct three verified errors in Spinr's documented conventions.
 
 ERROR 1 — Admin token TTL (security control stated incorrectly)
 CLAUDE.md line 217 currently reads:
@@ -595,6 +600,114 @@ pointed the other way. Phases 1–3 correct docs that overstate what the code do
 this phase overstated what the code does **not** do. Both come from reasoning about
 the repo without checking it. The lesson for every phase here stands: **verify against
 the repo before acting, even when the evidence block above looks authoritative.**_
+
+### Phase 11 — CI gate health audit
+
+**Priority: high — arguably above Phases 7–9. Effort: S (audit) + M (fixes it surfaces).**
+
+#### Verified evidence (observed live on PR #3037, 2026-08-01)
+
+PR #3037 added **one markdown file, 614 lines, zero code**. Five checks went red on it:
+
+| Check | Cause | Caused by the diff? |
+|---|---|---|
+| `backend-test` | Postgres service logged `role "spinr_test" does not exist` while `ci.yml` sets `POSTGRES_USER: postgres` / `POSTGRES_DB: spinr_test` — a swapped user/database in a DSN built somewhere in the test path | No |
+| `driver-app-test` | `__tests__/components/ActivityView.test.tsx:173` expects `No Rides Found`; component renders ride rows. Reproduced locally: 1 failed, 5 passed | No |
+| `G6 · Trivy container scan` | Scan step reported success and SARIF uploaded cleanly; no `##[error]` found in the retrievable log. Related known finding tracked as ACTION_ITEMS **C6** | No |
+| `G4b · yarn audit (shared)` | Dependency audit | No |
+| `G4c · npm audit (admin-dashboard)` | Dependency audit | No |
+
+Meanwhile all 7 `ci-guardrails` gates passed. So **four of five non-guardrail gates were red for reasons unrelated to the change**.
+
+Two further confirmed sources of ambiguity:
+
+- `.github/workflows/security-gates.yml` header still reads *"Non-blocking for the first 2 weeks — treat as baselining window. After that, flip `continue-on-error` to `false` for each job to enforce"* — **undated**. In reality the file now has a mix: most jobs are `continue-on-error: false` (blocking), two are `true` (advisory). Nobody can tell which gates block without reading every job.
+- `ci-guardrails.yml`'s `coverage-regression-gate` is `continue-on-error: true` (advisory) while `change-impact-log-gate` is `false` (blocking). Both render as ordinary checks in the PR UI, indistinguishable at a glance.
+
+#### Why this matters more than it looks
+
+This is the decay pattern `CLAUDE.md` pre-merge gate #8 describes: *"A CI check that's red for a reason unrelated to your diff is a signal the gate itself has decayed, not 'not my problem.'"*
+
+A contributor who opens a PR and sees a wall of red learns to ignore **all** of it — including the one gate that would have caught something real. The cost isn't the red checks; it's that red stops carrying information. For a product in live testing with real riders and drivers, that is a shipping-safety problem, not a tidiness problem.
+
+#### Prompt
+
+```
+Audit the health of every CI gate in the Spinr repo and produce a status report.
+
+WHY (observed live on PR #3037, 2026-08-01):
+That PR added ONE markdown file with zero code. Five checks still went red:
+backend-test, driver-app-test, G6 Trivy container scan, G4b yarn audit (shared),
+and G4c npm audit (admin-dashboard). All five were verified as NOT caused by the
+diff. All 7 ci-guardrails gates passed. So four of five non-guardrail gates were
+red for unrelated reasons. When most gates are red by default, red stops carrying
+information and contributors learn to ignore all of it — including the gate that
+would have caught a real defect.
+
+TASK:
+There are 22 workflow files in .github/workflows/. For EVERY job that produces a
+check run, determine and record:
+  1. Gate name and the workflow file + job id it comes from.
+  2. Blocking or advisory — read the actual `continue-on-error` value at BOTH job
+     and step level. Do not infer it from the job's name or from comments.
+  3. Current status on `main` (not on a PR branch) — green, red, or never-runs.
+  4. If red: how long it has been red, and whether a documented accepted-risk
+     entry exists (an ACTION_ITEMS.md item or a `[CR]` issue via
+     .github/ISSUE_TEMPLATE/ci_change_request.yml).
+  5. Whether the gate is reachable at all — a gate whose path filter or trigger
+     means it never runs on a normal PR is dead weight; say so.
+
+KNOWN STARTING POINTS (verify each, do not take on trust):
+- `security-gates.yml`'s header says gates are "non-blocking for the first 2 weeks
+  — treat as baselining window", undated. That is now WRONG for most jobs in the
+  file: most are `continue-on-error: false` and two are `true`. Reconcile the
+  header with reality and put a DATE on any remaining temporary state.
+- `ci-guardrails.yml`: `coverage-regression-gate` is advisory
+  (`continue-on-error: true`); `change-impact-log-gate` is blocking
+  (`continue-on-error: false`). Both look identical in the PR UI.
+- ACTION_ITEMS C6 tracks a Trivy finding ("stale-pinned base image confirmed; a
+  second finding (msgpack) still unexplained"). Trivy is pinned at 0.70.0 and
+  0.72.0 is available — note it, but do NOT bump the version as part of this
+  audit. Per CLAUDE.md, a version bump must be verified by running the affected
+  build/lint/tests first, and that is its own scoped change.
+
+DELIVER:
+A table at `docs/ci/gate-health-2026-08.md` with one row per gate covering all
+five fields above, followed by:
+  - A prioritised list of gates to FIX (red, blocking, no documented reason).
+  - A list of gates to DOCUMENT (red for a known accepted reason but with no
+    ACTION_ITEMS entry or [CR] issue — file one for each).
+  - A list of gates to RETIRE (never run, permanently advisory with nobody
+    reading them, or superseded by another gate).
+  - An explicit answer to: is `backend-test` currently green on `main`? This was
+    NOT resolved during the original review and is the single most important
+    unknown — if the backend test gate is red on main, 501 backend test files are
+    providing zero merge protection and that outranks every other item in this
+    document.
+
+CONSTRAINTS:
+- This phase is an AUDIT. Produce the report and file [CR] issues.
+- Do NOT fix the underlying failures in this phase, with one exception: if a gate
+  is red purely because of a wrong `continue-on-error` value or a stale comment
+  that misstates whether it blocks, correct that — it is documentation of the
+  gate's own contract.
+- Do NOT bump any dependency or tool version here.
+- Anything requiring a real code fix (e.g. the ActivityView test, the swapped
+  Postgres DSN) becomes its own scoped ticket, not part of this change.
+- CI/docs only, no live-tested runtime surface touched, so NO Change Impact & Risk
+  Log entry is required. Do not create one.
+```
+
+#### Acceptance
+- `docs/ci/gate-health-2026-08.md` exists with one row per check-producing job across all 22 workflows.
+- Blocking-vs-advisory read from actual `continue-on-error` values, not names.
+- Explicit fix / document / retire lists.
+- **`backend-test` status on `main` stated definitively.**
+- `[CR]` issues filed for red-but-accepted gates.
+
+#### Two follow-on tickets this will generate (do not fix inside Phase 11)
+- **`ActivityView` period-filter empty state** — test asserts `No Rides Found`; component renders ride rows. Either the fixture is stale or there is a real driver-app bug. Someone who owns the period-stats behaviour must decide which, because "fixing" the assertion could bury a user-visible defect.
+- **Swapped Postgres user/database in the backend test DSN** — something authenticates as user `spinr_test` when that is the database name and `postgres` is the user.
 
 ---
 

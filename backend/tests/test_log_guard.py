@@ -121,6 +121,24 @@ def test_pii_in_the_rendered_message_is_redacted(sink):
     assert "booking failed" in rec["message"]
 
 
+def test_card_number_in_message_is_caught_at_the_sink(sink):
+    """The _SCREEN cheap-filter must stay in sync with _PII_PATTERNS — a shape
+    scrub_pii can redact but the screen can't see never reaches the scrub at
+    all. Card numbers are the shape most likely to actually appear in a raw
+    log line (an error-handling path interpolating a request body)."""
+    logger.info("card 4111111111111111 declined")
+    rec = _last(sink)
+    assert "4111111111111111" not in rec["message"]
+    assert "[CARD]" in rec["message"]
+
+
+def test_grouped_sin_in_message_is_caught_at_the_sink(sink):
+    logger.info("lookup failed for SIN 123-456-789")
+    rec = _last(sink)
+    assert "123-456-789" not in rec["message"]
+    assert "[GOVID]" in rec["message"]
+
+
 def test_the_t1_leak_shape_is_caught_at_the_sink(sink):
     """The exact pattern the pre-commit hook structurally cannot see: a payload
     interpolated at runtime. None of `lat`, `lng` or `coordinates` appears in the

@@ -45,20 +45,32 @@ except ImportError:  # pragma: no cover - dual import
     from utils.pii import REDACTED, is_sensitive_key  # type: ignore
 
 # Cheap screen: the only things scrub_pii can match are an '@' (email), a
-# decimal-degree pair (coords), a NANP phone shape, or a postal code. If none of
-# those shapes is present we skip the full scrub entirely.
+# decimal-degree pair (coords), a NANP phone shape, a postal code, a
+# card-network-prefixed digit run, or a grouped 3-3-3 SIN. If none of those
+# shapes is present we skip the full scrub entirely.
+#
+# This screen must stay in sync with backend/ai/pii.py's _PII_PATTERNS list —
+# a shape scrub_pii can redact but this screen can't see is silently invisible
+# to the sink guard, which is exactly the "two independent paths that look
+# like one check" failure mode this codebase has shipped before (see
+# CLAUDE.md). When a pattern is added to _PII_PATTERNS, add its cheap
+# discriminator here too.
 #
 # Measured on this codebase's log lines: full scrub_pii costs ~23us on a typical
 # 124-char line and ~436us on a 2.4KB one; this screen costs ~4.7us and ~92us
 # respectively. The screen matters most exactly where the scrub is most expensive.
 #
 # Deliberately NOT screening on a bare 10-digit run: that is every unix timestamp,
-# so it would fire on nearly every line and the screen would buy nothing.
+# so it would fire on nearly every line and the screen would buy nothing. Same
+# reasoning applies to the bare 9-digit SIN shape below — only the grouped form
+# is screened, matching what _PII_PATTERNS actually matches.
 _SCREEN = re.compile(
     r"@"  # email
     r"|-?\d{1,3}\.\d{2,}"  # decimal degrees (also matches money; a cheap over-match)
     r"|(?<![\d+])(?:\+\d{10}|[2-9]\d{9})"  # NANP phone shapes
     r"|\b[A-Za-z]\d[A-Za-z][\s-]?\d[A-Za-z]\d\b"  # postal code
+    r"|(?<!\d)(?:4\d{3}|5[1-5]\d{2}|2(?:2[2-9]\d|[3-6]\d{2}|7[01]\d|720)|3[47]\d{2}|6(?:011|5\d{2}))"  # card prefix
+    r"|(?<!\d)\d{3}[\s-]\d{3}[\s-]\d{3}(?!\d)"  # grouped 3-3-3 SIN
 )
 
 # Bound the walk so a pathological/deep `extra` cannot spin the guard on a hot path.

@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` — added B-AI1 + AI1–AI13 from the AI/MCP guardrail audit). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c (open, not started). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -213,15 +213,17 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   money/dispatch paths now meet their coverage floors.
   </details>
 
-### A1b. Backend test-coverage floor for the rest of the codebase (scoped, not started)
-- [ ] **Status:** open — scoping only, no work started. Raised 2026-07-27 when
+### A1b. Backend test-coverage floor — Track 1 (money/safety/compliance-adjacent)
+- [x] **Status:** closed (2026-08-01) — Track 1 complete. Raised 2026-07-27 when
   the user asked why A1 only touched money/dispatch paths rather than the
   whole backend. Answer: A1's mandate (CLAUDE.md) is explicitly ≥90% for
   payments/fare and ≥80% for rides/dispatch — not a whole-codebase target.
   The global CI floor (`backend/pytest.ini`) is only 60%, and everything
-  outside A1's file list currently sits there or below. This item scopes
-  what a deliberate *next* push would look like, split into two tracks so
-  a future session can pick either without re-deriving priority order.
+  outside A1's file list currently sits there or below. This item originally
+  scoped two tracks; Track 2 (breadth, lower urgency) was never started and
+  is spun off as its own item, **A1c**, below — closing this item's
+  acceptance against Track 1 only, which is fully done (all four priority
+  groups below at or above their 80%/90% targets).
 - **Why:** the same logic that justified A1 (higher-risk code deserves a
   higher bar) applies to other domains this session never touched —
   corporate billing, safety/SOS, auth/RLS, and admin actions all have
@@ -640,13 +642,36 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        suppressions). Same change-log entry.
      - `routes/admin/legal_documents.py`: 47% → 100% (upsert version-bump
        semantics — PIPEDA consent-version tracking). Same change-log entry.
-- **Approach — Track 2 (breadth, lower urgency):** everything else currently
-  below the 60% CI floor or in the 60-80% band with no explicit target —
-  utils/services not touched by Track 1. Lower priority; only worth
-  picking up once Track 1 is done or if a specific file becomes a live
-  incident source. First item picked up 2026-08-01 (below); no other files
-  itemized yet — a future session should measure before assuming any other
-  file's current percentage.
+- **Track 2 (breadth) spun off:** see **A1c** below — not part of this
+  item's acceptance. Note: one Track 2 file (`repositories/wallet_repo.py`)
+  was already picked up under this item on 2026-08-01, before the Track 2
+  split — its progress is preserved under A1c, not lost.
+- **Also explicitly out of scope for this item (unchanged):** frontend test
+  coverage (rider-app/driver-app/admin-dashboard — React Native / Next.js,
+  not measured or covered by anything in A1/A1b) and a correctness audit of
+  fare/pricing *values* (e.g. whether Economy vs. XL vehicle-type pricing
+  in `fare_configs` is intentional — that data lives in the live DB via the
+  admin dashboard's Service Areas → Vehicle Pricing editor, not in this
+  repo, and needs a live DB read to answer, not a coverage pass). Both are
+  real, separate asks the user raised in the same session as A1b's
+  scoping — track them as their own items if/when the user wants them
+  picked up.
+- **Acceptance:** ✅ met for Track 1 — all four priority groups (corporate
+  billing, safety/SOS, auth/RLS, admin routes) measured and closed at or
+  above their 80%/90% targets, per the file-by-file breakdown above. Track 2
+  acceptance was never defined and now lives under A1c, not here.
+
+### A1c. Backend test-coverage floor — Track 2 (breadth, lower priority, in progress)
+- [ ] **Status:** open — spun off from A1b (2026-08-01) when A1b's Track 1
+  work closed out. One file already done (below, picked up under A1b before
+  the split); the rest of Track 2 is unscoped.
+- **Why:** same logic as A1/A1b (higher-risk code deserves a higher bar),
+  but for everything *outside* the money/safety/compliance-adjacent set
+  Track 1 already covers — utils/services with no explicit coverage target,
+  currently sitting at or below the global 60% CI floor. Lower real-world
+  consequence than Track 1's scope, hence lower priority — not launch-gating
+  on its own.
+- **Files:**
   - `backend/repositories/wallet_repo.py` (444 lines — wallet & Stripe
     repository: atomic wallet RPCs, promo application, fare-split, Stripe
     event helpers; extracted from `db_supabase.py` per Phase 4 god-object
@@ -707,25 +732,29 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
     contextvar reset to `conftest.py` so no other file has to defend against
     this individually.
     See `docs/change-log/2026-08-01-a1b-wallet-repo-coverage.md`.
+  - No other files itemized yet — a future session should measure before
+    assuming any other file's current percentage (don't trust stale tracked
+    percentages; A1b found several files already better-covered than
+    assumed once measured against the full suite).
+- **Approach:** everything currently below the 60% CI floor or in the
+  60-80% band with no explicit target, that Track 1 didn't already touch.
+  Only worth picking up once a specific file becomes a live incident source,
+  or if the user explicitly wants full-backend breadth next.
 - **Explicitly NOT recommended:** raising the CI floor to 80% uniformly
   across the whole backend in one move. Many low-risk files (CSV export
   helpers, LMS integration, one-off admin scripts) would cost
   disproportionate effort for coverage that doesn't reduce real risk —
   same diminishing-returns logic that stopped A1's `matching.py` pass at
   79.4% rather than chasing the last 0.6%.
-- **Also explicitly out of scope for this item:** frontend test coverage
-  (rider-app/driver-app/admin-dashboard — React Native / Next.js, not
-  measured or covered by anything in A1/A1b) and a correctness audit of
-  fare/pricing *values* (e.g. whether Economy vs. XL vehicle-type pricing
-  in `fare_configs` is intentional — that data lives in the live DB via the
-  admin dashboard's Service Areas → Vehicle Pricing editor, not in this
-  repo, and needs a live DB read to answer, not a coverage pass). Both are
-  real, separate asks the user raised in the same session as A1b's
-  scoping — track them as their own items if/when the user wants them
-  picked up, don't fold them into A1b.
-- **Acceptance:** not yet defined — pick a track and file list with the
-  user before starting; don't assume "cover everything to 80%" is the
-  goal without confirming, per the "explicitly NOT recommended" note above.
+- **Also explicitly out of scope:** frontend test coverage
+  (rider-app/driver-app/admin-dashboard — React Native / Next.js) and a
+  correctness audit of fare/pricing *values* (that data lives in the live
+  DB, not this repo, and needs a live DB read to answer, not a coverage
+  pass). Real, separate asks — track as their own items if/when wanted,
+  don't fold into A1c.
+- **Acceptance:** not yet defined — pick a file list with the user before
+  starting; don't assume "cover everything to 80%" is the goal without
+  confirming.
 
 ### A2. Post-deploy smoke test in CI
 - [x] **Status:** done — already implemented before this checklist was last

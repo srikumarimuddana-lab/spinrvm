@@ -732,10 +732,69 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
     contextvar reset to `conftest.py` so no other file has to defend against
     this individually.
     See `docs/change-log/2026-08-01-a1b-wallet-repo-coverage.md`.
-  - No other files itemized yet — a future session should measure before
-    assuming any other file's current percentage (don't trust stale tracked
-    percentages; A1b found several files already better-covered than
-    assumed once measured against the full suite).
+  - **Full-repo scoping pass (2026-08-01)** — measured every non-test,
+    non-migration backend file via a single full-suite
+    `pytest tests/ -q --cov=. --cov-report=json` run (315 files, 78.5%
+    aggregate). 88 files sit below 80%; excluding `wallet_repo.py` (above,
+    already closed) and everything Track 1 already owns
+    (`routes/admin/`, corporate, safety, auth). Also surfaced: one
+    pre-existing flaky test, `test_e2e_ride_lifecycle.py::
+    TestRideLifecycleConcurrency::test_two_drivers_accepting_same_ride_one_wins`
+    (passes standalone, intermittently fails under full-suite load —
+    timing-sensitive, not investigated further, not blocking).
+    - **Sub-tier A — money/ride/dispatch-adjacent, arguably deserves
+      Track-1-grade priority despite living in "Track 2"** (recommend
+      picking up first):
+      - `repositories/ride_repo.py` — 54.83% (383 stmts, 173 missing) — ride
+        state persistence layer.
+      - `routes/websocket.py` — 50.26% (569 stmts, 283 missing) — WS auth +
+        dispatch fan-out.
+      - `routes/drivers/subscriptions.py` — 60.52% (575 stmts, 227
+        missing) — Spinr Pass, money-adjacent (NOT the same file as
+        `routes/admin/subscriptions.py`, already closed under Track 1 —
+        this is the driver-facing one).
+      - Rest of the unevenly-covered `routes/drivers/` package: `ride_flow.py`
+        (66.30%), `ride_cancel.py` (51.75%), `ride_reads.py` (58.95%),
+        `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`
+        (38.82%), `_shared.py` (51.32%), `status.py` (48.39%),
+        `profile.py` (67.65%).
+      - `utils/redis_client.py` — 55.00% (220 stmts, 99 missing) —
+        presence/rate-limit backbone; `utils/redis_client.py` falling back
+        silently to in-process dict (per CLAUDE.md) makes this worth
+        testing both modes.
+    - **Sub-tier B — below 60%, genuinely lower-risk breadth** (utils/services,
+      admin-adjacent tooling, third-party integrations):
+      `routes/main.py` (**0%**, 52 stmts — worth a quick look at what this
+      even is before writing tests for it), `utils/t4a_pdf.py` (4.40%),
+      `utils/subscription_invoice_pdf.py` (7.97%),
+      `services/zoho_desk_db.py` (11.76%), `utils/reconciliation.py`
+      (15.69%), `utils/demand_forecast.py` (18.52%),
+      `utils/zoho_desk_sync.py` (22.33%), `utils/analytics.py` (22.70%),
+      `routes/lost_and_found.py` (25.85%), `services/stripe_kyc_sync.py`
+      (30.70%), `utils/marketing_push.py` (33.33%), `utils/ws_pubsub.py`
+      (38.46%), `services/data_transfer/bundle_document_uploader.py`
+      (38.75%), `routes/users.py` (39.86%), `routes/support.py` (42.22%),
+      `repositories/corporate_repo.py` (42.29%), `utils/push_retry.py`
+      (45.30%), `routes/maps_proxy.py` (51.35%),
+      `utils/route_validation.py` (53.33%), `utils/scheduled_rides.py`
+      (55.40%), `utils/suspension_reactivation.py` (55.93%),
+      `utils/route_snapshot.py` (57.08%), `utils/stuck_ride_sweeper.py`
+      (57.32%), `core/security.py` (57.89%), `core/lifespan.py` (58.52% —
+      note: the 16-background-loop startup/shutdown module central to
+      issue #2981's fix; any new tests here should account for the
+      `ENV=="test"` no-op guard added in that fix), `routes/marketing.py`
+      (58.57%), `utils/document_expiry.py` (58.71%).
+    - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
+      scoping note** (55 more files, not itemized individually here —
+      notable large ones: `routes/webhooks.py` 75.40%/748 stmts Stripe-
+      adjacent, `routes/promotions.py` 65.85%, `utils/payment_retry.py`
+      72.54%, `repositories/driver_repo.py` 72.99%, `routes/disputes.py`
+      73.88% — full list reproducible via the same `--cov=.` command
+      above; a future session should re-run it rather than trust this
+      snapshot going stale).
+    - Not yet started — this is scoping only, per the same pattern Track 1
+      followed (measure first, then pick files one PR at a time, ≤3 files
+      per subtask).
 - **Approach:** everything currently below the 60% CI floor or in the
   60-80% band with no explicit target, that Track 1 didn't already touch.
   Only worth picking up once a specific file becomes a live incident source,

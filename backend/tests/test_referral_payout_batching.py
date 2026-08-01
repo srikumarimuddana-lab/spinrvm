@@ -11,6 +11,7 @@ truncation falls back to exact server-side counting.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import utils.referral_payout as rp
@@ -19,6 +20,23 @@ import utils.referral_terms as rt
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+# Referral deadlines are computed against real wall-clock time
+# (`datetime.now(timezone.utc)` in utils/referral_payout.py's expiry check),
+# so fixture dates must stay relative to "now", not hardcoded absolute
+# calendar dates. A hardcoded "2026-07-01" applied_at + the global 30-day
+# window silently crossed into the past once real time caught up to
+# 2026-07-31, which flipped these tests from "referral still pending" to
+# "referral expired" (an extra `insert_one` expiry-claim call the tests
+# don't expect) with zero code change — a time-bomb, not a real regression.
+# See issue #2981.
+_NOW = datetime.now(timezone.utc)
+
+
+def _iso(delta_days: float) -> str:
+    """ISO-8601 timestamp `delta_days` from now (negative = past)."""
+    return (_NOW + timedelta(days=delta_days)).isoformat()
 
 
 def _db(*, users, rides_by_table_filters=None, drivers=None, service_areas=None):
@@ -67,14 +85,16 @@ def _db(*, users, rides_by_table_filters=None, drivers=None, service_areas=None)
     return db
 
 
-def _rider(uid, referred_by="referrer_1", applied_at="2026-07-01T00:00:00+00:00"):
+def _rider(uid, referred_by="referrer_1", applied_at=None):
+    if applied_at is None:
+        applied_at = _iso(-10)  # 10 days ago: well inside the 30-day window, deadline still in the future
     return {"id": uid, "referral_code_used": "RIDEX", "referred_by": referred_by, "referral_applied_at": applied_at}
 
 
 def test_batched_tick_pays_qualified_rider_without_per_referee_queries():
     users = [_rider("u1"), _rider("u2")]
     # u1 has a qualifying completed ride inside the window; u2 has none.
-    rides = [{"rider_id": "u1", "created_at": "2026-07-02T00:00:00+00:00", "service_area_id": None}]
+    rides = [{"rider_id": "u1", "created_at": _iso(-9), "service_area_id": None}]
     db = _db(users=users, rides_by_table_filters=rides)
     credit = AsyncMock()
 
@@ -95,9 +115,10 @@ def test_batched_tick_pays_qualified_rider_without_per_referee_queries():
 def test_batched_counts_respect_per_referee_bounds():
     # One ride BEFORE the referral applied, one AFTER the deadline: neither
     # counts, so no claim is opened (deadline in the future → no expiry either).
-    users = [_rider("u1", applied_at="2026-07-01T00:00:00+00:00")]
+    applied_at = _iso(-10)
+    users = [_rider("u1", applied_at=applied_at)]
     rides = [
-        {"rider_id": "u1", "created_at": "2026-06-30T23:59:59+00:00", "service_area_id": None},
+        {"rider_id": "u1", "created_at": _iso(-10.001), "service_area_id": None},
         {"rider_id": "u1", "created_at": "2099-01-01T00:00:00+00:00", "service_area_id": None},
     ]
     areas = [{"id": "area1", "rider_referral_window_days": 36500}]  # far-future deadline
@@ -119,8 +140,8 @@ def test_truncated_prefetch_falls_back_to_exact_counts(monkeypatch):
     monkeypatch.setattr(rp, "_RIDES_FETCH_LIMIT", 1)
     users = [_rider("u1"), _rider("u2")]
     rides = [
-        {"rider_id": "u1", "created_at": "2026-07-02T00:00:00+00:00", "service_area_id": None},
-        {"rider_id": "u2", "created_at": "2026-07-02T00:00:00+00:00", "service_area_id": None},
+        {"rider_id": "u1", "created_at": _iso(-9), "service_area_id": None},
+        {"rider_id": "u2", "created_at": _iso(-9), "service_area_id": None},
     ]
     db = _db(users=users, rides_by_table_filters=rides)
     db.count_documents = AsyncMock(return_value=0)  # exact counts say: not qualified
@@ -167,10 +188,7 @@ def test_driver_kind_uses_batched_driver_lookups():
 
 def test_terms_resolved_once_per_area_kind_for_the_whole_tick():
     users = [_rider("u1"), _rider("u2"), _rider("u3")]
-    rides = [
-        {"rider_id": uid, "created_at": "2026-07-02T00:00:00+00:00", "service_area_id": "area1"}
-        for uid in ("u1", "u2", "u3")
-    ]
+    rides = [{"rider_id": uid, "created_at": _iso(-9), "service_area_id": "area1"} for uid in ("u1", "u2", "u3")]
     areas = [{"id": "area1", "rider_referrer_reward": 7, "rider_referee_reward": 0}]
     db = _db(users=users, rides_by_table_filters=rides, service_areas=areas)
     credit = AsyncMock()

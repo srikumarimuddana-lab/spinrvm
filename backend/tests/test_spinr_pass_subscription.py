@@ -1411,8 +1411,24 @@ class TestExpiryWarning3Day:
 
         push_mock = AsyncMock()
 
+        # get_rows is called twice with different filters: the main
+        # active_subs scan (`{"status": "active"}`, no expiry_warned_3d
+        # clause) and the dedicated 3d-warning query
+        # (`{"$and": [..., {"expiry_warned_3d": False}, ...]}`). A flat
+        # `AsyncMock(return_value=[sub])` answers both identically,
+        # which — since this fixture's `sub` has `expiry_warned_3d=True`
+        # — hands the dedicated query a row a real DB filter would have
+        # excluded. Mirror that filter here so the mock matches what
+        # Postgres/PostgREST would actually return.
+        async def _get_rows(table, filters=None, **kwargs):
+            if filters and "$and" in filters:
+                for clause in filters["$and"]:
+                    if clause.get("expiry_warned_3d") is False and sub["expiry_warned_3d"] is not False:
+                        return []
+            return [sub]
+
         with (
-            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[sub])),
+            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch("backend.db_supabase.find_one", AsyncMock(return_value=driver)),
             patch("backend.db_supabase.update_one", AsyncMock()),
             patch("backend.routes.drivers._deps.send_push_notification", push_mock),
@@ -1420,6 +1436,12 @@ class TestExpiryWarning3Day:
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"require_driver_subscription": False}),
             ),
+            # Force the distributed lock to always be won here — see the
+            # identical comment on test_3d_warning_push_sent_and_flag_set
+            # above for why an unpatched redis_set_nx makes this test's
+            # outcome depend on full-suite run order instead of the actual
+            # filtering logic under test.
+            patch("backend.utils.redis_client.redis_set_nx", AsyncMock(return_value=True)),
             patch("backend.routes.drivers._deps.asyncio.sleep", AsyncMock(side_effect=Exception("stop"))),
         ):
             try:

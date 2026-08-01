@@ -128,7 +128,9 @@ check_doc_paths() {
       if [ ! -e "$repo_root/$path" ]; then
         echo "$rel_doc cites missing path: $path" >> "$out"
       fi
-    done < <(grep -ohE '`[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+/?`' "$doc" 2>/dev/null \
+    done < <(
+      # shellcheck disable=SC2016  # backticks below are literal Markdown code-span delimiters, not command substitution
+      grep -ohE '`[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+/?`' "$doc" 2>/dev/null \
       | grep -E '\.(py|ts|tsx|sql|md|sh|json)`$|/`$' || true)
   done <<< "$doc_files"
 }

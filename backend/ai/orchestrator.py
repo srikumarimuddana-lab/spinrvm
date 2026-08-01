@@ -52,6 +52,17 @@ logger = logging.getLogger(__name__)
 
 GENERIC_ERROR_MESSAGE = "Something went wrong on our side — please try again in a moment."
 
+# AI3: a single iteration's tool_calls come straight from the model — an
+# adversarial or hallucinating turn could request an unbounded number, each
+# potentially hitting a paid upstream (Maps, via tools_booking's find_place /
+# get_fare_quote / propose_ride_booking). Cap fan-out per iteration; this is
+# independent of TOOL_TIMEOUT_SECONDS (backend/ai/tools.py), which bounds a
+# single call's wall-clock time, not how many run concurrently. A real
+# booking turn (find_place pickup + find_place dropoff + get_fare_quote +
+# propose_ride_booking) tops out around 4 calls, so 5 leaves headroom without
+# raising the ceiling on paid-API fan-out.
+MAX_TOOL_CALLS_PER_ITERATION = 5
+
 Frame = Tuple[str, Dict[str, Any]]
 
 
@@ -281,9 +292,49 @@ async def run_chat_turn(
             messages.append({"role": "assistant", "content": "".join(turn_text), "tool_calls": tool_calls})
             for tc in tool_calls:
                 yield "tool", {"name": tc.name, "status": "start"}
-            results = await asyncio.gather(
-                *(execute_tool(tc.name, tc.arguments, user=tool_user, audience=audience) for tc in tool_calls)
+
+            # AI3 cap: only the first MAX_TOOL_CALLS_PER_ITERATION calls run;
+            # the rest are never dropped (CLAUDE.md "do not silently swallow
+            # errors") — each gets a synthetic error result so the model sees
+            # the refusal and the turn can still reach a final answer.
+            executable_calls = tool_calls[:MAX_TOOL_CALLS_PER_ITERATION]
+            excess_calls = tool_calls[MAX_TOOL_CALLS_PER_ITERATION:]
+            if excess_calls:
+                logger.warning(
+                    "ai tool call budget exceeded: %d requested, %d executed, %d rejected",
+                    len(tool_calls),
+                    len(executable_calls),
+                    len(excess_calls),
+                    extra={
+                        "user_id": user.get("id"),
+                        "conversation_id": conversation["id"],
+                        # tool names only — never arguments/results (PIPEDA)
+                        "requested_tools": [tc.name for tc in tool_calls],
+                    },
+                )
+                _metric_inc("spinr_ai_tool_calls_capped_total", by=len(excess_calls))
+
+            executed_results = await asyncio.gather(
+                *(execute_tool(tc.name, tc.arguments, user=tool_user, audience=audience) for tc in executable_calls)
             )
+
+            def _capped_result() -> Tuple[Dict[str, Any], bool]:
+                # A fresh dict per excess call — downstream mutates results
+                # in place (e.g. result.pop("_client_action", ...)), so
+                # aliasing one shared dict across multiple excess calls would
+                # let one call's pop affect another's.
+                return (
+                    {
+                        "error": (
+                            f"tool call budget exceeded — only {MAX_TOOL_CALLS_PER_ITERATION} tool calls "
+                            "are allowed per turn; this call was not executed, try again with fewer calls "
+                            "this turn"
+                        )
+                    },
+                    False,
+                )
+
+            results = list(executed_results) + [_capped_result() for _ in excess_calls]
             for tc, (result, ok) in zip(tool_calls, results, strict=True):
                 used_tool_names.append(tc.name)
                 _metric_inc("spinr_ai_tool_calls_total", {"tool": tc.name, "ok": str(ok).lower()})

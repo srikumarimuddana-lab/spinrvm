@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c (open, not started). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c (open) — full-repo scoping pass done (Sub-tiers A/B/C), first file (`utils/reconciliation.py`, 16%→90%) closed. Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -767,8 +767,8 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
       `routes/main.py` (**0%**, 52 stmts — worth a quick look at what this
       even is before writing tests for it), `utils/t4a_pdf.py` (4.40%),
       `utils/subscription_invoice_pdf.py` (7.97%),
-      `services/zoho_desk_db.py` (11.76%), `utils/reconciliation.py`
-      (15.69%), `utils/demand_forecast.py` (18.52%),
+      `services/zoho_desk_db.py` (11.76%), ~~`utils/reconciliation.py`
+      (15.69%)~~ **done, see below**, `utils/demand_forecast.py` (18.52%),
       `utils/zoho_desk_sync.py` (22.33%), `utils/analytics.py` (22.70%),
       `routes/lost_and_found.py` (25.85%), `services/stripe_kyc_sync.py`
       (30.70%), `utils/marketing_push.py` (33.33%), `utils/ws_pubsub.py`
@@ -792,9 +792,30 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
       73.88% — full list reproducible via the same `--cov=.` command
       above; a future session should re-run it rather than trust this
       snapshot going stale).
-    - Not yet started — this is scoping only, per the same pattern Track 1
-      followed (measure first, then pick files one PR at a time, ≤3 files
-      per subtask).
+    - First file since this scoping pass picked up below.
+  - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
+    `financial_events` reconciliation loop — the only alarm for a Stripe/DB
+    financial drift going undetected) — **16% → 90%** (2026-08-01, measured
+    via `pytest tests/test_reconciliation.py --cov=utils.reconciliation`;
+    102 stmts, 10 missed). Had no dedicated test file. Picked ahead of
+    Sub-tier B's raw ranking (lower than `t4a_pdf.py`'s 4% and
+    `subscription_invoice_pdf.py`'s 8%) specifically for real-world
+    consequence — a silent bug here means a real financial discrepancy goes
+    undetected, not just untested, unlike a cosmetic PDF-rendering bug.
+    Added `backend/tests/test_reconciliation.py` (19 tests): the loop's
+    survive-a-failing-tick behavior, the before-2am / lock-not-acquired /
+    lock-acquired branches of `_maybe_run_tick`, `_run_reconciliation`'s
+    stripe-key-not-configured / other-RuntimeError / generic-exception /
+    financial-events-query-failure early returns, the exact `> threshold`
+    (not `>=`) 1-cent boundary, `_sum_stripe_intents`'s pagination and
+    succeeded-only filter, `_sum_financial_events`'s None-skip and
+    empty-`.data` handling, and `_record_discrepancy`'s insert shape plus
+    its swallow-on-failure contract. Test-only, no application code changed,
+    no bugs found. Full suite re-run after: 6801 passed (was 6782), 0
+    failed, 0 new warnings. See
+    `docs/change-log/2026-08-01-a1c-reconciliation-coverage.md`.
+  - Rest of Sub-tier A/B/C above: not yet started — pick one file/PR at a
+    time, ≤3 files per subtask, per the same pattern Track 1 followed.
 - **Approach:** everything currently below the 60% CI floor or in the
   60-80% band with no explicit target, that Track 1 didn't already touch.
   Only worth picking up once a specific file becomes a live incident source,

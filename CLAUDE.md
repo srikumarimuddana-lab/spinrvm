@@ -214,7 +214,7 @@ Auto-mode tiers (demand / supply ratio → multiplier):
 - Never apply surge to scheduled rides booked outside the surge window
 - Surge does not apply to corporate account-paid rides (policy; verify in fare service)
 
-**Token lifetimes** — access tokens: 15 min (rider/driver), 12 hr (admin). Refresh tokens: 30 days, stored as SHA-256 hash, rotated on every use. Mobile clients auto-retry 401s via Axios interceptor after token refresh.
+**Token lifetimes** — access tokens: 15 min (rider/driver), 1 hr (admin). Refresh tokens: 30 days, stored as SHA-256 hash, rotated on every use. Mobile clients auto-retry 401s via Axios interceptor after token refresh.
 
 **Insurance periods (TNC commercial insurance)** — every moment a driver spends in the app maps to one of four periods. Misclassification is a regulatory and insurance liability. Derive period from ride state, not from the driver UI:
 
@@ -260,9 +260,12 @@ Sentry tags (attach to every captured event):
 - `env`: `production` / `staging` / `development`
 
 Metric naming — Prometheus/OpenMetrics snake_case `spinr_<domain>_<metric>_<unit>`
-(counters end `_total`, latency histograms end `_duration_ms`). `utils/metrics.py`
-is the source of truth and the exposition format `utils/metrics.render_prometheus`
-emits; dashboards/alerts must use these names (the older dotted
+(counters end `_total`, latency histograms end `_duration_ms`). The metric names
+themselves are defined at their emitting call sites (e.g.
+`services/dispatch_service.py`, `services/payment_service.py`,
+`utils/stripe_reconcile.py`); `utils/metrics.py` provides the underlying
+counter/gauge registry and the exposition format `utils/metrics.render_prometheus`
+emits. Dashboards/alerts must use these names (the older dotted
 `spinr.<domain>.<metric>.<unit>` spelling is **not** what the code emits — do not
 write alerts against it):
 - `spinr_dispatch_offer_sent_total`

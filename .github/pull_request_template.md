@@ -52,7 +52,7 @@ Tick any that apply and fill the elaboration line. At least one reviewer from th
 
 - **Unit tests** [required]: `added` | `updated` | `not-applicable` — <count or reason>
 - **Integration tests** [required]: `added` | `updated` | `not-applicable` — <one line>
-- **Metrics / logs introduced** [required]: `none` | <list; confirm naming follows `spinr.<domain>.<metric>.<unit>`>
+- **Metrics / logs introduced** [required]: `none` | <list; confirm naming follows `spinr_<domain>_<metric>_<unit>`>
 - **Screenshots / video** [required if UI files touched]: <attach or link>
 - **Perf numbers** [required if SLA-critical path touched — dispatch, fare calc, settlement, WS fan-out, driver location, token refresh, Stripe webhook]: <before/after P95>
 

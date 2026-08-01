@@ -33,7 +33,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
 import { Bot, Car, LifeBuoy, MapPin, MessageSquarePlus, Send, ShieldAlert, Tag, User as UserIcon } from "lucide-react";
 import type { AiAction } from "@spinr/shared/types/ai";
-import { buildLocationChoiceMessage } from "@spinr/shared/utils/aiLocationMessages";
+import { buildLocationChoiceMessage, buildQuoteBookingMessage } from "@spinr/shared/utils/aiLocationMessages";
 
 interface ChatBubble {
     id: string;
@@ -121,15 +121,15 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                 </div>
                 {action.quotes.map((q, i) => {
                     const hasSavings = !!q.promo_savings && q.final_total !== q.total;
-                    // Self-contained message (mirrors the rider app): the next
-                    // turn sees only message text, so restate the trip context.
-                    const from = action.pickup_address ? ` from ${action.pickup_address}` : "";
-                    const to = action.dropoff_address ? ` to ${action.dropoff_address}` : "";
-                    const promo = q.promo_code ? ` with promo ${q.promo_code}` : "";
+                    // Self-contained message carrying the quote's exact
+                    // [lat,lng] and vehicle id verbatim (mirrors the rider
+                    // app's quote-card tap) — a prose-only message forced a
+                    // third independent geocode, moving pins/prices between
+                    // the quote and the confirm card (AI9).
                     return (
                         <button
                             key={q.vehicle_type_id ?? i}
-                            onClick={() => onQuickSend(`Book the ${q.vehicle_type ?? "recommended option"}${from}${to}${promo}.`)}
+                            onClick={() => onQuickSend(buildQuoteBookingMessage(action, q))}
                             className="w-full flex items-center justify-between gap-3 rounded-md bg-background px-2 py-1.5 text-left hover:bg-accent"
                         >
                             <span>

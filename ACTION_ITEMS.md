@@ -1892,12 +1892,18 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   (`rider-app/app/ai-assistant.tsx`); backend self-contained messages
   mitigate, but a stale-yet-consistent quote re-books at a possibly different
   price. Consider disabling cards older than the latest assistant turn.
-- [ ] **AI9. Admin AI console quote-card tap still prose-only** — same
+- [x] **AI9. Admin AI console quote-card tap still prose-only** — same
   defect class fixed for suggestions;
   `admin-dashboard/.../ai-console/page.tsx:125-131` drops `[lat,lng]` and
   vehicle id. Move `buildQuoteBookingMessage` into
   `shared/utils/aiLocationMessages.ts` (re-export shim in
   `rider-app/components/bookingProposal.ts`) and use it in the console.
+  Done (2026-08-01) — branch `claude/ai9-admin-quote-card-coords`:
+  `buildQuoteBookingMessage` moved into `shared/utils/aiLocationMessages.ts`;
+  `rider-app/components/bookingProposal.ts` re-exports it (rider call site
+  unchanged); the admin console's quote-card `onClick` now calls the shared
+  builder instead of its own prose-only template. See
+  `docs/change-log/2026-08-01-ai9-admin-quote-card-coords.md`.
 - [ ] **AI10. No conversation-level concurrency lock server-side** — two
   clients on one `conversation_id` interleave `append_message` writes and
   race history snapshots (client is single-flight only).

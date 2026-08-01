@@ -78,7 +78,13 @@ test.describe('admin dashboard: support — interaction', () => {
       await mockSupport(page);
       await page.goto('/dashboard/support');
       await expect(page.getByRole('heading', { name: 'Support & Issues' })).toBeVisible({ timeout: 20000 });
-      await page.getByRole('button', { name: tab, exact: true }).click();
+      // The default Tickets tab renders its own nested "Tickets | FAQs" sub-tab bar
+      // (_tabs/tickets.tsx), so a page-wide getByRole('button', { name: 'FAQs' })
+      // matches two buttons and trips Playwright strict mode. Scope to the outer
+      // tab bar via a label only it renders — deliberately not `.first()`, which
+      // would pass only by DOM ordering and silently re-break if the bars moved.
+      const pageTabBar = page.getByRole('button', { name: 'Lost & Found', exact: true }).locator('..');
+      await pageTabBar.getByRole('button', { name: tab, exact: true }).click();
       await expect(page.locator('body')).toBeVisible({ timeout: 10000 });
     });
   }

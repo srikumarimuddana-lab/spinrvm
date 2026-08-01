@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useAuthStore } from "@/store/authStore";
+import { monthToDateDefaults } from "@/lib/utils";
 import {
     downloadAirportTrips,
     downloadDriverRoster,
@@ -27,16 +28,6 @@ import {
     emailInsuranceBillingSgi,
     type ComplianceReportFormat,
 } from "@/lib/api";
-
-/** 1st of the current month, and today — the default window every
- * date-ranged Compliance report uses when an admin hasn't picked their
- * own From/To. YYYY-MM-DD, matching the backend's date_from/date_to. */
-function monthToDateDefaults(): { from: string; to: string } {
-    const now = new Date();
-    const from = new Date(now.getFullYear(), now.getMonth(), 1);
-    const toIso = (d: Date) => d.toISOString().slice(0, 10);
-    return { from: toIso(from), to: toIso(now) };
-}
 
 /** Shared From/To date-range control for every date-ranged Compliance
  * report — replaces the old rolling-N-days shorthand dropdown. Defaults

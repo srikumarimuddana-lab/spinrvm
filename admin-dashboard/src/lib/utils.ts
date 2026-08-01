@@ -1,6 +1,18 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 
+/** 1st of the current month, and today, as YYYY-MM-DD — the default
+ * window every date-ranged Records/Compliance report/filter uses when an
+ * admin hasn't picked their own From/To. Matches the backend's own
+ * date_from/date_to default (routes/admin/compliance.py's
+ * _resolve_date_window). */
+export function monthToDateDefaults(): { from: string; to: string } {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth(), 1);
+    const toIso = (d: Date) => d.toISOString().slice(0, 10);
+    return { from: toIso(from), to: toIso(now) };
+}
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }

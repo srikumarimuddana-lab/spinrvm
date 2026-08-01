@@ -4,8 +4,9 @@ name: Claude PR review
 # authorised reviewer comments "/claude review". Findings are posted as a PR
 # review comment. Never merges; never pushes code back.
 #
-# Required repo secret:
+# Required repo secret (one of):
 #   ANTHROPIC_API_KEY — Spinr org-scoped, with billing alerts enabled.
+#   CLAUDE_CODE_OAUTH_TOKEN — alternative OAuth-token auth, if preferred.
 #
 # Optional (recommended):
 #   SUPABASE_READONLY_TOKEN, CONTEXT7_API_KEY — mirror of .claude/mcp.example.json
@@ -65,13 +66,13 @@ jobs:
     env:
       # `secrets` is available in job-level `env` but not in job-level `if`,
       # so the presence check is threaded through to the steps this way.
-      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
 
     steps:
       - name: Report that AI review is disabled
         if: env.HAS_ANTHROPIC_KEY != 'true'
         run: |
-          echo "::notice title=Claude PR review skipped::ANTHROPIC_API_KEY is not set, so the AI review did not run. This is a supported configuration — the review is advisory and never blocks merging. Set the secret in Settings → Secrets to enable it."
+          echo "::notice title=Claude PR review skipped::Neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set, so the AI review did not run. This is a supported configuration — the review is advisory and never blocks merging. Set one of the secrets in Settings → Secrets to enable it."
 
       - name: Checkout PR code
         if: env.HAS_ANTHROPIC_KEY == 'true'
@@ -84,6 +85,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Inline prompt — keeps review behaviour under source control
           prompt: |
             You are reviewing a Spinr pull request. Load CLAUDE.md and the

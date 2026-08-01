@@ -523,6 +523,17 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        `test_support_tickets_service_area_routes.py` /
        `test_support_tickets_ai_suggest.py` and were intentionally not
        duplicated).
+     - `promotions.py`: 48% → 89% (combined with pre-existing
+       `test_admin_promo_stats.py`) via new `tests/test_admin_promotions_crud.py`
+       — prioritized the money-adjacent create/update/delete paths (discount
+       value validation, code uppercasing, optional-field insert/update
+       fallback, audit logging) over read-only stats. See
+       `docs/change-log/2026-07-29-a1b-admin-promotions-faqs-venues-coverage.md`.
+     - `faqs.py`: 42% → 97% via new `tests/test_admin_faqs_crud.py` — FAQ
+       CRUD, embedding-invalidation-on-edit branch, and the three
+       notification-broadcast audiences (all/riders/drivers).
+     - `venues.py`: 43% → 100% via new `tests/test_admin_venues_crud.py` —
+       venue CRUD, 404-not-found and 503-db-error branches, audit logging.
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth

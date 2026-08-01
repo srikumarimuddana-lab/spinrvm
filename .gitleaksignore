@@ -1,0 +1,13 @@
+# Verified false positives only. Each entry must have a one-line comment
+# explaining why it's safe to ignore, per this repo's own review policy for
+# gitleaks findings (see docs/change-log/2026-08-01-b15b-sos-paging.md and
+# the G5b entropy-floor precedent in .gitleaks.toml).
+
+# PR #3033: a fabricated test fixture for ACTION_ITEMS.md B15(b) (SOS
+# on-call paging) used a 32-char hex string shaped like a real PagerDuty
+# routing key, tripping the generic-api-key rule on the git-history scan.
+# Not a real secret -- fixed forward in commit 3510b6f (both files now use
+# an obviously-fake string), but the introducing commit still exists in
+# history, so the history scan (G5a) needs these two fingerprints ignored.
+758f7cedd7cce1e19e8b8533e09692827b76501e:backend/tests/test_sos_paging.py:generic-api-key:38
+758f7cedd7cce1e19e8b8533e09692827b76501e:backend/tests/test_admin_settings_lms_gate.py:generic-api-key:147

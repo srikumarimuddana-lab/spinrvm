@@ -271,6 +271,12 @@ jobs:
     # Blocking on HIGH+ CVEs — baseline was clean when this was enabled (2026-04-27).
     continue-on-error: false
     strategy:
+      # Without this, one failing module cancels the others mid-run and their
+      # audit status is never reported. `shared` failed on every PR from
+      # 2026-07-29 onward, so the rider-app / driver-app / admin-dashboard legs
+      # were cancelled rather than run — their audit state was unknown for the
+      # entire period, masked by a leg that was failing for an unrelated reason.
+      fail-fast: false
       matrix:
         module: [rider-app, driver-app, admin-dashboard, shared]
     steps:

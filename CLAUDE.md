@@ -53,8 +53,15 @@ Do not rely on "commit, observe, roll back if broken" for anything touching a li
 9. **Escalate, don't silently ship, when in doubt** — if blast radius is unclear, you can't verify all consumers of something shared (no time, no test coverage, unclear ownership), or the change touches rides/payments/auth/corporate/safety and you're not confident of the full impact, use `AskUserQuestion` before merging rather than shipping and watching for fallout.
 
 ### PR review handling (Codex auto-review)
+
+> **Status as of 2026-08-01: no automated PR review is running on this repo, from either vendor.**
+> - **Codex has been silent since 30 July.** The app is installed and has reviewed 183 PRs historically, but its last comment was on #2877 (created 2026-07-30). Roughly 200 PRs since (#2878 onward) have had none. Cause not yet diagnosed — see `ACTION_ITEMS.md` C9.
+> - **The Claude agent audit (`claude-review.yml`) is off by design** — `ANTHROPIC_API_KEY` deliberately unset on cost grounds, see C7.
+>
+> The guidance below stays in force and applies unchanged if Codex resumes — but **do not wait for a Codex review that may never arrive**, and do not treat its absence as "no findings." Until one of the two is restored, a PR touching money, auth, migrations, dispatch, or safety should get a **manual** pass with `spinr-security-auditor` / `spinr-money-auditor` / `spinr-migration-reviewer` via the Agent tool before merge.
+
 - When subscribed to a PR (or asked to look at one), **do not chase CI checks** — skip `yarn audit` / `npm audit` / lint / deploy status unless the user explicitly asks. Pre-existing dependency-audit failures on surfaces a PR doesn't touch are not this PR's job.
-- **Always** check the PR's review comments from Codex (`chatgpt-codex-connector`) and act on them without being reminded:
+- **When a Codex review is present**, check its comments (`chatgpt-codex-connector`) and act on them without being reminded:
   1. For each unresolved Codex comment, verify the claim against the actual code — confirm it's true, partially true, or wrong.
   2. If true (or partially), fix it. If it's wrong or not applicable, leave it and say why in the reply.
   3. Reply to each thread (via `mcp__github__add_reply_to_pull_request_comment`) noting the fix commit SHA or the reason it needs no action.

@@ -2150,6 +2150,44 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   the fixture date onto today when today is the 1st — was correct; only my
   later claim that it was still unfixed was wrong.
 
+### C9. Codex auto-review stopped on 30 July — combined with C7, this repo has **no** automated PR review
+- [ ] **Status:** open. The `chatgpt-codex-connector` GitHub App is installed
+  and has worked — it has commented on **183 PRs** historically — but it has
+  reviewed nothing for two days. This is a **stall, not an absence**, which
+  should make the cause findable.
+- **Evidence (2026-08-01):**
+  - `commenter:app/chatgpt-codex-connector` → 183 PRs total.
+  - Sorted by most recent, the newest is **#2877, created 2026-07-30T00:11Z**.
+  - Restricting to `created:>=2026-07-30` returns **exactly one** result —
+    that same #2877.
+  - PRs #2878 → #3096 (roughly 200, including every PR merged on 1 August)
+    have **no** Codex comment at all.
+  - Method note: the search operator requires the `app/` prefix.
+    `commenter:chatgpt-codex-connector` without it returns 0 results even
+    though the app is active — a false negative that a control query
+    (`commenter:app/github-actions` → 1079) caught. Anyone re-checking this
+    should run the control first.
+- **Why it matters:** `CLAUDE.md`'s PR-review-handling section instructs every
+  agent session to *always* check Codex comments and act on them. For ~200
+  consecutive PRs there have been none, so that instruction has had nothing
+  behind it. Worse, silence reads as "no findings" rather than "no reviewer" —
+  the same failure mode as a permanently-red check. Combined with **C7** (the
+  Claude agent audit deliberately off on cost grounds), **this repo currently
+  has no automated PR review from either vendor**, while in live app testing.
+- **Action:** diagnose why Codex stopped around 29–30 July. Plausible and
+  unchecked: lapsed subscription or billing state, revoked/expired app
+  installation token, a config change in that window, or an org-level policy
+  change. All are visible in GitHub app settings and the Codex dashboard —
+  neither readable from a PR branch, so this needs someone with org access.
+- **Interim mitigation (applied 2026-08-01):** `CLAUDE.md` now states both
+  reviewers are inactive and directs sessions to run the `spinr-*` audit
+  agents manually for diffs touching money, auth, migrations, dispatch, or
+  safety. That is a social control, not an enforced one.
+- **Note:** if the decision is that Codex stays off too, the honest follow-up
+  is to delete the PR-review-handling section rather than leave it describing
+  a workflow nobody runs — the same cleanup done for the Claude reviewer in
+  #3096.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)

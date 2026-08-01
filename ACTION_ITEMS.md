@@ -497,6 +497,25 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        well below the 70% admin-routes target — remaining gap is largely
        read/list/export/analytics endpoints; not pursued further in this
        pass.
+       **Batch 2 (2026-08-01): 42%/52.35% → 70%** (single-file
+       `--cov=routes.admin.rides` measurement against
+       `test_admin_rides_coverage.py` alone; 81 tests total, 24 new).
+       Closed the deferred read/list/export/analytics gap: ride
+       location-trail/live/invoice, send-receipt, heatmap-data, earnings
+       (+/rides +/overview), export/rides, export/drivers, payouts/overview
+       (incl. the no-drivers-in-area empty-shell branch), admin dashboard
+       `/stats`, fare-estimate, promo/preview, and the places-proxy
+       not-configured 503 guards. Test-only, no application code changed,
+       no new bugs found (the previously-flagged `admin_get_payout_stats`
+       route-shadowing bug from the support-routes pass remains unfixed,
+       out of this batch's scope). Full-suite `--cov` re-measurement was
+       not obtained in this session due to a sandbox-specific
+       coverage-instrumentation/`pyiceberg` import interaction unrelated to
+       this file — see
+       `docs/change-log/2026-08-01-a1b-admin-rides-coverage-batch2.md`
+       ("What was NOT verified") for detail. Reached the 70% admin-routes
+       target on a single-file basis; the true full-suite % (normally ≥ the
+       single-file %) was not independently confirmed.
      - `routes/admin/support.py` (disputes, support-ticket CRUD, flags,
        complaints) — was ~39%, now 97% (267 stmts, 8 missed: two narrow
        DB-exception logging branches at 220/228, the `updated_at`-set

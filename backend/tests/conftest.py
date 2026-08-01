@@ -14,6 +14,15 @@ from typing import Any, Dict, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+
+# Pre-import pydantic.root_model so it's registered in sys.modules before
+# coverage.py tracing starts. Under `pytest --cov`, pydantic's
+# create_generic_submodel() (triggered by pyiceberg's IcebergRootModel via
+# storage3's analytics import) does sys.modules[created_model.__module__] and
+# can KeyError on 'pydantic.root_model' -- reproduces only with coverage
+# instrumentation active, not in a plain interpreter. Environment/tooling
+# quirk, unrelated to any application code.
+import pydantic.root_model  # noqa: F401,E402
 import pytest
 from fastapi.testclient import TestClient
 

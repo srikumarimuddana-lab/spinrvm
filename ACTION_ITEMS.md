@@ -485,37 +485,49 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        validation at the >500/<=0 Pydantic gate and the 503-on-DB-error path
        for every write endpoint). Test-only, no bugs found. See
        `docs/change-log/2026-07-29-a1b-admin-analytics-incentives-coverage.md`.
-     - `backend/routes/admin/rides.py` — **improved ~34% → 42%** (1190
-       statements, 687 remaining uncovered; measured via full `pytest
-       tests/ -q`, real pytest-cov output). Added
-       `tests/test_admin_rides_coverage.py` (57 tests) covering the
-       highest-consequence admin ride-mutation and inspection endpoints
-       (validation-error paths, not-found 404s, DB-failure propagation,
-       success-path shape assertions). No application code changed, no
-       bugs found. See
-       `docs/change-log/2026-07-30-a1b-admin-rides-coverage.md`. Still
-       well below the 70% admin-routes target — remaining gap is largely
-       read/list/export/analytics endpoints; not pursued further in this
-       pass.
-       **Batch 2 (2026-08-01): 42%/52.35% → 70%** (single-file
-       `--cov=routes.admin.rides` measurement against
-       `test_admin_rides_coverage.py` alone; 81 tests total, 24 new).
-       Closed the deferred read/list/export/analytics gap: ride
-       location-trail/live/invoice, send-receipt, heatmap-data, earnings
-       (+/rides +/overview), export/rides, export/drivers, payouts/overview
-       (incl. the no-drivers-in-area empty-shell branch), admin dashboard
-       `/stats`, fare-estimate, promo/preview, and the places-proxy
-       not-configured 503 guards. Test-only, no application code changed,
-       no new bugs found (the previously-flagged `admin_get_payout_stats`
-       route-shadowing bug from the support-routes pass remains unfixed,
-       out of this batch's scope). Full-suite `--cov` re-measurement was
-       not obtained in this session due to a sandbox-specific
-       coverage-instrumentation/`pyiceberg` import interaction unrelated to
-       this file — see
-       `docs/change-log/2026-08-01-a1b-admin-rides-coverage-batch2.md`
-       ("What was NOT verified") for detail. Reached the 70% admin-routes
-       target on a single-file basis; the true full-suite % (normally ≥ the
-       single-file %) was not independently confirmed.
+     - `backend/routes/admin/rides.py` — **34% → 42% (2026-07-30) → two
+       independent, concurrent 2026-08-01 sessions both picked up the
+       deferred read/list/export/analytics gap, unaware of each other; both
+       landed, reconciled here rather than picking one over the other:**
+       - **Batch 2** (PR #3057) extended the existing
+         `tests/test_admin_rides_coverage.py` in place (57 → 81 tests, 24
+         new), measured single-file (`--cov=routes.admin.rides` against that
+         file alone): **42%/52.35% → 70%**. Closed ride location-trail/live/
+         invoice, send-receipt, heatmap-data, earnings (+/rides +/overview),
+         export/rides, export/drivers, payouts/overview (incl. the
+         no-drivers-in-area empty-shell branch), dashboard `/stats`,
+         fare-estimate, promo/preview, and the places-proxy not-configured
+         503 guards. Full-suite `--cov` re-measurement wasn't obtained in
+         that session (sandbox-specific coverage-instrumentation/
+         `pyiceberg` import interaction) — see
+         `docs/change-log/2026-08-01-a1b-admin-rides-coverage-batch2.md`.
+       - **This session** (unaware of #3057 in flight, branched from main
+         before it merged) added a *second*, separate file,
+         `tests/test_admin_rides_read_endpoints_coverage.py` (41 tests,
+         overlapping in target endpoints with batch 2 above but written
+         independently), and — per this task's own instruction not to trust
+         the stale 42% figure — re-measured **full-suite** coverage twice
+         (before and after its own changes, both against a pre-#3057 base):
+         **already 80%** (242/1190 uncovered) *before* this session added
+         anything, because the backend suite had grown from ~5610 to 6576
+         tests since 2026-07-30 via unrelated A1b work, several of which
+         incidentally exercise this file as a side effect. This session's 41
+         new tests all pass (suite pass count rose 6576→6617) but did not
+         move the aggregate number (byte-identical 242-line gap before/
+         after) — every line they touch was already reachable elsewhere.
+         See `docs/change-log/2026-07-30-a1b-admin-rides-coverage.md` and
+         `docs/change-log/2026-08-01-a1b-admin-rides-coverage-continued.md`.
+       - **Net effect:** both sessions' test files are kept (some endpoint
+         overlap between them is redundant but harmless — extra CI time, no
+         correctness risk); no application code was changed by either; no
+         new bugs found by either. `routes/admin/rides.py` is confirmed
+         clear of the 70% admin-routes target by two different measurement
+         methods (single-file 70%, full-suite 80%) using two independently
+         written test suites — about as solid a confirmation as this
+         backlog's convention produces. Neither session independently
+         re-confirmed a **full-suite** number *after* both sets of tests
+         landed together; if that number matters later, it's a cheap
+         re-run, not a re-investigation.
      - `routes/admin/support.py` (disputes, support-ticket CRUD, flags,
        complaints) — was ~39%, now 97% (267 stmts, 8 missed: two narrow
        DB-exception logging branches at 220/228, the `updated_at`-set
@@ -1815,10 +1827,15 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
 
-### C6. `docker-image-scan` (Trivy): stale-pinned base image confirmed; a second finding (msgpack) still unexplained
-- [ ] **Status:** open overall — base-image-staleness half fixed 2026-08-01
-  (draft PR pending `docker-image-scan` verification, see update below);
-  msgpack half still unexplained. Originally found 2026-07-30 while
+### C6. `docker-image-scan` (Trivy): stale-pinned base image confirmed; msgpack mystery now solved (Trivy false positive)
+- [x] **Status:** done — both findings now fully explained. Base-image
+  staleness was fixed 2026-08-01 (digest refreshed, see update below). The
+  msgpack finding is **resolved: it's a Trivy tool false positive, not a
+  real vulnerable dependency** — see "msgpack mystery: SOLVED" below. The
+  actual scan-config remediation (stop Trivy from trusting a stale embedded
+  SBOM) is filed as **CR-2026-002**, GitHub issue
+  [#3048](https://github.com/srikumarimuddana-lab/spinrvm/issues/3048), and
+  tracked there rather than here. Originally found 2026-07-30 while
   triaging `docker-image-scan` on
   PR #2931 (a backend change, so this wasn't waved off as the usual
   unrelated-base-image noise without checking), then reproduced identically
@@ -1922,6 +1939,53 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   - **msgpack half of C6 is untouched and still open** — genuinely
     requires a real Docker build to investigate, which remains unavailable
     in this environment.
+- **msgpack mystery: SOLVED (2026-08-01), separately from the base-image
+  work above.** Investigated PR #3044's `docker-image-scan` job (run
+  `30713789884`, job `91406577991`) and the identical `G6 · Trivy container
+  scan` job in `security-gates.yml` (run `30713789883`, job
+  `91405783086`) — same PR, same commit, both Trivy invocations agree.
+  Conclusion: **this is a Trivy tool false positive, not a real vulnerable
+  dependency.** Evidence, in order:
+  1. `backend/requirements.txt` and `backend/requirements-locked.txt` both
+     already pin `msgpack==1.2.1` — the version Trivy itself calls "fixed".
+  2. The actual `docker build` step's own pip install output in the job log
+     shows the real, live install: `Successfully installed pip-26.2
+     setuptools-83.0.0` and `Collecting msgpack==1.2.1 (from
+     -r requirements-locked.txt (line 1746))` — both packages install at
+     patched-or-newer versions, confirmed directly in the build log, not
+     inferred.
+  3. Trivy's **own** per-file python-pkg inventory table, printed earlier in
+     the same scan run, lists
+     `usr/local/lib/python3.12/site-packages/msgpack-1.2.1.dist-info/METADATA`
+     and `.../setuptools-83.0.0.dist-info/METADATA` — both with **zero**
+     findings. Trivy's live filesystem scan correctly sees the patched
+     versions.
+  4. Yet Trivy's summary "Python (python-pkg)" vulnerability table, printed
+     immediately after in the same tool invocation, reports Installed
+     Version `1.1.2` / `70.3.0` for those same two packages — directly
+     contradicting its own per-file table from the same run.
+  5. The scan log includes Trivy's own warning right before this
+     contradiction: `WARN Third-party SBOM may lead to inaccurate
+     vulnerability detection`. Strong evidence Trivy is trusting a
+     stale/incorrect embedded SBOM (most likely a Docker BuildKit
+     provenance/SBOM attestation baked into the image) for vulnerability
+     *matching*, while still using its own live filesystem scan for the
+     per-file inventory listing — two different data sources disagreeing
+     inside one Trivy run.
+  6. This exact false positive was observed **identically** across PRs
+     #3033, #3042, #3043, and #3044 — confirming it reproduces on every
+     backend image build regardless of the PR's actual diff, consistent
+     with a scan-tooling issue rather than a real per-commit regression.
+  - **Filed as CR-2026-002**, GitHub issue
+    [#3048](https://github.com/srikumarimuddana-lab/spinrvm/issues/3048)
+    (`[CR] Trivy container-scan (G6 / docker-image-scan) reports
+    false-positive HIGH findings for msgpack/setuptools — trusting a stale
+    embedded SBOM over its own live scan`). That issue carries the actual
+    proposed fix (likely `--provenance=false --sbom=false` on the `docker
+    build` step, or forcing Trivy to regenerate its own SBOM instead of
+    consuming the embedded one) — not re-implemented here; this entry only
+    documents that the mystery itself is solved and points to the CR for
+    the scan-config remediation.
 
 ### B-AI1. Corporate rider booking via AI chat bypasses corporate billing
 - [x] **Status:** done (2026-07-29) — found by the 2026-07-28 AI guardrail

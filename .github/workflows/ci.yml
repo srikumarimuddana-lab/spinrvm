@@ -383,25 +383,55 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # `continue-on-error: true` above stops a baseline-less run blocking a
+      # merge, but it does NOT stop the check reporting `failure` — so this
+      # gate has been permanently red since it was added, for a reason the job
+      # comment itself documents as expected. A check that is always red stops
+      # being read, and then a real failure arrives looking like the noise.
+      #
+      # Detect the missing baselines up front and skip cleanly instead. This
+      # also avoids `npm ci` + a Chromium download + a full Next.js production
+      # build on every PR purely to fail at the last step.
+      #
+      # Seed baselines with .github/workflows/update-visual-baselines.yml; the
+      # moment any `*-snapshots/*.png` is committed, every step below runs
+      # exactly as before with no further change here.
+      - name: Check for committed visual baselines
+        id: baselines
+        run: |
+          COUNT=$(find e2e -type f -name '*.png' -path '*-snapshots*' 2>/dev/null | wc -l)
+          if [ "$COUNT" -gt 0 ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Found $COUNT committed baseline screenshot(s) — running visual regression."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Visual regression skipped::No Playwright snapshot baselines are committed under admin-dashboard/e2e/**-snapshots/, so there is nothing to compare against. Seed them via the update-visual-baselines workflow to enable this gate."
+          fi
+
       - uses: actions/setup-node@v6
+        if: steps.baselines.outputs.present == 'true'
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: admin-dashboard/package-lock.json
 
       - name: Install dependencies
+        if: steps.baselines.outputs.present == 'true'
         run: npm ci
 
       - name: Install Playwright browsers
+        if: steps.baselines.outputs.present == 'true'
         run: npx playwright install --with-deps chromium
 
       - name: Build Next.js app
+        if: steps.baselines.outputs.present == 'true'
         run: npm run build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
           BACKEND_URL: http://localhost:8000
 
       - name: Start Next.js and run visual regression tests
+        if: steps.baselines.outputs.present == 'true'
         run: |
           npx next start &
           npx wait-on http://localhost:3000 --timeout 30000
@@ -413,7 +443,11 @@ jobs:
           CI: true
 
       - name: Upload Playwright report
-        if: always()
+        # `always()` would also fire on the skip path, where no report exists —
+        # producing the "No files were found with the provided path" warning
+        # that made this job look like it ran and found nothing, rather than
+        # like it never ran at all.
+        if: always() && steps.baselines.outputs.present == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: visual-regression-report

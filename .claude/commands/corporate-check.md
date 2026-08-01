@@ -2,7 +2,14 @@
 
 Delegate to the `spinr-corporate-billing-reviewer` agent to review
 `corporate_wallet_apply_delta` callers, allowance-cap enforcement, payment-source
-priority, and idempotency in the current diff (or a named scope).
+priority, and idempotency in the current diff (or a named scope). When the
+diff touches the AI/LLM surface, also dispatch `spinr-ai-guardrail-reviewer`
+in parallel (same dual-dispatch pattern as `/review`'s safety row,
+`/security-check`, `/compliance-check`, `/dispatch-check`, and
+`/fare-audit`) — `ACTION_ITEMS.md`'s `B-AI1` documents an **open, named** gap
+where corporate rider booking via AI chat may bypass corporate billing rules
+entirely, so this isn't a speculative connection like `/surge-check`'s —
+it's a confirmed intersection between the two domains.
 
 ## Usage
 
@@ -25,7 +32,16 @@ priority, and idempotency in the current diff (or a named scope).
    diff touches `routes/rides/booking.py`'s two independent corporate booking
    paths (`company_allowance` and `work_profile`), explicitly confirm the fix
    was applied to **both** blocks, not just the one that prompted the change
-5. Presents the agent's report to the user — no edits without explicit approval
+5. If the scope includes `backend/ai/**`, `backend/routes/ai.py`,
+   `backend/routes/admin/ai_console.py`, or `rider-app/app/ai-assistant.tsx`,
+   also dispatches `spinr-ai-guardrail-reviewer` **in parallel** with the same
+   scope — independent audits over the same diff, not a sequential pass. Ask
+   it explicitly whether the diff touches AI-originated corporate booking and,
+   if so, whether it goes through the same payment-source-priority path
+   (rider wallet → corporate allowance → master wallet → rider card) as
+   `B-AI1` requires
+6. Presents both agents' reports to the user, each under its own heading —
+   no edits without explicit approval
 
 ## Corporate-relevant paths (auto-included when no args)
 
@@ -35,10 +51,14 @@ priority, and idempotency in the current diff (or a named scope).
 - `backend/routes/rides/booking.py` (the two corporate booking paths inside `create_ride`)
 - `backend/utils/allowance_reset.py`, `backend/utils/corporate_low_balance.py`
 - Any caller of `corporate_wallet_apply_delta` anywhere in the codebase, not just the diff
+- `backend/ai/**`, `backend/routes/ai.py`, `backend/routes/admin/ai_console.py`,
+  `rider-app/app/ai-assistant.tsx` — triggers `spinr-ai-guardrail-reviewer`
+  alongside `spinr-corporate-billing-reviewer` (see step 5 above), especially
+  relevant given the open `B-AI1` gap
 
 ## Output
 
-The agent's report:
+`spinr-corporate-billing-reviewer`'s report:
 
 ```
 SPINR CORPORATE BILLING AUDIT — <scope>
@@ -49,6 +69,24 @@ BLAST RADIUS  (other callers of any shared function touched)
 VERIFIED ...
 VERDICT: SAFE TO MERGE / FIX BLOCKERS / NEEDS FINANCE REVIEW
 ```
+
+If `spinr-ai-guardrail-reviewer` was also dispatched (AI-surface paths in
+scope), its report follows under its own heading, verbatim — don't merge or
+paraphrase the two reports into one:
+
+```
+SPINR AI GUARDRAIL AUDIT — <scope>
+===================================
+BLOCKERS ...
+WARNINGS ...
+OPEN BACKLOG TOUCHED ...
+VERIFIED ...
+VERDICT: SAFE TO MERGE / FIX BLOCKERS / NEEDS PRODUCT+LEGAL REVIEW
+```
+
+When both ran, the overall verdict is the worst of the two — never soften
+one agent's verdict because the other came back clean (same rule the other
+`-check` commands use for their rollups).
 
 ## When to run
 

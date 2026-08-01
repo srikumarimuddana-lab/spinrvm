@@ -35,7 +35,12 @@ DRIVER_ID = "driver_row_b15b"
 RIDE_ID = "ride_b15b_001"
 
 _WEBHOOK_URL = "https://events.pagerduty.com/v2/enqueue"
-_ROUTING_KEY = "R0123456789ABCDEF0123456789ABCD"
+# Deliberately NOT a realistic-looking secret (no hex/high-entropy shape) --
+# a prior version of this fixture used a 32-char hex string that gitleaks'
+# generic-api-key rule flagged as a possible real credential. This is just
+# as effective for the tests below (routing key is an opaque string field,
+# no format validation) without looking like real key material.
+_ROUTING_KEY = "fake-test-routing-key-not-a-real-secret"
 
 
 def _incident(**overrides) -> dict:

@@ -143,10 +143,12 @@ async def test_super_admin_can_change_sos_paging_fields():
 
 
 def test_sos_paging_routing_key_masked_on_get():
+    # Deliberately not a realistic-looking secret (no hex/high-entropy shape)
+    # -- avoids tripping gitleaks' generic-api-key rule on a fake test value.
     masked = admin_settings._mask_credentials(
-        {"sos_paging_routing_key": "R0123456789ABCDEF0123456789ABCD", "sos_paging_webhook_url": "https://x"}
+        {"sos_paging_routing_key": "fake-test-routing-key", "sos_paging_webhook_url": "https://x"}
     )
-    assert masked["sos_paging_routing_key"] == "R0123456*****"
+    assert masked["sos_paging_routing_key"] == "fake-tes*****"
     # webhook_url is plain, like lms_api_base_url — not in _CREDENTIAL_FIELDS.
     assert masked["sos_paging_webhook_url"] == "https://x"
 

@@ -1,15 +1,27 @@
 # SGI Provincial Reporting — Data Inventory & Gap Analysis
 
-> **Status:** Gap write-up — _not_ an implemented pipeline.
-> **Created:** 2026-06-02 · **Owner:** unassigned · **Review with:** legal + founder before building.
+> **Status:** Gap write-up — the periodic (quarterly/annual) reports are still
+> _not_ implemented pipelines; the on-demand trip-record export now is (see
+> **2026-08-01 update** below).
+> **Created:** 2026-06-02 · **Owner:** unassigned · **Review with:** legal +
+> founder before building the two still-open reports.
 >
 > This is the file `.claude/context/regulatory-sk.md:96` refers to as
 > "_template in `docs/compliance/sgi-quarterly.md` — to be created_". It does
 > **two** things: (1) documents what trip-distance and insurance-period data
 > we already capture and how long it survives, and (2) records the open
-> questions that block us from actually producing an SGI submission. No export
-> code exists yet; see [Gaps](#4-gaps-what-is-not-built) and
+> questions that block us from actually producing an SGI submission. See
+> [Gaps](#4-gaps-what-is-not-built) and
 > [Open questions](#5-open-questions-blocking-implementation).
+>
+> **2026-08-01 update:** `scripts/compliance_export.py` is now built — but
+> only for the on-demand trip-record obligation (§1 row 3), which had an
+> already-confirmed SLA (≤14 days, <30 min) and didn't depend on §5's open
+> questions about SGI's *periodic-submission* channel/format. It applies the
+> strictest PII redaction available (driver_id/ride_id only, no rider
+> identity, no raw address/coordinates — see §6) and writes one
+> `compliance_export_events` audit row per run. The quarterly ride-volume and
+> annual driver-roster reports are unchanged: still blocked on §5.
 
 ---
 
@@ -40,8 +52,8 @@ Source: `.claude/context/regulatory-sk.md:94-98` ("Provincial reporting").
 | Report | Cadence | Contents | Tooling status |
 |---|---|---|---|
 | Ride volume + incident count | **Quarterly** | Aggregate counts to SGI | ❌ none |
-| Driver roster (license + insurance status) | **Annual** | Per-driver eligibility snapshot | ❌ none (manual admin export only) |
-| Trip-record production | **On-demand** (≤14 days of request; target run <30 min) | Per-trip records incl. distance, period linkage | ❌ none (`scripts/compliance_export.py` referenced but absent) |
+| Driver roster (license + insurance status) | **Annual** | Per-driver eligibility snapshot | ⚠️ form-fill only: `backend/services/data_transfer/sgi_form_filler.py` + `sgi_field_maps.py` can fill SGI's D00032/D00033 AcroForm PDFs from `drivers` data, but no scheduled/on-demand job drives them yet |
+| Trip-record production | **On-demand** (≤14 days of request; target run <30 min) | Per-trip records incl. distance, period linkage | ✅ built — `scripts/compliance_export.py` |
 
 Related retained-for-audit data (not a periodic *submission*, but must be
 producible on request):
@@ -134,10 +146,10 @@ trace, and the per-phase distances are already rolled up onto the ride.
 
 | Expected artifact | Referenced at | Status |
 |---|---|---|
-| `scripts/compliance_export.py` (on-demand trip production, <30 min) | `.claude/context/regulatory-sk.md:98` | ❌ Does not exist (`scripts/` has no such file) |
+| `scripts/compliance_export.py` (on-demand trip production, <30 min) | `.claude/context/regulatory-sk.md:98` | ✅ Built 2026-08-01 — see §6 |
 | Quarterly ride-volume + incident-count job/report | `.claude/context/regulatory-sk.md:96` | ❌ No job, no aggregation, no submission record |
-| Annual driver-roster export (license + insurance status) | `.claude/context/regulatory-sk.md:97` | ❌ No scheduled job |
-| SGI submission format / template | this file | ❌ Not defined (see §5) |
+| Annual driver-roster export (license + insurance status) | `.claude/context/regulatory-sk.md:97` | ⚠️ PDF form-fill exists (`sgi_form_filler.py`); no job schedules or triggers it |
+| SGI submission format / template | this file | ❌ Not defined for quarterly/annual (see §5); on-demand doesn't need one — it's handed over per the specific request, not through a standing SGI channel |
 
 The closest existing capability, `GET /admin/export/rides`
 (`backend/routes/admin/rides.py`), is **not fit for SGI** because it:
@@ -177,16 +189,18 @@ built. We have the **data**; we do not have the **spec**.
 
 ---
 
-## 6. Proposed export shape (illustrative — NOT yet implemented)
+## 6. Export shape — implemented for on-demand, illustrative for periodic
 
-Sketch only, to show the data is reachable once §5 is answered. Do **not** treat
-as a committed schema.
+The on-demand trip-record export (`scripts/compliance_export.py`) implements
+this join, via a PostgREST embedded select rather than raw SQL (`driver_insurance_periods`
+selected with an embedded `rides(...)`), scoped by `--start`/`--end` and
+optionally `--driver-id`/`--ride-id` instead of a fixed quarter window:
 
 ```sql
--- Per-trip, with per-period distance — the join an export would rest on.
--- Apply PII redaction (area/postal-prefix, no raw address) before output.
+-- Per-trip, with per-period distance — the join the on-demand export is built on.
+-- PII boundary: driver_id/ride_id only, no rider identity, no raw address/coordinates.
 SELECT
-    dip.period,                              -- 1 / 2 / 3
+    dip.period,                              -- 2 / 3 only (ride-linked periods)
     dip.driver_id,
     dip.ride_id,
     dip.started_at, dip.ended_at,
@@ -196,23 +210,44 @@ SELECT
     r.created_at
 FROM driver_insurance_periods dip
 LEFT JOIN rides r ON r.id = dip.ride_id
-WHERE dip.started_at >= :quarter_start
-  AND dip.started_at <  :quarter_end
+WHERE dip.started_at >= :start
+  AND dip.started_at <  :end
   AND dip.period IN (2, 3);                  -- commercial-coverage legs
 ```
 
-When greenlit, the implementation should live in `scripts/compliance_export.py`
-(referenced by the regulatory checklist), be replay-safe, write a row to
-`audit_logs` recording who exported what range, and complete in <30 min against
-prod per the on-demand SLA.
+It's replay-safe (read-only scan; only write is one `compliance_export_events`
+row per invocation — not `audit_logs`, since migration 263 already built the
+purpose-fit, RLS-gated, append-only table for exactly this "who exported
+what range" evidence), paginates in 1,000-row pages, and outputs CSV or JSON
+to a file or stdout. See the script's module docstring for full usage and for
+why it deliberately has no raw-address/PII override flag.
+
+The **quarterly aggregate** version below (fleet/service-area rollup, not
+per-trip rows) is still illustrative only — §5's open questions about SGI's
+periodic submission format/channel remain unanswered, and this sketch should
+not be treated as a committed schema until they are:
+
+```sql
+-- Illustrative quarterly rollup — NOT implemented. Do not build until §5 is answered.
+SELECT
+    dip.period,
+    COUNT(DISTINCT dip.ride_id) AS trip_count,
+    SUM(r.actual_distance_km) AS total_distance_km
+FROM driver_insurance_periods dip
+LEFT JOIN rides r ON r.id = dip.ride_id
+WHERE dip.started_at >= :quarter_start
+  AND dip.started_at <  :quarter_end
+  AND dip.period IN (2, 3)
+GROUP BY dip.period;
+```
 
 ---
 
-## 7. Definition of done (for the future build)
+## 7. Definition of done
 
-- [ ] §5 answered and signed off by legal + founder.
-- [ ] `scripts/compliance_export.py` implemented to the confirmed format, with PII redaction.
+- [ ] §5 (periodic-report questions) answered and signed off by legal + founder.
+- [x] `scripts/compliance_export.py` implemented, with PII redaction — on-demand trip-record production only (2026-08-01).
 - [ ] Quarterly aggregate report defined and either scheduled or runnable on demand.
-- [ ] Annual driver-roster export defined.
-- [ ] Proof-of-submission retention decided and wired to `audit_logs`.
-- [ ] This file updated from "gap write-up" to "operational runbook" once the above ship.
+- [ ] Annual driver-roster export defined and wired to a scheduled/on-demand job (form-fill mechanics already exist — see §4).
+- [ ] Proof-of-submission retention decided for the periodic reports and wired to `audit_logs` (the on-demand export's own audit trail is done — `compliance_export_events`, 7-year retention per migration 263).
+- [ ] This file updated from "gap write-up" to "operational runbook" once the two remaining periodic reports ship.

@@ -155,6 +155,26 @@ async def lifespan(app: FastAPI):
     # Track task handles so we can cancel them cleanly on shutdown.
     background_tasks: list[asyncio.Task] = []
 
+    # ENV=test: every one of these loops runs its first tick immediately (loop
+    # body, then sleep — not sleep-then-loop), so under a real TestClient(app)
+    # lifespan (used by ~most HTTP-level tests) they'd fire for real,
+    # concurrently with whatever db_supabase.* patch that individual test
+    # installed for its own narrow purpose. Cancelling them on shutdown
+    # (below) doesn't help either: task.cancel() on a coroutine that's
+    # mid-await inside repositories._base.run_sync()'s
+    # loop.run_in_executor() does not stop the underlying OS thread once it
+    # has already started running — it keeps executing to completion and
+    # calls into whichever mock is active when it finally gets there, which
+    # can be a *later* test entirely. Root cause of issue #2981 (see
+    # tests/conftest.py's mock_supabase_client fixture docs and
+    # test_data_transfer_search_route.py's `_entity_call` for two independent
+    # write-ups of the same symptom). None of these loops are under test via
+    # TestClient — they each have their own direct-call unit tests (e.g.
+    # test_referral_payout_batching.py calls referral_payout._tick()
+    # directly) — so skipping real spawns in ENV=test trades zero coverage
+    # for eliminating a whole class of nondeterministic full-suite pollution.
+    _skip_background_loops = settings.ENV.lower() == "test"
+
     async def _restartable(name: str, coro_factory):
         """Wrap a background loop so an uncaught crash auto-restarts after 5s."""
         while True:
@@ -170,6 +190,9 @@ async def lifespan(app: FastAPI):
                 await asyncio.sleep(5)
 
     def _spawn(name: str, coro_factory):
+        if _skip_background_loops:
+            logger.info(f"Skipped background task in ENV=test: {name}")
+            return
         try:
             task = asyncio.create_task(_restartable(name, coro_factory), name=name)
             background_tasks.append(task)

@@ -1860,10 +1860,15 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   excess calls in a turn get a synthetic budget-exceeded tool_result (not
   dropped) and a `logger.warning` + `spinr_ai_tool_calls_capped_total` metric.
   See `docs/change-log/2026-08-01-ai3-tool-call-cap.md`.
-- [ ] **AI4. `scheduled_time` reaches the proposal unvalidated** —
+- [x] **AI4. `scheduled_time` reaches the proposal unvalidated** —
   `tools_booking.py` accepts any ≤80-char string; a hallucinated/past ISO
   time renders on the card and only fails at Confirm. Validate ISO-8601 +
-  ≥5-min lead at proposal time.
+  ≥5-min lead at proposal time. Done (2026-08-01) — branch
+  `claude/ai4-validate-scheduled-time`: `propose_ride_booking` now parses
+  `scheduled_time` with `datetime.fromisoformat` and requires ≥5-min lead
+  before building the card, returning a structured `{"error": ...}` result
+  on failure (same shape as the existing out-of-area refusal); the
+  Confirm-time validator in `schemas.py` is unchanged (defense in depth).
 - [ ] **AI5. `find_place` offers out-of-service-area street addresses** —
   the area filter is skipped for street-address-shaped queries
   (`tools_booking.py:538-539`), so a rider can pick a location the booking

@@ -565,6 +565,19 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        download/resend 404/429/502 branches). No application code changed,
        no bugs found. See
        `docs/change-log/2026-08-01-a1b-admin-subscriptions-coverage.md`.
+     - `backend/routes/admin/service_areas.py` — 65.80% → **91%**. Added
+       `tests/test_admin_service_areas_coverage.py` (32 tests): service-area
+       create/update/delete (airport bbox + subregion guards, surge-above-cap
+       justification gate, `subscription_required`↔`spinr_pass_enabled`
+       coercion, vehicle-pricing auto-seed), surge-pricing activate/deactivate,
+       surge-status 503, area-fees CRUD, area-tax get/update, vehicle-pricing
+       get. No application code changed. Found (not fixed, flagged in PR):
+       the handler's manual `surge_multiplier` range check is dead code —
+       `ServiceAreaUpdateRequest`'s Pydantic `Field(ge=1.0, le=10.0)` already
+       matches `_SURGE_MAX` exactly, so out-of-range values 422 before the
+       handler's own 400 branch is ever reached. Full suite re-run locally
+       this pass — see
+       `docs/change-log/2026-08-01-a1b-admin-service-areas-coverage.md`.
      - `routes/admin/monitoring.py`: 54% → 96% (live-map driver/ride
        fetchers, Redis health/connectivity/flush-prefix, WebSocket health,
        infrastructure snapshot). See

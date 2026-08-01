@@ -1905,10 +1905,15 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   to cancel rides, but there is no `cancel`/`ride_issue` escalation category
   and no deep link to the ride screen — riders get a support ticket for a
   self-serve action.
-- [ ] **AI12. Admin console endpoint has no rate limiter and a stale
+- [x] **AI12. Admin console endpoint has no rate limiter and a stale
   docstring** — `routes/admin/ai_console.py` claims turns count against the
   daily cap; the orchestrator deliberately exempts them, and the endpoint has
   no `@ai_chat_limit` equivalent (super-admin-only + audited, so low risk).
+  Done (2026-08-01): docstring now states the actual exemption (orchestrator's
+  `_over_daily_cap`, gated on `admin_actor_id is None`); added
+  `admin_ai_console_limit` (20/minute, matches `admin_ai_suggest_limit`'s
+  admin+paid-LLM precedent) as a defensive ceiling on `POST /admin/ai/chat`.
+  See `docs/change-log/2026-08-01-ai12-admin-console-rate-limit.md`.
 - [ ] **AI14. Accepted risk: a tapped suggestion is trusted even when its
   geocode is only APPROXIMATE** — prompt rule 6b (PR #2774) treats any
   rider-tapped `location_suggestions` candidate as confirmed, so a numbered

@@ -548,12 +548,20 @@ Lower priority. Same rules apply. Prompts are intentionally shorter here — run
 Phases 1–6 first and re-scope these with fresh evidence when you reach them.
 
 ### Phase 7 — Corporate coverage CI gate
+**Precursor that already exists:** `.github/workflows/ci-guardrails.yml` has a
+`coverage-regression-gate` job ("Coverage regression check"). Read it before
+starting. Two reasons it does not close this gap: it is **advisory**
+(`continue-on-error: true`, so it never blocks a merge), and it checks *regression
+against the baseline*, not a **per-module floor**. A module can therefore sit at 33%
+indefinitely as long as it does not drop further.
+
 `CLAUDE.md` states corporate modules target ≥80% coverage and explicitly notes this
 is **not yet enforced by a `--cov-fail-under` gate**. Current aggregate ~52%, with
 `corporate_accounts.py` at 39% and `corporate_signup.py` / `corporate_rider.py` /
-`corporate_company_kyb.py` at 32–33%. Add a scoped coverage gate **set at current
+`corporate_company_kyb.py` at 32–33%. Add a scoped per-module floor **set at current
 measured coverage, not the 80% target**, so it ratchets without blocking unrelated
-PRs. Measure first; do not assume the numbers above are still current.
+PRs. Measure first; do not assume the numbers above are still current. Prefer
+extending the existing job over adding a competing one.
 
 ### Phase 8 — `spinr-fraud-auditor` agent
 Grep found `fraud` in exactly one non-test backend file (`services/payment_service.py`),
@@ -568,11 +576,25 @@ shape — a repeating pattern, easy to get subtly wrong, touching rides and mone
 Encode: registration, mandatory PII scrubbing, rate limiting, the parallel-call cap,
 the eval requirement, and safe MCP exposure.
 
-### Phase 10 — Change Impact Log CI enforcement
-`CLAUDE.md` mandates a Change Impact & Risk Log entry for changes to live-tested
-surfaces, enforced today only by a human or AI remembering. Add a CI check: a PR
-touching `backend/routes/rides/`, `backend/routes/payments.py`, `corporate_*`,
-`safety`, or `auth` must add a `docs/change-log/` entry or carry a `no-impact` label.
+### ~~Phase 10 — Change Impact Log CI enforcement~~ — WITHDRAWN, ALREADY EXISTS
+
+**Corrected 2026-08-01.** This was proposed in error. The gate already ships:
+`.github/workflows/ci-guardrails.yml` job `change-impact-log-gate`
+("Change Impact & Risk Log check"), and it is **blocking**
+(`continue-on-error: false`). It matches changed files against a `SENSITIVE_MARKERS`
+substring list covering rides, dispatch, fare service, payments, webhooks, auth,
+corporate, wallet, safety, insurance periods, driver ride/status/payout routes, and
+migrations — then requires either a `docs/change-log/` entry or the required sections
+in the PR body.
+
+**Do not build this.** If it needs anything, it is a review of whether
+`SENSITIVE_MARKERS` has gaps — not a new gate.
+
+_Why this error is worth recording: it is the same failure this document is about,
+pointed the other way. Phases 1–3 correct docs that overstate what the code does;
+this phase overstated what the code does **not** do. Both come from reasoning about
+the repo without checking it. The lesson for every phase here stands: **verify against
+the repo before acting, even when the evidence block above looks authoritative.**_
 
 ---
 

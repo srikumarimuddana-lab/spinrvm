@@ -216,12 +216,12 @@ export default function ForecastPage() {
                 <div
                   key={i}
                   className={`text-center p-2 rounded-lg border ${
-                    f.is_peak ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"
+                    f.is_peak ? "bg-amber-50 border-amber-200" : "bg-muted border-border"
                   }`}
                 >
                   <p className="text-[10px] text-muted-foreground font-medium">{f.day_name}</p>
                   <p className="text-xs font-bold">{f.hour}:00</p>
-                  <p className={`text-sm font-bold mt-1 ${f.is_peak ? "text-amber-600" : "text-gray-700"}`}>
+                  <p className={`text-sm font-bold mt-1 ${f.is_peak ? "text-amber-600" : "text-foreground"}`}>
                     {f.predicted_rides}
                   </p>
                   {f.is_peak && (

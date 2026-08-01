@@ -497,6 +497,76 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        well below the 70% admin-routes target — remaining gap is largely
        read/list/export/analytics endpoints; not pursued further in this
        pass.
+     - `routes/admin/support.py` (disputes, support-ticket CRUD, flags,
+       complaints) — was ~39%, now 97% (267 stmts, 8 missed: two narrow
+       DB-exception logging branches at 220/228, the `updated_at`-set
+       branches at 374/376/451, and line 177/551 filter edges). 40 new
+       tests in `backend/tests/test_admin_support_routes.py`, following the
+       `get_admin_user` dependency-override pattern from
+       `test_support_tickets_service_area_routes.py`. Bug found, not fixed
+       (test-only scope): `admin_get_dispute_stats` does
+       `Decimal(str(d.get("refund_amount") or 0))` inside a bare
+       `except (TypeError, ValueError)` — a non-numeric `refund_amount`
+       string raises `decimal.InvalidOperation`, which is not caught, so
+       the stats endpoint 500s instead of tolerating the bad row. See
+       `docs/change-log/2026-07-29-a1b-admin-support-coverage.md`.
+     - `routes/admin/support_tickets.py` (Zoho Desk proxy: config, sync,
+       dashboard, trends, ticket list/search/reply/comment/patch/tags) —
+       was ~43%, now 91% (357 stmts, 31 missed — mostly `ImportError`
+       fallback branches for the dual-import pattern, and a few narrow
+       Zoho-error edges not exercised: e.g. `update_config`'s no-op
+       `data_center` normalization skip, `/tickets/{id}/threads` error
+       paths already covered by other error-path tests but not every
+       endpoint's Zoho-error branch). 35 new tests in
+       `backend/tests/test_admin_support_tickets_routes.py` (service-area
+       and AI-suggest routes already had dedicated coverage in
+       `test_support_tickets_service_area_routes.py` /
+       `test_support_tickets_ai_suggest.py` and were intentionally not
+       duplicated).
+     - `promotions.py`: 48% → 89% (combined with pre-existing
+       `test_admin_promo_stats.py`) via new `tests/test_admin_promotions_crud.py`
+       — prioritized the money-adjacent create/update/delete paths (discount
+       value validation, code uppercasing, optional-field insert/update
+       fallback, audit logging) over read-only stats. See
+       `docs/change-log/2026-07-29-a1b-admin-promotions-faqs-venues-coverage.md`.
+     - `faqs.py`: 42% → 97% via new `tests/test_admin_faqs_crud.py` — FAQ
+       CRUD, embedding-invalidation-on-edit branch, and the three
+       notification-broadcast audiences (all/riders/drivers).
+     - `venues.py`: 43% → 100% via new `tests/test_admin_venues_crud.py` —
+       venue CRUD, 404-not-found and 503-db-error branches, audit logging.
+     - `backend/routes/admin/wallet.py` — **99%** (was low, exact baseline
+       not separately tracked). Added `tests/test_admin_wallet_endpoints.py`
+       (rider-wallet admin read/adjust endpoints).
+     - `backend/routes/admin/rider_import.py` — **89%**. Added
+       `tests/test_admin_rider_import.py`.
+     - `backend/routes/admin/users.py` — **74%**. Added
+       `tests/test_admin_users_management.py`.
+       All three: no application code changed, no bugs found. Full suite
+       not re-run locally this pass (relying on this PR's CI as the
+       regression gate — see
+       `docs/change-log/2026-07-30-a1b-admin-wallet-users-coverage.md`).
+     - `backend/routes/admin/maintenance.py` — **99%**. Added
+       `tests/test_admin_maintenance_coverage.py`.
+     - `backend/routes/admin/vehicle_fleet.py` — **94%**. Added
+       `tests/test_admin_vehicle_fleet_coverage.py`.
+     - `backend/routes/admin/staff.py` — **89%**. Added
+       `tests/test_admin_staff_coverage.py` (internal-staff account CRUD:
+       password validation, role presets, super_admin demotion guard,
+       session revoke on deactivation, credential stripping).
+       All three: no application code changed, no bugs found. Full suite
+       not re-run locally this pass (relying on this PR's CI as the
+       regression gate — see
+       `docs/change-log/2026-07-30-a1b-admin-maintenance-fleet-staff-coverage.md`).
+     - `routes/admin/monitoring.py`: 54% → 96% (live-map driver/ride
+       fetchers, Redis health/connectivity/flush-prefix, WebSocket health,
+       infrastructure snapshot). See
+       `docs/change-log/2026-07-29-a1b-admin-monitoring-messaging-legal-coverage.md`.
+     - `routes/admin/messaging.py`: 60% → 97% (recipient resolution +
+       service-area filter, per-channel senders, `_fan_out` stats
+       write-back including the failure-to-persist path, audience-preview,
+       suppressions). Same change-log entry.
+     - `routes/admin/legal_documents.py`: 47% → 100% (upsert version-bump
+       semantics — PIPEDA consent-version tracking). Same change-log entry.
 - **Approach — Track 2 (breadth, lower urgency):** everything else currently
   below the 60% CI floor or in the 60-80% band with no explicit target —
   utils/services not touched by Track 1. Lower priority; only worth
@@ -1463,31 +1533,55 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   the larger proposal.
 
 ### B15. Rider/driver SOS: DB insert has no fallback on failure, and "PagerDuty" in domain-safety.md doesn't exist in code
-- [ ] **Status:** open — found 2026-07-30 while tracing the SOS flow against
-  `.claude/context/domain-safety.md`'s documented behavior. Not fixed yet;
-  logging as a tracked finding per user instruction rather than fixing inline,
-  so it can be picked up as its own scoped change with a Change Impact Log
-  (touches a live safety surface).
-- **Why:** `trigger_emergency` (`backend/routes/rides/safety.py:38-83`) —
-  the rider/driver in-ride SOS endpoint — calls
+- [ ] **Status:** partially done — the DB-insert-fallback / try-except
+  sub-finding is **fixed and merged**: PR #2931
+  (https://github.com/srikumarimuddana-lab/spinrvm/pull/2931) wraps the
+  `safety_incidents` insert in `trigger_emergency`
+  (`backend/routes/rides/safety.py`) in a try/except mirroring
+  `backend/routes/safety.py:98-105`'s pattern — logs the full exception and
+  returns a clean 503 instead of an unhandled 500. The two documentation
+  inaccuracies noted below (PagerDuty claim, 3s hold duration) are also
+  **fixed** in `.claude/context/domain-safety.md` (2026-08-01,
+  `docs/change-log/2026-08-01-b15-doc-cleanup.md`) — the doc now describes
+  the real DB-failure notification path (admin WS broadcast + safety
+  distribution-list email + `logger.critical()`, no paging) and the real
+  1200ms hold duration. Checkbox stays `[ ]` because two parts of this entry
+  are still genuinely open and are product/infra decisions, not engineering
+  tasks the doc fix or the try/except resolved: (1) whether a non-DB-dependent
+  fallback (e.g. direct Twilio SMS bypassing the DB write) should be built
+  for the sustained-outage case — a DB outage spanning all 3 client retries
+  still means zero emergency-contact SMS and zero safety-team notification;
+  (2) whether real on-call paging (PagerDuty/Opsgenie) should be built at
+  all, since none exists today. Neither needs re-litigating the parts already
+  marked done below — see "Also noted" for the separate rideless-SOS-path
+  finding, also still open and also a product decision, untouched by this
+  update.
+- **Why (original finding, now fixed by PR #2931 — kept for record):**
+  `trigger_emergency` (`backend/routes/rides/safety.py:38-83`) —
+  the rider/driver in-ride SOS endpoint — called
   `await _deps.db_supabase.insert_one("safety_incidents", incident)` at
-  line 83 with **no surrounding try/except**. If that insert throws, the
-  request 500s before any of the subsequent steps run: the admin WS
+  line 83 with **no surrounding try/except**. If that insert threw, the
+  request 500'd before any of the subsequent steps ran: the admin WS
   broadcast, the safety-team email (`notify_safety_team`), and the
-  emergency-contact SMS loop are all sequenced *after* the insert in the
+  emergency-contact SMS loop were all sequenced *after* the insert in the
   same function body. Its sibling endpoint for non-urgent reports,
   `backend/routes/safety.py:98-105` (`POST /safety/report`), wraps the
   identical-purpose insert in a try/except that logs the full exception and
-  returns a clean 503 — `trigger_emergency` doesn't follow that pattern.
-  Separately, `.claude/context/domain-safety.md` describes a rule that a DB
+  returns a clean 503 — `trigger_emergency` didn't follow that pattern.
+  PR #2931 closed this gap by wrapping the insert in a try/except mirroring
+  the sibling pattern. Separately, `.claude/context/domain-safety.md`
+  described a rule that a DB
   failure on SOS should "fall back to direct Twilio + PagerDuty call with
   best-effort data" — grepped the whole backend for "pagerduty"
   (case-insensitive) and found zero implementation matches anywhere. What
   actually fires today on a successful SOS is a WS broadcast to the admin
   dashboard + an email to a safety distribution list + a `logger.critical()`
   line — no paging mechanism that would reach an on-call person not actively
-  watching the dashboard or a log stream. The doc describes intended
-  behavior that was either never built or removed without a doc update.
+  watching the dashboard or a log stream. The doc described intended
+  behavior that was either never built or removed without a doc update;
+  `.claude/context/domain-safety.md` has since been corrected (2026-08-01)
+  to describe the actual channels. Whether real paging should be built is
+  still an open decision — see Status above.
 - **Severity note (calibrated, not worst-case):** the client
   (`shared/components/SOSButton.tsx`) retries 3× (1s/2s backoff) and never
   shows a false "Alert Sent" — it only confirms success after a real 200,
@@ -1508,23 +1602,33 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   rider who feels unsafe while waiting for pickup or just after drop-off has
   no in-app SOS path today, only a prompt to call 911 themselves. Product
   decision, not obviously a bug, but worth a deliberate call rather than
-  silent-by-omission. Doc also says hold duration is "3s"; code
-  (`SOS_HOLD_MS`) is 1200ms — minor doc inaccuracy, fix alongside.
-- **Files:** `backend/routes/rides/safety.py` (add try/except around the
-  `insert_one` at line 83, mirroring `backend/routes/safety.py:98-105`'s
-  pattern — 503 on failure, full exception logged, never a silent 500);
-  `.claude/context/domain-safety.md` (correct the PagerDuty claim to match
-  actual notification channels, or file a decision to build real paging;
-  correct hold duration 3s → 1.2s; clarify the ride-required constraint).
-- **Approach:** wrap the insert per the sibling pattern first (small, low
-  risk, matches an existing precedent in the same codebase). Then decide,
-  as a separate follow-up: (a) whether SOS needs a non-DB-dependent
-  fallback path for the sustained-outage case (e.g. direct Twilio SMS to
-  safety on-call using only in-memory ride/user context, bypassing the DB
-  write), and (b) whether real paging (PagerDuty/Opsgenie) should be built
-  or the doc should stop claiming it exists.
-- **Acceptance:** not yet defined — this entry exists so the finding isn't
-  lost; scope the fix and acceptance criteria when picked up.
+  silent-by-omission — **still open, not addressed by this update.** Doc
+  also said hold duration is "3s"; code (`SOS_HOLD_MS`) is 1200ms — minor
+  doc inaccuracy, **fixed** 2026-08-01 alongside the PagerDuty correction.
+- **Files:**
+  - `backend/routes/rides/safety.py` — **done**, PR #2931 wrapped the
+    `insert_one` in a try/except mirroring
+    `backend/routes/safety.py:98-105`'s pattern (503 on failure, full
+    exception logged, never a silent 500).
+  - `.claude/context/domain-safety.md` — **done**, 2026-08-01: corrected the
+    PagerDuty claim to match actual notification channels (admin WS
+    broadcast + safety distribution-list email + `logger.critical()`, noted
+    as a known gap rather than invented as fixed) and corrected hold
+    duration 3s → 1.2s. The ride-required constraint (rideless SOS) was
+    intentionally **not** touched — see "Also noted" above, it's a product
+    decision, not a doc-accuracy issue.
+- **Approach:** insert-wrap step is done. Still needed, as separate
+  follow-ups requiring a product/infra decision before any engineering work:
+  (a) whether SOS needs a non-DB-dependent fallback path for the
+  sustained-outage case (e.g. direct Twilio SMS to safety on-call using only
+  in-memory ride/user context, bypassing the DB write); (b) whether real
+  paging (PagerDuty/Opsgenie) should be built, now that the doc no longer
+  claims it exists; (c) whether a rideless/standalone SOS path should exist
+  at all (see "Also noted").
+- **Acceptance:** insert-wrap + doc-accuracy sub-items are done (PR #2931 +
+  2026-08-01 doc cleanup). The remaining three items under Approach need
+  scoping and acceptance criteria once a product/infra decision is made —
+  not yet defined, this entry stays open until then.
 
 ### B16. Driver SOS UX doesn't implement the discretion the design sketch chose it for
 - [ ] **Status:** open — found 2026-07-30, same trace session as B15, this
@@ -1749,9 +1853,13 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with
   `conversations.py`'s stated contract and Sentry's strict scrubbing.
-- [ ] **AI3. No cap on parallel tool calls per iteration** —
+- [x] **AI3. No cap on parallel tool calls per iteration** —
   `orchestrator.py` gathers all requested calls unbounded (6 iterations ×
   N calls, each able to hit Google Maps). Cap per-iteration fan-out (e.g. 5).
+  Done (2026-08-01): `MAX_TOOL_CALLS_PER_ITERATION = 5` in `orchestrator.py`;
+  excess calls in a turn get a synthetic budget-exceeded tool_result (not
+  dropped) and a `logger.warning` + `spinr_ai_tool_calls_capped_total` metric.
+  See `docs/change-log/2026-08-01-ai3-tool-call-cap.md`.
 - [x] **AI4. `scheduled_time` reaches the proposal unvalidated** —
   `tools_booking.py` accepts any ≤80-char string; a hallucinated/past ISO
   time renders on the card and only fails at Confirm. Validate ISO-8601 +

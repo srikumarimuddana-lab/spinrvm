@@ -149,7 +149,7 @@ This is intentional (`python -m backend.server` vs top-level). Do not simplify a
 
 **Ride state machine** — always guard transitions with `_require_ride_in_state()`. `cancelled` is only valid before `in_progress`. State changes must emit a WebSocket event.
 
-Valid states and transitions (source: `backend/routes/rides.py`):
+Valid states and transitions (source: `backend/routes/rides/` — see `lifecycle.py`, `booking.py`, `matching.py`):
 
 ```
                 ┌─► cancelled (rider/driver/system, pre-trip only)

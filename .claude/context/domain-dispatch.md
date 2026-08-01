@@ -5,8 +5,8 @@ _Load when working on: driver matching, offer timeouts, ride search, location up
 ## Key files
 
 - `backend/services/dispatch_service.py` — matching algorithm entry point
-- `backend/routes/rides.py` — `/rides/request`, `/rides/{id}/accept`, offer-timeout logic
-- `backend/routes/drivers.py` — `go_online`, `go_offline`, location batch update
+- `backend/routes/rides/` — `/rides/request`, `/rides/{id}/accept`, offer-timeout logic (see `matching.py`, `booking.py`, `lifecycle.py`)
+- `backend/routes/drivers/` — `go_online`, `go_offline`, location batch update (see `status.py`, `location.py`)
 - `backend/socket_manager.py` + `backend/utils/ws_pubsub.py` — WS fan-out
 - `backend/core/lifespan.py` — scheduled-dispatch background loop
 

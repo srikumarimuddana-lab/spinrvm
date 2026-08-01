@@ -5,10 +5,10 @@ _Load when working on: SOS flow, emergency contacts, insurance period transition
 ## Key files
 
 - `backend/routes/safety.py` — SOS trigger, emergency contact CRUD, incident reports
-- `backend/services/insurance_period_service.py` — period transition logging
+- `backend/utils/insurance_periods.py` — period transition logging
 - `backend/utils/audit_logger.py` — append-only safety audit trail
-- `backend/routes/chat.py` — in-ride chat with profanity/PII filters
-- `rider-app/src/screens/SOSScreen.tsx`, `driver-app/src/screens/SOSScreen.tsx`
+- `backend/routes/rides/chat.py` — in-ride chat with profanity/PII filters
+- `rider-app/app/report-safety.tsx`, `driver-app/app/report-safety.tsx`
 
 ## SOS flow (non-negotiable behavior)
 

@@ -968,19 +968,22 @@ class TestAdminRidesReadEndpointsSmoke:
             resp = client.get("/api/admin/places/details", params={"place_id": "pid"})
         assert resp.status_code == 503
 
-    def test_get_payout_stats_route_shadowed_by_payout_id_KNOWN_BUG(self, client, as_super_admin):
-        """DISCOVERED BUG (not fixed here -- test-only scope; see final report):
-        `GET /payouts/{payout_id}` is registered at line ~3137, before
-        `GET /payouts/stats` at line ~3409. FastAPI/Starlette match routes in
-        registration order, so a request for /payouts/stats is captured by
-        /payouts/{payout_id} with payout_id="stats" and 404s ("Payout not
-        found") instead of ever reaching admin_get_payout_stats. This exactly
-        contradicts the code's own comment above admin_get_payout ("IMPORTANT:
-        keep this BEFORE @router.get('/payouts/{payout_id}')") -- the ordering
-        in the file today violates that invariant. Net effect: the admin
-        dashboard's payout stats panel likely 404s in production. This test
-        pins the CURRENT (buggy) behaviour so a future fix shows up as an
-        intentional, reviewed change to this test rather than a silent flip."""
-        with patch("db_supabase.find_one", AsyncMock(return_value=None)):
+    def test_get_payout_stats_reaches_stats_handler_not_shadowed_by_payout_id(self, client, as_super_admin):
+        """Regression test for issue #3068: `GET /payouts/stats` was being
+        captured by `GET /payouts/{payout_id}` (payout_id="stats") because the
+        latter was registered first, 404ing instead of ever reaching
+        admin_get_payout_stats. Fixed by moving admin_get_payout_stats's route
+        registration above admin_get_payout's, matching the code comment's
+        stated invariant. This test now asserts the stats route is actually
+        reached (200, correct response shape) rather than shadowed."""
+        with patch("routes.admin.rides.db.rpc", AsyncMock(return_value=[])):
             resp = client.get("/api/admin/payouts/stats")
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body.keys()) == {
+            "total_paid",
+            "total_pending",
+            "total_failed",
+            "payout_count",
+            "pending_count",
+        }

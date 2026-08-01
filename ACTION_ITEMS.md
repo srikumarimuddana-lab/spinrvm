@@ -1849,10 +1849,17 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   Redis errors (`backend/ai/orchestrator.py:82-84`). One user on many IPs, or
   a Redis blip, removes the LLM-cost ceiling (kill switch remains the hard
   stop). Consider a user-keyed limiter + fail-closed above a generous floor.
-- [ ] **AI2. Assistant output is persisted un-scrubbed** — only the user
+- [x] **AI2. Assistant output is persisted un-scrubbed** — only the user
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with
   `conversations.py`'s stated contract and Sentry's strict scrubbing.
+  Done (2026-07-30, PR #2914): `orchestrator.py` now scrubs `final_text`
+  into `stored_text` via `scrub_pii(..., keep_trip_pins=True)` before
+  `append_message`/`store_cached` — the live SSE stream to the client is
+  unaffected, only the persisted/cached copy changes. Regression test
+  `test_assistant_text_is_pii_scrubbed_before_persistence` in
+  `test_ai_orchestrator.py`. See
+  `docs/change-log/2026-07-30-ai-assistant-output-pii-scrub.md`.
 - [x] **AI3. No cap on parallel tool calls per iteration** —
   `orchestrator.py` gathers all requested calls unbounded (6 iterations ×
   N calls, each able to hit Google Maps). Cap per-iteration fan-out (e.g. 5).

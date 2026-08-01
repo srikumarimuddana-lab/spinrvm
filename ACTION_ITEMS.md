@@ -1853,9 +1853,13 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with
   `conversations.py`'s stated contract and Sentry's strict scrubbing.
-- [ ] **AI3. No cap on parallel tool calls per iteration** —
+- [x] **AI3. No cap on parallel tool calls per iteration** —
   `orchestrator.py` gathers all requested calls unbounded (6 iterations ×
   N calls, each able to hit Google Maps). Cap per-iteration fan-out (e.g. 5).
+  Done (2026-08-01): `MAX_TOOL_CALLS_PER_ITERATION = 5` in `orchestrator.py`;
+  excess calls in a turn get a synthetic budget-exceeded tool_result (not
+  dropped) and a `logger.warning` + `spinr_ai_tool_calls_capped_total` metric.
+  See `docs/change-log/2026-08-01-ai3-tool-call-cap.md`.
 - [ ] **AI4. `scheduled_time` reaches the proposal unvalidated** —
   `tools_booking.py` accepts any ≤80-char string; a hallucinated/past ISO
   time renders on the card and only fails at Confirm. Validate ISO-8601 +

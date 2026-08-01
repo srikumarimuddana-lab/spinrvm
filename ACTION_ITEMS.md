@@ -1725,7 +1725,10 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   doesn't become a permanently-forgotten "temporary" gap.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image confirmed; a second finding (msgpack) still unexplained
-- [ ] **Status:** open — found 2026-07-30 while triaging `docker-image-scan` on
+- [ ] **Status:** open overall — base-image-staleness half fixed 2026-08-01
+  (draft PR pending `docker-image-scan` verification, see update below);
+  msgpack half still unexplained. Originally found 2026-07-30 while
+  triaging `docker-image-scan` on
   PR #2931 (a backend change, so this wasn't waved off as the usual
   unrelated-base-image noise without checking), then reproduced identically
   on PR #2934 (a *docs-only* PR touching zero backend files) — same two HIGH
@@ -1783,6 +1786,51 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
 - **Acceptance:** base image digest refreshed and confirmed current;
   msgpack's installed-vs-locked mismatch either reproduced-and-explained or
   confirmed to no longer reproduce after a clean rebuild.
+- **Update (2026-08-01) — base-image-staleness half only, done; msgpack half
+  still open.** This sandbox had no Docker daemon (`docker version` connects
+  fine to the client but `dial unix /var/run/docker.sock: connect: no such
+  file or directory` on the API — confirmed still true, not assumed). The
+  proxy also blocks the Docker Hub blob CDN outright (`recentRelayFailures`
+  in `$HTTPS_PROXY/__agentproxy/status` shows repeated `connect_rejected` /
+  gateway 403 for `production.cloudfront.docker.com`), so a plain `docker
+  pull` / `docker manifest inspect` (the runbook's documented procedure)
+  fails partway through. Worked around it by hitting the Docker registry
+  v2 HTTP API directly (`auth.docker.io` for a pull token, then
+  `registry-1.docker.io/v2/library/python/manifests/<tag>` with an
+  `Accept: application/vnd.oci.image.index.v1+json` header for the
+  `Docker-Content-Digest` response header) plus the `hub.docker.com/v2`
+  metadata API for cross-checks — neither needs a blob download, and both
+  are apparently unblocked by the proxy.
+  - Found the pinned tag `python:3.12.9-slim`'s digest **had not moved at
+    all** since the 2026-04-29 capture (`sha256:48a11b7...` — verified
+    byte-identical via the registry API). Docker Hub does not rebuild a
+    fixed patch-version tag after newer patches ship, so re-pinning that
+    same tag would have been a no-op that didn't actually close any CVE
+    gap — which defeats the stated purpose of the quarterly cadence.
+  - Confirmed via the registry API, the Hub metadata API, and the floating
+    `python:3.12-slim` alias (which always tracks the newest 3.12.x patch)
+    — all three agree — that the current latest patch is `3.12.13-slim` at
+    digest `sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd042
+    66317710de`, last published 2026-07-16.
+  - Bumped `backend/Dockerfile` (both stages) to `python:3.12.13-slim` at
+    that verified digest; see `docs/change-log/
+    2026-08-01-refresh-docker-base-image-digest.md` for the full Change
+    Impact Log. **Not verified**: no local Docker build was possible (no
+    daemon), so this is unverified beyond "the digest is real and current
+    per two independent Docker-operated APIs" — `docker-image-scan` in CI
+    on the draft PR is the actual build+Trivy verification.
+  - Also noticed, out of scope for this pass: a second, apparently-unused
+    root-level `Dockerfile` (different build recipe — venv + plain
+    `requirements.txt`, no `--require-hashes`) pins the *same* stale
+    `3.12.9-slim` digest via its own comment ("Q-5"). Neither `railway.json`
+    nor `backend/fly.toml` reference it (`railway.json` explicitly points
+    at `backend/Dockerfile`), so it looks orphaned rather than a live
+    build path — left untouched since it's outside this task's scope, but
+    worth a follow-up to confirm it's dead and either delete it or bring
+    it in sync.
+  - **msgpack half of C6 is untouched and still open** — genuinely
+    requires a real Docker build to investigate, which remains unavailable
+    in this environment.
 
 ### B-AI1. Corporate rider booking via AI chat bypasses corporate billing
 - [x] **Status:** done (2026-07-29) — found by the 2026-07-28 AI guardrail

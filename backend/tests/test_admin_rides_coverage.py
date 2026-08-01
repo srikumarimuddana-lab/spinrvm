@@ -691,6 +691,283 @@ class TestAdminRidesReadEndpointsSmoke:
             resp = client.get("/api/admin/payouts/no-such")
         assert resp.status_code == 404
 
+    def test_get_ride_location_trail_happy_path(self, client, as_super_admin):
+        with patch("db_supabase.get_ride_location_trail", AsyncMock(return_value=[{"lat": 1, "lng": 2}])):
+            resp = client.get("/api/admin/rides/ride-1/location-trail")
+        assert resp.status_code == 200
+        assert resp.json() == [{"lat": 1, "lng": 2}]
+
+    def test_get_live_ride_not_found_404(self, client, as_super_admin):
+        with patch("db_supabase.get_live_ride_data", AsyncMock(return_value=None)):
+            resp = client.get("/api/admin/rides/no-ride/live")
+        assert resp.status_code == 404
+
+    def test_get_live_ride_happy_path(self, client, as_super_admin):
+        with patch("db_supabase.get_live_ride_data", AsyncMock(return_value={"id": "ride-1", "driver_lat": 1})):
+            resp = client.get("/api/admin/rides/ride-1/live")
+        assert resp.status_code == 200
+
+    def test_get_ride_invoice_not_found_404(self, client, as_super_admin):
+        with patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=None)):
+            resp = client.get("/api/admin/rides/no-ride/invoice")
+        assert resp.status_code == 404
+
+    def test_get_ride_invoice_happy_path_no_lock(self, client, as_super_admin):
+        ride = {
+            "id": "ride-1",
+            "status": "completed",
+            "total_fare": "12.00",
+            "grand_total": "12.00",
+        }
+        with patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=ride)):
+            resp = client.get("/api/admin/rides/ride-1/invoice")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ride_id"] == "ride-1"
+        assert body["fare_locked"] is False
+        assert body["grand_total"] == "12.00"
+
+    def test_get_ride_invoice_fare_locked_uses_snapshot(self, client, as_super_admin):
+        ride = {
+            "id": "ride-1",
+            "status": "completed",
+            "fare_breakdown_snapshot": {"lines": [{"label": "Base", "amount": "5.00"}], "grand_total": "5.00"},
+        }
+        with (
+            patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=ride)),
+            patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={"fare_lock_enabled": True})),
+        ):
+            resp = client.get("/api/admin/rides/ride-1/invoice")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["fare_locked"] is True
+        assert body["grand_total"] == "5.00"
+
+    def test_send_receipt_ride_not_found_404(self, client, as_super_admin):
+        with patch("db_supabase.get_ride", AsyncMock(return_value=None)):
+            resp = client.post("/api/admin/rides/no-ride/send-receipt")
+        assert resp.status_code == 404
+
+    def test_send_receipt_no_rider_email_no_override_422(self, client, as_super_admin):
+        ride = {"id": "ride-1", "rider_id": "usr-1", "tip_amount": "0"}
+        with (
+            patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value={"id": "usr-1", "email": ""})),
+        ):
+            resp = client.post("/api/admin/rides/ride-1/send-receipt")
+        assert resp.status_code == 422
+
+    def test_send_receipt_provider_failure_502(self, client, as_super_admin):
+        ride = {"id": "ride-1", "rider_id": "usr-1", "tip_amount": "0"}
+        with (
+            patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value={"id": "usr-1", "email": "r@example.com"})),
+            patch("services.payment_service.send_ride_receipt", AsyncMock(return_value=False), create=True),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+        ):
+            resp = client.post("/api/admin/rides/ride-1/send-receipt")
+        assert resp.status_code == 502
+
+    def test_send_receipt_happy_path_with_override_email(self, client, as_super_admin):
+        ride = {"id": "ride-1", "rider_id": "usr-1", "tip_amount": "1.00"}
+        with (
+            patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value={"id": "usr-1", "email": ""})),
+            patch("services.payment_service.send_ride_receipt", AsyncMock(return_value=True), create=True),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+        ):
+            resp = client.post("/api/admin/rides/ride-1/send-receipt", json={"email": "override@example.com"})
+        assert resp.status_code == 200
+        assert resp.json() == {"sent": True, "ride_id": "ride-1"}
+
+    def test_get_heatmap_data_happy_path(self, client, as_super_admin):
+        rows = [
+            {
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.5,
+                "corporate_account_id": "corp-1",
+            },
+            {
+                "pickup_lat": None,
+                "pickup_lng": None,
+                "dropoff_lat": None,
+                "dropoff_lng": None,
+                "corporate_account_id": None,
+            },
+        ]
+        with patch("db_supabase.get_rows", AsyncMock(return_value=rows)):
+            resp = client.get(
+                "/api/admin/rides/heatmap-data",
+                params={"filter": "corporate", "start_date": "2026-01-01", "end_date": "2026-01-31"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["stats"]["total_rides"] == 2
+        assert body["stats"]["corporate_rides"] == 1
+        assert len(body["pickup_points"]) == 1
+
+    def test_get_earnings_happy_path(self, client, as_super_admin):
+        rollup = [
+            {
+                "sum_total_fare": "100.00",
+                "completed_count": 4,
+                "sum_driver_earnings": "80.00",
+                "sum_admin_earnings": "20.00",
+            }
+        ]
+        with patch("db_supabase.rpc", AsyncMock(return_value=rollup)):
+            resp = client.get("/api/admin/earnings", params={"period": "week"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_revenue"] == 100.0
+        assert body["total_rides"] == 4
+
+    def test_get_earnings_rides_happy_path(self, client, as_super_admin):
+        rides = [
+            {
+                "id": "ride-1",
+                "ride_code": "R1",
+                "status": "completed",
+                "total_fare": "10.00",
+                "driver_earnings": "8.00",
+                "admin_earnings": "2.00",
+                "tip_amount": "1.00",
+                "tax_amount": "0.50",
+                "discount_amount": "0",
+                "surge_multiplier": "1",
+                "driver_id": "drv-1",
+                "rider_id": "usr-1",
+            }
+        ]
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("routes.admin.drivers._batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
+        ):
+            resp = client.get("/api/admin/earnings/rides")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["rides"][0]["ride_id"] == "ride-1"
+
+    def test_get_earnings_overview_happy_path(self, client, as_super_admin):
+        with (
+            patch("db_supabase.rpc", AsyncMock(return_value=[])),
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+        ):
+            resp = client.get("/api/admin/earnings/overview", params={"period": "30d"})
+        assert resp.status_code == 200
+        assert resp.json()["period"]["key"] == "30d"
+
+    def test_get_earnings_overview_invalid_period_422(self, client, as_super_admin):
+        resp = client.get("/api/admin/earnings/overview", params={"period": "decade"})
+        assert resp.status_code == 422
+
+    def test_export_rides_happy_path(self, client, as_super_admin):
+        rides = [
+            {
+                "id": "ride-1",
+                "pickup_address": "A",
+                "dropoff_address": "B",
+                "total_fare": "10.00",
+                "status": "completed",
+                "created_at": "2026-01-01T00:00:00Z",
+                "rider_id": "usr-1",
+                "driver_id": "drv-1",
+            }
+        ]
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("routes.admin.drivers._batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)) as mock_insert,
+        ):
+            resp = client.get("/api/admin/export/rides")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count"] == 1
+        # Audit log entry (F-41) must be written for every export.
+        assert mock_insert.call_args[0][0] == "audit_logs"
+
+    def test_export_drivers_happy_path_empty(self, client, as_super_admin):
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+        ):
+            resp = client.get("/api/admin/export/drivers")
+        assert resp.status_code == 200
+        assert resp.json() == {"drivers": [], "count": 0}
+
+    def test_get_payouts_overview_happy_path_empty(self, client, as_super_admin):
+        with (
+            patch("db_supabase.rpc", AsyncMock(return_value=[])),
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+        ):
+            resp = client.get("/api/admin/payouts/overview", params={"period": "7d"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["period"]["key"] == "7d"
+        assert body["metrics"]["payouts_count"]["current"] == 0
+
+    def test_get_payouts_overview_service_area_no_drivers_returns_empty_shell(self, client, as_super_admin):
+        with patch("db_supabase.get_rows", AsyncMock(return_value=[])):
+            resp = client.get("/api/admin/payouts/overview", params={"service_area_id": "area-1"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["metrics"]["outstanding_payable"]["current"] == 0.0
+        assert body["daily_series"] == []
+
+    def test_get_admin_stats_happy_path(self, client, as_super_admin):
+        with (
+            patch("db_supabase.count_documents", AsyncMock(return_value=1)),
+            patch("db_supabase.rpc", AsyncMock(return_value=[{"sum_total_fare": "5.00"}])),
+        ):
+            resp = client.get("/api/admin/stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_rides"] == 1
+
+    def test_fare_estimate_happy_path(self, client, as_super_admin):
+        with patch("routes.rides.fare_estimate", AsyncMock(return_value={"total": "10.00"}), create=True):
+            resp = client.get(
+                "/api/admin/rides/fare-estimate",
+                params={
+                    "pickup_lat": 50.4,
+                    "pickup_lng": -104.6,
+                    "dropoff_lat": 50.5,
+                    "dropoff_lng": -104.5,
+                    "distance_km": 5,
+                    "duration_minutes": 10,
+                    "vehicle_type_id": "vt-1",
+                },
+            )
+        assert resp.status_code == 200
+
+    def test_promo_preview_happy_path(self, client, as_super_admin):
+        validation = {
+            "code": "SAVE5",
+            "discount_type": "fixed",
+            "discount_amount": "5.00",
+            "promo_id": "promo-1",
+        }
+        with patch("routes.promotions._validate_promo_for_user", AsyncMock(return_value=validation), create=True):
+            resp = client.post(
+                "/api/admin/promo/preview",
+                json={"rider_id": "usr-1", "code": "SAVE5", "ride_fare": "20.00"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["code"] == "SAVE5"
+
+    def test_places_autocomplete_not_configured_503(self, client, as_super_admin):
+        with patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={})):
+            resp = client.get("/api/admin/places/autocomplete", params={"input": "walm"})
+        assert resp.status_code == 503
+
+    def test_places_details_not_configured_503(self, client, as_super_admin):
+        with patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={})):
+            resp = client.get("/api/admin/places/details", params={"place_id": "pid"})
+        assert resp.status_code == 503
+
     def test_get_payout_stats_route_shadowed_by_payout_id_KNOWN_BUG(self, client, as_super_admin):
         """DISCOVERED BUG (not fixed here -- test-only scope; see final report):
         `GET /payouts/{payout_id}` is registered at line ~3137, before

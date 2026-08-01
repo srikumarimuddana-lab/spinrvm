@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pydantic
 import pytest
 from fastapi import HTTPException
 
@@ -205,11 +206,18 @@ class TestUpdateServiceAreaGuards:
         assert exc_info.value.status_code == 400
         assert "sub-region" in exc_info.value.detail
 
-    # NOTE: surge_multiplier's Pydantic Field already constrains it to
-    # [1.0, _SURGE_MAX] (10.0), so the handler's own `sm < 1.0 or sm >
-    # _SURGE_MAX` branch (lines ~523-527) is currently unreachable through a
-    # validated request — the Field bound and _SURGE_MAX are numerically
-    # identical. Not fixed here (test-only scope); flagged in the PR body.
+    def test_surge_multiplier_out_of_range_rejected_by_pydantic_422(self):
+        """Regression test for issue #3069: the handler's own manual
+        `sm < 1.0 or sm > _SURGE_MAX` re-check was dead code — Pydantic's
+        `Field(ge=1.0, le=10.0)` on `ServiceAreaUpdateRequest.surge_multiplier`
+        already matches `_SURGE_MAX` exactly and rejects out-of-range values
+        with a 422 before the handler ever runs. The dead branch was removed;
+        this test pins that the boundary is still enforced (now solely at the
+        Pydantic layer)."""
+        with pytest.raises(pydantic.ValidationError):
+            ServiceAreaUpdateRequest(surge_multiplier=10.01)
+        with pytest.raises(pydantic.ValidationError):
+            ServiceAreaUpdateRequest(surge_multiplier=0.99)
 
     @pytest.mark.anyio
     async def test_surge_above_cap_without_justification_rejected(self):

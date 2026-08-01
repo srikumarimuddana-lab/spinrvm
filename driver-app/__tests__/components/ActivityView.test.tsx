@@ -149,8 +149,28 @@ describe('ActivityView', () => {
   });
 
   it('shows load more for a month when period stats say more rides exist', async () => {
-    const thisMonth = new Date();
-    thisMonth.setDate(Math.max(1, thisMonth.getDate() - 10));
+    // Must land within the current calendar month but NOT on today's date
+    // (the default 'today' period must exclude it so the initial render can
+    // assert "No Rides Found"). The old approach subtracted a fixed 10-day
+    // offset from today's day-of-month and clamped negative/zero results to
+    // day 1 via Math.max(1, ...) — but that clamp collapses the fixture back
+    // onto "today" itself whenever today IS the 1st, and still lands
+    // suspiciously close to "today" on the 2nd-10th. Anchor to day 1 of the
+    // month instead (never negative/invalid, preserving the same safety
+    // intent as the old Math.max(1, ...) clamp) and nudge forward one day
+    // only in the single case where day 1 would collide with today.
+    const today = new Date();
+    const thisMonth = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      1,
+      today.getHours(),
+      today.getMinutes(),
+      today.getSeconds()
+    );
+    if (thisMonth.getDate() === today.getDate()) {
+      thisMonth.setDate(thisMonth.getDate() + 1);
+    }
     mockStore = makeStore({
       earnings: {
         ...makeStore().earnings,

@@ -485,41 +485,49 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        validation at the >500/<=0 Pydantic gate and the 503-on-DB-error path
        for every write endpoint). Test-only, no bugs found. See
        `docs/change-log/2026-07-29-a1b-admin-analytics-incentives-coverage.md`.
-     - `backend/routes/admin/rides.py` — **34% → 42% (2026-07-30) → re-measured
-       2026-08-01 at 80%, already past the 70% admin-routes target** (1190
-       statements, 242 uncovered; measured via full `pytest tests/ -q`, real
-       pytest-cov output, twice — before and after this session's changes).
-       The 42% figure was stale, not wrong: the backend suite grew from
-       ~5610 to 6576 tests in the six days since via other A1b work
-       (corporate, safety, drivers, analytics, incentives, support, …), and
-       several of those incidentally exercise this file's endpoints as a side
-       effect — the real full-suite baseline had already reached 80% before
-       this session added anything. Added a second file,
-       `tests/test_admin_rides_read_endpoints_coverage.py` (41 tests),
-       covering every endpoint the first pass hadn't touched directly
-       (dashboard stats, ride location-trail/live/invoice, send-receipt, the
-       Places/fare-estimate/promo-preview proxies, the Static-Maps route-map
-       proxy, heatmap data, earnings + /rides + /overview, the CSV exports,
-       and /payouts/overview) — happy path + one upstream/DB-exception path
-       each, same "lighter smoke pass" convention as other read-endpoint
-       passes in this backlog. All 41 pass and the full suite's pass count
-       rose by exactly 41 (6576→6617), confirming they genuinely ran; the
-       file's aggregate coverage number did **not** move (242 uncovered
-       before and after, byte-identical missing-line list) because every
-       line these tests touch was already reachable from some other test
-       file in the suite — the tests still add value as *intentional,
-       dedicated* coverage of these endpoints rather than an accidental
-       side effect of unrelated tests, but the honest framing is "confirmed
-       at 80%," not "raised to 80%." No application code changed, no bugs
-       found. Remaining 242 uncovered lines are concentrated in
-       `admin_send_payable_invoice`'s actual Stripe invoice-creation body
-       (every guard clause is covered; the real `stripe.Invoice.create`/
-       `finalize`/`send` happy path is not) and deep branches of
-       `payouts/overview` / `export/drivers` that need multi-row,
-       multi-status fixture data to reach — not pursued further given the
-       file already clears its target. See
-       `docs/change-log/2026-07-30-a1b-admin-rides-coverage.md` and
-       `docs/change-log/2026-08-01-a1b-admin-rides-coverage-continued.md`.
+     - `backend/routes/admin/rides.py` — **34% → 42% (2026-07-30) → two
+       independent, concurrent 2026-08-01 sessions both picked up the
+       deferred read/list/export/analytics gap, unaware of each other; both
+       landed, reconciled here rather than picking one over the other:**
+       - **Batch 2** (PR #3057) extended the existing
+         `tests/test_admin_rides_coverage.py` in place (57 → 81 tests, 24
+         new), measured single-file (`--cov=routes.admin.rides` against that
+         file alone): **42%/52.35% → 70%**. Closed ride location-trail/live/
+         invoice, send-receipt, heatmap-data, earnings (+/rides +/overview),
+         export/rides, export/drivers, payouts/overview (incl. the
+         no-drivers-in-area empty-shell branch), dashboard `/stats`,
+         fare-estimate, promo/preview, and the places-proxy not-configured
+         503 guards. Full-suite `--cov` re-measurement wasn't obtained in
+         that session (sandbox-specific coverage-instrumentation/
+         `pyiceberg` import interaction) — see
+         `docs/change-log/2026-08-01-a1b-admin-rides-coverage-batch2.md`.
+       - **This session** (unaware of #3057 in flight, branched from main
+         before it merged) added a *second*, separate file,
+         `tests/test_admin_rides_read_endpoints_coverage.py` (41 tests,
+         overlapping in target endpoints with batch 2 above but written
+         independently), and — per this task's own instruction not to trust
+         the stale 42% figure — re-measured **full-suite** coverage twice
+         (before and after its own changes, both against a pre-#3057 base):
+         **already 80%** (242/1190 uncovered) *before* this session added
+         anything, because the backend suite had grown from ~5610 to 6576
+         tests since 2026-07-30 via unrelated A1b work, several of which
+         incidentally exercise this file as a side effect. This session's 41
+         new tests all pass (suite pass count rose 6576→6617) but did not
+         move the aggregate number (byte-identical 242-line gap before/
+         after) — every line they touch was already reachable elsewhere.
+         See `docs/change-log/2026-07-30-a1b-admin-rides-coverage.md` and
+         `docs/change-log/2026-08-01-a1b-admin-rides-coverage-continued.md`.
+       - **Net effect:** both sessions' test files are kept (some endpoint
+         overlap between them is redundant but harmless — extra CI time, no
+         correctness risk); no application code was changed by either; no
+         new bugs found by either. `routes/admin/rides.py` is confirmed
+         clear of the 70% admin-routes target by two different measurement
+         methods (single-file 70%, full-suite 80%) using two independently
+         written test suites — about as solid a confirmation as this
+         backlog's convention produces. Neither session independently
+         re-confirmed a **full-suite** number *after* both sets of tests
+         landed together; if that number matters later, it's a cheap
+         re-run, not a re-investigation.
      - `routes/admin/support.py` (disputes, support-ticket CRUD, flags,
        complaints) — was ~39%, now 97% (267 stmts, 8 missed: two narrow
        DB-exception logging branches at 220/228, the `updated_at`-set
@@ -580,6 +588,27 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        not re-run locally this pass (relying on this PR's CI as the
        regression gate — see
        `docs/change-log/2026-07-30-a1b-admin-maintenance-fleet-staff-coverage.md`).
+     - `backend/routes/admin/subscriptions.py` — 68.42% → **98%**. Added
+       `tests/test_admin_subscriptions_coverage.py` (32 tests: Spinr Pass
+       plan CRUD, subscription-stats aggregation, subscription-payments
+       pagination/date-filter/legacy-tax-row branches, tax-config update,
+       offer-analytics pagination/truncation/date-parsing, invoice
+       download/resend 404/429/502 branches). No application code changed,
+       no bugs found. See
+       `docs/change-log/2026-08-01-a1b-admin-subscriptions-coverage.md`.
+     - `backend/routes/admin/service_areas.py` — 65.80% → **91%**. Added
+       `tests/test_admin_service_areas_coverage.py` (32 tests): service-area
+       create/update/delete (airport bbox + subregion guards, surge-above-cap
+       justification gate, `subscription_required`↔`spinr_pass_enabled`
+       coercion, vehicle-pricing auto-seed), surge-pricing activate/deactivate,
+       surge-status 503, area-fees CRUD, area-tax get/update, vehicle-pricing
+       get. No application code changed. Found (not fixed, flagged in PR):
+       the handler's manual `surge_multiplier` range check is dead code —
+       `ServiceAreaUpdateRequest`'s Pydantic `Field(ge=1.0, le=10.0)` already
+       matches `_SURGE_MAX` exactly, so out-of-range values 422 before the
+       handler's own 400 branch is ever reached. Full suite re-run locally
+       this pass — see
+       `docs/change-log/2026-08-01-a1b-admin-service-areas-coverage.md`.
      - `routes/admin/monitoring.py`: 54% → 96% (live-map driver/ride
        fetchers, Redis health/connectivity/flush-prefix, WebSocket health,
        infrastructure snapshot). See

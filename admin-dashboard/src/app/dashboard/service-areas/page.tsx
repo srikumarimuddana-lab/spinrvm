@@ -962,7 +962,7 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs text-gray-500 border-b">
+            <tr className="text-left text-xs text-muted-foreground border-b">
               <th className="pb-2 pr-2">Vehicle Type</th>
               <th className="pb-2 pr-2">Base Fare ($)</th>
               <th className="pb-2 pr-2">Per KM ($)</th>
@@ -985,7 +985,7 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
                 <tr key={i} className="border-b">
                   <td className="py-2 pr-2">
                     <select
-                      className="w-full border rounded-lg px-2 py-1.5 text-sm bg-white"
+                      className="w-full border rounded-lg px-2 py-1.5 text-sm bg-card"
                       value={currentVal}
                       onChange={e => update(i, 'vehicle_type', e.target.value)}
                     >
@@ -1007,7 +1007,7 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
                         value={(r as any)[f]} onChange={e => update(i, f, e.target.value)} />
                     </td>
                   ))}
-                  <td className="py-2"><button onClick={() => removeRow(i)} className="text-gray-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button></td>
+                  <td className="py-2"><button onClick={() => removeRow(i)} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /></button></td>
                 </tr>
               );
             })}
@@ -1020,10 +1020,10 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
         </p>
       )}
       <div className="flex gap-3 mt-3">
-        <button onClick={addRow} className="text-sm text-red-500 font-semibold hover:underline">+ Add vehicle type</button>
+        <button onClick={addRow} className="text-sm text-primary font-semibold hover:underline">+ Add vehicle type</button>
         <button
           onClick={() => { onSave(rows); setDirty(false); }}
-          className={`px-5 py-2 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+          className={`px-5 py-2 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
           disabled={!dirty}
         >
           {dirty ? 'Save Pricing*' : 'Saved'}

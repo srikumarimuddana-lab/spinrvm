@@ -560,7 +560,7 @@ export default function ServiceAreasPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1271,51 +1271,51 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
             <div>
                 <div className="flex items-center justify-between mb-4">
                     <div>
-                        <h4 className="font-bold text-gray-800">Area Fees</h4>
-                        <p className="text-sm text-gray-500">Fees applied to rides in this area. Calculated dynamically based on type.</p>
+                        <h4 className="font-bold text-foreground">Area Fees</h4>
+                        <p className="text-sm text-muted-foreground">Fees applied to rides in this area. Calculated dynamically based on type.</p>
                     </div>
                     <button onClick={handleCreate} disabled={saving}
-                        className="flex items-center gap-1.5 bg-red-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
+                        className="flex items-center gap-1.5 bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-semibold hover:bg-primary/90 disabled:opacity-50">
                         <Plus className="h-4 w-4" /> Add Fee
                     </button>
                 </div>
 
                 {loading ? (
-                    <div className="text-center py-8 text-gray-400">Loading fees...</div>
+                    <div className="text-center py-8 text-muted-foreground">Loading fees...</div>
                 ) : fees.length === 0 ? (
-                    <div className="text-center py-8 bg-gray-50 rounded-xl border-2 border-dashed">
-                        <DollarSign className="h-8 w-8 text-gray-300 mx-auto mb-2" />
-                        <p className="text-sm text-gray-500">No fees configured</p>
-                        <p className="text-xs text-gray-400">Add fees like airport surcharge, night fee, city fee, etc.</p>
+                    <div className="text-center py-8 bg-muted rounded-xl border-2 border-dashed">
+                        <DollarSign className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                        <p className="text-sm text-muted-foreground">No fees configured</p>
+                        <p className="text-xs text-muted-foreground">Add fees like airport surcharge, night fee, city fee, etc.</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                         {fees.map(fee => (
-                            <div key={fee.id} className={`rounded-xl border p-4 ${fee.is_active ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                            <div key={fee.id} className={`rounded-xl border p-4 ${fee.is_active ? 'bg-card' : 'bg-muted opacity-60'}`}>
                                 <div className="flex items-start justify-between mb-3">
                                     <div>
-                                        <p className="font-bold text-gray-800">{fee.fee_name || fee.fee_type || 'Fee'}</p>
-                                        <p className="text-xs text-gray-400 mt-0.5">{fee.fee_type} · {fee.calc_mode || 'flat'}</p>
+                                        <p className="font-bold text-foreground">{fee.fee_name || fee.fee_type || 'Fee'}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{fee.fee_type} · {fee.calc_mode || 'flat'}</p>
                                     </div>
                                     <div className="text-right">
-                                        <p className="text-lg font-bold text-gray-900">
+                                        <p className="text-lg font-bold text-foreground">
                                             {fee.calc_mode === 'percentage' ? `${fee.amount}%` : `$${Number(fee.amount || 0).toFixed(2)}`}
                                             {fee.calc_mode === 'per_km' && '/km'}
                                         </p>
                                     </div>
                                 </div>
-                                {fee.description && <p className="text-xs text-gray-500 mb-3">{fee.description}</p>}
+                                {fee.description && <p className="text-xs text-muted-foreground mb-3">{fee.description}</p>}
                                 {fee.conditions && fee.conditions.start_hour !== undefined && (
-                                    <p className="text-xs text-gray-400 mb-3">Hours: {fee.conditions.start_hour}:00 - {fee.conditions.end_hour}:00</p>
+                                    <p className="text-xs text-muted-foreground mb-3">Hours: {fee.conditions.start_hour}:00 - {fee.conditions.end_hour}:00</p>
                                 )}
                                 <div className="flex items-center gap-2 pt-2 border-t">
-                                    <button onClick={() => setEditingFee(editingFee?.id === fee.id ? null : fee)} className="text-xs text-gray-400 hover:text-red-500 font-medium flex items-center gap-1">
+                                    <button onClick={() => setEditingFee(editingFee?.id === fee.id ? null : fee)} className="text-xs text-muted-foreground hover:text-primary font-medium flex items-center gap-1">
                                         <Pencil className="h-3 w-3" /> Edit
                                     </button>
-                                    <button onClick={() => handleUpdate(fee.id, { is_active: !fee.is_active })} className="text-xs text-gray-400 hover:text-gray-600 font-medium ml-auto">
+                                    <button onClick={() => handleUpdate(fee.id, { is_active: !fee.is_active })} className="text-xs text-muted-foreground hover:text-foreground font-medium ml-auto">
                                         {fee.is_active ? 'Disable' : 'Enable'}
                                     </button>
-                                    <button onClick={() => handleDelete(fee.id)} className="text-xs text-gray-300 hover:text-red-500 font-medium">
+                                    <button onClick={() => handleDelete(fee.id)} className="text-xs text-muted-foreground hover:text-destructive font-medium">
                                         <Trash2 className="h-3 w-3" />
                                     </button>
                                 </div>
@@ -1332,17 +1332,17 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
 
             {/* SECTION 2: Taxes */}
             <div>
-                <h4 className="font-bold text-gray-800 mb-3">Tax Configuration</h4>
-                <div className="bg-white rounded-xl border p-4">
+                <h4 className="font-bold text-foreground mb-3">Tax Configuration</h4>
+                <div className="bg-card rounded-xl border p-4">
                     <div className="flex items-center gap-4 mb-4">
                         <label className="flex items-center gap-2 text-sm">
                             <input type="radio" name={`tax-${areaId}`} checked={!area.hst_enabled}
-                                onChange={() => onFieldUpdate(areaId, 'hst_enabled', false)} className="accent-red-500" />
+                                onChange={() => onFieldUpdate(areaId, 'hst_enabled', false)} className="accent-primary" />
                             GST + PST (separate)
                         </label>
                         <label className="flex items-center gap-2 text-sm">
                             <input type="radio" name={`tax-${areaId}`} checked={!!area.hst_enabled}
-                                onChange={() => onFieldUpdate(areaId, 'hst_enabled', true)} className="accent-red-500" />
+                                onChange={() => onFieldUpdate(areaId, 'hst_enabled', true)} className="accent-primary" />
                             HST (harmonized)
                         </label>
                     </div>
@@ -1380,7 +1380,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
 
             {/* SECTION 3: Cancellation Fees */}
             <div>
-                <h4 className="font-bold text-gray-800 mb-3">Cancellation Fees</h4>
+                <h4 className="font-bold text-foreground mb-3">Cancellation Fees</h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <FieldInput label="Rider cancel — driver on the way ($)" value={area.rider_cancel_fee_before_driver || 0} type="number" onSave={v => onFieldUpdate(areaId, 'rider_cancel_fee_before_driver', parseFloat(v))} />
                     <FieldInput label="Rider cancel — driver arrived ($)" value={area.rider_cancel_fee_after_arrival || 4.50} type="number" onSave={v => onFieldUpdate(areaId, 'rider_cancel_fee_after_arrival', parseFloat(v))} />
@@ -1393,8 +1393,8 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
 
             {/* SECTION 4: Referral Rewards */}
             <div>
-                <h4 className="font-bold text-gray-800 mb-3">Referral Rewards</h4>
-                <p className="text-xs text-gray-500 mb-3">
+                <h4 className="font-bold text-foreground mb-3">Referral Rewards</h4>
+                <p className="text-xs text-muted-foreground mb-3">
                     Per-area referral rewards (CAD). Riders/drivers whose area resolves here see and earn these amounts; users not mapped to any area fall back to the global default. Set any reward to $0 to turn that side off (e.g. driver referee reward defaults to $0 — set it above 0 to pay a signup bonus to the referred driver). &quot;Rides within (days)&quot; is the deadline to complete the required rides before the referral expires unpaid — set 0 for no deadline.
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1407,7 +1407,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                     <FieldInput label="Driver — rides required" value={area.driver_referral_rides_required ?? 10} type="number" onSave={v => onFieldUpdate(areaId, 'driver_referral_rides_required', parseInt(v))} />
                     <FieldInput label="Driver — rides within (days)" value={area.driver_referral_window_days ?? 30} type="number" onSave={v => onFieldUpdate(areaId, 'driver_referral_window_days', parseInt(v))} />
                 </div>
-                <p className="text-xs text-gray-500 mt-4 mb-2">
+                <p className="text-xs text-muted-foreground mt-4 mb-2">
                     Referral Terms &amp; Conditions shown on the rider/driver &quot;Refer &amp; Earn&quot; screens. Leave blank to auto-generate the default sentence from the reward amounts above.
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1425,7 +1425,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={confirmFeeDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    <AlertDialogAction onClick={confirmFeeDelete} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
@@ -1497,10 +1497,10 @@ function FeeEditForm({ fee, feeTypes, calcModes, onSave, onCancel }: {
             )}
             <div className="flex gap-2 pt-1">
                 <button onClick={async () => { setSaving(true); await onSave(form); setSaving(false); }} disabled={saving}
-                    className="bg-red-500 text-white px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
+                    className="bg-primary text-primary-foreground px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-primary/90 disabled:opacity-50">
                     {saving ? 'Saving...' : 'Save'}
                 </button>
-                <button onClick={onCancel} className="bg-gray-100 text-gray-600 px-4 py-1.5 rounded-lg text-sm font-semibold">Cancel</button>
+                <button onClick={onCancel} className="bg-muted text-foreground px-4 py-1.5 rounded-lg text-sm font-semibold">Cancel</button>
             </div>
         </div>
     );

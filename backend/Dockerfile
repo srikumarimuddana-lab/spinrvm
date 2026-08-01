@@ -6,10 +6,18 @@
 # B-P2-8 half 2 — content-hash pin: the `@sha256:` suffix makes the base
 # image bit-for-bit reproducible. Any Docker Hub re-tag or compromised mirror
 # must also rotate this digest, leaving an auditable PR diff. Digest captured
-# 2026-04-29 from the manifest list (all platforms; Docker resolves to the
-# correct arch). Refresh quarterly or on Trivy/Grype alert:
+# 2026-08-01 from the manifest list (all platforms; Docker resolves to the
+# correct arch). ACTION_ITEMS.md C6 (2026-08-01 refresh): the prior pin
+# (python:3.12.9-slim, digest sha256:48a11b7...) was 94 days past the
+# quarterly cadence AND, verified directly against the registry, that
+# tag's digest had not moved at all since capture — Docker Hub does not
+# rebuild a fixed patch-version tag once newer patches ship, so re-pinning
+# the same tag would not have closed any CVE gap. Bumped to the current
+# latest 3.12.x patch (3.12.13-slim) instead, cross-verified against the
+# floating `python:3.12-slim` alias resolving to the same digest.
+# Refresh quarterly or on Trivy/Grype alert:
 # see `docs/runbooks/docker-image-pinning.md`.
-FROM python:3.12.9-slim@sha256:48a11b7ba705fd53bf15248d1f94d36c39549903c5d59edcfa2f3f84126e7b44
+FROM python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 WORKDIR /build
 
@@ -33,7 +41,7 @@ RUN pip install --no-cache-dir --prefix=/install --require-hashes -r requirement
 
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM python:3.12.9-slim@sha256:48a11b7ba705fd53bf15248d1f94d36c39549903c5d59edcfa2f3f84126e7b44 AS runtime
+FROM python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
 
 # Apply OS security patches to the runtime image as well.
 # The builder's patched packages don't transfer to the runtime stage

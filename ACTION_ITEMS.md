@@ -1080,13 +1080,35 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
       every "found, not fixed" flag are in
       `docs/change-log/2026-08-02-a1c-subtier-b-sweep-coverage.md`.
       - `routes/main.py`: 0% → **84.6%** (`tests/test_routes_main_coverage.py`).
-        The literal `/health` endpoint Railway's readiness probe and the
-        post-deploy smoke test (A2) depend on.
+        **Correction (2026-08-02, found by an independent concurrent
+        session's identical-scope coverage pass, PR #3324, closed
+        unmerged as redundant with this sweep — but the finding itself is
+        real and worth keeping):** the note above was wrong. This file's
+        `api_router` (including its `/health` route) is **never mounted**
+        — grepped `server.py` for any `routes.main`/`api_router`
+        reference and found none. The actual `/health` that Railway's
+        readiness probe, `fly.toml`'s `[[http_service.checks]]`, and the
+        A2 post-deploy smoke test depend on is a separate, independent
+        implementation defined directly in `server.py` (`@app.get
+        ("/health")`, with its own DB-ping cache and loop-liveness check)
+        — this file's `/health` is dead code that happens to share a
+        route path with the real one, never wired in. Not deleted here
+        (out of scope for a coverage pass); worth a repo-owner call on
+        whether to remove `routes/main.py` entirely or wire it in and
+        delete the duplicate in `server.py` instead.
       - `utils/t4a_pdf.py`: 4.40% → **97.8%** (`tests/test_t4a_pdf_coverage.py`).
       - `utils/subscription_invoice_pdf.py`: 7.97% → **99.3%**
         (`tests/test_subscription_invoice_pdf_coverage.py`).
       - `services/zoho_desk_db.py`: 11.76% → **99.2%**
-        (`tests/test_zoho_desk_db_coverage.py`).
+        (`tests/test_zoho_desk_db_coverage.py`). **Found by the same
+        independent PR #3324/#3325 pass, not yet fixed:**
+        `list_mirror`'s search `.or_()` builder hand-rolls comma/LIKE-
+        wildcard handling instead of routing through
+        `repositories/_base.py`'s shared `_escape_like`/
+        `_postgrest_or_value` helpers per this file's documented
+        convention (see root `CLAUDE.md`'s "Query filters" section) — an
+        over-matching-only quirk on an internal admin search box, not a
+        security issue, but a real deviation from the required pattern.
       - `utils/demand_forecast.py`: 18.52% → **98.8%**
         (`tests/test_demand_forecast_coverage.py`). Source renamed its
         `confidence` field to `data_basis` mid-sweep (concurrent PR #3289,

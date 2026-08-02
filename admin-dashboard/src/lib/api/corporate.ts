@@ -192,6 +192,54 @@ export interface WalletRiskPortfolio {
 export const getWalletRiskPortfolio = () =>
     request<WalletRiskPortfolio>("/api/admin/corporate-accounts/wallet-portfolio");
 
+/* ── Corporate subscription billing (flat SaaS, round 2) ── */
+export type CorporateSubscriptionStatus = "active" | "past_due" | "cancelled";
+
+export interface CorporateSubscriptionPlan {
+    id: string;
+    name: string;
+    monthly_price: string;
+    description?: string | null;
+    is_active: boolean;
+}
+
+export interface CorporateSubscription {
+    id: string;
+    company_id: string;
+    plan_id: string | null;
+    plan_name: string;
+    price: string;
+    status: CorporateSubscriptionStatus;
+    current_period_end: string | null;
+    cancel_at_period_end: boolean;
+    started_at: string;
+    cancelled_at: string | null;
+    created_at: string;
+}
+
+export interface CompanySubscriptionResponse {
+    current: CorporateSubscription | null;
+    history: CorporateSubscription[];
+}
+
+export const getSubscriptionPlans = () =>
+    request<{ plans: CorporateSubscriptionPlan[] }>("/api/admin/corporate-accounts/subscription-plans");
+
+export const getCompanySubscription = (companyId: string) =>
+    request<CompanySubscriptionResponse>(`/api/admin/corporate-accounts/${companyId}/subscription`);
+
+export const assignCompanySubscription = (companyId: string, planId: string) =>
+    request<CorporateSubscription>(`/api/admin/corporate-accounts/${companyId}/subscription`, {
+        method: "POST",
+        body: JSON.stringify({ plan_id: planId }),
+    });
+
+export const cancelCompanySubscription = (companyId: string, atPeriodEnd: boolean = true) =>
+    request<CorporateSubscription>(`/api/admin/corporate-accounts/${companyId}/subscription/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ at_period_end: atPeriodEnd }),
+    });
+
 /* ── Corporate members / allowances (Plan 3) ── */
 export type CorporateMemberRole = "owner" | "admin" | "member";
 export type CorporateMemberStatus = "invited" | "active" | "suspended" | "removed";

@@ -260,6 +260,14 @@ class AppSettings(BaseModel):
     # genuinely new notification type — ships dark until reviewed for
     # notification-fatigue impact, then flip on from the admin dashboard.
     scheduled_ride_driver_nudge_enabled: bool = False
+    # Notice-window cancellation fee for PRE-DISPATCH scheduled rides
+    # (Finding #01). Rider-only — no driver is ever assigned pre-dispatch,
+    # so unlike cancellation_fee_admin/_driver above nothing is disbursed.
+    # New pricing decision — ships dark until reviewed/approved, then flip
+    # on from the admin dashboard; no redeploy needed either way.
+    scheduled_ride_notice_window_fee_enabled: bool = False
+    scheduled_ride_notice_window_minutes: int = 60
+    scheduled_ride_notice_window_fee_amount: DecimalStr = Decimal("3.00")
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no

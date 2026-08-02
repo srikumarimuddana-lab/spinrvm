@@ -710,10 +710,7 @@ async def websocket_endpoint(
             if not ws_session_id:
                 return False
             now_mono = asyncio.get_event_loop().time()
-            if (
-                ws_revoked_checked_at is not None
-                and now_mono - ws_revoked_checked_at < _WS_REVOKE_RECHECK_SECONDS
-            ):
+            if ws_revoked_checked_at is not None and now_mono - ws_revoked_checked_at < _WS_REVOKE_RECHECK_SECONDS:
                 return False
             ws_revoked_checked_at = now_mono
             ws_revoked = await is_session_revoked(ws_session_id)
@@ -981,6 +978,13 @@ async def websocket_endpoint(
                     )
                     continue
 
+                if driver_id and isinstance(points, list) and not points:
+                    # Valid list, just empty (e.g. offline-recovery flush with
+                    # nothing buffered) — ack with count 0 instead of silently
+                    # dropping the message, matching the not-a-list ack below.
+                    await websocket.send_json({"type": "location_batch_ack", "count": 0})
+                    continue
+
                 if driver_id and isinstance(points, list) and points:
                     dict_points = [p for p in points if isinstance(p, dict)]
                     if not dict_points:
@@ -1238,9 +1242,7 @@ async def websocket_endpoint(
                     await websocket.send_json(
                         {
                             "type": "nearby_drivers",
-                            "drivers": prematch_driver_list(
-                                in_radius, _cell_m, viewer_id=user.get("id")
-                            ),
+                            "drivers": prematch_driver_list(in_radius, _cell_m, viewer_id=user.get("id")),
                         }
                     )
 

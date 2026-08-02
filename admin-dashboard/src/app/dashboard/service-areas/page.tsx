@@ -1820,8 +1820,8 @@ function CascadeEditor({
   return (
     <div>
       <div className="mb-4">
-        <h4 className="font-bold text-gray-800">Dispatch Cascade Rules</h4>
-        <p className="text-sm text-gray-500 mt-0.5">
+        <h4 className="font-bold text-foreground">Dispatch Cascade Rules</h4>
+        <p className="text-sm text-muted-foreground mt-0.5">
           When a ride is booked for a vehicle type and no driver of that type is available,
           dispatch automatically tries the upgrade types listed here.
           Only vehicle types configured under <span className="font-semibold">Vehicle Pricing</span> for
@@ -1839,10 +1839,10 @@ function CascadeEditor({
           </p>
         </div>
       ) : rules.length === 0 ? (
-        <div className="text-center py-10 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
-          <ArrowRightLeft className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500 font-medium">No cascade rules</p>
-          <p className="text-gray-400 text-sm mt-1">
+        <div className="text-center py-10 bg-muted rounded-xl border-2 border-dashed border-border">
+          <ArrowRightLeft className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+          <p className="text-muted-foreground font-medium">No cascade rules</p>
+          <p className="text-muted-foreground text-sm mt-1">
             Add a rule to allow larger vehicles to fill in when the exact type has no available driver.
           </p>
         </div>
@@ -1852,7 +1852,7 @@ function CascadeEditor({
             const toOptions = vehicleTypes.filter(v => v.id !== rule.from);
             const takenFromIds = new Set(rules.filter((_, i) => i !== idx).map(r => r.from));
             return (
-              <div key={idx} className="rounded-xl border bg-white p-4">
+              <div key={idx} className="rounded-xl border bg-card p-4">
                 <div className="flex items-start gap-4">
                   <div className="flex-1">
                     <label className="block text-xs font-semibold text-muted-foreground mb-1">When booked type is</label>
@@ -1869,7 +1869,7 @@ function CascadeEditor({
                     </select>
                   </div>
 
-                  <div className="flex items-center pt-6 text-gray-400">
+                  <div className="flex items-center pt-6 text-muted-foreground">
                     <ArrowRightLeft className="h-4 w-4" />
                   </div>
 
@@ -1877,21 +1877,21 @@ function CascadeEditor({
                     <label className="block text-xs font-semibold text-muted-foreground mb-1">Also offer to drivers of</label>
                     <div className="border rounded-lg p-2 space-y-1 min-h-[42px]">
                       {toOptions.length === 0 ? (
-                        <p className="text-xs text-gray-400 px-1 py-1">No other vehicle types available</p>
+                        <p className="text-xs text-muted-foreground px-1 py-1">No other vehicle types available</p>
                       ) : toOptions.map(v => (
                         <label key={v.id} className="flex items-center gap-2 text-sm cursor-pointer px-1">
                           <input
                             type="checkbox"
                             checked={rule.to.includes(v.id)}
                             onChange={() => toggleTo(idx, v.id)}
-                            className="accent-red-500"
+                            className="accent-primary"
                           />
                           {v.name}
                         </label>
                       ))}
                     </div>
                     {rule.to.length > 0 && (
-                      <p className="text-xs text-gray-400 mt-1">
+                      <p className="text-xs text-muted-foreground mt-1">
                         Cascade order: {rule.to.map(id => vtName(id)).join(' → ')}
                       </p>
                     )}
@@ -1899,7 +1899,7 @@ function CascadeEditor({
 
                   <button
                     onClick={() => removeRule(idx)}
-                    className="pt-6 text-gray-300 hover:text-red-500"
+                    className="pt-6 text-muted-foreground hover:text-destructive"
                     title="Remove rule"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -1915,14 +1915,14 @@ function CascadeEditor({
         <button
           onClick={addRule}
           disabled={vehicleTypes.every(v => usedFromIds.has(v.id))}
-          className="flex items-center gap-1.5 text-sm text-red-500 font-semibold hover:text-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex items-center gap-1.5 text-sm text-primary font-semibold hover:text-primary/80 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Plus className="h-4 w-4" /> Add cascade rule
         </button>
         <button
           onClick={handleSave}
           disabled={!dirty || saving}
-          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : dirty ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-gray-100 text-gray-400 cursor-not-allowed'} disabled:opacity-50`}
+          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground cursor-not-allowed'} disabled:opacity-50`}
         >
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Cascade Rules'}
         </button>

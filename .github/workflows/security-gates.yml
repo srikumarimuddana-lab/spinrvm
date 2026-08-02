@@ -417,6 +417,21 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
+          # CR-2026-002 / #3048: excludes pip's own embedded CycloneDX SBOM
+          # (pip/_vendor/bom.cdx.json, describing pip's internally vendored
+          # msgpack/setuptools copies — never imported by the app). Trivy
+          # auto-detects any *.cdx.json in the image and, per its own "Third-
+          # party SBOM may lead to inaccurate vulnerability detection"
+          # warning, prefers that file's component list over its live
+          # filesystem scan — which is why msgpack 1.1.2/setuptools 70.3.0
+          # (pip's vendored versions) were reported HIGH while the real
+          # top-level packages (msgpack 1.2.1, setuptools 83.0.0) were
+          # already clean per Trivy's own per-file inventory. Root cause
+          # confirmed by reproducing this image's exact pip version (26.2,
+          # per ci.yml's build logs) in an isolated venv and inspecting its
+          # vendor.txt + bom.cdx.json directly — see ci.yml's docker-image-
+          # scan job for the live diagnostic against the actual image.
+          skip-files: '**/pip/_vendor/bom.cdx.json'
       - name: Upload SARIF to GitHub Security
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
@@ -427,6 +442,7 @@ jobs:
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: HIGH,CRITICAL
+          skip-files: '**/pip/_vendor/bom.cdx.json'
       - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:

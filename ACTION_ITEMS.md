@@ -1068,27 +1068,98 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         actual buggy output rather than worked around. See
         `docs/change-log/2026-08-02-a1c-redis-client-coverage.md`.
     - **Sub-tier B — below 60%, genuinely lower-risk breadth** (utils/services,
-      admin-adjacent tooling, third-party integrations):
-      `routes/main.py` (**0%**, 52 stmts — worth a quick look at what this
-      even is before writing tests for it), `utils/t4a_pdf.py` (4.40%),
-      `utils/subscription_invoice_pdf.py` (7.97%),
-      `services/zoho_desk_db.py` (11.76%), ~~`utils/reconciliation.py`
-      (15.69%)~~ **done, see below**, `utils/demand_forecast.py` (18.52%),
-      `utils/zoho_desk_sync.py` (22.33%), `utils/analytics.py` (22.70%),
-      `routes/lost_and_found.py` (25.85%), `services/stripe_kyc_sync.py`
-      (30.70%), `utils/marketing_push.py` (33.33%), `utils/ws_pubsub.py`
-      (38.46%), `services/data_transfer/bundle_document_uploader.py`
-      (38.75%), `routes/users.py` (39.86%), `routes/support.py` (42.22%),
-      `repositories/corporate_repo.py` (42.29%), `utils/push_retry.py`
-      (45.30%), `routes/maps_proxy.py` (51.35%),
-      `utils/route_validation.py` (53.33%), `utils/scheduled_rides.py`
-      (55.40%), `utils/suspension_reactivation.py` (55.93%),
-      `utils/route_snapshot.py` (57.08%), `utils/stuck_ride_sweeper.py`
-      (57.32%), `core/security.py` (57.89%), `core/lifespan.py` (58.52% —
-      note: the 16-background-loop startup/shutdown module central to
-      issue #2981's fix; any new tests here should account for the
-      `ENV=="test"` no-op guard added in that fix), `routes/marketing.py`
-      (58.57%), `utils/document_expiry.py` (58.71%).
+      admin-adjacent tooling, third-party integrations) — **CLOSED,
+      full sweep, 2026-08-02**: all 26 files below now have a dedicated
+      test file, mid-80s%–100% coverage each except `core/lifespan.py`
+      (64.3%, see its own note). No application code changed anywhere in
+      this sweep. Full details, the concurrent-session-drift handling
+      (two source files this sweep tests were rewritten mid-session by
+      other sessions — `corporate_repo.py`'s search escaping and
+      `demand_forecast.py`'s `confidence`→`data_basis` rename — both
+      re-verified and fixed to match, not silently patched over), and
+      every "found, not fixed" flag are in
+      `docs/change-log/2026-08-02-a1c-subtier-b-sweep-coverage.md`.
+      - `routes/main.py`: 0% → **84.6%** (`tests/test_routes_main_coverage.py`).
+        The literal `/health` endpoint Railway's readiness probe and the
+        post-deploy smoke test (A2) depend on.
+      - `utils/t4a_pdf.py`: 4.40% → **97.8%** (`tests/test_t4a_pdf_coverage.py`).
+      - `utils/subscription_invoice_pdf.py`: 7.97% → **99.3%**
+        (`tests/test_subscription_invoice_pdf_coverage.py`).
+      - `services/zoho_desk_db.py`: 11.76% → **99.2%**
+        (`tests/test_zoho_desk_db_coverage.py`).
+      - `utils/demand_forecast.py`: 18.52% → **98.8%**
+        (`tests/test_demand_forecast_coverage.py`). Source renamed its
+        `confidence` field to `data_basis` mid-sweep (concurrent PR #3289,
+        Admin #3) — tests updated to match, not left pinning the stale name.
+      - `utils/zoho_desk_sync.py`: 22.33% → **95.2%**
+        (`tests/test_zoho_desk_sync_coverage.py`).
+      - `utils/analytics.py`: 22.70% → **98.2%** (`tests/test_analytics_coverage.py`).
+      - `routes/lost_and_found.py`: 25.85% → **89.1%**
+        (`tests/test_lost_and_found_route_coverage.py`).
+      - `services/stripe_kyc_sync.py`: 30.70% → **97.4%**
+        (`tests/test_stripe_kyc_sync_coverage.py`).
+      - `utils/marketing_push.py`: 33.33% → **100%**
+        (`tests/test_marketing_push_coverage.py`).
+      - `utils/ws_pubsub.py`: 38.46% → **100%** (`tests/test_ws_pubsub_coverage.py`).
+      - `services/data_transfer/bundle_document_uploader.py`: 38.75% →
+        **100%** (`tests/test_bundle_document_uploader_coverage.py`). This
+        sweep's tests originally flagged a hardcoded-declared-MIME-type
+        bug that made `replay_documents` silently skip every document —
+        that bug was independently fixed by a concurrent session before
+        this branch's tests were committed; the test was updated to pin
+        the now-correct behavior rather than the stale bug.
+      - `routes/users.py`: 39.86% → **93.6%** (`tests/test_routes_users_coverage.py`).
+        **Found, not fixed:** `DELETE /users/profile` is documented as
+        "permanently delete" but only soft-deletes — near-duplicate of the
+        explicitly-soft-delete `DELETE /users/account`. Worth confirming
+        which the rider app's delete flow actually calls.
+      - `routes/support.py`: 42.22% → **88.9%** (`tests/test_routes_support_coverage.py`).
+        **Found, not fixed:** `support_chat`'s single broad `except Exception`
+        converts any Gemini SDK failure into a 200 OK fallback reply with
+        only a `logging.warning` — no Sentry, no error-level log — masking
+        a real AI-outage as an ordinary chat answer.
+      - `repositories/corporate_repo.py`: 42.29% → **99.4%**
+        (`tests/test_corporate_repo_coverage.py`). Source rewritten
+        mid-sweep by concurrent PR #3289 (search now escapes reserved
+        PostgREST characters via the shared `_apply_filters`/
+        `_build_or_clause_term` path instead of stripping them) — 2 tests
+        updated to match the new (correct) behavior.
+      - `utils/push_retry.py`: 45.30% → **98.3%** (`tests/test_push_retry_coverage.py`).
+        **Found, not fixed:** `_process_row` bumps the claim's
+        `attempts`/`next_attempt_at` before delivery; if delivery succeeds
+        but the following `sent_at` UPDATE itself raises, the row stays
+        due and can be re-delivered (at-least-once, pre-existing).
+      - `routes/maps_proxy.py`: 51.35% → **83.8%** (`tests/test_maps_proxy_coverage.py`,
+        deliberately non-overlapping with the pre-existing `test_maps_proxy.py`).
+      - `utils/route_validation.py`: 53.33% → **100%**
+        (`tests/test_route_validation_coverage.py`).
+      - `utils/scheduled_rides.py`: 55.40% → **93.5%**
+        (`tests/test_scheduled_rides_coverage.py`). **Found, not fixed:**
+        `_dispatch_scheduled_ride`'s outer `except Exception` on the claim
+        call gives the caller no distinct signal for "transient DB error"
+        vs. "legitimately already claimed."
+      - `utils/suspension_reactivation.py`: 55.93% → **94.9%**
+        (`tests/test_suspension_reactivation_coverage.py`).
+      - `utils/route_snapshot.py`: 57.08% → **99.1%**
+        (`tests/test_route_snapshot_coverage.py`).
+      - `utils/stuck_ride_sweeper.py`: 57.32% → **90.2%**
+        (`tests/test_stuck_ride_sweeper_coverage.py`).
+      - `core/security.py`: 57.89% → **100%** (`tests/test_core_security_coverage.py`).
+      - `core/lifespan.py`: 58.52% → **64.3%** (`tests/test_core_lifespan_coverage.py`).
+        Deliberately not chased higher: the function individually
+        try/excepts 17 separate background-loop imports+spawns, and
+        covering each one's import-success/failure branch would need
+        mocking all 17 import targets individually. The shared logic that
+        matters most is covered — `init_database`, `cleanup_database`, and
+        (the regression this sweep most cares about) the `ENV=="test"`
+        no-op guard from issue #2981, explicitly locked in by asserting
+        the real stdlib `asyncio.create_task` is never invoked for any of
+        the 17 loop names under `ENV=test`.
+      - `routes/marketing.py`: 58.57% → **94.3%** (`tests/test_routes_marketing_coverage.py`).
+      - `utils/document_expiry.py`: 58.71% → **91.6%**
+        (`tests/test_document_expiry_coverage.py`). One of the 17
+        background loops; regulatory-adjacent (Saskatchewan Transportation
+        Act driver-eligibility — expired documents must suspend the driver).
     - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
       scoping note** (55 more files, not itemized individually here —
       notable large ones: `routes/webhooks.py` 75.40%/748 stmts Stripe-

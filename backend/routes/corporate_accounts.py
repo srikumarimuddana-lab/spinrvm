@@ -766,7 +766,11 @@ async def change_company_status(
                     stripe_customer_id=row.get("stripe_customer_id"),
                     actor_user_id=str(current_admin.get("id") or ""),
                 )
-                if winddown_result.get("stripe_error") or winddown_result.get("unrefundable_amount", "0.00") != "0.00":
+                if (
+                    winddown_result.get("stripe_error")
+                    or winddown_result.get("unrefundable_amount", "0.00") != "0.00"
+                    or winddown_result.get("ledger_write_failed")
+                ):
                     logger.error(
                         "Corporate wallet close wind-down incomplete for company %s: %s",
                         normalized_id,

@@ -322,6 +322,9 @@ v1_api_router.include_router(corporate_accounts_router, dependencies=[Depends(re
 # (/admin/corporate-accounts/{id}/wallet/...). Also mounted at /api below for
 # backward compat; the admin dashboard now calls the /api/v1 paths.
 v1_api_router.include_router(corporate_wallet_router, dependencies=[Depends(require_module("corporate_accounts"))])
+v1_api_router.include_router(
+    corporate_subscriptions_router, dependencies=[Depends(require_module("corporate_accounts"))]
+)
 v1_api_router.include_router(users_router)
 v1_api_router.include_router(addresses_router)
 v1_api_router.include_router(payments_router)
@@ -390,6 +393,9 @@ app.include_router(
     corporate_accounts_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))]
 )
 app.include_router(corporate_wallet_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))])
+app.include_router(
+    corporate_subscriptions_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))]
+)
 # Corporate member/allowance/domain endpoints served at root (`/company/{id}/...`)
 # because the rider app calls /company/{id}/policy and /company/{id}/allowances
 # without an /api prefix (verified in workProfileStore.ts). Do not remove until

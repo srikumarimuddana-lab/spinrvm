@@ -328,6 +328,14 @@ class SettingsUpdateRequest(BaseModel):
     # cap, no masking/super-admin gate needed to change it (same posture as
     # dual_approval_exports_enabled above — a process control, not a secret).
     corporate_wallet_admin_adjust_daily_cap: Optional[Decimal] = Field(default=None, gt=0, decimal_places=2)
+    # Ships dark (default false / unset): gates POST
+    # /admin/corporate-accounts/{id}/subscription (routes/corporate_subscriptions.py),
+    # which starts a real recurring Stripe charge against a company. Flip on
+    # only after verifying the flow in staging with a real Stripe test-mode
+    # account — corporate + admin portal review round 2, flat SaaS
+    # subscription billing. Cancelling an existing subscription is never
+    # gated behind this flag.
+    corporate_subscription_billing_enabled: Optional[bool] = None
 
     @field_validator("lms_api_base_url")
     @classmethod

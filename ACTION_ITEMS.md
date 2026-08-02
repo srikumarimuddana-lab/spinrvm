@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%. Prior same-day: `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C freshly itemized via a re-run coverage scan: 38 files (5635 stmts) in the 60-80% band, batched ≤3 files/subtask, replacing the prior stale "55 files, not itemized" note; `utils/payment_retry.py` (independently closed by a concurrent session to 99% during this scan) reconciled in rather than overwritten. Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -1183,13 +1183,146 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         background loops; regulatory-adjacent (Saskatchewan Transportation
         Act driver-eligibility — expired documents must suspend the driver).
     - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
-      scoping note** (55 more files, not itemized individually here —
-      notable remaining large ones: `routes/webhooks.py` 75.40%/748 stmts
-      Stripe-adjacent, `routes/promotions.py` 65.85%,
-      `repositories/driver_repo.py` 72.99%, `routes/disputes.py`
-      73.88% — full list reproducible via the same `--cov=.` command
-      above; a future session should re-run it rather than trust this
-      snapshot going stale).
+      scoping note** — **itemized 2026-08-02** (fresh re-scan; the prior
+      "55 files, not itemized" note was correctly flagged as going stale
+      and is superseded by this list). Methodology: same full-suite
+      `pytest tests/ -q --cov=. --cov-report=json --cov-report=term-missing
+      --no-cov-on-fail` command as the original 2026-08-01 pass (8374
+      passed, 8 skipped, 1 xfailed, 318 files with statements, 86.32%
+      aggregate — aggregate has risen from 78.5% because Sub-tier A/B are
+      now closed). Every file below is non-test, non-migration, sits
+      strictly in the 60–80% band, and is **not** already closed under
+      Sub-tier A or B above and **not** already owned by A1b/Track 1 (all
+      of `routes/admin/*`, anything with "corporate" in its domain —
+      including `utils/allowance_reset.py`, which reads as a generic
+      background loop by filename but is entirely corporate-employee-
+      allowance logic — and safety/auth-adjacent files). Two Track-1-owned
+      files happen to also sit in the 60-80% band and are excluded here as
+      out-of-scope, not because they're fine: `routes/admin/drivers.py`
+      (73.44%, already tracked under A1b item 4, deprioritized there) and
+      `routes/admin/sgi_forms.py` (70.27%, untouched). **This scan found
+      38 files, 5635 statements** — a 39th file, `utils/payment_retry.py`,
+      was independently closed by a concurrent session between this scan
+      running and this edit landing (see its own entry immediately below,
+      kept intact rather than folded away); it is excluded from the
+      itemized batches below because it's no longer in the 60-80% band.
+      Batched ≤3 files/subtask per CLAUDE.md's working-style convention —
+      pick a batch, verify its numbers with a targeted `--cov=<module>`
+      run before writing tests (per this backlog's established pattern, a
+      keyword-filtered baseline can be stale), and update this list when a
+      batch closes rather than leaving it to rot:
+      - **Batch 1:** `utils/offer_expiry_reaper.py` (60.61%, 66 stmts),
+        `utils/period1_distance_finalizer.py` (64.38%, 73 stmts),
+        `utils/driver_claim_reaper.py` (64.71%, 68 stmts) — all three are
+        dispatch/offer-cleanup background-loop helpers, similar shape to
+        the already-closed `utils/stuck_ride_sweeper.py`.
+      - **Batch 2:** `services/zoho_desk_service.py` (65.84%, 202 stmts),
+        `routes/promotions.py` (65.85%, 328 stmts — rider-facing promo
+        redemption; NOT the same file as the already-closed
+        `routes/admin/promotions.py` CRUD), `utils/data_export_purge.py`
+        (68.42%, 57 stmts — PIPEDA deletion-retention purge, compliance-
+        adjacent).
+      - **Batch 3:** `utils/retention_purge.py` (69.12%, 136 stmts —
+        PIPEDA retention, compliance-adjacent), `utils/orphaned_hold_reconciler.py`
+        (69.23%, 91 stmts — Stripe pre-auth-hold cleanup, payment-
+        adjacent), `utils/driver_online.py` (69.70%, 33 stmts — the new
+        `intent_online`/`effective_online`/`effective_available`
+        composition helper that replaced the retired presence sweeper;
+        small file but dispatch-critical, directly implements CLAUDE.md's
+        `is_available ⇒ is_online` invariant — worth prioritizing despite
+        landing late alphabetically/by-coverage in this list).
+      - **Batch 4:** `services/guest_notification_service.py` (70.34%, 118
+        stmts), `services/driver_import_service.py` (70.34%, 381 stmts —
+        largest file in this batch), `utils/quest_tracker.py` (70.42%, 71
+        stmts).
+      - **Batch 5:** `utils/redis_diag.py` (71.43%, 112 stmts — admin
+        diagnostics), `routes/drivers/ride_complete.py` (71.75%, 400 stmts
+        — trip-completion/fare-settlement-kickoff/earnings-snapshot;
+        natural companion to the already-closed `ride_flow.py`/
+        `ride_cancel.py`/`ride_reads.py` triplet from the same package,
+        money-adjacent, recommend treating at Sub-tier-A urgency despite
+        living in this list), `utils/meta_capi.py` (72.37%, 152 stmts —
+        Meta Conversions API marketing integration).
+      - **Batch 6:** `utils/preauth_capture.py` (72.41%, 87 stmts — Stripe
+        pre-authorization capture, payment-adjacent), `utils/presence_sweeper.py`
+        (72.73%, 33 stmts — **flag: this module is explicitly documented
+        as RETIRED in its own docstring** — "the loop body is unreachable
+        from production startup," kept only as a no-op so
+        `test_p3_loop_jitter_metrics` keeps its symbols stable. Its real
+        logic was fully superseded by `utils/driver_online.py` in Batch 3.
+        Chasing higher coverage on a documented no-op is low value —
+        recommend deprioritizing or skipping this file, same call as
+        `routes/main.py`'s dead-code flag under Sub-tier B above). Only 2
+        files in this batch — `utils/payment_retry.py`, the batch's
+        original third file, was independently closed by a concurrent
+        session (see its full entry below) before this list's Batch 6
+        would otherwise have been picked up.
+      - **Batch 7:** `routes/fares.py` (72.79%, 136 stmts — fare-estimate/
+        service-area endpoint, distinct from `services/fare_service.py`
+        which is already ≥90% under A1's original scope), `repositories/driver_repo.py`
+        (72.99%, 137 stmts), `routes/favorites.py` (73.13%, 67 stmts —
+        rider saved-route convenience feature).
+      - **Batch 8:** `ai/mcp_server.py` (73.39%, 124 stmts), `ai/providers/__init__.py`
+        (73.68%, 38 stmts — the AI-provider adapter factory; small but
+        real, not a stub), `routes/disputes.py` (73.88%, 134 stmts —
+        rider/driver-facing dispute/refund-request endpoints, distinct
+        from the already-closed `routes/admin/support.py`'s admin-side
+        dispute handling).
+      - **Batch 9:** `utils/driver_onboarding_reminder_rules.py` (74.00%,
+        100 stmts), `ai/response_cache.py` (74.29%, 35 stmts),
+        `services/zoho_desk_integration.py` (74.42%, 129 stmts).
+      - **Batch 10:** `utils/distance_reconciliation.py` (74.70%, 83
+        stmts), `services/data_transfer/observability.py` (75.00%, 20
+        stmts — Sentry/Prometheus tagging helper for the Data Transfer
+        module; small and wrapper-shaped but not a trivial pass-through —
+        worth a real test file), `utils/location_integrity.py` (75.00%,
+        52 stmts — GPS spoofing/integrity checks, safety-adjacent but not
+        under the `safety.py`/`insurance_periods.py` umbrella Track 1
+        already owns, so kept here).
+      - **Batch 11:** `routes/webhooks.py` (75.40%, 748 stmts — largest
+        file in the whole Sub-tier C list, Stripe-webhook-adjacent;
+        recommend Sub-tier-A-style urgency given `CLAUDE.md`'s Stripe-
+        idempotency conventions, even though it lands in this tier),
+        `ai/embeddings.py` (76.79%, 56 stmts), `core/config.py` (76.86%,
+        121 stmts — `Settings` fail-fast validation, referenced directly
+        by CLAUDE.md's Critical Conventions).
+      - **Batch 12:** `utils/route_gap_monitor.py` (77.78%, 108 stmts),
+        `utils/route_distance.py` (78.12%, 489 stmts — second-largest file
+        in this list), `routes/faqs.py` (78.12%, 32 stmts — public
+        unauthenticated FAQ read endpoint, distinct from the already-
+        closed `routes/admin/faqs.py` CRUD).
+      - **Batch 13:** `utils/apns_client.py` (78.72%, 141 stmts — Apple
+        push client), `server.py` (79.20%, 250 stmts — app factory/router
+        mounting, see CLAUDE.md's Key Backend Files), `utils/stripe_charge.py`
+        (79.74%, 227 stmts — payment-adjacent, closest file in this list
+        to the 80% line).
+      - **Excluded as already closed (Sub-tier A/B, or independently
+        closed mid-sweep) or Track-1-owned:** every file named in
+        Sub-tier A/B above, plus `utils/payment_retry.py` (closed by a
+        concurrent session — full entry below), `utils/allowance_reset.py`
+        (corporate — see above), `routes/admin/drivers.py`,
+        `routes/admin/sgi_forms.py` (both admin-owned).
+      - **New finding, not itemized above (flag only, not a Sub-tier C
+        item — this file is below the 60% floor, which per this backlog's
+        own definition would make it a new Sub-tier B candidate, not C):**
+        `utils/driver_presence.py` — **50.49%, 103 stmts.** Real production
+        code (module docstring: superseded-legacy shim referenced by
+        `utils.driver_presence`, tied to the same online/available
+        composition domain as `utils/driver_online.py` above), not a dev
+        script — worth a follow-up session confirming whether this is a
+        genuine regression/gap or dead code being phased out in favor of
+        `driver_online.py`, before anyone writes tests against it blind.
+        Not investigated further here per this task's scoping-only
+        mandate. The other below-60% hits from this scan
+        (`scripts/*.py` — `_requeue_failed_referrals.py`,
+        `check_migration.py`, `check_route_shadowing.py`,
+        `reconcile_orphaned_holds.py`, `split_god_file.py`,
+        `update_patch_targets.py`, `analyze_ride_route.py`,
+        `report_fare_attribution_gap.py`, all near-0%–58%; plus
+        `ai/context.py` at 55.56% on only 9 statements) are one-off
+        CLI/dev tooling and a trivial file respectively — consistent with
+        CLAUDE.md's "Explicitly NOT recommended" guidance against chasing
+        coverage on one-off admin scripts, not flagged as regressions.
       - `utils/payment_retry.py` — **CLOSED, 72.54% → 99%** (2026-08-02,
         244 stmts, 67→2 missing; measured via
         `pytest tests/test_payment_retry.py tests/test_payment_retry_coverage.py

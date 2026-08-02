@@ -676,4 +676,25 @@ class CreateRideRequest(BaseModel):
                         f"{tz_name} on that date (DST spring-forward gap). "
                         "Please choose a time after the clocks change."
                     )
+
+                # DST fall-back guard: the gap check above only catches a
+                # local time that doesn't exist (spring-forward). The
+                # opposite case — a local time that occurs TWICE (the
+                # repeated hour when clocks fall back) — round-trips fine
+                # under either interpretation, so it isn't caught by that
+                # check at all. Compare the UTC offset under fold=0 (first
+                # occurrence) vs fold=1 (second occurrence): equal offsets
+                # means the time is unambiguous; different offsets means
+                # this exact wall-clock time happens twice on this date, and
+                # naive.replace(tzinfo=tz, fold=0) above would have silently
+                # picked the first occurrence with no way for the rider (or
+                # the regulatory trip-log record) to know which one they meant.
+                fold0_offset = local.utcoffset()
+                fold1_offset = naive.replace(tzinfo=tz, fold=1).utcoffset()
+                if fold0_offset != fold1_offset:
+                    raise ValueError(
+                        f"The time {naive.strftime('%H:%M')} is ambiguous in {tz_name} on that "
+                        "date (DST fall-back — this local time occurs twice). Please choose a "
+                        "different time, or specify scheduled_time with an explicit UTC offset."
+                    )
         return value

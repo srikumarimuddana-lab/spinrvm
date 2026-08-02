@@ -1040,4 +1040,99 @@ async def upsert_corporate_policy(company_id: str, patch: Dict[str, Any]) -> Dic
         res = supabase.table("corporate_policies").insert(insert_doc).execute()
         return _single_row_from_res(res) or insert_doc
 
+    return await run_sync(_ins) or insert_doc
+
+
+# ============ Corporate Subscription (flat SaaS billing) Functions ============
+
+
+async def list_corporate_subscription_plans(active_only: bool = True) -> List[Dict[str, Any]]:
+    """Return the admin-managed catalog of flat SaaS subscription plans."""
+
+    def _fn():
+        q = supabase.table("corporate_subscription_plans").select("*")
+        if active_only:
+            q = q.eq("is_active", True)
+        return q.order("monthly_price").execute()
+
+    res = await run_sync(_fn)
+    return _rows_from_res(res)
+
+
+async def get_corporate_subscription_plan(plan_id: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        return supabase.table("corporate_subscription_plans").select("*").eq("id", plan_id).limit(1).execute()
+
+    rows = _rows_from_res(await run_sync(_fn))
+    return rows[0] if rows else None
+
+
+async def get_active_corporate_subscription(company_id: str) -> Optional[Dict[str, Any]]:
+    """Return the company's current active/past_due subscription row, if any.
+
+    At most one such row exists per company (enforced by a partial unique
+    index — see migration 280), so `.limit(1)` is a defensive belt, not the
+    source of the invariant.
+    """
+
+    def _fn():
+        return (
+            supabase.table("corporate_subscriptions")
+            .select("*")
+            .eq("company_id", company_id)
+            .in_("status", ["active", "past_due"])
+            .limit(1)
+            .execute()
+        )
+
+    rows = _rows_from_res(await run_sync(_fn))
+    return rows[0] if rows else None
+
+
+async def get_corporate_subscription_by_stripe_id(stripe_subscription_id: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        return (
+            supabase.table("corporate_subscriptions")
+            .select("*")
+            .eq("stripe_subscription_id", stripe_subscription_id)
+            .limit(1)
+            .execute()
+        )
+
+    rows = _rows_from_res(await run_sync(_fn))
+    return rows[0] if rows else None
+
+
+async def list_corporate_subscriptions_for_company(company_id: str) -> List[Dict[str, Any]]:
+    """Full subscription history for a company (admin detail view), newest first."""
+
+    def _fn():
+        return (
+            supabase.table("corporate_subscriptions")
+            .select("*")
+            .eq("company_id", company_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+    return _rows_from_res(await run_sync(_fn))
+
+
+async def create_corporate_subscription_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _fn():
+        res = supabase.table("corporate_subscriptions").insert(row).execute()
+        return _single_row_from_res(res) or row
+
+    return await run_sync(_fn)
+
+
+async def update_corporate_subscription(subscription_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    patch = {**patch, "updated_at": datetime.now(timezone.utc).isoformat()}
+
+    def _fn():
+        res = supabase.table("corporate_subscriptions").update(patch).eq("id", subscription_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
     return await run_sync(_ins)

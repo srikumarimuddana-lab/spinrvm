@@ -2285,6 +2285,45 @@ _Last updated: 2026-08-02 — A1c (Track 2) in progress: `routes/drivers/subscri
     consuming the embedded one) — not re-implemented here; this entry only
     documents that the mystery itself is solved and points to the CR for
     the scan-config remediation.
+  - **Update (2026-08-01) — root-cause mechanism corrected; fix
+    implemented.** The "Docker BuildKit provenance/SBOM attestation"
+    hypothesis above (point 5) is **wrong** — not just unconfirmed, ruled
+    out. The actual embedded SBOM is `pip`'s own, and it doesn't need a
+    running Docker build to prove: this job's own logs (per point 2 above)
+    show `Successfully installed pip-26.2` — reproduced *that exact pip
+    version* in an isolated local venv (`pip install pip==26.2`, no Docker
+    needed) and inspected what it carries. Two files inside pip's own
+    `_vendor/` directory settle it:
+    - `pip/_vendor/vendor.txt` — a plain-text list of pip's internally
+      vendored dependencies (used for pip's own internal purposes, never
+      imported by application code) — reads `msgpack==1.1.2` and
+      `setuptools==70.3.0`, the exact "installed" versions Trivy reports.
+    - `pip/_vendor/bom.cdx.json` — a genuine CycloneDX 1.4 SBOM (confirmed:
+      `"bomFormat": "CycloneDX"`) that pip ships describing those same
+      vendored copies, with proper `pkg:pypi/msgpack@1.1.2` /
+      `pkg:pypi/setuptools@70.3.0` purls.
+
+    Trivy auto-detects any `*.cdx.json`/`*.spdx.json` file inside a scanned
+    image by extension (confirmed against current Trivy docs) and, per its
+    own "Third-party SBOM may lead to inaccurate vulnerability detection"
+    warning, prefers that file's component list for vulnerability matching
+    over its own live filesystem scan — which is exactly the contradiction
+    point 4 above describes. No OCI-level BuildKit attestation is involved;
+    the offending file sits in ordinary site-packages, inside the image
+    filesystem Trivy already walks for its per-file inventory.
+
+    Fixed via `aquasecurity/trivy-action`'s native `skip-files` input
+    (`skip-files: '**/pip/_vendor/bom.cdx.json'`) on all four Trivy steps
+    across `G6 · Trivy container scan` (`security-gates.yml`) and
+    `docker-image-scan` (`ci.yml`) — no `docker build` flag, no Dockerfile
+    change, no application dependency touched. `ci.yml`'s diagnostic step
+    (id "DIAGNOSTIC (CR-2026-002)") was extended rather than removed, to
+    directly confirm `bom.cdx.json`'s presence/contents against the real
+    built image on the fix's own CI run, not just the isolated-venv
+    reproduction. See the PR for this change and CR-2026-002 / #3048 for
+    the full writeup; **not verified end-to-end** — no Docker daemon in
+    this sandbox either, same constraint noted throughout this item, so
+    real CI on that PR is the actual confirmation, not this entry.
 
 ### B-AI1. Corporate rider booking via AI chat bypasses corporate billing
 - [x] **Status:** done (2026-07-29) — found by the 2026-07-28 AI guardrail

@@ -819,28 +819,37 @@ _Last updated: 2026-08-02 — A1c (Track 2) in progress: `routes/drivers/subscri
         (but well-typed) list. Full suite: `6865 passed, 8 skipped,
         1 xfailed, 0 failed`. See
         `docs/change-log/2026-08-02-a1b-websocket-coverage.md`.
-      - `routes/drivers/subscriptions.py` — **61% → 69%** (2026-08-02,
-        measured via `pytest tests/ -q -k subscription --cov=routes.drivers.subscriptions`,
-        the same keyword-filtered methodology as the original 60.52%/61%
-        baseline — 575 stmts, 181 missing, down from 227/222). Spinr Pass,
+      - `routes/drivers/subscriptions.py` — **done, 83.8%** (575 stmts, 93
+        missing, up from 61% → 69% (#3243) → 83.8%) — Spinr Pass,
         money-adjacent (NOT the same file as `routes/admin/subscriptions.py`,
         already closed under Track 1 — this is the driver-facing one).
-        `test_spinr_pass_subscription.py` already covered the checkout/
-        webhook/verify-session/cancel flow end-to-end, but
-        `_compute_subscription_tax` and `_record_subscription_payment` were
-        only exercised through the no-service-area short-circuit, and the
-        driver-facing resend-invoice endpoint had zero coverage (only its
-        unrelated admin-console sibling was tested). Added
+        Two passes landed on this file: #3243 added
         `backend/tests/test_driver_subscriptions_tax_ledger_coverage.py`
-        (17 tests) covering the tax-rate math (GST/PST/HST, disabled-config,
-        missing-config defaults), the ledger's duplicate-vs-real-DB-error
-        swallow distinction, and `resend_subscription_invoice`'s 404/502
-        guards plus legacy-vs-tax-columns resend paths. No application code
-        changed, no bugs found. Remaining gap is concentrated in
-        `_send_subscription_invoice_email`'s own rendering body and
-        `check_expiring_subscriptions` (one of the 17 background startup
-        loops — left for its own dedicated pass). See
-        `docs/change-log/2026-08-02-a1c-driver-subscriptions-tax-ledger-coverage.md`.
+        (17 tests) covering `_compute_subscription_tax`'s GST/PST/HST rate
+        math (disabled-config, missing-config defaults), the ledger's
+        duplicate-vs-real-DB-error swallow distinction, and
+        `resend_subscription_invoice`'s 404/502 guards plus legacy-vs-
+        tax-columns resend paths. This pass added
+        `tests/test_drivers_subscriptions_coverage.py` (33 tests, after
+        trimming out `_compute_subscription_tax`/`resend_subscription_invoice`
+        tests that would have duplicated #3243's coverage) for what neither
+        of the two existing files reached: `get_subscription_plans` (area
+        kill switch, area/vehicle-type filters), `get_current_subscription`
+        (unparseable-expiry 503, expired-row auto-flip, quota happy path
+        with area-timezone-lookup failure degrading to Regina), the public
+        `subscription_checkout_return` https-bounce redirect,
+        `get_subscription_payment_history`'s legacy-row (pre-migration-186
+        tax columns) branch and pagination, `_send_subscription_invoice_email`
+        directly (no-driver/no-email/success/PDF-failure/exception
+        branches), and — the largest chunk — most of the
+        `check_expiring_subscriptions` background loop (24h warning,
+        expired-enforcement under gate on/off, `cancel_pending` retry sweep
+        success/still-failing, unparseable/missing-expiry skip,
+        settings-lookup-failure defaults to no-enforcement, lock-not-
+        acquired early exit). No application code changed. No bugs found.
+        Full suite: `6976 passed, 8 skipped, 1 xfailed, 0 failed`. See
+        `docs/change-log/2026-08-02-a1b-drivers-subscriptions-coverage.md`
+        and `docs/change-log/2026-08-02-a1c-driver-subscriptions-tax-ledger-coverage.md`.
       - Rest of the unevenly-covered `routes/drivers/` package: `ride_flow.py`
         (66.30%), `ride_cancel.py` (51.75%), `ride_reads.py` (58.95%),
         `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`

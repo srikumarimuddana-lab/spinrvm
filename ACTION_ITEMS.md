@@ -2699,6 +2699,58 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   fresh-row skipped, missing-timestamp over-reported rather than hidden,
   query-failure never raises).
 
+### C11. Metrics aggregation & alerting not yet implemented — SLA/KPI table still unmeasured
+- [ ] **Status:** open — design accepted (ADR-010, PR #3255, merged 2026-08-02);
+  implementation not started. Tracked as **CR-2026-008**, issue
+  [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295).
+- **What's wrong:** `backend/utils/metrics.py` is per-process only (its own
+  docstring says so — no cross-replica aggregation, no exporter sidecar).
+  `CLAUDE.md`'s P95 SLA table (dispatch offer→accept < 2s, fare calc < 300ms,
+  WS fan-out < 100ms) and KPI table (match rate ≥ 85%, payment success ≥ 99%)
+  cannot be computed from it today. Directly blocks item **B6** above
+  (Directions-latency re-tuning), which needs a real p99 that currently has
+  nowhere to accumulate across replicas.
+- **Design exists, not yet built:** ADR-010
+  (`docs/adr/010-metrics-aggregation-and-alerting.md`) recommends a
+  Prometheus-agent-per-Fly-machine pushing to a managed backend (Grafana
+  Cloud), with a concrete <1-day MVP: one dashboard panel + 2 alert rules
+  (dispatch-latency breach, payment-failure-rate breach) wired to the
+  existing `ALERT_WEBHOOK_URL` Slack channel `loop_watchdog` already uses.
+- **Why not done yet:** requires infra/vendor provisioning (a Grafana Cloud
+  account, a real Fly deploy) that no dev session/sandbox environment can do
+  — genuinely needs an operator with Fly + Grafana Cloud access, not just
+  code.
+- **Open decision before implementing:** agent placement — colocate the
+  scrape agent in `backend/Dockerfile`/`fly.toml` (touches the recently
+  hardened, digest-pinned, Trivy-scanned runtime image — see C6/CR-2026-002
+  — and could reopen that scan surface) vs. a standalone Fly app scraping
+  over the private network (avoids touching the hardened image, but needs
+  Fly Machines-API-based per-replica discovery glue since Fly's `.internal`
+  DNS load-balances rather than fanning out to all replicas). Full tradeoff
+  in ADR-010 §1 and issue #3295.
+- **Constraints:** implementation needs real source changes
+  (`Dockerfile`/`fly.toml`, or a new small standalone app) and a new
+  dependency (the agent binary) — **not** purely docs/design past this
+  point. Also needs a new Fly production secret (Grafana Cloud remote-write
+  API key).
+- **Risk if left undone:** none of `CLAUDE.md`'s SLA/KPI numbers are
+  verified; a real dispatch-latency or payment-failure regression during
+  live app testing would only surface via user complaints/support tickets,
+  not an alert.
+- **Risk of implementing:** low overall — doesn't touch ride/dispatch/
+  payment/auth business logic — but see the Dockerfile/Trivy risk above if
+  the colocated-agent option is chosen; otherwise routine additive-deploy
+  risk only.
+- **Effort estimate:** ~4–8 hours active engineering time (half a day to a
+  full day) per ADR-010 §5, plus Grafana Cloud account lead time.
+- **Verification once implemented:** confirm the Grafana dashboard panel
+  populates from real production traffic, confirm the 2 alert rules don't
+  false-fire against normal load, and confirm `docker-image-scan` (Trivy)
+  is still green if the colocated-agent option was chosen.
+- **Files (once implemented):** `backend/fly.toml`, `backend/Dockerfile`
+  (or a new standalone app) + Grafana Cloud config (external, not in this
+  repo).
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)

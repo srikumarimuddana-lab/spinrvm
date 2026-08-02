@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c (open) — full-repo scoping pass done (Sub-tiers A/B/C), first file (`utils/reconciliation.py`, 16%→90%) closed; AI15 added and closed same-day (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-02 — A1c (Track 2) in progress: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) 61%→69%. Prior same-day: `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -793,10 +793,28 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
         (but well-typed) list. Full suite: `6865 passed, 8 skipped,
         1 xfailed, 0 failed`. See
         `docs/change-log/2026-08-02-a1b-websocket-coverage.md`.
-      - `routes/drivers/subscriptions.py` — 60.52% (575 stmts, 227
-        missing) — Spinr Pass, money-adjacent (NOT the same file as
-        `routes/admin/subscriptions.py`, already closed under Track 1 —
-        this is the driver-facing one).
+      - `routes/drivers/subscriptions.py` — **61% → 69%** (2026-08-02,
+        measured via `pytest tests/ -q -k subscription --cov=routes.drivers.subscriptions`,
+        the same keyword-filtered methodology as the original 60.52%/61%
+        baseline — 575 stmts, 181 missing, down from 227/222). Spinr Pass,
+        money-adjacent (NOT the same file as `routes/admin/subscriptions.py`,
+        already closed under Track 1 — this is the driver-facing one).
+        `test_spinr_pass_subscription.py` already covered the checkout/
+        webhook/verify-session/cancel flow end-to-end, but
+        `_compute_subscription_tax` and `_record_subscription_payment` were
+        only exercised through the no-service-area short-circuit, and the
+        driver-facing resend-invoice endpoint had zero coverage (only its
+        unrelated admin-console sibling was tested). Added
+        `backend/tests/test_driver_subscriptions_tax_ledger_coverage.py`
+        (17 tests) covering the tax-rate math (GST/PST/HST, disabled-config,
+        missing-config defaults), the ledger's duplicate-vs-real-DB-error
+        swallow distinction, and `resend_subscription_invoice`'s 404/502
+        guards plus legacy-vs-tax-columns resend paths. No application code
+        changed, no bugs found. Remaining gap is concentrated in
+        `_send_subscription_invoice_email`'s own rendering body and
+        `check_expiring_subscriptions` (one of the 17 background startup
+        loops — left for its own dedicated pass). See
+        `docs/change-log/2026-08-02-a1c-driver-subscriptions-tax-ledger-coverage.md`.
       - Rest of the unevenly-covered `routes/drivers/` package: `ride_flow.py`
         (66.30%), `ride_cancel.py` (51.75%), `ride_reads.py` (58.95%),
         `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`

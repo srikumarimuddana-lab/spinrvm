@@ -27,13 +27,13 @@ try:
     from ..features import send_push_notification
     from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
-    from .redis_client import redis_expire, redis_incr, redis_set_nx
+    from .redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
     from socket_manager import manager  # type: ignore[no-redef]
     from utils.datetime_utils import parse_iso_utc
-    from utils.redis_client import redis_expire, redis_incr, redis_set_nx  # type: ignore[no-redef]
+    from utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx  # type: ignore[no-redef]
 
 try:
     from .metrics import inc as _metric_inc
@@ -302,7 +302,18 @@ async def _dispatch_scheduled_ride(ride: dict):
 
 
 async def _send_reminder(ride: dict):
-    """Send a 10-minute reminder notification for an upcoming scheduled ride."""
+    """Send a 10-minute reminder notification for an upcoming scheduled ride.
+
+    The push send and the reminder_sent DB flag write are two separate
+    operations that can fail independently. A Redis NX claim (1h TTL) guards
+    the push itself, decoupled from the flag:
+      - push fails: the claim is released so the next tick retries the send
+        (unchanged from before this fix).
+      - push succeeds but the flag write fails: the claim stays in place, so
+        the next tick skips re-sending the push but still retries the flag
+        write — previously this case re-sent a duplicate push every tick
+        until the write finally succeeded.
+    """
     ride_id = ride["id"]
     try:
         # Check if reminder already sent
@@ -310,14 +321,31 @@ async def _send_reminder(ride: dict):
             return
 
         rider_id = ride.get("rider_id")
+        dedupe_key = f"spinr:sched_reminder_pushed:{ride_id}"
 
-        if rider_id:
-            await send_push_notification(
-                rider_id,
-                "Ride reminder - 10 minutes",
-                f"Your ride to {ride.get('dropoff_address', 'your destination')} is scheduled soon. A driver will be assigned shortly.",
-                data={"type": "scheduled_ride_reminder", "ride_id": ride_id},
-            )
+        should_push = True
+        try:
+            # redis_set_nx returns True only for the first caller within the TTL.
+            should_push = await redis_set_nx(dedupe_key, "1", ttl=3600)
+        except Exception as dedup_err:
+            # Redis unavailable — fall through and send (worst case: a
+            # duplicate push), rather than silently skip the reminder.
+            logger.debug(f"scheduled dispatch: reminder dedup check failed for {ride_id}: {dedup_err}")
+
+        if rider_id and should_push:
+            try:
+                await send_push_notification(
+                    rider_id,
+                    "Ride reminder - 10 minutes",
+                    f"Your ride to {ride.get('dropoff_address', 'your destination')} is scheduled soon. A driver will be assigned shortly.",
+                    data={"type": "scheduled_ride_reminder", "ride_id": ride_id},
+                )
+            except Exception:
+                try:
+                    await redis_delete(dedupe_key)
+                except Exception as release_err:
+                    logger.debug(f"scheduled dispatch: reminder dedup release failed for {ride_id}: {release_err}")
+                raise
 
         await db.update_one(
             "rides",

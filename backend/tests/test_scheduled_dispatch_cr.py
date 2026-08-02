@@ -351,3 +351,92 @@ class TestDispatcherLoopFailureAlerting:
                 await sr.scheduled_ride_dispatcher_loop()
 
         metric_inc.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #14: _send_reminder's push-send and reminder_sent-flag-write must
+# fail independently without either duplicating or permanently losing the
+# reminder.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _reminder_ride(**extra) -> dict:
+    return {
+        "id": RIDE_ID,
+        "rider_id": RIDER_ID,
+        "dropoff_address": "456 Broadway",
+        "reminder_sent": False,
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+class TestSendReminderIdempotency:
+    async def test_happy_path_pushes_once_and_sets_flag(self):
+        from backend.utils import scheduled_rides as sr
+
+        ride = _reminder_ride()
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.db, "update_one", AsyncMock()) as update,
+        ):
+            await sr._send_reminder(ride)
+
+        push.assert_awaited_once()
+        update.assert_awaited_once_with("rides", {"id": RIDE_ID}, {"$set": {"reminder_sent": True}})
+
+    async def test_push_failure_releases_the_dedupe_claim_for_retry(self):
+        """If the push itself fails, the next tick must still retry it —
+        the dedupe claim taken before the send must be released, not left
+        in place blocking a legitimate retry."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _reminder_ride()
+        delete_mock = AsyncMock()
+        update_mock = AsyncMock()
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "redis_delete", delete_mock),
+            patch.object(sr, "send_push_notification", AsyncMock(side_effect=RuntimeError("push failed"))),
+            patch.object(sr.db, "update_one", update_mock),
+        ):
+            await sr._send_reminder(ride)
+
+        delete_mock.assert_awaited_once_with(f"spinr:sched_reminder_pushed:{RIDE_ID}")
+        # The flag write must NOT run — the push never actually went out.
+        update_mock.assert_not_awaited()
+
+    async def test_flag_write_failure_does_not_duplicate_push_next_tick(self):
+        """Regression for Finding #14: a successful push followed by a
+        failed reminder_sent write used to cause a duplicate push on the
+        next tick (reminder_sent still False). The dedupe claim from the
+        first attempt must survive to block the second attempt's push."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _reminder_ride()
+        push_mock = AsyncMock()
+
+        # Attempt 1: push succeeds, DB write fails.
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", push_mock),
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=RuntimeError("db write failed"))),
+        ):
+            await sr._send_reminder(ride)
+
+        push_mock.assert_awaited_once()
+
+        # Attempt 2 (next tick, reminder_sent still False): dedupe key from
+        # attempt 1 is still claimed, so redis_set_nx now returns False.
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=False)),
+            patch.object(sr, "send_push_notification", push_mock),
+            patch.object(sr.db, "update_one", AsyncMock()) as update_mock,
+        ):
+            await sr._send_reminder(ride)
+
+        # Still only ever pushed once across both attempts.
+        push_mock.assert_awaited_once()
+        # But the flag write is retried and this time succeeds.
+        update_mock.assert_awaited_once_with("rides", {"id": RIDE_ID}, {"$set": {"reminder_sent": True}})

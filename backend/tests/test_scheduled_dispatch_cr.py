@@ -243,3 +243,111 @@ class TestScheduledDispatch:
         _, filters = get_rows_calls[0]
         assert filters.get("status") == "scheduled"
         assert filters.get("is_scheduled") is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #06: check_scheduled_rides()'s return-value contract, which
+# scheduled_ride_dispatcher_loop uses to track consecutive fetch failures.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestCheckScheduledRidesReturnValue:
+    async def test_returns_false_on_fetch_failure(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", AsyncMock(side_effect=RuntimeError("db down"))),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is False
+
+    async def test_returns_true_on_successful_fetch(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[])),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is True
+
+    async def test_returns_none_when_lock_held_by_another_replica(self):
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=False)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is None
+        # Skipped entirely — must not even reach the candidate query.
+        get_rows_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+class TestDispatcherLoopFailureAlerting:
+    async def test_alerts_once_after_sustained_consecutive_failures(self):
+        """The loop's own consecutive-failure counter (fed by
+        check_scheduled_rides()'s True/False/None contract) must escalate
+        exactly once at the threshold, not on every tick after it — same
+        escalate-once shape as _track_defer_and_maybe_escalate."""
+        from backend.utils import scheduled_rides as sr
+
+        # Drive the loop body directly rather than the real `while True` +
+        # asyncio.sleep loop: break out via StopAsyncIteration from sleep
+        # after N iterations, which is the standard way to bound an
+        # otherwise-infinite background loop under test.
+        call_count = {"n": 0}
+
+        async def _fake_sleep(_seconds):
+            call_count["n"] += 1
+            if call_count["n"] >= sr._FETCH_FAILURE_ALERT_THRESHOLD + 2:
+                raise StopAsyncIteration
+
+        with (
+            patch.object(sr, "check_scheduled_rides", AsyncMock(return_value=False)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.asyncio, "sleep", _fake_sleep),
+            patch.object(sr, "_record_heartbeat", lambda *_a, **_k: None),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await sr.scheduled_ride_dispatcher_loop()
+
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_fetch_failures_sustained_total")
+
+    async def test_success_resets_the_failure_counter(self):
+        """A single successful tick between failures must reset the count,
+        so a flaky-but-recovering DB doesn't eventually cross the threshold
+        purely by accumulating occasional failures over a long uptime."""
+        from backend.utils import scheduled_rides as sr
+
+        # Fail (threshold - 1) times, succeed once, then fail
+        # (threshold - 1) times again — should never reach the threshold.
+        results = (
+            [False] * (sr._FETCH_FAILURE_ALERT_THRESHOLD - 1)
+            + [True]
+            + [False] * (sr._FETCH_FAILURE_ALERT_THRESHOLD - 1)
+        )
+        call_count = {"n": 0}
+
+        async def _fake_sleep(_seconds):
+            call_count["n"] += 1
+            if call_count["n"] >= len(results):
+                raise StopAsyncIteration
+
+        with (
+            patch.object(sr, "check_scheduled_rides", AsyncMock(side_effect=results)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.asyncio, "sleep", _fake_sleep),
+            patch.object(sr, "_record_heartbeat", lambda *_a, **_k: None),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await sr.scheduled_ride_dispatcher_loop()
+
+        metric_inc.assert_not_called()

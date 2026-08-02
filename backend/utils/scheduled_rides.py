@@ -12,6 +12,7 @@ import asyncio
 import logging
 import random
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 try:
     from utils.loop_monitor import record_heartbeat as _record_heartbeat
@@ -329,11 +330,19 @@ async def _send_reminder(ride: dict):
         logger.error(f"Failed to send reminder for ride {ride_id}: {e}", exc_info=True)
 
 
-async def check_scheduled_rides():
-    """Check for scheduled rides that need dispatching or reminders."""
+async def check_scheduled_rides() -> Optional[bool]:
+    """Check for scheduled rides that need dispatching or reminders.
+
+    Returns ``True`` if the candidate fetch succeeded (rides may or may not
+    have needed action), ``False`` if the fetch itself failed, or ``None`` if
+    this tick was skipped because another replica holds the leader lock. The
+    caller (scheduled_ride_dispatcher_loop) uses this to track consecutive
+    fetch failures across ticks — a skip is neither a success nor a failure,
+    so it must not reset or advance that counter.
+    """
     try:
         if not await redis_set_nx("spinr:scheduled_rides:lock", "1", ttl=90):
-            return
+            return None
     except Exception as _lock_err:
         logger.warning(f"scheduled_rides: Redis leader lock unavailable ({_lock_err}), proceeding without lock")
 
@@ -358,7 +367,7 @@ async def check_scheduled_rides():
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(f"Failed to fetch scheduled rides: {e} | original={original}", exc_info=True)
-        return
+        return False
 
     if len(scheduled) >= _SCHEDULED_RIDES_TICK_LIMIT:
         # Every row this tick will still dispatch in scheduled_time order, but
@@ -390,13 +399,36 @@ async def check_scheduled_rides():
         if not already_dispatched and now >= scheduled_time:
             await _dispatch_scheduled_ride(ride)
 
+    return True
+
+
+# Consecutive check_scheduled_rides() fetch failures (per replica, in-process
+# — reset on process restart, which is fine: this tracks a live outage, not a
+# durable record) before it's treated as sustained rather than a one-off blip.
+_FETCH_FAILURE_ALERT_THRESHOLD = 5
+
 
 async def scheduled_ride_dispatcher_loop():
     """Background loop that checks scheduled rides every 60 seconds."""
     logger.info("Scheduled ride dispatcher started")
+    consecutive_fetch_failures = 0
     while True:
         try:
-            await check_scheduled_rides()
+            result = await check_scheduled_rides()
+            if result is False:
+                consecutive_fetch_failures += 1
+                if consecutive_fetch_failures == _FETCH_FAILURE_ALERT_THRESHOLD:
+                    # Fires once per outage, not every tick thereafter — mirrors
+                    # the escalate-once pattern in _track_defer_and_maybe_escalate.
+                    logger.error(
+                        f"scheduled_rides: {consecutive_fetch_failures} consecutive candidate-fetch "
+                        "failures — the entire scheduled-ride book may be going dark"
+                    )
+                    _metric_inc("spinr_dispatch_scheduled_fetch_failures_sustained_total")
+            elif result is True:
+                consecutive_fetch_failures = 0
+            # result is None (another replica holds the leader lock this
+            # tick) — leave the counter untouched, it says nothing about DB health.
         except Exception as e:
             logger.error(f"Scheduled ride dispatcher error: {e}", exc_info=True)
         _record_heartbeat("scheduled_dispatcher (60s)")

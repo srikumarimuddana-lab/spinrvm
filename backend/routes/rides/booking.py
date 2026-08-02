@@ -740,7 +740,12 @@ async def create_ride(
         _policy_result = await _deps.evaluate_policy_for_ride(
             corporate_account_id=body.corporate_account_id,
             rider_id=current_user["id"],
-            estimated_fare=total_fare,
+            # grand_total (base + area fees + tax), not total_fare — total_fare
+            # excludes area fees/tax, so a ride could clear max_fare_per_ride
+            # against total_fare while the actual charge (grand_total, still
+            # excluding tip which isn't known until after the trip) is over
+            # the company's cap. Corporate + admin portal review, gap #39.
+            estimated_fare=grand_total,
             ride_type="standard",
             pickup_time=_policy_pickup_time,
         )
@@ -912,10 +917,13 @@ async def create_ride(
             )
 
         # 2–4. Fetch allowance + policy, evaluate all rules.
+        # grand_total, not total_fare — see the company_allowance path above
+        # (gap #39): total_fare excludes area fees/tax, so it understates
+        # what will actually be charged against max_fare_per_ride.
         _policy_result = await _deps.evaluate_policy_for_ride(
             corporate_account_id=_corp_company_id,
             rider_id=current_user["id"],
-            estimated_fare=total_fare,
+            estimated_fare=grand_total,
             ride_type=body.vehicle_type_id or "standard",
             pickup_time=_policy_pickup_time,
             policy_override=_membership.get("policy_override", False),

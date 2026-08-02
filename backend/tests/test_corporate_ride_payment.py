@@ -184,6 +184,39 @@ def test_work_profile_policy_violation_returns_400(test_client, rider_override):
     assert "max_fare_per_ride" in detail["failed_rules"]
 
 
+def test_work_profile_policy_check_uses_grand_total_not_bare_fare(test_client, rider_override):
+    """Corporate + admin portal review, gap #39: the booking-time
+    max_fare_per_ride check must compare against grand_total (fare +
+    area fees + tax), not the bare total_fare that excludes them —
+    otherwise a company's per-ride cap can be bypassed whenever area
+    fees/tax push the actual charge over the cap while total_fare alone
+    stays under it. fees_total is set far above any plausible total_fare
+    for this short in-city fixture route so the assertion doesn't depend
+    on the exact fare-calc output, matching this file's existing
+    max_fare_per_ride=0.01 pattern in test_work_profile_policy_violation_
+    returns_400."""
+    membership = {"id": _MEMBER_ID, "company_id": _CORP_COMPANY_ID, "policy_override": False}
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 500, "used": 0}
+    # Comfortably above any plausible total_fare for this ~2km fixture route,
+    # comfortably below total_fare + fees_total once area fees are included.
+    policy = {"active": True, "max_fare_per_ride": 100}
+    deps = _mock_create_ride_deps(memberships=[membership], allowance=allowance, policy=policy)
+    deps["routes.rides._deps.calculate_all_fees"] = AsyncMock(
+        return_value={"fees_total": 10000, "tax_amount": 0, "fees": [], "tax_breakdown": {}}
+    )
+    patchers, _ = _apply_all_patches(deps)
+    body = {**_BASE_RIDE_BODY, "work_profile": True, "corporate_account_id": _CORP_COMPANY_ID}
+    try:
+        resp = test_client.post("/api/v1/rides", json=body, headers=_APP_CHECK_HEADERS)
+    finally:
+        for p in patchers:
+            p.stop()
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert detail["reason"] == "policy_violation"
+    assert "max_fare_per_ride" in detail["failed_rules"]
+
+
 def test_work_profile_allowance_low_returns_400(test_client, rider_override):
     """Remaining allowance too low and master fallback not allowed → 400 allowance_low."""
     membership = {"id": _MEMBER_ID, "company_id": _CORP_COMPANY_ID, "policy_override": False}

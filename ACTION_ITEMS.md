@@ -889,11 +889,40 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
           skipped, 1 xfailed, 0 failed` — exactly +66, matching the new
           test count, zero regressions. See
           `docs/change-log/2026-08-02-a1c-subscriptions-coverage.md`.
-      - Rest of the unevenly-covered `routes/drivers/` package: `ride_flow.py`
-        (66.30%), `ride_cancel.py` (51.75%), `ride_reads.py` (58.95%),
-        `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`
-        (38.82%), `_shared.py` (51.32%), `status.py` (48.39%),
-        `profile.py` (67.65%).
+      - `ride_flow.py`, `ride_cancel.py`, `ride_reads.py` — **CLOSED**
+        (2026-08-02, branch `claude/a1c-drivers-ride-flow-batch`): fresh
+        baseline measured via the full `pytest tests/ -q
+        --cov=routes.drivers.ride_flow --cov=routes.drivers.ride_cancel
+        --cov=routes.drivers.ride_reads` matched the documented numbers
+        exactly — `ride_flow.py` 66.30%→99% (273 stmts, 92→2 missing);
+        `ride_cancel.py` 51.75%→100% (144 stmts, 69→0 missing);
+        `ride_reads.py` 58.95%→98% (190 stmts, 78→3 missing). Added
+        `backend/tests/test_driver_ride_flow_coverage.py` (95 tests), run
+        alongside every pre-existing test file already touching these
+        modules (297 passed, no collisions). Coverage focus: `accept_ride`'s
+        subscription-guard sub-branches, the batch-dispatch winner/loser
+        resolution, the ride_metrics pickup-leg write;
+        `decline_ride`/`arrive_at_pickup`/`verify_pickup_otp`/`start_ride`'s
+        guard clauses and non-fatal-failure branches; `cancel_ride`'s
+        JSON-body reason parsing, PGRST204 fallback, and pre-auth-release
+        branches; `mark_rider_noshow`'s full success path (previously only
+        the 409-claim-lost branch had coverage); `get_active_ride`'s
+        batch-offer fallback and incentives/quest-hint/service-area-polygon
+        enrichment; `get_ride_history`'s incentive-claims and
+        earnings-snapshot branches. Test-only, no application code changed.
+        **Bug found, not fixed (test-only scope):** `get_active_ride`'s
+        rider/vehicle-type-lookup except-handlers format their log message
+        with a direct dict index (`ride['vehicle_type_id']`) instead of
+        `.get(...)`, which would itself `KeyError` if the outer lookup
+        failed because the key was fully absent — not reachable in
+        production (Supabase rows always carry the column) so not escalated
+        further. Full details:
+        `docs/change-log/2026-08-02-a1c-drivers-ride-flow-batch-coverage.md`.
+      - Remaining `routes/drivers/` files also in progress this same day
+        (see their own bullets/PRs for final numbers once merged):
+        `payouts.py`, `earnings.py`, `referrals.py` on branch
+        `claude/a1c-drivers-payouts-batch`; `_shared.py`, `status.py`,
+        `profile.py` on branch `claude/a1c-drivers-shared-batch`.
       - `utils/redis_client.py` — **done, 100%** (2026-08-02, 220/220 stmts;
         was 55% full-suite side-effect coverage, all of it via the
         in-process-fallback path). Presence/rate-limit backbone. Every prior

@@ -1577,10 +1577,10 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
   return (
     <div>
       {/* Kill switch */}
-      <div className={`flex items-center justify-between p-4 rounded-xl mb-3 ${enabled ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-3 ${enabled ? 'bg-green-50 border border-green-200' : 'bg-muted border border-border'}`}>
         <div>
-          <h4 className="font-bold text-gray-800">Spinr Pass for {area.name}</h4>
-          <p className="text-sm text-gray-500">
+          <h4 className="font-bold text-foreground">Spinr Pass for {area.name}</h4>
+          <p className="text-sm text-muted-foreground">
             {enabled ? 'Drivers in this area can see and subscribe to plans' : 'Disabled — drivers see "It\'s Free Right Now!" instead'}
           </p>
         </div>
@@ -1588,10 +1588,10 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
       </div>
 
       {/* Mandatory-subscription toggle */}
-      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50 border border-gray-200'}`}>
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-amber-50 border border-amber-200' : 'bg-muted border border-border'}`}>
         <div>
-          <h4 className="font-bold text-gray-800">Require Subscription to Drive</h4>
-          <p className="text-sm text-gray-500">
+          <h4 className="font-bold text-foreground">Require Subscription to Drive</h4>
+          <p className="text-sm text-muted-foreground">
             {required
               ? 'Drivers must have an active Spinr Pass to go online, receive offers, and accept rides'
               : 'Spinr Pass is optional — all verified drivers can work in this area'}
@@ -1602,15 +1602,15 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
 
       {/* Plan management */}
       <div className="flex items-center justify-between mb-4">
-        <h4 className="font-bold text-gray-800">Subscription Plans</h4>
-        <button onClick={() => { resetForm(); setShowForm(true); }} className="flex items-center gap-1.5 bg-red-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">
+        <h4 className="font-bold text-foreground">Subscription Plans</h4>
+        <button onClick={() => { resetForm(); setShowForm(true); }} className="flex items-center gap-1.5 bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-semibold hover:bg-primary/90">
           <Plus className="h-4 w-4" /> New Plan
         </button>
       </div>
 
       {/* Create/Edit Form */}
       {showForm && (
-        <div className="bg-white rounded-xl border p-5 mb-5 shadow-sm">
+        <div className="bg-card rounded-xl border p-5 mb-5 shadow-sm">
           <h5 className="font-bold mb-3">{editingId ? "Edit Plan" : "New Plan"}</h5>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
             <div>
@@ -1632,9 +1632,9 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
             <div>
               <label className="block text-xs font-semibold text-muted-foreground mb-1">Rides Per Day</label>
               <div className="flex gap-1.5 flex-wrap">
-                <button onClick={() => setForm({...form, rides_per_day: -1})} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${form.rides_per_day === -1 ? "bg-red-500 text-white border-red-500" : "bg-white border-gray-200"}`}>Unlimited</button>
+                <button onClick={() => setForm({...form, rides_per_day: -1})} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${form.rides_per_day === -1 ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border"}`}>Unlimited</button>
                 {[4, 8, 12, 20].map(n => (
-                  <button key={n} onClick={() => setForm({...form, rides_per_day: n})} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${form.rides_per_day === n ? "bg-red-500 text-white border-red-500" : "bg-white border-gray-200"}`}>{n}</button>
+                  <button key={n} onClick={() => setForm({...form, rides_per_day: n})} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${form.rides_per_day === n ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border"}`}>{n}</button>
                 ))}
               </div>
             </div>
@@ -1648,47 +1648,47 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
             <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Priority support, Surge protection" value={form.features} onChange={e => setForm({...form, features: e.target.value})} />
           </div>
           <div className="flex items-center gap-4 mb-4">
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active} onChange={e => setForm({...form, is_active: e.target.checked})} className="accent-red-500" /> Active</label>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active} onChange={e => setForm({...form, is_active: e.target.checked})} className="accent-primary" /> Active</label>
           </div>
           <div className="flex gap-2">
-            <button onClick={handleSubmit} className="bg-red-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">{editingId ? "Save" : "Create Plan"}</button>
-            <button onClick={resetForm} className="bg-gray-100 text-gray-600 px-5 py-2 rounded-xl text-sm font-semibold">Cancel</button>
+            <button onClick={handleSubmit} className="bg-primary text-primary-foreground px-5 py-2 rounded-xl text-sm font-semibold hover:bg-primary/90">{editingId ? "Save" : "Create Plan"}</button>
+            <button onClick={resetForm} className="bg-muted text-foreground px-5 py-2 rounded-xl text-sm font-semibold">Cancel</button>
           </div>
         </div>
       )}
 
       {/* Plans List */}
       {plans.length === 0 ? (
-        <div className="text-center py-12 bg-gray-50 rounded-xl">
-          <CreditCard className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500 font-medium">No subscription plans yet</p>
-          <p className="text-gray-400 text-sm mt-1">Create your first Spinr Pass plan above</p>
+        <div className="text-center py-12 bg-muted rounded-xl">
+          <CreditCard className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+          <p className="text-muted-foreground font-medium">No subscription plans yet</p>
+          <p className="text-muted-foreground text-sm mt-1">Create your first Spinr Pass plan above</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
           {plans.map(p => (
-            <div key={p.id} className={`bg-white rounded-xl border p-5 relative ${!p.is_active ? "opacity-50" : ""}`}>
+            <div key={p.id} className={`bg-card rounded-xl border p-5 relative ${!p.is_active ? "opacity-50" : ""}`}>
               <button onClick={() => handleTogglePlan(p)} className="absolute top-3 right-3">
-                {p.is_active ? <ToggleRight className="h-5 w-5 text-green-500" /> : <ToggleLeft className="h-5 w-5 text-gray-300" />}
+                {p.is_active ? <ToggleRight className="h-5 w-5 text-green-500" /> : <ToggleLeft className="h-5 w-5 text-muted-foreground" />}
               </button>
-              <h5 className="font-bold text-gray-900 text-lg">{p.name}</h5>
-              {p.description && <p className="text-gray-500 text-xs mt-0.5">{p.description}</p>}
+              <h5 className="font-bold text-foreground text-lg">{p.name}</h5>
+              {p.description && <p className="text-muted-foreground text-xs mt-0.5">{p.description}</p>}
               <div className="mt-2 mb-3">
-                <span className="text-2xl font-extrabold text-red-500">${p.price?.toFixed(2)}</span>
-                <span className="text-gray-400 text-xs ml-1">/ {getDurationLabel(p.duration_days).toLowerCase()}</span>
+                <span className="text-2xl font-extrabold text-primary">${p.price?.toFixed(2)}</span>
+                <span className="text-muted-foreground text-xs ml-1">/ {getDurationLabel(p.duration_days).toLowerCase()}</span>
               </div>
-              <p className="text-sm text-gray-600 mb-1">
+              <p className="text-sm text-foreground mb-1">
                 {p.rides_per_day === -1 ? 'Unlimited rides/day' : `${p.rides_per_day} rides/day`}
               </p>
-              <p className="text-xs text-gray-400">{p.subscriber_count || 0} subscribers</p>
+              <p className="text-xs text-muted-foreground">{p.subscriber_count || 0} subscribers</p>
               {(p.features || []).length > 0 && (
                 <div className="border-t mt-3 pt-2">
-                  {p.features.map((f: string, i: number) => <p key={i} className="text-xs text-gray-500 py-0.5">✓ {f}</p>)}
+                  {p.features.map((f: string, i: number) => <p key={i} className="text-xs text-muted-foreground py-0.5">✓ {f}</p>)}
                 </div>
               )}
               <div className="flex gap-2 mt-3 pt-2 border-t">
-                <button onClick={() => handleEdit(p)} className="flex-1 text-center py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg"><Pencil className="h-3 w-3 inline mr-1" />Edit</button>
-                <button onClick={() => handleDeletePlan(p)} className="flex-1 text-center py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50 rounded-lg"><Trash2 className="h-3 w-3 inline mr-1" />Delete</button>
+                <button onClick={() => handleEdit(p)} className="flex-1 text-center py-1.5 text-xs font-semibold text-foreground hover:bg-muted rounded-lg"><Pencil className="h-3 w-3 inline mr-1" />Edit</button>
+                <button onClick={() => handleDeletePlan(p)} className="flex-1 text-center py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/10 rounded-lg"><Trash2 className="h-3 w-3 inline mr-1" />Delete</button>
               </div>
             </div>
           ))}
@@ -1699,21 +1699,21 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
       {plans.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h4 className="font-bold text-gray-800">Subscribers</h4>
-            {!subsLoaded && <button onClick={loadSubs} className="text-sm text-red-500 font-semibold hover:underline">Load subscribers</button>}
+            <h4 className="font-bold text-foreground">Subscribers</h4>
+            {!subsLoaded && <button onClick={loadSubs} className="text-sm text-primary font-semibold hover:underline">Load subscribers</button>}
           </div>
           {subsLoaded && (
             subs.length === 0 ? (
-              <p className="text-gray-400 text-sm">No subscribers yet.</p>
+              <p className="text-muted-foreground text-sm">No subscribers yet.</p>
             ) : (
-              <div className="bg-white rounded-xl border overflow-hidden">
+              <div className="bg-card rounded-xl border overflow-hidden">
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-left">
+                  <thead className="bg-muted text-left">
                     <tr>
-                      <th className="px-4 py-2 font-semibold text-gray-600 text-xs">Driver</th>
-                      <th className="px-4 py-2 font-semibold text-gray-600 text-xs">Plan</th>
-                      <th className="px-4 py-2 font-semibold text-gray-600 text-xs">Status</th>
-                      <th className="px-4 py-2 font-semibold text-gray-600 text-xs">Expires</th>
+                      <th className="px-4 py-2 font-semibold text-foreground text-xs">Driver</th>
+                      <th className="px-4 py-2 font-semibold text-foreground text-xs">Plan</th>
+                      <th className="px-4 py-2 font-semibold text-foreground text-xs">Status</th>
+                      <th className="px-4 py-2 font-semibold text-foreground text-xs">Expires</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1724,7 +1724,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
                         <td className="px-4 py-2">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{s.status?.toUpperCase()}</span>
                         </td>
-                        <td className="px-4 py-2 text-xs text-gray-500">{s.expires_at ? new Date(s.expires_at).toLocaleDateString() : '—'}</td>
+                        <td className="px-4 py-2 text-xs text-muted-foreground">{s.expires_at ? new Date(s.expires_at).toLocaleDateString() : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1743,7 +1743,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmPlanDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={confirmPlanDelete} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

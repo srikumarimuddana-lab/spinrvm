@@ -820,10 +820,29 @@ _Last updated: 2026-08-02 — A1c (Track 2) in progress: `routes/drivers/subscri
         `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`
         (38.82%), `_shared.py` (51.32%), `status.py` (48.39%),
         `profile.py` (67.65%).
-      - `utils/redis_client.py` — 55.00% (220 stmts, 99 missing) —
-        presence/rate-limit backbone; `utils/redis_client.py` falling back
-        silently to in-process dict (per CLAUDE.md) makes this worth
-        testing both modes.
+      - `utils/redis_client.py` — **done, 100%** (2026-08-02, 220/220 stmts;
+        was 55% full-suite side-effect coverage, all of it via the
+        in-process-fallback path). Presence/rate-limit backbone. Every prior
+        test touched this module only as a side effect of a higher-level
+        caller through the `mock_redis` fixture (in-process dict only) — the
+        real-Redis-connected branch of every public function had zero direct
+        coverage. Added `backend/tests/test_redis_client_coverage.py` (51
+        tests) covering both modes for every function, `_get_redis()`'s
+        URL-change reconnect + connect-failure-falls-back branches, the
+        configured-but-erroring-must-raise-loudly contract (per CLAUDE.md's
+        Redis transparency note) for every primitive except the
+        documented-intentional exception (`redis_set_nx`'s belt-and-braces
+        local-lock fallback), `get_redis_stats`/`count_keys_by_prefix` in
+        both modes, and `_humanize_bytes`'s unit boundaries. No application
+        code changed. **Bug found, not fixed (test-only scope):**
+        `_humanize_bytes` mislabels any petabyte+-scale value as bytes
+        instead of the correct unit — `unit` is only reassigned inside a
+        branch that never fires once `size` starts at T-scale, so the loop
+        silently divides through every remaining unit without ever updating
+        it. Not a live risk today (no realistic Redis holds petabytes; feeds
+        only an admin dashboard gauge), pinned by a test asserting the
+        actual buggy output rather than worked around. See
+        `docs/change-log/2026-08-02-a1c-redis-client-coverage.md`.
     - **Sub-tier B — below 60%, genuinely lower-risk breadth** (utils/services,
       admin-adjacent tooling, third-party integrations):
       `routes/main.py` (**0%**, 52 stmts — worth a quick look at what this

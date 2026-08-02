@@ -80,6 +80,13 @@ export interface DriverLiveStats {
     // Driver avatar, loaded lazily here so the bulk drivers list no longer
     // has to ship profile_image (a base64 blob for legacy accounts).
     photo_url: string | null;
+    /** Last 4 of the driver's licence number. The full value is Vault-encrypted
+     * at rest and never leaves the backend; the bulk list only carries the
+     * opaque token, so the detail panel reads the mask from here. */
+    license_number_last4: string | null;
+    /** True when a licence number exists on the row (even if it could not be
+     * decrypted), so the panel can distinguish "none on file" from "unreadable". */
+    license_number_on_file: boolean;
 }
 export const getDriverLiveStats = (id: string) =>
     request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);

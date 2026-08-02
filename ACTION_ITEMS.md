@@ -1267,6 +1267,41 @@ _Last updated: 2026-08-02 — A1c (Track 2) in progress: `routes/drivers/subscri
 
 ## P1 — Fix before launch (code)
 
+### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
+- [ ] **Status:** open — found 2026-07-30 while adding migration 275. Migration
+  274 itself is clean (verified by simulating the runner's splitter); this is a
+  pre-existing defect in the runner affecting **34 already-merged migrations**.
+- **Files:** `backend/scripts/migrate.py:195` (`_apply_migration_autocommit`),
+  frozen list in `backend/tests/test_migration_concurrently_splitting.py`
+  (`_KNOWN_UNSPLITTABLE`)
+- **Problem:** `apply_migration` routes a file to the autocommit path when the
+  string `CONCURRENTLY` appears **anywhere in the text, including a comment**.
+  That path cannot use a transaction, so it does `sql.split(";")` and executes
+  each chunk after stripping *leading* `--` lines. Two things break:
+  1. A **mid-line semicolon in a prose comment** (`-- ... hot table; a plain
+     build blocks ...`) splits inside the comment; the rest of that line becomes
+     the first line of the next chunk, is not a comment, and is handed to
+     Postgres as SQL. Migration 55 has exactly this — the runner would try to
+     execute `safe to remove anytime if the planner regresses.`
+  2. A **`$$`-quoted function body** is shredded at every semicolon inside
+     `BEGIN … END`. Migrations like `196_wallet_apply_credit.sql` contain no
+     concurrent index at all — they are only routed here because the word
+     `CONCURRENTLY` appears in their rollback comment.
+- **Why it has not bitten yet:** these migrations are recorded as applied, so
+  they are never re-run. It bites the next time one is applied to a fresh
+  environment (new staging project, disaster-recovery rebuild, a fresh Supabase
+  project for a new province) — where it fails partway through, after earlier
+  statements have already committed under autocommit.
+- **Approach:** replace the naive `split(";")` with a splitter that skips
+  semicolons inside `--` comments, `'…'` literals, and `$tag$…$tag$` bodies; and
+  detect CONCURRENTLY from executable SQL rather than raw text so function-body
+  migrations keep running in a single transaction. Then delete
+  `_KNOWN_UNSPLITTABLE` — the test already asserts the property for every file
+  not in it.
+- **Acceptance:** `_KNOWN_UNSPLITTABLE` is empty and
+  `test_migration_concurrently_splitting.py` passes over every migration;
+  a fresh-database apply of the full migration set succeeds end to end.
+
 ### B1. `track_driver_online` accepts raw GPS for third-party analytics
 - [x] **Status:** done — geohash-string-only signature; lat/lng dict raises
   TypeError, non-geohash string raises ValueError; contract pinned in

@@ -2702,6 +2702,10 @@ async def admin_export_drivers(
                 "subscription_expires_at": _sub_expires,
                 "joined_at": d.get("created_at"),
                 "approved_at": d.get("verified_at"),
+                # Account deletion cannot change `status` (no 'deleted' value in
+                # the set), so without this column a departed driver exports as
+                # a plain active driver.
+                "deleted_at": d.get("deleted_at"),
                 "last_status_changed_at": d.get("last_status_changed_at"),
                 "updated_at": d.get("updated_at"),
             }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { FileText, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, FileText, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Select,
@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
-import { generateSgiForm, searchDataTransferEntities, type SgiFormType } from "@/lib/api";
+import { generateSgiForm, getSgiRemovalQueue, searchDataTransferEntities, type SgiFormType, type SgiRemovalQueueEntry } from "@/lib/api";
 import { inferEntityType, type EntitySelectionState } from "@/components/data-transfer/useEntitySelection";
 
 // Matches sgi_form_filler.py's MAX_DRIVER_ROWS/MAX_VEHICLE_ROWS — the real
@@ -89,6 +89,33 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
     const [action, setAction] = useState<"add" | "remove" | "change">("add");
     const [loading, setLoading] = useState(false);
 
+    // Drivers who deleted their account while filed with SGI. They stay listed
+    // as active passenger-for-hire drivers until the removal forms are filed,
+    // and nothing else in the product surfaces that backlog.
+    const [removalQueue, setRemovalQueue] = useState<SgiRemovalQueueEntry[]>([]);
+    const [queueUnresolvable, setQueueUnresolvable] = useState(0);
+    const [queueLoading, setQueueLoading] = useState(false);
+
+    const loadQueue = useCallback(async () => {
+        setQueueLoading(true);
+        try {
+            const res = await getSgiRemovalQueue();
+            setRemovalQueue(res.drivers);
+            setQueueUnresolvable(res.unresolvable);
+        } catch {
+            // Non-fatal: the queue is a prompt, not a prerequisite for
+            // generating a form manually. Leave it empty rather than blocking
+            // the tab on it.
+            setRemovalQueue([]);
+        } finally {
+            setQueueLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadQueue();
+    }, [loadQueue]);
+
     const hasExplicitSelection = selection.selectedRefs.size > 0 || selection.selectAllMatching !== null;
     const selectedFormTypes = Array.from(formTypes);
 
@@ -101,28 +128,19 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
         });
     };
 
-    const onGenerate = async () => {
-        if (selectedFormTypes.length === 0) {
-            toast({ title: "No form selected", description: "Check at least one form (D00032 and/or D00033)." });
-            return;
-        }
-        setLoading(true);
+    /** Generate the checked forms for an explicit driver-id list. Shared by the
+     *  Search & Select flow and the removal queue, so a queued removal is filed
+     *  through exactly the same path (and therefore gets the same
+     *  already-filed stamp) as a manually selected one. */
+    const runGenerate = async (
+        driverIds: string[],
+        formAction: "add" | "remove" | "change",
+        // Passed explicitly rather than read from state: the queue button sets
+        // both form types and fires in the same tick, and a React state update
+        // is not visible to this closure until the next render.
+        forms: SgiFormType[],
+    ) => {
         try {
-            const { ids: driverIds, truncated } = await resolveDriverIds(selection);
-            if (driverIds.length === 0) {
-                toast({
-                    title: "No drivers selected",
-                    description: "Select driver records in Search & Select first (rider selections don't apply).",
-                });
-                return;
-            }
-            if (truncated) {
-                toast({
-                    title: "Selection truncated",
-                    description: `Only the first ${MAX_ROW_LIMIT} matching drivers were considered — narrow your filter for a complete submission.`,
-                });
-            }
-
             // Each checked form is generated as its own download. A
             // selection larger than the form's row limit is split into
             // consecutive documents (D00032_Driver_Details_1.pdf,
@@ -131,12 +149,12 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
             // there's nothing stopping an admin from submitting several
             // documents for one batch.
             const results = await Promise.allSettled(
-                selectedFormTypes.map(async (formType) => {
+                forms.map(async (formType) => {
                     const rowLimit = FORM_ROW_LIMITS[formType];
                     const batches = chunk(driverIds, rowLimit);
                     const baseFilename = FORM_FILENAMES[formType].replace(/\.pdf$/, "");
                     for (let i = 0; i < batches.length; i++) {
-                        const blob = await generateSgiForm(formType, batches[i], action);
+                        const blob = await generateSgiForm(formType, batches[i], formAction);
                         const filename = batches.length > 1 ? `${baseFilename}_${i + 1}.pdf` : `${baseFilename}.pdf`;
                         triggerDownload(blob, filename);
                     }
@@ -159,6 +177,9 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                     variant: "destructive",
                 });
             }
+            // A removal changes what is still outstanding — refresh so the queue
+            // reflects what was just filed rather than re-prompting for it.
+            if (formAction === "remove" && successes > 0) await loadQueue();
         } catch (e: any) {
             toast({ title: "Form generation failed", description: e?.message ?? "Unknown error", variant: "destructive" });
         } finally {
@@ -166,8 +187,116 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
         }
     };
 
+    const onGenerate = async () => {
+        if (selectedFormTypes.length === 0) {
+            toast({ title: "No form selected", description: "Check at least one form (D00032 and/or D00033)." });
+            return;
+        }
+        setLoading(true);
+        let driverIds: string[];
+        try {
+            const resolved = await resolveDriverIds(selection);
+            driverIds = resolved.ids;
+            if (resolved.truncated) {
+                toast({
+                    title: "Selection truncated",
+                    description: `Only the first ${MAX_ROW_LIMIT} matching drivers were considered — narrow your filter for a complete submission.`,
+                });
+            }
+        } catch (e: any) {
+            toast({ title: "Form generation failed", description: e?.message ?? "Unknown error", variant: "destructive" });
+            setLoading(false);
+            return;
+        }
+        if (driverIds.length === 0) {
+            toast({
+                title: "No drivers selected",
+                description: "Select driver records in Search & Select first (rider selections don't apply).",
+            });
+            setLoading(false);
+            return;
+        }
+        await runGenerate(driverIds, action, selectedFormTypes);
+    };
+
+    /** File the outstanding removals straight from the queue — no Search &
+     *  Select round-trip. Both forms are always generated: a driver needs D00032
+     *  AND D00033, and filing one leaves their vehicle on SGI's books. Entries
+     *  with no linked users row cannot be sent and are surfaced separately
+     *  rather than silently skipped. */
+    const onGenerateQueuedRemovals = async () => {
+        const ids = removalQueue.map((d) => d.entity_id).filter((id): id is string => !!id);
+        if (ids.length === 0) return;
+        setFormTypes(new Set<SgiFormType>(["driver_details", "vehicle_details"]));
+        setAction("remove");
+        setLoading(true);
+        await runGenerate(ids, "remove", ["driver_details", "vehicle_details"]);
+    };
+
+    const queuedFilable = removalQueue.filter((d) => d.entity_id).length;
+
     return (
         <div className="space-y-4">
+            {removalQueue.length > 0 && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20 p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                                {removalQueue.length} driver{removalQueue.length === 1 ? "" : "s"} left but {removalQueue.length === 1 ? "is" : "are"} still filed with the regulator
+                            </p>
+                            <p className="text-xs text-amber-800/80 dark:text-amber-300/80 mt-0.5">
+                                They deleted their Spinr account, so Spinr no longer dispatches to them — but SGI still
+                                lists them as active passenger-for-hire drivers until the removal is filed. Each needs
+                                both D00032 (driver) and D00033 (vehicle).
+                            </p>
+                        </div>
+                        <Button variant="ghost" size="sm" className="h-7 shrink-0" onClick={loadQueue} disabled={queueLoading}>
+                            <RefreshCw className={`h-3.5 w-3.5 ${queueLoading ? "animate-spin" : ""}`} />
+                        </Button>
+                    </div>
+                    <div className="max-h-40 overflow-y-auto rounded border border-amber-200 dark:border-amber-800/60 bg-background/60">
+                        <table className="w-full text-xs">
+                            <thead className="text-muted-foreground">
+                                <tr className="border-b border-amber-200 dark:border-amber-800/60">
+                                    <th className="text-left font-medium px-2 py-1.5">Driver</th>
+                                    <th className="text-left font-medium px-2 py-1.5">Stopped</th>
+                                    <th className="text-left font-medium px-2 py-1.5">Outstanding</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {removalQueue.map((d) => (
+                                    <tr key={d.driver_id} className="border-b border-amber-100 last:border-0 dark:border-amber-900/40">
+                                        <td className="px-2 py-1.5">
+                                            {d.name || d.driver_id}
+                                            {!d.entity_id && (
+                                                <span className="ml-1 text-amber-700 dark:text-amber-400">(no linked account)</span>
+                                            )}
+                                        </td>
+                                        <td className="px-2 py-1.5 tabular-nums">{d.effective_date ?? "—"}</td>
+                                        <td className="px-2 py-1.5">
+                                            {[d.driver_form_outstanding && "D00032", d.vehicle_form_outstanding && "D00033"]
+                                                .filter(Boolean)
+                                                .join(" + ") || "—"}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                    {queueUnresolvable > 0 && (
+                        <p className="text-xs text-amber-800 dark:text-amber-300">
+                            {queueUnresolvable} of these {queueUnresolvable === 1 ? "has" : "have"} no linked user account and
+                            cannot be generated from here — they need to be filed with SGI manually.
+                        </p>
+                    )}
+                    <Button size="sm" onClick={onGenerateQueuedRemovals} disabled={loading || queuedFilable === 0}>
+                        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                        Generate removal forms for {queuedFilable}
+                    </Button>
+                </div>
+            )}
+
             <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
                     <span className="text-sm font-medium">Forms to generate</span>

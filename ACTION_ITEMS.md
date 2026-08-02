@@ -745,31 +745,57 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
     - **Sub-tier A — money/ride/dispatch-adjacent, arguably deserves
       Track-1-grade priority despite living in "Track 2"** (recommend
       picking up first):
-      - `repositories/ride_repo.py` — **done, 84.1%** (was 54.83%, 383
-        stmts, 61 missing). Ride state persistence layer. Had no dedicated
-        test file; only indirect coverage via route-level tests. Added
-        `tests/test_ride_repo_coverage.py` (74 tests): `_safe_route_segments`
-        allowlist-projection branches (malformed/out-of-range/unknown-
-        provider coordinate rejection), route-snapshot signed-URL
-        happy/error paths, `_project_route_detail`'s v1-legacy vs.
-        v2-segmented-geometry branches (completion-point validation,
-        snapshot-URL signing-failure graceful-degrade, revision-mismatch
-        skip), `get_ride`/`insert_ride`/`update_ride` happy paths and
-        unconfigured/DB-failure branches, `claim_ride_payment_processing`'s
-        atomic payment-status race guard (both claimed and
-        already-claimed-by-concurrent-request outcomes), `get_rides_for_user`/
-        `get_rides_for_driver` (status/date-range filters),
-        `get_ride_details_enriched`'s minimal-ride (no rider/driver) and
-        incentive-claims-fetch-failure-degrades-gracefully paths,
-        `create_flag`'s auto-ban-at-3-active-flags threshold for both rider
-        and driver targets, complaint/lost-and-found CRUD, and
-        `get_live_ride_data`/`get_user_status`/`get_flags_for_target`. No
-        application code changed. No bugs found — every DB-touching
-        function either raises via `run_sync`'s `DatabaseError` wrapper or
-        degrades soft exactly as documented (e.g. `_project_route_detail`'s
-        signed-URL signing failure). Full suite: `6904 passed, 8 skipped,
-        1 xfailed, 0 failed`. See
-        `docs/change-log/2026-08-02-a1b-ride-repo-coverage.md`.
+      - `repositories/ride_repo.py` — **CLOSED, covered twice by
+        independent concurrent sessions on 2026-08-01/02** (both merged;
+        no file-path collision since each added a differently-named test
+        file, so both landed intact — leaving genuinely redundant but
+        harmless double coverage, not a conflict to pick a winner from):
+        - **Session A (2026-08-01), 55% → 96%** (383 stmts, 173→17
+          missed; both numbers via the full
+          `pytest tests/ -q --cov=repositories.ride_repo`, not a
+          keyword-filtered subset). Added `backend/tests/test_ride_repo.py`
+          (56 tests, mirrors `test_ride_route_contract.py`'s existing
+          local fake-client convention rather than the generic
+          `mock_supabase_client` fixture, since several functions need
+          per-table differentiated responses within a single
+          `asyncio.gather` fan-out): CRUD (`insert_ride`/`update_ride`),
+          admin enrichment (`get_ride_details_enriched`'s multi-table
+          fan-out), payment-claim race guard
+          (`claim_ride_payment_processing`, both branches of the
+          optimistic lock + DB-error-not-swallowed), flags/auto-ban
+          (`create_flag`, below- and at-threshold for both rider and
+          driver targets), complaints, lost-and-found, location trail,
+          `get_user_status`/`get_flags_for_target`/`get_live_ride_data`.
+          Deliberately left `_safe_route_segments`/`_project_route_detail`
+          alone (already `test_ride_route_contract.py`'s dedicated
+          domain) — accounts for most of the remaining 17 missed lines.
+          Test-only, no application code changed, no bugs found.
+          Full-suite regression: 6830 → 6886 passed, 0 failed. See
+          `docs/change-log/2026-08-01-a1c-ride-repo-coverage.md`.
+        - **Session B (2026-08-02), 54.83% → 84.1%** (383 stmts, 61
+          missed). Added `backend/tests/test_ride_repo_coverage.py` (74
+          tests) — broader scope than Session A: also covers
+          `_safe_route_segments`'s allowlist-projection branches
+          (malformed/out-of-range/unknown-provider coordinate rejection)
+          and `_project_route_detail`'s v1-legacy vs. v2-segmented-geometry
+          branches (completion-point validation, snapshot-URL
+          signing-failure graceful-degrade, revision-mismatch skip) —
+          i.e. it duplicates part of `test_ride_route_contract.py`'s
+          domain rather than deferring to it, the opposite scoping choice
+          from Session A. Also test-only, no application code changed, no
+          bugs found. Full suite: 6904 passed, 8 skipped, 1 xfailed, 0
+          failed. See `docs/change-log/2026-08-02-a1b-ride-repo-coverage.md`.
+        - **Net effect:** the file now has three test files exercising
+          overlapping surface (`test_ride_route_contract.py`,
+          `test_ride_repo.py`, `test_ride_repo_coverage.py`) — some
+          redundant test-writing effort from the concurrent-session
+          collision, but net positive: real coverage is whichever of the
+          two runs highest per-line (96% and 84.1% don't fully overlap in
+          which lines they hit), no regression either way, and no
+          production code touched by either. Not worth unwinding
+          post-merge — flagging here so a future consolidation pass (if
+          any) knows both exist and why, rather than treating one as
+          silently superseding the other.
       - `routes/websocket.py` — **done, 80.3%** (569 stmts, 112 missing,
         up from 50.44%) — WS auth + dispatch fan-out. Nine existing WS test
         files covered handshake/auth edge cases, per-user rate limiting,

@@ -3,14 +3,16 @@ name: Security Gates
 # Gates G1–G7 from docs/ci-security-gates.md (SAST, Semgrep, dep audit, secrets,
 # container scan, license check).
 #
-# Status as of 2026-08-02 (CI gate health audit, docs/ci/gate-health-2026-08.md):
-# the original "2-week baselining window" is over and enforcement already
-# happened — 8 of 10 jobs (G1, G2, G3, G4a, G4b, G4c, G6, G7) are
-# `continue-on-error: false` (blocking). Only G5a (gitleaks git-history) and
-# G5b (gitleaks admin bundle) remain `continue-on-error: true`, each for its
-# own dated, documented reason (see the gitleaks job below) — not a blanket
-# window. Do not read this file's age as evidence a job is still advisory;
-# check that job's own `continue-on-error` line.
+# Status as of 2026-08-03 (CI gate health audit, docs/ci/gate-health-2026-08.md;
+# CR-2026-007): the original "2-week baselining window" is over and
+# enforcement already happened — 8 of 10 jobs (G1, G2, G3, G4a, G4b, G4c, G6,
+# G7) are `continue-on-error: false` (blocking). Only G5a (gitleaks
+# git-history) and G5b (gitleaks admin bundle) remain `continue-on-error:
+# true` — see each job's own comment below for why: G5a has a specific,
+# still-open leaked-key reason; G5b does not (it's a candidate to flip to
+# blocking once a clean-baseline window has passed). Do not read this file's
+# age as evidence a job is still advisory; check that job's own
+# `continue-on-error` line and comment.
 #
 # Runs on every PR to main and on a daily schedule for main itself.
 
@@ -376,6 +378,19 @@ jobs:
   # A build-time env var that should have been server-only can slip into
   # the bundle (e.g. NEXT_PUBLIC_API_KEY) and pass git-history scanning
   # while still being present in the shipped artefact.
+  #
+  # continue-on-error (2026-08-03, CR-2026-007): unlike G5a above, this is
+  # NOT advisory because of a known, still-open leak — it's a separate scan
+  # target (the built client bundle, not git history) and no triaged finding
+  # has ever been recorded against it. It has been green on every `main` run
+  # checked as of this date. It was set to true when this file was first
+  # authored, alongside G5a, without its own documented reason — likely
+  # inherited G5a's caution by proximity rather than a finding specific to
+  # this job. If it stays green through a few more weeks of real traffic
+  # (a genuinely new admin-dashboard env var landing is the main risk to
+  # watch for), flip this to `continue-on-error: false` — do not leave an
+  # advisory gate with no reason attached indefinitely; that's the failure
+  # mode this comment exists to prevent.
   bundle-secrets:
     name: G5b · Gitleaks (admin bundle)
     runs-on: ubuntu-latest

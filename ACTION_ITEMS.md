@@ -745,46 +745,57 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
     - **Sub-tier A — money/ride/dispatch-adjacent, arguably deserves
       Track-1-grade priority despite living in "Track 2"** (recommend
       picking up first):
-      - `repositories/ride_repo.py` — **CLOSED (2026-08-01), 55% → 96%**
-        (383 stmts, 173→17 missed; both numbers via the full
-        `pytest tests/ -q --cov=repositories.ride_repo`, not a
-        keyword-filtered subset) — ride state persistence layer: CRUD,
-        admin enrichment (`get_ride_details_enriched`'s multi-table
-        `asyncio.gather` fan-out), payment-claim race guard
-        (`claim_ride_payment_processing`), flags/auto-ban
-        (`create_flag`), complaints, lost-and-found, location trail. Had a
-        dedicated file for only one function
-        (`test_ride_route_contract.py`, covers `get_ride`'s v2 route
-        projection contract) — everything else was untested. Added
-        `backend/tests/test_ride_repo.py` (56 tests, mirrors
-        `test_ride_route_contract.py`'s existing local fake-client
-        convention rather than the generic `mock_supabase_client`
-        fixture, since this file needs per-table differentiated
-        responses within single `asyncio.gather` fan-outs): happy path +
-        DB-error-propagation for `create_route_snapshot_signed_url`,
-        `_driver_profile_image`, `insert_ride`, `update_ride`,
-        `claim_ride_payment_processing` (both branches of the optimistic-
-        lock race — claimed vs. already-claimed — plus DB-error-not-
-        swallowed), `get_rides_for_user`/`get_rides_for_driver`,
-        `get_ride_count_by_date_range`, `create_flag` (below-threshold
-        vs. at-threshold-auto-ban, both rider→`users` and
-        driver→`drivers` ban targets), `create_complaint`/
-        `resolve_complaint`, `create_lost_and_found`/
-        `update_lost_and_found`, `get_ride_location_trail`,
-        `get_user_status`, `get_flags_for_target`, `get_live_ride_data`,
-        and `get_ride_details_enriched` (none-when-unconfigured/ride-not-
-        found, no-rider-or-driver-skips-gracefully, incentive-claims
-        query-failure degrades to empty, full happy path asserting
-        rider/driver/flags/offers/incentive-claims assemble correctly).
-        Remaining 17 uncovered lines: the dual-import `except ImportError`
-        fallback (lines 19-20, structurally untestable per this repo's
-        convention) plus defensive edge-case branches inside
-        `_safe_route_segments`/`_project_route_detail` that are
-        `test_ride_route_contract.py`'s dedicated domain, not this pass's.
-        Test-only PR — no application code changed, no bugs found.
-        Full-suite regression: 6830 → 6886 passed (exactly +56, the new
-        tests), 0 failed. See
-        `docs/change-log/2026-08-01-a1c-ride-repo-coverage.md`.
+      - `repositories/ride_repo.py` — **CLOSED, covered twice by
+        independent concurrent sessions on 2026-08-01/02** (both merged;
+        no file-path collision since each added a differently-named test
+        file, so both landed intact — leaving genuinely redundant but
+        harmless double coverage, not a conflict to pick a winner from):
+        - **Session A (2026-08-01), 55% → 96%** (383 stmts, 173→17
+          missed; both numbers via the full
+          `pytest tests/ -q --cov=repositories.ride_repo`, not a
+          keyword-filtered subset). Added `backend/tests/test_ride_repo.py`
+          (56 tests, mirrors `test_ride_route_contract.py`'s existing
+          local fake-client convention rather than the generic
+          `mock_supabase_client` fixture, since several functions need
+          per-table differentiated responses within a single
+          `asyncio.gather` fan-out): CRUD (`insert_ride`/`update_ride`),
+          admin enrichment (`get_ride_details_enriched`'s multi-table
+          fan-out), payment-claim race guard
+          (`claim_ride_payment_processing`, both branches of the
+          optimistic lock + DB-error-not-swallowed), flags/auto-ban
+          (`create_flag`, below- and at-threshold for both rider and
+          driver targets), complaints, lost-and-found, location trail,
+          `get_user_status`/`get_flags_for_target`/`get_live_ride_data`.
+          Deliberately left `_safe_route_segments`/`_project_route_detail`
+          alone (already `test_ride_route_contract.py`'s dedicated
+          domain) — accounts for most of the remaining 17 missed lines.
+          Test-only, no application code changed, no bugs found.
+          Full-suite regression: 6830 → 6886 passed, 0 failed. See
+          `docs/change-log/2026-08-01-a1c-ride-repo-coverage.md`.
+        - **Session B (2026-08-02), 54.83% → 84.1%** (383 stmts, 61
+          missed). Added `backend/tests/test_ride_repo_coverage.py` (74
+          tests) — broader scope than Session A: also covers
+          `_safe_route_segments`'s allowlist-projection branches
+          (malformed/out-of-range/unknown-provider coordinate rejection)
+          and `_project_route_detail`'s v1-legacy vs. v2-segmented-geometry
+          branches (completion-point validation, snapshot-URL
+          signing-failure graceful-degrade, revision-mismatch skip) —
+          i.e. it duplicates part of `test_ride_route_contract.py`'s
+          domain rather than deferring to it, the opposite scoping choice
+          from Session A. Also test-only, no application code changed, no
+          bugs found. Full suite: 6904 passed, 8 skipped, 1 xfailed, 0
+          failed. See `docs/change-log/2026-08-02-a1b-ride-repo-coverage.md`.
+        - **Net effect:** the file now has three test files exercising
+          overlapping surface (`test_ride_route_contract.py`,
+          `test_ride_repo.py`, `test_ride_repo_coverage.py`) — some
+          redundant test-writing effort from the concurrent-session
+          collision, but net positive: real coverage is whichever of the
+          two runs highest per-line (96% and 84.1% don't fully overlap in
+          which lines they hit), no regression either way, and no
+          production code touched by either. Not worth unwinding
+          post-merge — flagging here so a future consolidation pass (if
+          any) knows both exist and why, rather than treating one as
+          silently superseding the other.
       - `routes/websocket.py` — 50.26% (569 stmts, 283 missing) — WS auth +
         dispatch fan-out.
       - `routes/drivers/subscriptions.py` — 60.52% (575 stmts, 227

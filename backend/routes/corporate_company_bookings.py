@@ -34,6 +34,7 @@ try:
     from ..dependencies.company_guard import require_company_admin, require_company_member
     from ..features import compute_fare_estimate
     from ..services.company_booking_service import create_company_guest_booking
+    from ..services.corporate_policy_service import require_company_bookable
     from ..utils.error_handling import db_error_text
     from ..validators import validate_phone
 except ImportError:
@@ -41,6 +42,7 @@ except ImportError:
     from dependencies.company_guard import require_company_admin, require_company_member  # type: ignore
     from features import compute_fare_estimate  # type: ignore
     from services.company_booking_service import create_company_guest_booking  # type: ignore
+    from services.corporate_policy_service import require_company_bookable  # type: ignore
     from utils.error_handling import db_error_text  # type: ignore
     from validators import validate_phone  # type: ignore
 
@@ -97,16 +99,15 @@ def _booking_row(ride: Dict[str, Any], member: Optional[Dict[str, Any]], guest: 
 async def _require_company_active(company_id: str) -> None:
     """Typed 403 for non-active companies (M2.6): a pending_verification /
     suspended / closed company cannot book. The portal reads the `code` to
-    route the user to the verification page instead of a raw error."""
-    company = await db_supabase.get_corporate_account_by_id(company_id) or {}
-    if (company.get("status") or "").lower() != "active":
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "company_not_active",
-                "message": "This company hasn't completed verification yet. Bookings unlock once it's approved.",
-            },
-        )
+    route the user to the verification page instead of a raw error.
+
+    Thin wrapper around the shared ``require_company_bookable`` (scheduled-
+    rides gap review, Finding #20) — kept as a locally-named function so
+    this file's existing call site and docstring context don't need to
+    change; the actual status/kill-switch logic now lives in one place,
+    shared with the employee self-book path in ``routes/rides/booking.py``.
+    """
+    await require_company_bookable(company_id)
 
 
 @router.post("/bookings")
@@ -219,31 +220,52 @@ async def cancel_booking(
     """Cancel a company booking pre-trip. Members may cancel their own
     bookings; owner/admin any of the company's. Delegates to the canonical
     rider-cancel flow (atomic pre-trip claim, driver release, WS events)
-    with the guest as the acting rider."""
+    with the guest (or, for a self-booked employee ride, the employee
+    themselves) as the acting rider.
+
+    Covers both guest bookings AND an employee's own self-booked ride
+    (scheduled-rides gap review, Finding #19) — this endpoint previously
+    404'd on a self-booked ride even though it appears in the same booking
+    list this cancel button lives on, via a `guest_booking` check that had
+    no reason to exclude the self-booked case. The company-admin ownership
+    check below (role or corporate_member_id match) already applies
+    correctly to both.
+    """
     ride = await db_supabase.get_ride(ride_id)
-    if not ride or ride.get("corporate_account_id") != ctx["company_id"] or not ride.get("guest_booking"):
+    if not ride or ride.get("corporate_account_id") != ctx["company_id"]:
         raise HTTPException(status_code=404, detail="Booking not found")
     if ctx["role"] not in _ADMIN_ROLES and ride.get("corporate_member_id") != ctx["member_id"]:
         raise HTTPException(status_code=403, detail="You can only cancel your own bookings")
 
-    guest_user = await db_supabase.get_user_by_id(ride["rider_id"])
-    if not guest_user:
+    customer = await db_supabase.get_user_by_id(ride["rider_id"])
+    if not customer:
         raise HTTPException(status_code=404, detail="Booking customer not found")
 
     try:
         from .rides import cancel_ride_rider
+        from .rides.cancellation import cancel_scheduled_ride
     except ImportError:
         from routes.rides import cancel_ride_rider  # type: ignore
+        from routes.rides.cancellation import cancel_scheduled_ride  # type: ignore
 
-    result = await cancel_ride_rider(
-        ride_id,
-        reason="Cancelled by company",
-        request=request,
-        current_user=guest_user,
-    )
+    # A not-yet-dispatched scheduled booking (status='scheduled') isn't in
+    # cancel_ride_rider's cancellable-states list at all — cancel_scheduled_ride
+    # is the endpoint that actually handles it (pre-dispatch atomic claim, or
+    # falling through to cancel_ride_rider itself once dispatched), exactly
+    # mirroring the rider-app's own DELETE /rides/scheduled/{id} route.
+    if ride.get("is_scheduled"):
+        result = await cancel_scheduled_ride(ride_id, request=request, current_user=customer)
+    else:
+        result = await cancel_ride_rider(
+            ride_id,
+            reason="Cancelled by company",
+            request=request,
+            current_user=customer,
+        )
 
     # Tell the customer their ride is off (SMS for guests; app-holders get
-    # the standard cancel push from the flow above).
+    # the standard cancel push from the flow above). Safe to call
+    # unconditionally — notify_guest_cancelled no-ops for a non-guest rider.
     try:
         from ..services.guest_notification_service import notify_guest_cancelled
         from ..utils.background import spawn

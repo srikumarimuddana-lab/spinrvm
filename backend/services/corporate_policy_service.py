@@ -79,6 +79,61 @@ class PolicyResult:
         }
 
 
+async def require_company_bookable(company_id: str, settings: Optional[dict] = None) -> None:
+    """Raise a 403 if ``company_id`` can't be booked against right now.
+
+    Single source of truth for "is this company active enough to book,"
+    shared by the employee self-book path (``routes/rides/booking.py``) and
+    the company-portal guest-booking path
+    (``routes/corporate_company_bookings.py``) — scheduled-rides gap review,
+    Finding #20. Previously these were two separately-implemented checks
+    with two different definitions of "inactive": self-book only blocked
+    ``suspended``/``closed`` and respected the
+    ``corporate_inactive_company_blocks_booking`` kill switch; guest-booking
+    blocked anything not ``"active"`` (including ``pending_verification``)
+    and ignored that switch entirely. This version uses the broader status
+    definition — not ``"active"`` means not bookable, so a
+    not-yet-verified company can't be self-booked against either, matching
+    the guest-booking path's existing (and more defensible) stance — for
+    both call sites, while keeping the kill switch as a shared,
+    admin-controlled escape hatch either path can be paused with.
+
+    ``settings`` may be pre-fetched by the caller to avoid a second
+    ``app_settings`` round-trip within the same request; fetched fresh if
+    omitted.
+    """
+    from fastapi import HTTPException
+
+    if settings is None:
+        try:
+            from ..settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings() or {}
+
+    if not settings.get("corporate_inactive_company_blocks_booking", True):
+        return
+
+    try:
+        from .. import db_supabase
+    except ImportError:
+        import db_supabase  # type: ignore
+
+    company = await db_supabase.get_corporate_account_by_id(company_id) or {}
+    if (company.get("status") or "").lower() != "active":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "company_not_active",
+                "message": (
+                    "Your company account isn't active right now. Contact your company admin, "
+                    "or use a personal payment method."
+                ),
+                "failed_rules": ["company_inactive"],
+            },
+        )
+
+
 async def evaluate_policy_for_ride(
     corporate_account_id: str,
     rider_id: str,

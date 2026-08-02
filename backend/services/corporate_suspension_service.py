@@ -30,8 +30,17 @@ except ImportError:
     from socket_manager import manager  # type: ignore
 
 # Rides that haven't picked up the rider yet — the same pre-trip set
-# `routes/rides/cancellation.py::cancel_ride_rider` treats as cancellable.
+# `routes/rides/cancellation.py::cancel_ride_rider` treats as cancellable,
+# PLUS `scheduled` (scheduled-rides gap review, Finding #16). A not-yet-
+# dispatched scheduled ride was previously excluded here, so a suspended/
+# closed company's scheduled bookings kept dispatching drivers and billing
+# the company right up to their pickup time — directly contradicting this
+# module's own stated purpose. Safe to include: `driver_id` is always None
+# pre-dispatch, so the driver-release branch below is a no-op for these
+# rows, and corporate rides carry no pre-auth hold to release either
+# (nothing was ever charged for a ride that never dispatched).
 _PRE_PICKUP_STATUSES = (
+    RideStatus.SCHEDULED,
     RideStatus.SEARCHING,
     RideStatus.DRIVER_ASSIGNED,
     RideStatus.DRIVER_ACCEPTED,

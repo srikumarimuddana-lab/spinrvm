@@ -14,8 +14,9 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
-from services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride
+from services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride, require_company_bookable
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -364,3 +365,72 @@ async def test_evaluate_policy_for_ride_caller_override_wins_when_true():
         )
     assert result.passed is True
     assert "max_fare_per_ride" in result.bypassed_rules
+
+
+# ── require_company_bookable (shared "is company active" guard) ───────────────
+#
+# Single source of truth for the self-book path (routes/rides/booking.py) and
+# the company-portal guest-booking path (routes/corporate_company_bookings.py)
+# — scheduled-rides gap review, Finding #20. Uses the broader "not active
+# blocks" definition (so pending_verification is blocked too), matching the
+# guest-booking path's prior stance rather than the self-book path's narrower
+# prior "suspended/closed only" check — that widening is new behavior for the
+# self-book path and is covered explicitly below.
+
+
+@pytest.mark.asyncio
+async def test_require_company_bookable_passes_for_active_company():
+    with patch("db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})):
+        await require_company_bookable("c1", settings={})  # no exception
+
+
+@pytest.mark.asyncio
+async def test_require_company_bookable_blocks_suspended_company():
+    with patch("db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "suspended"})):
+        with pytest.raises(HTTPException) as exc_info:
+            await require_company_bookable("c1", settings={})
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["failed_rules"] == ["company_inactive"]
+
+
+@pytest.mark.asyncio
+async def test_require_company_bookable_blocks_pending_verification_company():
+    """New coverage: pending_verification is not 'active', so a not-yet-
+    verified company must be blocked on the self-book path too — previously
+    the self-book path's own inline check only blocked suspended/closed and
+    let pending_verification companies through."""
+    with patch("db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "pending_verification"})):
+        with pytest.raises(HTTPException) as exc_info:
+            await require_company_bookable("c1", settings={})
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["failed_rules"] == ["company_inactive"]
+
+
+@pytest.mark.asyncio
+async def test_require_company_bookable_blocks_missing_company():
+    with patch("db_supabase.get_corporate_account_by_id", AsyncMock(return_value=None)):
+        with pytest.raises(HTTPException) as exc_info:
+            await require_company_bookable("c1", settings={})
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["failed_rules"] == ["company_inactive"]
+
+
+@pytest.mark.asyncio
+async def test_require_company_bookable_kill_switch_disabled_skips_db_lookup():
+    """Rollback path: corporate_inactive_company_blocks_booking=False must
+    fully restore fail-open behavior without a redeploy, and without even
+    hitting the DB — the shared kill switch either path can be paused with."""
+    with patch("db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "suspended"})) as m_get:
+        await require_company_bookable(
+            "c1", settings={"corporate_inactive_company_blocks_booking": False}
+        )  # no exception
+    m_get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_require_company_bookable_fetches_settings_when_not_provided():
+    with (
+        patch("settings_loader.get_app_settings", AsyncMock(return_value={})),
+        patch("db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
+    ):
+        await require_company_bookable("c1")  # settings=None -> fetched internally, no exception

@@ -16,11 +16,10 @@
 -- docs/change-log/2026-08-01-data-transfer-export-jobs-fk-fix.md §10, after
 -- fixing the second instance of this bug this session).
 --
--- Rollback plan:
---   Re-adding the FK would just reintroduce the always-failing-write bug —
---   there is nothing to roll back to. A plain `git revert` of this migration
---   file is safe for repo history; the live constraint drop itself should
---   not be undone.
+-- Rollback: Re-adding the FK would just reintroduce the always-failing-write
+--   bug — there is nothing to roll back to. A plain `git revert` of this
+--   migration file is safe for repo history; the live constraint drop
+--   itself should not be undone.
 --
 -- Forward-compatible: drops one constraint, no column type change, no data
 -- migration (the column was always populated correctly, just unable to

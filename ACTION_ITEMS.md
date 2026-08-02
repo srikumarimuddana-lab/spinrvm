@@ -1072,9 +1072,13 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
       `routes/main.py` (**0%**, 52 stmts — worth a quick look at what this
       even is before writing tests for it), `utils/t4a_pdf.py` (4.40%),
       `utils/subscription_invoice_pdf.py` (7.97%),
-      `services/zoho_desk_db.py` (11.76%), ~~`utils/reconciliation.py`
-      (15.69%)~~ **done, see below**, `utils/demand_forecast.py` (18.52%),
-      `utils/zoho_desk_sync.py` (22.33%), `utils/analytics.py` (22.70%),
+      ~~`services/zoho_desk_db.py` (11.76%)~~ **done, see below**,
+      ~~`utils/reconciliation.py`
+      (15.69%)~~ **done, see below**, `utils/demand_forecast.py` (91.36% as
+      of 2026-08-02 — already closed by a pre-existing test file added
+      earlier that day; not re-verified against original 18.52% baseline,
+      see Sub-tier B batch 2 note below),
+      ~~`utils/zoho_desk_sync.py` (22.33%)~~ **done, see below**, `utils/analytics.py` (22.70%),
       `routes/lost_and_found.py` (25.85%), `services/stripe_kyc_sync.py`
       (30.70%), `utils/marketing_push.py` (33.33%), `utils/ws_pubsub.py`
       (38.46%), `services/data_transfer/bundle_document_uploader.py`
@@ -1119,6 +1123,58 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
     no bugs found. Full suite re-run after: 6801 passed (was 6782), 0
     failed, 0 new warnings. See
     `docs/change-log/2026-08-01-a1c-reconciliation-coverage.md`.
+  - Sub-tier B batch 2 — `services/zoho_desk_db.py`, `utils/zoho_desk_sync.py`
+    (2026-08-02, measured via `pytest tests/ --cov=services.zoho_desk_db
+    --cov=utils.demand_forecast --cov=utils.zoho_desk_sync
+    --cov-report=term-missing`):
+    - `services/zoho_desk_db.py` — **11.76% → 100%**. The Zoho Desk mirror
+      read layer had zero real coverage — `test_admin_support_tickets_routes.py`
+      stubs every function out to test the routes layer instead. Added
+      `backend/tests/test_zoho_desk_db.py` (26 tests) covering
+      `mirror_ready`/`open_closed_counts`/`mirror_count`/`list_mirror`/
+      `count_by_status`/`fetch_window`'s unconfigured-supabase and
+      swallowed-exception contracts, `list_mirror`'s sort/filter/search
+      construction, and `fetch_window`'s pagination (short page, full-page
+      boundary crossing, `max_rows` cap). **Finding, not fixed (test-only
+      scope): `list_mirror`'s search-term `.or_()` builder hand-rolls its
+      own comma-replaced-with-space + unescaped-LIKE-wildcard handling
+      instead of routing through `repositories._base`'s shared
+      `_escape_like`/`_postgrest_or_value` helpers that CLAUDE.md's Query
+      filters section documents as the required convention — an
+      over-matching-only quirk (widens results, never narrows/errors), not
+      a security issue, on an internal admin search box.** See change-log
+      for detail.
+    - `utils/zoho_desk_sync.py` — **22.33% → 96.12%** (4 remaining lines are
+      the unreachable bare-`ImportError` fallback block). This is one of
+      the ~17 startup background loops (`core/lifespan.py`); per the
+      spinr-background-loop skill both the Redis-leader-lock
+      acquired/not-acquired paths were tested, plus `run_sync`'s seed vs.
+      incremental cursor logic, closed-ticket reverse-sync gating
+      (never fires during a seed, even with closed tickets present), and
+      the `SEED_MAX_PAGES`/`INCREMENTAL_MAX_PAGES` safety cap. Added
+      `backend/tests/test_zoho_desk_sync.py` (24 tests). No replay-safety
+      logic changed, only tested.
+    - `utils/demand_forecast.py` — **not touched this batch.** Documented
+      baseline (18.52%) was stale: a different concurrent session had
+      already added `backend/tests/test_demand_forecast.py` earlier the
+      same day, closing it to 91.36%. Per this batch's task instructions
+      ("if already at or near 100%, don't duplicate that work"), left as-is
+      rather than re-testing; the remaining 7 uncovered lines (bare-import
+      fallback + a few historical-data edge-case skips) are flagged as a
+      small residual gap for a future pass, not closed here.
+    - Test-only across both files touched; no application code changed.
+      Blast radius: `zoho_desk_db.*` and `zoho_desk_sync.run_sync`/
+      `zoho_desk_sync_loop` are consumed only by
+      `routes/admin/support_tickets.py` and the startup loop spawn in
+      `core/lifespan.py` — both unmodified, confirmed via grep. Full suite
+      re-run twice: first run hit one failure in an unrelated, untracked
+      (not part of this branch or origin/main) sibling file
+      `test_routes_main_coverage.py`, confirmed to be a pre-existing,
+      order/timing-dependent flake documented in that file's own docstring
+      and independently reproduced as flaky in a second clean run (0
+      failed) — not caused by this batch's diff. See change-log for the
+      full before/after pass counts and flake investigation. See
+      `docs/change-log/2026-08-02-a1c-subtier-b-batch2-coverage.md`.
   - Rest of Sub-tier A/B/C above: not yet started — pick one file/PR at a
     time, ≤3 files per subtask, per the same pattern Track 1 followed.
 - **Approach:** everything currently below the 60% CI floor or in the

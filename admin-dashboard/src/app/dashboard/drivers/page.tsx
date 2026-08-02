@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2 } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
@@ -457,14 +457,18 @@ export default function DriversPage() {
             license_plate: selected.license_plate || "",
             vehicle_vin: selected.vehicle_vin || "",
             date_of_birth: dateInputValue(selected.date_of_birth),
+            // Starts blank on purpose: the value on `selected` is the Vault
+            // ciphertext, not the licence number, so it can never be prefilled.
+            // Blank is treated as "leave unchanged" in saveEdits.
+            license_number: "",
             license_class: selected.license_class || "",
             regulatory_authority: selected.regulatory_authority || (selected.sgi_approved != null ? "SGI" : ""),
             regulatory_region: selected.regulatory_region || "",
             regulatory_authority_approved: boolInputValue(selected.regulatory_authority_approved ?? selected.sgi_approved),
             regulatory_authority_approved_at: datetimeLocalValue(selected.regulatory_authority_approved_at || selected.sgi_approved_at),
-            work_authorization_status: selected.work_authorization_status || "",
-            is_permanent_resident: boolInputValue(selected.is_permanent_resident),
-            is_citizen: boolInputValue(selected.is_citizen),
+            // Single source of truth — is_permanent_resident / is_citizen are
+            // derived from this by the backend and are no longer edited here.
+            work_authorization_status: workAuth(selected).status === "unknown" ? "" : workAuth(selected).status,
             decals_sent: boolInputValue(selected.decals_sent),
             decals_sent_at: datetimeLocalValue(selected.decals_sent_at),
         });
@@ -474,11 +478,15 @@ export default function DriversPage() {
     const saveEdits = async () => {
         if (!selected) return;
         const changes: Record<string, any> = {};
-        const boolFields = new Set(["regulatory_authority_approved", "is_permanent_resident", "is_citizen", "decals_sent"]);
+        const boolFields = new Set(["regulatory_authority_approved", "decals_sent"]);
         const dateFields = new Set(["date_of_birth"]);
         const datetimeFields = new Set(["regulatory_authority_approved_at", "decals_sent_at"]);
+        // Write-only: the driver row holds the Vault ciphertext, so there is no
+        // current value to diff against. Blank means "leave unchanged".
+        const writeOnlyFields = new Set(["license_number"]);
         const normalized: Record<string, any> = {};
         for (const [k, v] of Object.entries(editForm)) {
+            if (writeOnlyFields.has(k)) continue;
             if (boolFields.has(k)) normalized[k] = fromBoolInput(v);
             else if (dateFields.has(k)) normalized[k] = v || null;
             else normalized[k] = v === "" ? null : v;
@@ -493,9 +501,37 @@ export default function DriversPage() {
                         : (selected[k] ?? null);
             if (v !== current) changes[k] = v;
         }
+        for (const k of writeOnlyFields) {
+            const v = String(editForm[k] ?? "").trim();
+            if (v) changes[k] = v;
+        }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
-        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
+        try {
+            await updateDriver(selected.id, changes);
+            // The backend derives is_citizen / is_permanent_resident from the
+            // status, so mirror that here rather than leaving the old booleans
+            // (and the consolidated projection) stale until the next refetch.
+            const derived: Record<string, any> = {};
+            if ("work_authorization_status" in changes) {
+                const wa = workAuthLocal({ work_authorization_status: changes.work_authorization_status });
+                derived.is_citizen = wa.status === "unknown" ? null : wa.status === "citizen";
+                derived.is_permanent_resident = wa.status === "unknown" ? null : wa.status === "permanent_resident";
+            }
+            const patch = { ...changes, ...derived };
+            // Never keep the plaintext licence number in client state — the row
+            // otherwise stores ciphertext, and the panel only ever shows last-4.
+            delete (patch as any).license_number;
+            const merge = (d: any) => { const next = { ...d, ...patch }; next.work_authorization = workAuthLocal(next); return next; };
+            const updated = merge(selected);
+            setSelected(updated);
+            setDrivers(prev => prev.map(d => d.id === selected.id ? merge(d) : d));
+            if ("license_number" in changes) {
+                const last4 = String(changes.license_number).slice(-4);
+                setLiveStats(prev => prev ? { ...prev, license_number_last4: last4, license_number_on_file: true } : prev);
+            }
+            setEditing(false);
+        } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const [photoReviewing, setPhotoReviewing] = useState(false);
@@ -569,7 +605,7 @@ export default function DriversPage() {
                 { key: "id", label: "ID" }, { key: "driver_code", label: "Driver Code" },
                 { key: "name", label: "Name" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" },
                 { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
-                { key: "status", label: "Status" }, { key: "is_verified", label: "Verified" },
+                { key: "status", label: "Status" }, { key: "is_verified", label: "Spinr Approved" },
                 { key: "is_online", label: "Online" }, { key: "is_available", label: "Available" },
                 { key: "service_area", label: "Service Area" }, { key: "city", label: "City" },
                 { key: "regulatory_region", label: "Region" },
@@ -594,7 +630,8 @@ export default function DriversPage() {
                 { key: "subscription_status", label: "Subscription Status" },
                 { key: "subscription_plan", label: "Subscription Plan" },
                 { key: "subscription_expires_at", label: "Subscription Expires" },
-                { key: "joined_at", label: "Joined" }, { key: "approved_at", label: "Approved As Driver" },
+                { key: "joined_at", label: "Joined" }, { key: "approved_at", label: "Spinr Approved At" },
+                { key: "deleted_at", label: "Account Deleted At" },
                 { key: "last_status_changed_at", label: "Last Status Change" }, { key: "updated_at", label: "Updated At" },
             ]);
             toast({ title: "Export complete", description: `${res.count ?? res.drivers?.length ?? 0} drivers exported.` });
@@ -787,12 +824,15 @@ export default function DriversPage() {
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-1.5 items-start">
-                                                {driver.status === "active" ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
+                                                {/* account_deleted wins over status: deletion cannot change
+                                                    drivers.status, so a departed driver still carries "active". */}
+                                                {driver.account_deleted ? <Badge variant="default" className="bg-zinc-200 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 text-[10px] px-1.5 py-0 border-zinc-300 dark:border-zinc-700"><Trash2 className="h-3 w-3 mr-1" />Deleted</Badge>
+                                                : driver.status === "active" ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
                                                 : driver.status === "needs_review" ? <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge>
                                                 : driver.status === "suspended" ? <Badge variant="default" className="bg-orange-100 text-orange-700 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 text-[10px] px-1.5 py-0 border-orange-200 dark:border-orange-800"><Pause className="h-3 w-3 mr-1" />Suspended</Badge>
                                                 : driver.status === "banned" ? <Badge variant="default" className="bg-red-200 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-300 dark:border-red-800"><Ban className="h-3 w-3 mr-1" />Banned</Badge>
                                                 : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
-                                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online ? "Online" : "Offline"}</Badge>
+                                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online && !driver.account_deleted ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online && !driver.account_deleted ? "Online" : "Offline"}</Badge>
                                             </div>
                                         </TableCell>
                                         <TableCell>
@@ -924,13 +964,14 @@ export default function DriversPage() {
                                                 <div className="mt-2 text-xs text-red-600 dark:text-red-400">Profile photo rejected — driver must re-upload.</div>
                                             )}
                                             <div className="flex items-center gap-2 mt-2">
-                                                {selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
+                                                {selected.account_deleted ? <Badge className="bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><Trash2 className="h-3 w-3" /> Deleted</Badge>
+                                                : selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
                                                 : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
                                                 : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
                                                 : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
                                                 : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
-                                                <Badge variant="outline" className={selected.is_online ? "border-emerald-300 text-emerald-600" : ""}>
-                                                    {selected.is_online ? "Online" : "Offline"}
+                                                <Badge variant="outline" className={selected.is_online && !selected.account_deleted ? "border-emerald-300 text-emerald-600" : ""}>
+                                                    {selected.is_online && !selected.account_deleted ? "Online" : "Offline"}
                                                     {selected.last_status_changed_at && (
                                                         <span className="ml-1.5 text-[10px] opacity-70">
                                                             since {new Date(selected.last_status_changed_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
@@ -1142,40 +1183,60 @@ export default function DriversPage() {
                                         {editing ? (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                 <EditField label="Date of Birth" value={ef("date_of_birth")} onChange={v => setEf("date_of_birth", v)} type="date" />
+                                                <EditField
+                                                    label="License Number"
+                                                    value={ef("license_number")}
+                                                    onChange={v => setEf("license_number", v)}
+                                                    placeholder={liveStats?.license_number_last4 ? `•••• ${liveStats.license_number_last4}` : "Not on file"}
+                                                    hint="Leave blank to keep the number on file. Stored encrypted; only the last 4 are ever displayed."
+                                                />
                                                 <EditField label="License Class" value={ef("license_class")} onChange={v => setEf("license_class", v)} />
                                                 <EditField label="Regulatory Authority" value={ef("regulatory_authority")} onChange={v => setEf("regulatory_authority", v)} />
                                                 <EditField label="Regulatory Region" value={ef("regulatory_region")} onChange={v => setEf("regulatory_region", v)} />
                                                 <EditBooleanField label="Authority Approved" value={ef("regulatory_authority_approved")} onChange={v => setEf("regulatory_authority_approved", v)} />
                                                 <EditField label="Authority Approved At" value={ef("regulatory_authority_approved_at")} onChange={v => setEf("regulatory_authority_approved_at", v)} type="datetime-local" />
-                                                <div>
-                                                    <label className="text-[11px] text-muted-foreground mb-1 block">Work Authorization Status</label>
+                                                <div className="sm:col-span-2">
+                                                    <label className="text-[11px] text-muted-foreground mb-1 block">Work Authorization</label>
                                                     <Select value={ef("work_authorization_status") || "unknown"} onValueChange={v => setEf("work_authorization_status", v === "unknown" ? "" : v)}>
                                                         <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                                                         <SelectContent>
-                                                            <SelectItem value="unknown">Unknown</SelectItem>
-                                                            <SelectItem value="expiring">Expiring</SelectItem>
-                                                            <SelectItem value="indefinite">Indefinite</SelectItem>
-                                                            <SelectItem value="permanent_resident">Permanent resident</SelectItem>
-                                                            <SelectItem value="citizen">Citizen</SelectItem>
+                                                            {Object.entries(WORK_AUTH_LABELS).map(([value, label]) => (
+                                                                <SelectItem key={value} value={value}>{label}</SelectItem>
+                                                            ))}
                                                         </SelectContent>
                                                     </Select>
+                                                    <p className="text-[10px] text-muted-foreground mt-1">
+                                                        Citizen / permanent resident / work permit are mutually exclusive — picking one marks the others not applicable.
+                                                    </p>
                                                 </div>
-                                                <EditBooleanField label="Permanent Resident" value={ef("is_permanent_resident")} onChange={v => setEf("is_permanent_resident", v)} />
-                                                <EditBooleanField label="Citizen" value={ef("is_citizen")} onChange={v => setEf("is_citizen", v)} />
                                                 <EditBooleanField label="Decals Sent" value={ef("decals_sent")} onChange={v => setEf("decals_sent", v)} />
                                                 <EditField label="Decals Sent At" value={ef("decals_sent_at")} onChange={v => setEf("decals_sent_at", v)} type="datetime-local" />
                                             </div>
                                         ) : (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                                                 <DetailField icon={CalendarRange} label="Date of Birth" value={selected.date_of_birth ? fmtDate(selected.date_of_birth) : "—"} />
+                                                <DetailField
+                                                    icon={FileText}
+                                                    label="License Number"
+                                                    value={liveStats?.license_number_last4 ? `•••• ${liveStats.license_number_last4}` : liveStats?.license_number_on_file ? "On file (unreadable)" : "—"}
+                                                    mono
+                                                />
                                                 <DetailField icon={FileText} label="License Class" value={selected.license_class || "—"} />
                                                 <DetailField icon={ShieldCheck} label="Regulatory Authority" value={selected.regulatory_authority || (selected.sgi_approved != null ? "SGI" : "—")} />
                                                 <DetailField icon={MapPin} label="Regulatory Region" value={selected.regulatory_region || "—"} />
                                                 <DetailField icon={ShieldCheck} label="Authority Approved" value={(selected.regulatory_authority_approved ?? selected.sgi_approved) === true ? "Yes" : (selected.regulatory_authority_approved ?? selected.sgi_approved) === false ? "No" : "Unknown"} />
                                                 <DetailField icon={Clock} label="Authority Approved At" value={(selected.regulatory_authority_approved_at || selected.sgi_approved_at) ? new Date(selected.regulatory_authority_approved_at || selected.sgi_approved_at).toLocaleString("en-CA") : "—"} />
-                                                <DetailField icon={FileText} label="Work Authorization" value={selected.work_authorization_status ? selected.work_authorization_status.replace(/_/g, " ") : "Unknown"} />
-                                                <DetailField icon={Shield} label="Permanent Resident" value={selected.is_permanent_resident === true ? "Yes" : selected.is_permanent_resident === false ? "No" : "Unknown"} />
-                                                <DetailField icon={Shield} label="Citizen" value={selected.is_citizen === true ? "Yes" : selected.is_citizen === false ? "No" : "Unknown"} />
+                                                <DetailField icon={ShieldCheck} label="Spinr Approved" value={selected.is_verified === true ? "Yes" : selected.is_verified === false ? "No" : "Unknown"} />
+                                                <DetailField icon={Clock} label="Spinr Approved At" value={selected.verified_at ? new Date(selected.verified_at).toLocaleString("en-CA") : "—"} />
+                                                <DetailField
+                                                    icon={FileText}
+                                                    label="Work Authorization"
+                                                    value={workAuth(selected).expires_at
+                                                        ? `${workAuth(selected).label} ${fmtDate(workAuth(selected).expires_at!)}`
+                                                        : workAuth(selected).label}
+                                                />
+                                                <DetailField icon={Shield} label="Permanent Resident" value={WORK_AUTH_FLAG_LABELS[workAuth(selected).permanent_resident] || "Unknown"} />
+                                                <DetailField icon={Shield} label="Citizen" value={WORK_AUTH_FLAG_LABELS[workAuth(selected).citizen] || "Unknown"} />
                                                 <DetailField icon={CheckCircle} label="Decals Sent" value={selected.decals_sent === true ? "Yes" : selected.decals_sent === false ? "No" : "Unknown"} />
                                                 <DetailField icon={Clock} label="Decals Sent At" value={selected.decals_sent_at ? new Date(selected.decals_sent_at).toLocaleString("en-CA") : "—"} />
                                             </div>
@@ -1251,6 +1312,9 @@ export default function DriversPage() {
                                     <div className="grid grid-cols-2 gap-2.5">
                                         <DetailField icon={CalendarRange} label="Joined" value={fmtDate(selected.created_at)} />
                                         <DetailField icon={Clock} label="Last Updated" value={fmtDate(selected.updated_at)} />
+                                        {selected.account_deleted && (
+                                            <DetailField icon={Trash2} label="Account Deleted" value={selected.deleted_at ? new Date(selected.deleted_at).toLocaleString("en-CA") : "Yes"} />
+                                        )}
                                     </div>
                                 </TabsContent>
 
@@ -2710,6 +2774,46 @@ function DetailSection({ title, icon: Icon, children }: { title: string; icon: a
     );
 }
 
+/* ── Work authorization ───────────────────────────────────────────────
+ * One canonical status. `is_permanent_resident` / `is_citizen` are derived
+ * columns, not independently editable fields — they used to render as three
+ * separate "Unknown" rows that could disagree with each other.
+ * Mirrors routes/admin/drivers.py::work_authorization_view; the backend ships
+ * the same projection as `work_authorization` on every driver row and this
+ * local copy only recomputes it after an optimistic post-save merge. */
+const WORK_AUTH_LABELS: Record<string, string> = {
+    citizen: "Canadian citizen",
+    permanent_resident: "Permanent resident",
+    indefinite: "Work permit — no expiry",
+    expiring: "Work permit — expires",
+    unknown: "Unknown",
+};
+type WorkAuthView = { status: string; label: string; citizen: string; permanent_resident: string; expires_at: string | null };
+
+function workAuthLocal(driver: any): WorkAuthView {
+    const raw = String(driver?.work_authorization_status || "").toLowerCase();
+    let status = WORK_AUTH_LABELS[raw] ? raw : "unknown";
+    // Legacy rows imported before the status column existed carry only the
+    // booleans — promote them so those drivers do not read as "Unknown".
+    if (status === "unknown") {
+        if (driver?.is_citizen === true) status = "citizen";
+        else if (driver?.is_permanent_resident === true) status = "permanent_resident";
+    }
+    const flag = (matches: boolean) => (status === "unknown" ? "unknown" : matches ? "yes" : "not_applicable");
+    return {
+        status,
+        label: WORK_AUTH_LABELS[status],
+        citizen: flag(status === "citizen"),
+        permanent_resident: flag(status === "permanent_resident"),
+        expires_at: status === "expiring" ? (driver?.work_eligibility_expiry_date ?? null) : null,
+    };
+}
+
+/** Backend projection when present, local mirror otherwise. */
+const workAuth = (driver: any): WorkAuthView => (driver?.work_authorization as WorkAuthView) || workAuthLocal(driver);
+
+const WORK_AUTH_FLAG_LABELS: Record<string, string> = { yes: "Yes", not_applicable: "Not applicable", unknown: "Unknown" };
+
 function DetailField({ icon: Icon, label, value, mono }: { icon: any; label: string; value: string; mono?: boolean }) {
     return (
         <div className="bg-background border border-border/60 rounded-lg px-3 py-2.5 flex items-center gap-3 min-w-0">
@@ -2752,8 +2856,14 @@ function CopyableField({ icon: Icon, label, value }: { icon: any; label: string;
     );
 }
 
-function EditField({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (v: string) => void; type?: string }) {
-    return <div><label className="text-[11px] text-muted-foreground mb-1 block">{label}</label><Input type={type} value={value} onChange={e => onChange(e.target.value)} className="h-9 text-sm" /></div>;
+function EditField({ label, value, onChange, type = "text", placeholder, hint }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string }) {
+    return (
+        <div>
+            <label className="text-[11px] text-muted-foreground mb-1 block">{label}</label>
+            <Input type={type} value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} className="h-9 text-sm" />
+            {hint && <p className="text-[10px] text-muted-foreground mt-1">{hint}</p>}
+        </div>
+    );
 }
 
 function EditBooleanField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {

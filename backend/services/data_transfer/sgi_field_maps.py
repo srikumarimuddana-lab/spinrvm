@@ -26,6 +26,27 @@ def _today_iso() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+def _effective_date(driver: dict[str, Any], action: str) -> str:
+    """Date to stamp on the form row.
+
+    For an `add`/`change` the filing takes effect when it is submitted, so
+    today is right. For a `remove` it is not: SGI needs the date the driver
+    actually stopped driving, and a removal is routinely filed days or weeks
+    after the fact. `regulator_removal_effective_date` is set by the
+    account-deletion path (routes/users.py); fall back to `deleted_at`'s date
+    for rows tombstoned before that column existed, and only then to today.
+    """
+    if action != "remove":
+        return _today_iso()
+    explicit = driver.get("regulator_removal_effective_date")
+    if explicit:
+        return str(explicit)[:10]
+    deleted_at = driver.get("deleted_at")
+    if deleted_at:
+        return str(deleted_at)[:10]
+    return _today_iso()
+
+
 def driver_to_driver_details_row(driver: dict[str, Any], action: str = "add") -> dict[str, Any]:
     """Map a drivers-table row to a D00032 row dict.
 
@@ -49,7 +70,9 @@ def driver_to_driver_details_row(driver: dict[str, Any], action: str = "add") ->
         "full_name": driver.get("name") or "",
         "licence_number": driver.get("license_number") or "",
         "licence_class": driver.get("license_class") or "",
-        "effective_date": _today_iso(),
+        # For a removal this is the date the driver stopped, not today — see
+        # _effective_date.
+        "effective_date": _effective_date(driver, action),
         "action": action,
         "verified_driver_history": True,
         "criminal_record_check_attached": True,
@@ -76,7 +99,7 @@ def driver_to_vehicle_details_row(driver: dict[str, Any], action: str = "add") -
         "vin": driver.get("vehicle_vin") or "",
         "year_make_model": year_make_model,
         "registered_owners_name": driver.get("name") or "",
-        "vehicle_date": _today_iso(),
+        "vehicle_date": _effective_date(driver, action),
         # Defaults to Yes for the same reason as driver_details' two
         # attestation fields above — see that docstring.
         "valid_inspection": True,

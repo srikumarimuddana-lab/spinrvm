@@ -475,6 +475,7 @@ export {
     listDataTransferJobs,
     getDataTransferJob,
     regenerateDataTransferJobDownload,
+    getSgiRemovalQueue,
 } from "./api/data-transfer";
 export type {
     DataTransferEntityRow,
@@ -489,6 +490,8 @@ export type {
     DataTransferImportReport,
     DataTransferImportCommitResult,
     SgiFormType,
+    SgiRemovalQueue,
+    SgiRemovalQueueEntry,
     ComplianceReportFormat,
     DataTransferJob,
 } from "./api/data-transfer";

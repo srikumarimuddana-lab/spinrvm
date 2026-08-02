@@ -452,6 +452,84 @@ class TestUpdateDriver:
         assert driver_update_call.args[2]["is_citizen"] is True
         assert driver_update_call.args[2]["is_permanent_resident"] is False
 
+    def test_work_authorization_status_overrides_stale_explicit_flags(self, test_client, super_admin_override):
+        """The status is the single source of truth — a contradicting explicit
+        boolean in the same payload must not survive it (this used to be
+        `setdefault`, which let the two disagree)."""
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()) as upd,
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            resp = test_client.put(
+                "/api/admin/drivers/drv-1",
+                json={"work_authorization_status": "permanent_resident", "is_citizen": True},
+            )
+        assert resp.status_code == 200, resp.text
+        written = [c for c in upd.await_args_list if c.args[0] == "drivers"][0].args[2]
+        assert written["is_permanent_resident"] is True
+        assert written["is_citizen"] is False
+
+    @pytest.mark.parametrize("status", ["", "unknown"])
+    def test_work_authorization_unknown_nulls_status_and_flags(self, test_client, super_admin_override, status):
+        """'Unknown' means unknown, not 'neither citizen nor PR' — the derived
+        booleans must go back to NULL rather than a confident False."""
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()) as upd,
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            resp = test_client.put("/api/admin/drivers/drv-1", json={"work_authorization_status": status})
+        assert resp.status_code == 200, resp.text
+        written = [c for c in upd.await_args_list if c.args[0] == "drivers"][0].args[2]
+        assert written["work_authorization_status"] is None
+        assert written["is_citizen"] is None
+        assert written["is_permanent_resident"] is None
+
+    def test_work_authorization_work_permit_marks_flags_false(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()) as upd,
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            resp = test_client.put("/api/admin/drivers/drv-1", json={"work_authorization_status": "expiring"})
+        assert resp.status_code == 200, resp.text
+        written = [c for c in upd.await_args_list if c.args[0] == "drivers"][0].args[2]
+        assert written["work_authorization_status"] == "expiring"
+        assert written["is_citizen"] is False
+        assert written["is_permanent_resident"] is False
+
+    def test_invalid_work_authorization_status_400(self, test_client, super_admin_override):
+        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)):
+            resp = test_client.put("/api/admin/drivers/drv-1", json={"work_authorization_status": "green_card"})
+        assert resp.status_code == 400
+        assert "work_authorization_status" in resp.json()["detail"]
+
+    def test_license_number_is_encrypted_before_write(self, test_client, super_admin_override):
+        """Admin-edited licence numbers go through Vault like every other write
+        path — storing plaintext would be a PIPEDA violation."""
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()) as upd,
+            patch(
+                "routes.admin.drivers._encrypt_driver_pii",
+                AsyncMock(side_effect=lambda d: {**d, "license_number": f"vault::{d['license_number']}"}),
+            ) as enc,
+            patch("utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            resp = test_client.put("/api/admin/drivers/drv-1", json={"license_number": "SK1234567"})
+        assert resp.status_code == 200, resp.text
+        enc.assert_awaited_once()
+        written = [c for c in upd.await_args_list if c.args[0] == "drivers"][0].args[2]
+        assert written["license_number"] == "vault::SK1234567"
+
     def test_db_failure_surfaces_as_500(self, test_client, super_admin_override):
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
@@ -460,6 +538,84 @@ class TestUpdateDriver:
         ):
             resp = test_client.put("/api/admin/drivers/drv-1", json={"city": "Regina"})
         assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Work-authorization projection + licence masking (pure helpers / live-stats)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkAuthorizationView:
+    @pytest.mark.parametrize(
+        "driver,expected",
+        [
+            ({"work_authorization_status": "citizen"}, ("citizen", "yes", "not_applicable")),
+            ({"work_authorization_status": "permanent_resident"}, ("permanent_resident", "not_applicable", "yes")),
+            ({"work_authorization_status": "indefinite"}, ("indefinite", "not_applicable", "not_applicable")),
+            ({"work_authorization_status": "expiring"}, ("expiring", "not_applicable", "not_applicable")),
+            ({}, ("unknown", "unknown", "unknown")),
+            ({"work_authorization_status": "nonsense"}, ("unknown", "unknown", "unknown")),
+            # Legacy import rows carry only the booleans.
+            ({"is_citizen": True}, ("citizen", "yes", "not_applicable")),
+            ({"is_permanent_resident": True}, ("permanent_resident", "not_applicable", "yes")),
+        ],
+    )
+    def test_projection(self, driver, expected):
+        from routes.admin.drivers import work_authorization_view
+
+        view = work_authorization_view(driver)
+        assert (view["status"], view["citizen"], view["permanent_resident"]) == expected
+        assert view["label"]
+
+    def test_expiry_only_surfaced_for_expiring_permits(self):
+        from routes.admin.drivers import work_authorization_view
+
+        row = {"work_eligibility_expiry_date": "2027-01-01T00:00:00Z"}
+        assert work_authorization_view({**row, "work_authorization_status": "expiring"})["expires_at"]
+        assert work_authorization_view({**row, "work_authorization_status": "indefinite"})["expires_at"] is None
+        assert work_authorization_view({**row, "work_authorization_status": "citizen"})["expires_at"] is None
+
+
+class TestLiveStatsLicenseMask:
+    def _patches(self, driver, decrypt):
+        return (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("routes.admin.drivers._vault_decrypt", AsyncMock(side_effect=decrypt)),
+        )
+
+    def test_returns_last4_only(self, test_client, super_admin_override):
+        driver = {"id": "drv-1", "user_id": None, "license_number": "tok-abc"}
+        ps = self._patches(driver, lambda tok, hint="": "SK1234567")
+        with ps[0], ps[1], ps[2], ps[3]:
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["license_number_last4"] == "4567"
+        assert body["license_number_on_file"] is True
+        # The full number must never leave the backend.
+        assert "SK1234567" not in resp.text
+
+    def test_undecryptable_token_is_not_leaked(self, test_client, super_admin_override):
+        """_vault_decrypt returns the raw token when it cannot decrypt — masking
+        that would show 4 characters of ciphertext as if it were the licence."""
+        driver = {"id": "drv-1", "user_id": None, "license_number": "tok-abc"}
+        ps = self._patches(driver, lambda tok, hint="": tok)
+        with ps[0], ps[1], ps[2], ps[3]:
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["license_number_last4"] is None
+        assert resp.json()["license_number_on_file"] is True
+
+    def test_no_license_on_file(self, test_client, super_admin_override):
+        driver = {"id": "drv-1", "user_id": None}
+        ps = self._patches(driver, lambda tok, hint="": tok)
+        with ps[0], ps[1], ps[2], ps[3]:
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["license_number_last4"] is None
+        assert resp.json()["license_number_on_file"] is False
 
 
 # ---------------------------------------------------------------------------

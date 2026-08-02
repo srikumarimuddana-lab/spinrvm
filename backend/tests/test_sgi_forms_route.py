@@ -191,3 +191,130 @@ def test_vehicle_details_form_type(admin_client):
         )
     assert resp.status_code == 200
     assert "D00033" in resp.headers.get("content-disposition", "")
+
+
+# ── regulator removal queue + filing audit ──────────────────────────────────
+#
+# Spinr stops dispatching the moment a driver deletes their account, but SGI
+# goes on listing them as an active passenger-for-hire driver until the D00032
+# removal row is filed (and their vehicle until D00033). Nothing used to
+# trigger, surface, or record that filing.
+
+_DELETED_DRIVER_ROW = {
+    **_DRIVER_ROW,
+    "deleted_at": "2026-07-20T12:00:00Z",
+    "regulator_removal_required": True,
+    "regulator_removal_effective_date": "2026-07-20",
+}
+
+
+def _generate(admin_client, action, form_type="driver_details", driver_row=None, update_side=None):
+    updates = []
+
+    async def _update_one(table, filters, payload):
+        updates.append((table, filters, payload))
+        if update_side:
+            update_side()
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(return_value=[driver_row or _DELETED_DRIVER_ROW])),
+        patch("backend.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+        patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        patch("backend.services.data_transfer.sgi_form_filler.fill_driver_details_form", return_value=b"%PDF-1.4"),
+        patch("backend.services.data_transfer.sgi_form_filler.fill_vehicle_details_form", return_value=b"%PDF-1.4"),
+        patch("backend.routes.admin.sgi_forms.log_admin_action", AsyncMock(return_value="aud-1")),
+    ):
+        resp = admin_client.post(
+            "/api/admin/data-transfer/sgi-forms/generate",
+            json={"form_type": form_type, "driver_ids": ["user-1"], "action": action},
+        )
+    return resp, updates
+
+
+def test_remove_stamps_the_driver_form_column(admin_client):
+    resp, updates = _generate(admin_client, "remove", "driver_details")
+    assert resp.status_code == 200
+    driver_writes = [u for u in updates if u[0] == "drivers"]
+    assert len(driver_writes) == 1
+    _, filters, payload = driver_writes[0]
+    assert filters == {"id": "driver-record-1"}
+    assert payload["regulator_removal_driver_form_at"]
+    assert payload["regulator_removal_reported_by"] == "admin-1"
+    # The vehicle form is filed separately and is still outstanding.
+    assert "regulator_removal_vehicle_form_at" not in payload
+
+
+def test_remove_stamps_the_vehicle_form_column_separately(admin_client):
+    """A driver needs BOTH forms. Stamping one shared 'reported' column off
+    whichever was generated first would mark the job done with the vehicle
+    still on SGI's books."""
+    resp, updates = _generate(admin_client, "remove", "vehicle_details")
+    assert resp.status_code == 200
+    payload = [u for u in updates if u[0] == "drivers"][0][2]
+    assert payload["regulator_removal_vehicle_form_at"]
+    assert "regulator_removal_driver_form_at" not in payload
+
+
+def test_add_action_does_not_stamp_a_removal(admin_client):
+    resp, updates = _generate(admin_client, "add")
+    assert resp.status_code == 200
+    assert [u for u in updates if u[0] == "drivers"] == []
+
+
+def test_stamp_failure_still_returns_the_pdf(admin_client):
+    """The PDF is already built. Failing the request would make the admin
+    re-generate — and re-file — the form that just succeeded."""
+
+    def _boom():
+        raise RuntimeError("db down")
+
+    resp, _ = _generate(admin_client, "remove", update_side=_boom)
+    assert resp.status_code == 200
+    assert resp.content == b"%PDF-1.4"
+
+
+def test_removal_queue_lists_outstanding_forms(admin_client):
+    with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[_DELETED_DRIVER_ROW])):
+        resp = admin_client.get("/api/admin/data-transfer/sgi-forms/removal-queue")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 1
+    entry = body["drivers"][0]
+    # users.id — the id the generate endpoint and the rest of Data Transfer take.
+    assert entry["entity_id"] == "user-1"
+    assert entry["effective_date"] == "2026-07-20"
+    assert entry["driver_form_outstanding"] is True
+    assert entry["vehicle_form_outstanding"] is True
+
+
+def test_removal_queue_hides_fully_filed_drivers_by_default(admin_client):
+    filed = {
+        **_DELETED_DRIVER_ROW,
+        "regulator_removal_driver_form_at": "2026-07-25T00:00:00Z",
+        "regulator_removal_vehicle_form_at": "2026-07-25T00:00:00Z",
+    }
+    with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[filed])):
+        resp = admin_client.get("/api/admin/data-transfer/sgi-forms/removal-queue")
+    assert resp.json()["count"] == 0
+
+    with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[filed])):
+        resp = admin_client.get("/api/admin/data-transfer/sgi-forms/removal-queue?include_filed=true")
+    assert resp.json()["count"] == 1
+
+
+def test_removal_queue_keeps_partially_filed_drivers(admin_client):
+    half = {**_DELETED_DRIVER_ROW, "regulator_removal_driver_form_at": "2026-07-25T00:00:00Z"}
+    with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[half])):
+        resp = admin_client.get("/api/admin/data-transfer/sgi-forms/removal-queue")
+    entry = resp.json()["drivers"][0]
+    assert entry["driver_form_outstanding"] is False
+    assert entry["vehicle_form_outstanding"] is True
+
+
+def test_removal_queue_flags_drivers_with_no_linked_user(admin_client):
+    """Without a users.id the driver cannot be selected in the Data Transfer
+    flow, so the queue entry would never clear — surface it, don't drop it."""
+    orphan = {**_DELETED_DRIVER_ROW, "user_id": None}
+    with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[orphan])):
+        resp = admin_client.get("/api/admin/data-transfer/sgi-forms/removal-queue")
+    assert resp.json()["unresolvable"] == 1

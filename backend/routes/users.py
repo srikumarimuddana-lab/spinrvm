@@ -7,6 +7,7 @@ try:
     from ..utils.audit_logger import log_admin_action  # type: ignore
     from ..utils.error_handling import ErrorCode, SpinrException  # type: ignore
     from ..utils.error_keys import ErrorKeys  # type: ignore
+    from ..utils.insurance_periods import record_period_transition  # type: ignore
     from ..utils.redis_client import redis_delete  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
@@ -22,6 +23,7 @@ except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
     from utils.error_handling import ErrorCode, SpinrException  # type: ignore  # noqa: F811
     from utils.error_keys import ErrorKeys  # type: ignore  # noqa: F811
+    from utils.insurance_periods import record_period_transition  # type: ignore  # noqa: F811
     from utils.redis_client import redis_delete  # type: ignore  # noqa: F811
     from utils.referral_terms import (  # type: ignore  # noqa: F811
         area_id_for_rider,
@@ -158,6 +160,140 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
 # at the separate 3-year ceiling inside that same purge.
 
 
+async def _assert_deletable(user_id: str) -> None:
+    """Refuse deletion while the account still has something outstanding.
+
+    The driver app already told drivers this was enforced ("Deletion rejections
+    are actionable (active ride, unsettled balance, pending payout)" — see
+    driver-app/app/driver/settings.tsx) but nothing on the backend checked, so
+    deletion would tombstone a driver mid-ride and lock them out of a positive
+    earnings balance they can no longer withdraw.
+
+    Raises 409 with an actionable reason. Deliberately NOT 403/400: the request
+    is well-formed and the caller is authorised, the account is just not in a
+    deletable state yet, and the client shows the detail verbatim.
+    """
+    try:
+        from ..models.ride_status import RideStatus  # type: ignore
+    except ImportError:
+        from models.ride_status import RideStatus  # type: ignore
+
+    active = [s.value for s in RideStatus.active_statuses()]
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": user_id, "deleted_at": None}, limit=1)
+    )
+
+    # A ride in flight, on either side of it. Tombstoning mid-ride would strand
+    # the counterparty: the rider loses their driver, or the driver loses the
+    # trip they are being paid for.
+    ride_filters = [{"rider_id": user_id, "status": {"$in": active}}]
+    if driver:
+        ride_filters.append({"driver_id": driver["id"], "status": {"$in": active}})
+    for _filter in ride_filters:
+        if await db_supabase.get_rows("rides", _filter, limit=1):
+            raise HTTPException(
+                status_code=409,
+                detail="You have a ride in progress. Please finish or cancel it before deleting your account.",
+            )
+
+    if not driver:
+        return
+
+    # A payout mid-flight settles asynchronously through Stripe; deleting now
+    # would leave money moving toward an account nobody can reconcile against.
+    if await db_supabase.get_rows("payouts", {"driver_id": driver["id"], "status": "pending"}, limit=1):
+        raise HTTPException(
+            status_code=409,
+            detail="You have a payout still processing. Please wait for it to complete before deleting your account.",
+        )
+
+    # Unwithdrawn earnings. Deletion revokes every token, so a driver who
+    # deletes with a positive balance can no longer reach the payout screen to
+    # claim it. Reuses the earnings module's balance rather than recomputing —
+    # that function is the single source of truth for what Spinr owes a driver
+    # (rides + bonuses - all money-out payouts), and a second implementation
+    # here would drift from the number the driver sees in the app.
+    try:
+        from .drivers import earnings as _earnings  # type: ignore
+    except ImportError:
+        from routes.drivers import earnings as _earnings  # type: ignore
+
+    balance = await _earnings.get_driver_balance({"id": user_id})
+    payable = Decimal(str(balance.get("payable_balance") or "0"))
+    if payable > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"You have ${payable} in unpaid earnings. Please withdraw them before deleting your account."),
+        )
+
+
+async def _tombstone_driver_row(user_id: str, now: str) -> Optional[dict]:
+    """Soft-delete the caller's driver row and take it out of service.
+
+    Setting `deleted_at` alone was not enough. `drivers.status` stays whatever
+    it was (normally 'active') and there is no 'deleted' value in the status
+    set, so the row stayed indistinguishable from a working driver on every
+    bulk `get_rows` read — including the dispatch candidate query, which does
+    not join the users row and so never saw `status='pending_deletion'`.
+
+    Two things therefore have to happen here, not just the `deleted_at` stamp:
+
+    1. Clear the intent flags. `is_online`/`is_available` are what dispatch
+       actually filters on. The `stale_intent` background loop would flip them
+       eventually (after `stale_intent_offline_hours`, default 4h), but that is
+       a reconciler for unreachable apps, not the correct primary path for a
+       driver who explicitly left — and its presence-based safety net is
+       fail-open, so a Redis outage inside that window could still route a ride
+       to a deleted driver.
+    2. Close the open insurance period. `driver_insurance_periods` is the
+       append-only 7-year SGI/insurance audit trail; a driver who deletes while
+       online (Period 1) otherwise leaves a period row that never ends. Mirrors
+       what the go-offline toggle does (`routes/drivers/status.py`).
+
+    Returns the driver row (pre-update) or None when the caller is not a driver
+    (or was already tombstoned — the lookup filters `deleted_at IS NULL`, so a
+    repeat call is a no-op rather than a double-write that would append another
+    row to the insurance-period audit table).
+    """
+    rows = await db_supabase.get_rows("drivers", {"user_id": user_id, "deleted_at": None}, limit=1)
+    driver = rows[0] if rows else None
+    if not driver:
+        return None
+
+    updates = {
+        "deleted_at": now,
+        "is_online": False,
+        "is_available": False,
+        "went_offline_at": now,
+    }
+
+    # Spinr stops dispatching immediately, but the regulator (SGI in SK) still
+    # lists this driver as an active passenger-for-hire driver until we file the
+    # D00032/D00033 "remove" rows. Nothing triggered that filing, so it depended
+    # on someone remembering. Queue it here, stamped with the date the driver
+    # actually stopped — SGI cares about that date, not the date an admin got
+    # round to generating the form.
+    #
+    # Only for drivers who were actually filed with the regulator: an applicant
+    # who never got approved was never added, so there is nothing to remove and
+    # queueing them would bury the real backlog in noise.
+    if driver.get("is_verified") or driver.get("regulatory_authority_approved"):
+        updates["regulator_removal_required"] = True
+        updates["regulator_removal_effective_date"] = now[:10]
+
+    await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
+    # `_pre_invalidate_for_table` only evicts the cache keys present in the
+    # update's filter dict, so keying the write by `id` leaves the separate
+    # by-user_id entry (30s TTL, read by get_current_user on every request)
+    # serving the pre-deletion row. Evict both explicitly.
+    await db_supabase.invalidate_driver_cache(driver_id=driver["id"], user_id=user_id)
+    # Period 0 = out of the app entirely, personal auto insurance only.
+    # Non-raising by contract (see utils/insurance_periods.py) — a missed
+    # transition must not block the deletion the user asked for.
+    await record_period_transition(driver["id"], 0)
+    return driver
+
+
 @api_router.delete("/account")
 async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     """Soft-delete / tombstone the account (Uber/Lyft model).
@@ -171,6 +307,11 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     """
     user_id = current_user["id"]
     logger.info(f"Account deletion (soft/tombstone) requested for user {user_id}")
+
+    # Refuse while a ride, payout, or unwithdrawn balance is outstanding.
+    # Raises 409 before anything is written, so a blocked deletion leaves the
+    # account exactly as it was.
+    await _assert_deletable(user_id)
 
     # 7-year retention ceiling (2557 days ≈ 7y). The purge compares against this.
     grace_period_end = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=2557)).isoformat()
@@ -191,7 +332,7 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
                 "token_version": next_token_version,
             },
         )
-        await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        await _tombstone_driver_row(user_id, now)
         # Kill credentials at the root: revoke every refresh token (so /auth/refresh
         # can't rotate a deleting account back to life) and drop the Redis session
         # mirror. Best-effort — the deletion is already recorded above, and the daily
@@ -234,10 +375,17 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     logger.info(f"Account deletion requested for user {user_id}")
 
+    # Same outstanding-work gate as the soft-delete path. This endpoint is
+    # documented as internal-admin tooling, but it takes a normal user token,
+    # so leaving it ungated would be a way around the guard — and its deletion
+    # is irreversible, which makes stranding a balance worse here, not better.
+    await _assert_deletable(user_id)
+
     now = datetime.now(timezone.utc).isoformat()
     try:
-        # Soft-delete driver record (preserves audit trail)
-        await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        # Soft-delete driver record (preserves audit trail), clear the intent
+        # flags dispatch reads, and close any open insurance period.
+        await _tombstone_driver_row(user_id, now)
         # Hard-delete non-sensitive ancillary data (no soft-delete column)
         await db_supabase.delete_many("driver_documents", {"driver_id": user_id})
         await db_supabase.delete_many("emergency_contacts", {"user_id": user_id})

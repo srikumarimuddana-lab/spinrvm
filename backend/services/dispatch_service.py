@@ -338,6 +338,14 @@ class DispatchService:
             "is_available": True,
             "is_verified": True,
             "status": "active",
+            # Account deletion soft-deletes the drivers row but cannot change
+            # `status` — there is no 'deleted' value in the status set, so a
+            # tombstoned driver still reads as status='active' here. Deletion
+            # now also clears is_online/is_available (routes/users.py), but this
+            # filter is the durable guard: it does not depend on those flags
+            # having been written, and it holds even if a row is resurrected by
+            # an admin edit or an import. Compiles to `deleted_at is.null`.
+            "deleted_at": None,
             "vehicle_type_id": ride["vehicle_type_id"],
         }
         if ride.get("requires_wav"):

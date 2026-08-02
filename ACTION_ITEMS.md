@@ -892,8 +892,49 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
       - Rest of the unevenly-covered `routes/drivers/` package: `ride_flow.py`
         (66.30%), `ride_cancel.py` (51.75%), `ride_reads.py` (58.95%),
         `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`
-        (38.82%), `_shared.py` (51.32%), `status.py` (48.39%),
-        `profile.py` (67.65%).
+        (38.82%). (Two concurrent same-day sibling sessions are also
+        closing these six files — see their own bullets once merged,
+        branches `claude/a1c-drivers-ride-flow-batch` and
+        `claude/a1c-drivers-payouts-batch`.)
+      - `_shared.py`, `status.py`, `profile.py` — **CLOSED** (2026-08-02,
+        branch `claude/a1c-drivers-shared-batch`): `_shared.py` 51%→96%
+        (228 stmts, 111→8 missing — the 8 remaining lines are
+        `_require_ride_in_state`, deliberately left for the sibling
+        `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` session since that's
+        where it's actually called from); `status.py` 48%→100% (31 stmts,
+        16→0 missing — the whole gap was the untested `GET
+        /drivers/{driver_id}` endpoint; `update_driver_status`'s
+        online/available invariant was already covered by
+        `test_go_online_availability.py`/`test_p1_driver_offline.py`);
+        `profile.py` 68%→100% (136 stmts, 44→0 missing). Added
+        `backend/tests/test_drivers_shared_status_profile_coverage.py` (59
+        tests) covering the PII-vault RPC functions
+        (`_vault_encrypt`/`_vault_decrypt`, previously 0% direct coverage —
+        every route test mocks around them), the ride-route-snapshot
+        pipeline's storage/upload/write-back tail
+        (`_generate_and_store_ride_snapshot` lines 363–493, previously
+        unreached because every existing test stubs the OSM renderer to
+        return `None`), `_snap_pickup_leg_async`/`_validate_ride_route`
+        (zero prior coverage), `status.py`'s `get_driver` (admin/self/
+        rider-with-active-ride/rider-without-active-ride/404/DB-exception-
+        degrades-to-403 branches — the rider-facing safe projection was
+        also asserted to strip PII fields), and `profile.py`'s
+        `get_driver_config` exception fallback, `update_my_driver`'s
+        auto-create-driver-row and vehicle-change → `needs_review`
+        re-review branches (asserting
+        `record_period_transition(driver_id, 0)` fires per the Period 0-3
+        insurance state machine), `get_demand_heatmap`, and the
+        destination-mode 404 branches. Test-only, no application code
+        changed. **Bug found, not fixed (test-only scope):** the v2
+        route-snapshot reference-write `except` block in
+        `_generate_and_store_ride_snapshot` both logs and re-raises, but
+        its only caller is the function's own outermost catch-all, so the
+        `raise` is dead code (double-logs, never actually propagates) —
+        harmless (no data loss, object already uploaded) but noted rather
+        than silently worked around. Full suite: run together with every
+        other test file already touching these modules — 327 passed, no
+        collisions. See
+        `docs/change-log/2026-08-02-a1c-drivers-shared-batch-coverage.md`.
       - `utils/redis_client.py` — **done, 100%** (2026-08-02, 220/220 stmts;
         was 55% full-suite side-effect coverage, all of it via the
         in-process-fallback path). Presence/rate-limit backbone. Every prior

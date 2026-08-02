@@ -84,7 +84,7 @@ as of 2026-08-02T02:41Z UTC unless noted.
 | E2E tests (Playwright) | `e2e-test` | PR: A (`continue-on-error: ${{ event == pull_request }}`); main push: B | 🟢 green | |
 | Visual regression (Playwright) | `visual-regression-test` | A unconditionally | ⚪ self-skips | No committed baselines; job detects this and skips its own steps rather than failing. See `update-visual-baselines.yml`. |
 | Rider app E2E (Playwright) | `rider-app-e2e` | PR: A; main push: B | 🟢 green | |
-| Driver app E2E (Playwright) | `driver-app-e2e` | PR: A; main push: **B** | 🔴 **red on main**, blocking | Failed on both `main`-push runs checked (`0c58c3dc`, `24b3e49f`); a closed CR exists for a related driver-app E2E failure (#3247, "createPermissionHook is not a function") but its "Run E2E tests" step failure wasn't diagnosed line-by-line in this audit. **Needs a fresh CR** — see FIX list below; unlike PRs (where this is advisory), a push to `main` treats it as blocking, so this job is a real red gate on `main` right now. |
+| Driver app E2E (Playwright) | `driver-app-e2e` | PR: A; main push: **B** | 🟢 green (as of `581065b`+, 2026-08-02 ~19:24Z onward) | Was red on `main`-push at publication (`0c58c3dc`, `24b3e49f`) — root cause was `createPermissionHook is not a function`, tracked in [#3174](https://github.com/srikumarimuddana-lab/spinrvm/issues/3174) (an incomplete Expo SDK 57 upgrade), fixed by [#3274](https://github.com/srikumarimuddana-lab/spinrvm/pull/3274) the same day. Filed as [CR-2026-006 / #3256](https://github.com/srikumarimuddana-lab/spinrvm/issues/3256), then closed once 3 consecutive `main`-push runs after the fix confirmed green — see that issue for the run links. |
 | deploy-backend | `deploy-backend` | B, main-only | 🔴 red, but **expected** | Railway (primary step) and Render (fallback step) both fail — documented, ACTION_ITEMS C5: Railway standby deploys deliberately paused via a GitHub Environment protection rule. Not a code defect. |
 | deploy-frontend | `deploy-frontend` | n/a — `if: false` | ⚫ disabled | Same deprecation as frontend-test. |
 | deploy-admin | `deploy-admin` | B, main-only | 🟢 green | |
@@ -180,12 +180,17 @@ when required PR template fields are missing).
 
 ## FIX — red, blocking, no documented accepted-risk entry
 
-1. **`driver-app-e2e` (ci.yml) red on `main`-push** (blocking there, though
-   advisory on PRs). Failed on both `main` pushes checked in this audit. A
-   related closed CR (#3247) exists but doesn't obviously match the current
-   failure signature — needs a fresh diagnosis and either a fix or a new
-   `[CR]` documenting why it's an accepted, known-flaky risk. **Filed as
-   [CR-2026-006 / #3256](https://github.com/srikumarimuddana-lab/spinrvm/issues/3256).**
+1. ~~**`driver-app-e2e` (ci.yml) red on `main`-push**~~ — **RESOLVED
+   2026-08-02, no longer an open item.** Filed as
+   [CR-2026-006 / #3256](https://github.com/srikumarimuddana-lab/spinrvm/issues/3256)
+   at publication time. Root cause turned out to already be tracked in
+   [#3174](https://github.com/srikumarimuddana-lab/spinrvm/issues/3174)
+   (`createPermissionHook is not a function`, from an incomplete Expo SDK 57
+   upgrade) and fixed the same day by
+   [#3274](https://github.com/srikumarimuddana-lab/spinrvm/pull/3274).
+   Verified independently against 3 consecutive `main`-push runs after the
+   fix (not just trusting the fix PR's own claim) — all green. #3256 closed
+   with that evidence; see its comment thread for the run links.
 2. **G3 · Semgrep findings soft-pass** (`security-gates.yml`) — the job is
    `continue-on-error: false` (blocking) but its own script only fails on a
    broken run, not on an actual Semgrep finding (`::warning::` only). This
@@ -240,10 +245,10 @@ when required PR template fields are missing).
 ## Recommendations, impact, and next steps
 
 **Immediate (this week):**
-- `driver-app-e2e` (#3256) and G5b documentation (#3257) are now filed —
-  triage and close them; both are cheap (a diagnosis + a paragraph) and each
-  closes a real "why is this red/advisory and is that OK" question a future
-  contributor will otherwise re-ask, as PR #3037's review already had to.
+- `driver-app-e2e` (#3256) — **done**, closed 2026-08-02 (see the corrected
+  table entry above); the fix predated the CR itself, this audit just
+  verified it. G5b documentation (#3257) — open, PR
+  [#3327](https://github.com/srikumarimuddana-lab/spinrvm/pull/3327).
 - Decide on G3 Semgrep (FIX #2): either accept the soft-pass phase formally
   with a target date to flip it hard, or flip it now if the current finding
   count is already at/near zero (the same "ratchet, don't big-bang" pattern
@@ -268,14 +273,13 @@ green on `main` by the time this audit ran — they were real findings on
 snapshot from one day earlier was stale, not that the gates themselves are
 unreliable.
 
-**Impact if the FIX items are left undone:** `driver-app-e2e` staying red on
-`main` means every future `main` push shows workflow-level `failure` in
-`ci.yml` for a reason unrelated to that push's own diff — exactly the
-"red stops carrying information" failure mode this audit exists to prevent,
-now with one fewer excuse (Trivy/G6, C6's other long-standing offender, is
-resolved). G3 Semgrep's soft-pass is a quieter but real risk: a
-money/auth/dispatch-path Semgrep rule could fire today and nobody would see
-red for it.
+**Impact if the remaining FIX item is left undone:** G3 Semgrep's soft-pass
+is a quiet but real risk: a money/auth/dispatch-path Semgrep rule could fire
+today and nobody would see red for it. `driver-app-e2e` no longer has this
+concern — with it and Trivy/G6 (C6's other long-standing offender) both
+resolved, `ci.yml`'s workflow-level `failure` on `main` now traces to exactly
+one expected, documented cause (`deploy-backend`, Railway paused per C5),
+which is real progress toward "red stops carrying information."
 
 **Benefit of what's already correct:** `backend-test` — the gate 501 test
 files depend on for real merge protection — is confirmed green and stable
@@ -289,9 +293,11 @@ the file itself, so the next person reading it starts from an accurate
 picture instead of re-deriving it the way this audit had to.
 
 **What this audit did NOT do (explicitly out of scope, per the task):**
-root-cause or fix `driver-app-e2e`'s actual test failure, flip G3 Semgrep to
-hard-fail, bump Trivy from 0.70.0 to 0.72.0 (noted, not touched — a version
-bump needs its own build/lint/test verification pass per CLAUDE.md), or
-change any branch-protection *required-checks* configuration in GitHub
-settings (that's a repo-settings change, not a workflow-file change, and
-wasn't requested).
+flip G3 Semgrep to hard-fail, bump Trivy from 0.70.0 to 0.72.0 (noted, not
+touched — a version bump needs its own build/lint/test verification pass
+per CLAUDE.md), or change any branch-protection *required-checks*
+configuration in GitHub settings (that's a repo-settings change, not a
+workflow-file change, and wasn't requested). `driver-app-e2e`'s test failure
+was root-caused and fixed, but by other work already in flight (#3174/#3274)
+that this audit only verified after the fact — not something done as part
+of this audit's own scope.

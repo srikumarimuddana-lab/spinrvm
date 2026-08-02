@@ -1069,9 +1069,10 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         `docs/change-log/2026-08-02-a1c-redis-client-coverage.md`.
     - **Sub-tier B — below 60%, genuinely lower-risk breadth** (utils/services,
       admin-adjacent tooling, third-party integrations):
-      `routes/main.py` (**0%**, 52 stmts — worth a quick look at what this
-      even is before writing tests for it), `utils/t4a_pdf.py` (4.40%),
-      `utils/subscription_invoice_pdf.py` (7.97%),
+      ~~`routes/main.py` (0%, 52 stmts — worth a quick look at what this
+      even is before writing tests for it)~~ **done, see below**,
+      ~~`utils/t4a_pdf.py` (4.40%)~~ **done, see below**,
+      ~~`utils/subscription_invoice_pdf.py` (7.97%)~~ **done, see below**,
       ~~`services/zoho_desk_db.py` (11.76%)~~ **done, see below**,
       ~~`utils/reconciliation.py`
       (15.69%)~~ **done, see below**, `utils/demand_forecast.py` (91.36% as
@@ -1123,6 +1124,84 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
     no bugs found. Full suite re-run after: 6801 passed (was 6782), 0
     failed, 0 new warnings. See
     `docs/change-log/2026-08-01-a1c-reconciliation-coverage.md`.
+  - Sub-tier B batch 1 — `routes/main.py`, `utils/t4a_pdf.py`,
+    `utils/subscription_invoice_pdf.py` (2026-08-02, measured via
+    `pytest tests/ --cov=routes.main --cov=utils.t4a_pdf
+    --cov=utils.subscription_invoice_pdf --cov-report=term-missing`):
+    - `routes/main.py` — **0% → 100%** (52/52 stmts). **Finding: this file
+      is dead code.** Its `api_router` (`GET /` returning `{"message":
+      "Spinr API", ...}` and `GET /health`) is never imported or
+      `include_router`'d anywhere in `server.py` — confirmed via
+      `grep -n "routes\.main\|main_router\|import main" server.py` (no
+      hits) and `grep -n '"/health"' server.py routes/*.py` (server.py has
+      its own independent `/health` at line 204; server.py has no `/` route
+      at all). `git log --oneline -- routes/main.py` shows no evidence of
+      prior active use either. Not deleted (out of scope for a coverage
+      pass — flagging for a repo-owner call, not making it unilaterally);
+      added `backend/tests/test_routes_main_coverage.py` (13 tests) that
+      call `root()`/`health_check()` directly (bypassing the app, since
+      there's no mounted route to hit via TestClient) to close the gap on
+      code that still gets imported/loaded. Also surfaced (and documented
+      inline in the test file) that this repo's `tests/conftest.py`
+      bare/qualified module-aliasing means `health_check`'s two internal
+      relative-import fallbacks (`from .. import db_supabase`,
+      `from ..utils.loop_monitor import get_loop_status`) are structurally
+      unreachable via a normal import in this test harness once the bare
+      module is canonical — their success branches were reached instead via
+      a scoped `builtins.__import__` patch.
+    - `utils/t4a_pdf.py` — **4.40% → 100%** (91/91 stmts). Existing T4A
+      coverage (`test_t4a_email.py`) mocked `generate_t4a_pdf` out entirely,
+      so the fpdf2 rendering code itself had never run. Added
+      `backend/tests/test_t4a_pdf_coverage.py` (12 tests): GST-registered
+      (with/without BN)/not-registered branches, zero-trips/zero-earnings,
+      every `.get(...) or default` fallback via a near-empty summary dict,
+      the `generated_at` truncation/relabelling, `_fmt_money`'s Decimal
+      coercion including its except→`"0.00"` fallback (both as a unit and
+      end-to-end inside a full PDF render), and the module's own
+      `from . import report_branding` / `from utils import report_branding`
+      dual-import fallback (forced via a scoped `builtins.__import__`
+      patch, same technique as `routes/main.py` above).
+    - `utils/subscription_invoice_pdf.py` — **7.97% → 99%** (137/138
+      stmts). Existing coverage (`test_subscription_invoice.py`) explicitly
+      documents mocking `generate_subscription_invoice_pdf` out ("rendering
+      (fpdf) lives in subscription_invoice_pdf.py and is mocked here").
+      Added `backend/tests/test_subscription_invoice_pdf_coverage.py` (11
+      tests) calling it directly with Decimal fixtures: SK (GST+PST),
+      HST-province, all-three-taxes, zero-tax, zero-subtotal (`_pct`'s
+      divide-by-zero guard), `subscription_cycle` vs one-time billing
+      label, with/without a Stripe receipt URL, missing driver name
+      fallback, plus the `_d`/`_q`/`_fmt` money helpers directly. **Finding
+      (not fixed — test-only scope): the one remaining uncovered line
+      (139) is the `bold=True` branch of the private `_item_row` closure —
+      grepped every call site in the file; none ever pass `bold=True`, so
+      that branch is genuinely dead code reachable only by calling the
+      closure directly, which isn't possible from outside
+      `generate_subscription_invoice_pdf`.** Not a bug (no wrong output),
+      just an unused code path.
+    - Test-only across all three; no application code changed. Blast
+      radius: `routes/main.py`'s functions have no callers anywhere (dead
+      code, see above); `t4a_pdf.generate_t4a_pdf` is called only from
+      `routes/drivers/tax_exports.py` (`download_t4a_pdf`,
+      `_email_t4a_document`) — unmodified;
+      `subscription_invoice_pdf.generate_subscription_invoice_pdf` is
+      called from `routes/drivers/subscriptions.py`
+      (`_send_subscription_invoice_email`, already covered by today's
+      earlier `test_subscriptions_coverage.py` pass) and
+      `utils/subscription_invoice.py::build_subscription_invoice_pdf`
+      (used by `routes/admin/subscriptions.py`'s admin resend endpoint) —
+      neither modified. Full suite re-run twice after (excluding an
+      unrelated concurrent Sub-tier B batch 2 session's
+      `test_zoho_desk_db.py`/`test_zoho_desk_sync.py`, which are a
+      separate PR): **7609 passed, 8 skipped, 1 xfailed, 0 failed** both
+      times (baseline 7573 passed, 8 skipped, 1 xfailed) — delta +36
+      matches the 36 new tests here (13 + 12 + 11), 0 regressions. Note:
+      the Sub-tier B batch 2 log below reports one flaky-looking failure it
+      saw involving this batch's `test_routes_main_coverage.py` in a mixed
+      run; this batch's own runs (standalone, combined with the three
+      target files' pre-existing related tests, and twice full-suite) were
+      all clean, so this is noted for visibility rather than independently
+      re-chased here — worth a look if it recurs. See
+      `docs/change-log/2026-08-02-a1c-subtier-b-batch1-coverage.md`.
   - Sub-tier B batch 2 — `services/zoho_desk_db.py`, `utils/zoho_desk_sync.py`
     (2026-08-02, measured via `pytest tests/ --cov=services.zoho_desk_db
     --cov=utils.demand_forecast --cov=utils.zoho_desk_sync

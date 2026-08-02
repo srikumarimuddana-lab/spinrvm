@@ -147,6 +147,11 @@ async def test_corporate_policy_check_failure_raises_403():
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_FailedPolicy())),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        # require_company_bookable() does its own `from .. import db_supabase`
+        # local import, which reaches the real backend.db_supabase singleton —
+        # patching `_deps.db_supabase` (a whole-module replace above) does not
+        # intercept that call, so the singleton's attribute must be patched too.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -191,6 +196,10 @@ async def test_corporate_policy_passes_resolves_member_id():
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
         patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        # require_company_bookable() reaches the real backend.db_supabase
+        # singleton via its own local import, bypassing the whole-module
+        # `_deps.db_supabase` replace above.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
 
@@ -243,6 +252,10 @@ async def test_corporate_policy_passes_but_no_active_membership_fails_closed():
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        # require_company_bookable() reaches the real backend.db_supabase
+        # singleton via its own local import, bypassing the whole-module
+        # `_deps.db_supabase` replace above.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -286,6 +299,10 @@ async def test_corporate_policy_no_active_membership_allowed_when_flag_disabled(
             AsyncMock(return_value={"corporate_member_removal_blocks_booking": False}),
         ),
         patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
+        # require_company_bookable() reaches the real backend.db_supabase
+        # singleton via its own local import, bypassing the whole-module
+        # `_deps.db_supabase` replace above.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -572,6 +589,10 @@ async def test_suspended_company_blocks_company_allowance_booking():
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        # require_company_bookable() reaches the real backend.db_supabase
+        # singleton via its own local import, bypassing the whole-module
+        # `_deps.db_supabase` replace above.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "suspended"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -621,6 +642,10 @@ async def test_closed_company_blocks_company_allowance_booking():
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        # require_company_bookable() reaches the real backend.db_supabase
+        # singleton via its own local import, bypassing the whole-module
+        # `_deps.db_supabase` replace above.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "closed"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -667,6 +692,10 @@ async def test_active_company_allows_company_allowance_booking():
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
         patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
+        # require_company_bookable() reaches the real backend.db_supabase
+        # singleton via its own local import, bypassing the whole-module
+        # `_deps.db_supabase` replace above.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
         mock_supabase.find_one = AsyncMock(return_value=None)

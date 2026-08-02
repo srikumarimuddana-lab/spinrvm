@@ -163,9 +163,12 @@ except ImportError:
     )
 
 try:
-    from ...services.corporate_policy_service import evaluate_policy_for_ride  # type: ignore
+    from ...services.corporate_policy_service import evaluate_policy_for_ride, require_company_bookable
 except ImportError:
-    from services.corporate_policy_service import evaluate_policy_for_ride  # type: ignore
+    from services.corporate_policy_service import (  # type: ignore
+        evaluate_policy_for_ride,
+        require_company_bookable,
+    )
 
 try:
     from ...core.config import settings as _settings

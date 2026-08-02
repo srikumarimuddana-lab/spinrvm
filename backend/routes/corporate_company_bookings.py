@@ -34,6 +34,7 @@ try:
     from ..dependencies.company_guard import require_company_admin, require_company_member
     from ..features import compute_fare_estimate
     from ..services.company_booking_service import create_company_guest_booking
+    from ..services.corporate_policy_service import require_company_bookable
     from ..utils.error_handling import db_error_text
     from ..validators import validate_phone
 except ImportError:
@@ -41,6 +42,7 @@ except ImportError:
     from dependencies.company_guard import require_company_admin, require_company_member  # type: ignore
     from features import compute_fare_estimate  # type: ignore
     from services.company_booking_service import create_company_guest_booking  # type: ignore
+    from services.corporate_policy_service import require_company_bookable  # type: ignore
     from utils.error_handling import db_error_text  # type: ignore
     from validators import validate_phone  # type: ignore
 
@@ -97,16 +99,15 @@ def _booking_row(ride: Dict[str, Any], member: Optional[Dict[str, Any]], guest: 
 async def _require_company_active(company_id: str) -> None:
     """Typed 403 for non-active companies (M2.6): a pending_verification /
     suspended / closed company cannot book. The portal reads the `code` to
-    route the user to the verification page instead of a raw error."""
-    company = await db_supabase.get_corporate_account_by_id(company_id) or {}
-    if (company.get("status") or "").lower() != "active":
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "company_not_active",
-                "message": "This company hasn't completed verification yet. Bookings unlock once it's approved.",
-            },
-        )
+    route the user to the verification page instead of a raw error.
+
+    Thin wrapper around the shared ``require_company_bookable`` (scheduled-
+    rides gap review, Finding #20) — kept as a locally-named function so
+    this file's existing call site and docstring context don't need to
+    change; the actual status/kill-switch logic now lives in one place,
+    shared with the employee self-book path in ``routes/rides/booking.py``.
+    """
+    await require_company_bookable(company_id)
 
 
 @router.post("/bookings")

@@ -178,6 +178,11 @@ except ImportError:
     from utils.offer_card_token import sign_offer_card_token
 
 try:
+    from ...utils.safety_paging import page_on_call as page_sos_on_call
+except ImportError:
+    from utils.safety_paging import page_on_call as page_sos_on_call  # type: ignore
+
+try:
     from ...services.cancellation_service import (
         calculate_cancellation_fee,
         pay_driver_cancellation_fee,

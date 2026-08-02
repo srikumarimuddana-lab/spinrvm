@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Apply path-based labels
-        uses: actions/labeler@v6
+        uses: actions/labeler@v7
         with:
           configuration-path: .github/labeler.yml
           sync-labels: true
@@ -94,7 +94,13 @@ jobs:
 
   required-fields:
     name: Required PR fields filled
-    if: github.event.pull_request.draft == false
+    # Dependabot's PR body is auto-generated in its own format and never
+    # matches this repo's custom template (Tier 1-4 fields) — it isn't
+    # something a re-run or a body edit can fix, since Dependabot owns and
+    # regenerates that body. Without this exemption, every Dependabot PR
+    # above patch-level (which don't qualify for dependabot-auto-merge.yml's
+    # auto-merge) permanently fails a required check it can never satisfy.
+    if: github.event.pull_request.draft == false && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -269,7 +275,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

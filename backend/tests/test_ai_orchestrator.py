@@ -173,9 +173,7 @@ class TestHappyPaths:
         # a driver's phone number pulled from a dispatch tool result) — the
         # persisted assistant row must be scrubbed the same as the user row,
         # not treated as trusted first-party text.
-        adapter = FakeAdapter(
-            [[_text("Your driver's number is "), _text("306-555-1234, call anytime."), _end()]]
-        )
+        adapter = FakeAdapter([[_text("Your driver's number is "), _text("306-555-1234, call anytime."), _end()]])
         frames, mocks = await _run(adapter)
         # the client still sees the raw text streamed this turn — only the
         # persisted copy changes.
@@ -313,6 +311,83 @@ class TestGuards:
         # fallback text was emitted so the client never renders an empty bubble
         fallback = [p["text"] for n, p in frames if n == "token"]
         assert any("rephrase" in t for t in fallback)
+
+
+class TestToolCallCap:
+    """AI3: an iteration's tool_calls come straight from the model — cap
+    fan-out so an adversarial/hallucinating turn can't request unbounded
+    concurrent calls (each potentially hitting paid Google Maps)."""
+
+    def _turn_with_n_calls(self, n):
+        calls = [ToolCall(id=f"t{i}", name="get_active_ride", arguments={}) for i in range(n)]
+        return FakeAdapter(
+            [
+                [_end(stop="tool_use", tool_calls=calls)],
+                [_text("All done."), _end()],
+            ]
+        ), calls
+
+    @pytest.mark.anyio
+    async def test_over_budget_turn_executes_only_the_cap_rest_get_synthetic_error(self):
+        adapter, calls = self._turn_with_n_calls(7)
+        with patch.object(orch.logger, "warning") as warn:
+            frames, mocks = await _run(adapter, tool_result=({"ok": True}, True))
+
+        # Only the cap's worth of calls actually ran the tool.
+        assert mocks["execute"].await_count == orch.MAX_TOOL_CALLS_PER_ITERATION
+
+        # Every requested call still gets a start/end "tool" frame — none are
+        # silently dropped from the client's view either.
+        starts = [p for n, p in frames if n == "tool" and p["status"] == "start"]
+        ends = [p for n, p in frames if n == "tool" and p["status"] == "end"]
+        assert len(starts) == 7
+        assert len(ends) == 7
+        assert [p["ok"] for p in ends[-2:]] == [False, False]
+        assert all(p["ok"] is True for p in ends[:5])
+
+        # The model-visible tool_result messages for the excess calls carry
+        # the synthetic budget-exceeded error, not a crash or a dropped call.
+        second_turn_messages = adapter.seen_messages[1]
+        tool_result_msgs = [m for m in second_turn_messages if m["role"] == "tool_result"]
+        assert len(tool_result_msgs) == 7
+        assert all(m["is_error"] is False for m in tool_result_msgs[:5])
+        assert all(m["is_error"] is True for m in tool_result_msgs[5:])
+        for m in tool_result_msgs[5:]:
+            assert "budget exceeded" in m["content"]
+
+        # The overage is logged (info/warning tier per CLAUDE.md observability
+        # conventions), and never with PII — only tool names + ids.
+        warn.assert_called_once()
+        log_msg = warn.call_args.args[0]
+        assert "budget exceeded" in log_msg
+        extra = warn.call_args.kwargs.get("extra", {})
+        assert extra.get("requested_tools") == ["get_active_ride"] * 7
+
+        # The turn still finishes normally — no hang, no crash.
+        assert frames[-1][0] == "done"
+
+    @pytest.mark.anyio
+    async def test_at_cap_turn_is_completely_unaffected(self):
+        """Regression guard: a turn requesting exactly the cap (or fewer)
+        must see zero behavior change — no synthetic errors, no cap log."""
+        adapter, calls = self._turn_with_n_calls(orch.MAX_TOOL_CALLS_PER_ITERATION)
+        with patch.object(orch.logger, "warning") as warn:
+            frames, mocks = await _run(adapter, tool_result=({"ok": True}, True))
+
+        assert mocks["execute"].await_count == orch.MAX_TOOL_CALLS_PER_ITERATION
+        warn.assert_not_called()
+
+        ends = [p for n, p in frames if n == "tool" and p["status"] == "end"]
+        assert len(ends) == orch.MAX_TOOL_CALLS_PER_ITERATION
+        assert all(p["ok"] is True for p in ends)
+
+        second_turn_messages = adapter.seen_messages[1]
+        tool_result_msgs = [m for m in second_turn_messages if m["role"] == "tool_result"]
+        assert len(tool_result_msgs) == orch.MAX_TOOL_CALLS_PER_ITERATION
+        assert all(m["is_error"] is False for m in tool_result_msgs)
+        assert all("budget exceeded" not in m["content"] for m in tool_result_msgs)
+
+        assert frames[-1][0] == "done"
 
 
 class TestFailures:

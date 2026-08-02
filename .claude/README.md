@@ -14,7 +14,7 @@ PR hygiene is owned jointly by this folder and `.github/`:
     └── claude-review.yml            # spinr-* agent review with Impact cross-check
 ```
 
-The `/pr` command auto-fills the template from the diff; the `pr-checks` workflow then validates, expands conditional sections, and posts an advisory summary; `claude-review.yml` runs the deep agent audit on top.
+The `/pr` command auto-fills the template from the diff; the `pr-checks` workflow then validates, expands conditional sections, and posts an advisory summary. `claude-review.yml` would run the deep agent audit on top, but **it is disabled by design** — see below.
 
 ## Layout
 
@@ -78,7 +78,14 @@ Then, manually:
   - Supabase token: use a **read-only** access token scoped to non-PII tables. Never put the service role key there — it bypasses RLS.
   - Context7 API key: free tier is fine.
   - Delete the file if you don't want MCP servers.
-- **Set the `ANTHROPIC_API_KEY` repo secret** in GitHub so `.github/workflows/claude-review.yml` can run on PRs.
+- **`ANTHROPIC_API_KEY` is deliberately NOT set** — the AI PR review in
+  `.github/workflows/claude-review.yml` is off, a cost decision taken
+  2026-08-01 (tracked as `ACTION_ITEMS.md` C7). The workflow stays in the repo
+  and skips cleanly with a notice rather than failing. Setting the secret is
+  all that is needed to turn it on; nothing else has to change. Until then,
+  the `spinr-*` audit agents are available **on demand** — invoke them via the
+  Agent tool in a session, or comment `/claude review` on a PR (that path also
+  needs the secret). Do not rely on an automatic deep audit landing on a PR.
 - **Update the sprint file** at the start of every sprint — edit `.claude/context/sprint-current.md` (goal, in-flight, recently shipped). The SessionStart hook surfaces the goal automatically in every new session.
 
 ## What the hooks do
@@ -102,7 +109,7 @@ All hooks exit 0. None block Claude's tool calls — they advise and auto-format
 | Generic pre-commit scan | `/review` (existing) |
 | Broad security sweep | `spinr-security-auditor` via Agent tool |
 | Opening a PR | `/pr` — fills the tiered template from the diff |
-| PR opened on GitHub | `.github/workflows/pr-checks.yml` validates + expands; `claude-review.yml` runs the agent audit |
+| PR opened on GitHub | `.github/workflows/pr-checks.yml` validates + expands. `claude-review.yml` is **off** (no `ANTHROPIC_API_KEY`) — run the audit agents yourself if the diff warrants one |
 
 ## PR pipeline (what fires when a PR opens)
 
@@ -114,7 +121,7 @@ All hooks exit 0. None block Claude's tool calls — they advise and auto-format
 | `merge-conflict-detect` | If `git log --merges base..head` is non-empty, applies `debug:merge-conflict` and prompts for a Tier 7 note | no |
 | `expand-sections` | Appends Tier 5–7 subsection templates (migration / money / UI / auth / bg-loop / RLS / safety / bug-fix / high-risk) based on what the diff touches; idempotent | no |
 | `auto-summary` | Posts/updates a comment summarising declared type/risk/audience and flagging declaration-vs-diff mismatches | no |
-| `claude-review.yml` | Runs `spinr-security-auditor` + (conditionally) `spinr-money-auditor` and `spinr-migration-reviewer`, including each agent's IMPACT MISMATCHES cross-check against the PR body | no |
+| `claude-review.yml` | **Disabled — does not run.** `ANTHROPIC_API_KEY` is intentionally unset (C7), so the job skips with a notice. When enabled it runs `spinr-security-auditor` + (conditionally) `spinr-money-auditor` and `spinr-migration-reviewer`, including each agent's IMPACT MISMATCHES cross-check against the PR body. Also skips markdown/`docs/`/`.claude/` diffs and no longer re-runs on every push | no |
 
 `Type: trivial` (formatting / typo / comment / lockfile-only) skips Tier 2–4 enforcement and the section expander. The `scope contract` checkbox is the author's attestation that the diff matches the declared type — abusing `trivial` is a review-time finding.
 

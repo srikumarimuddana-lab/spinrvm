@@ -518,13 +518,13 @@ async def admin_update_service_area(
     # fare_service.py always applies SURGE_CAP (2.5×) at calculation time, so
     # values above SURGE_CAP stored here only take effect as manual overrides
     # that require documented justification per CLAUDE.md.
+    #
+    # Plain range validation (1.0-_SURGE_MAX) is NOT done here: it's already
+    # enforced by ServiceAreaUpdateRequest's Pydantic Field(ge=1.0, le=10.0),
+    # which matches _SURGE_MAX exactly, so it 422s before this handler ever
+    # runs. A prior manual re-check here was unreachable dead code (#3069).
     if area.surge_multiplier is not None:
         sm = float(area.surge_multiplier)
-        if sm < 1.0 or sm > _SURGE_MAX:
-            raise HTTPException(
-                status_code=400,
-                detail=f"surge_multiplier must be between 1.0 and {_SURGE_MAX}",
-            )
         # Disabling surge clears the multiplier to 1.0 below, so an above-cap
         # value is being turned off, not applied. Don't trap operators behind a
         # justification requirement just to switch off a risky >2.5x surge from

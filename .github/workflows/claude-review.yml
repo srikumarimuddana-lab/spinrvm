@@ -4,16 +4,27 @@ name: Claude PR review
 # authorised reviewer comments "/claude review". Findings are posted as a PR
 # review comment. Never merges; never pushes code back.
 #
-# Required repo secret:
+# Required repo secret (one of):
 #   ANTHROPIC_API_KEY — Spinr org-scoped, with billing alerts enabled.
+#   CLAUDE_CODE_OAUTH_TOKEN — alternative OAuth-token auth, if preferred.
 #
 # Optional (recommended):
 #   SUPABASE_READONLY_TOKEN, CONTEXT7_API_KEY — mirror of .claude/mcp.example.json
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    # Skip drafts to avoid burning tokens on work-in-progress branches
+    types: [opened, reopened, ready_for_review]
+    # Skip drafts to avoid burning tokens on work-in-progress branches.
+    #
+    # `synchronize` is deliberately absent. It fires on every push to an open
+    # PR, so an agent-driven branch with 4 pushes paid for 4 full three-agent
+    # audits to review one final state. Re-review a pushed branch on demand
+    # with a `/claude review` comment (see the issue_comment trigger below,
+    # which is not path-filtered and works on any PR).
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.claude/**'
   issue_comment:
     types: [created]
 
@@ -44,18 +55,37 @@ jobs:
     # Review is advisory — a missing/invalid ANTHROPIC_API_KEY or model error
     # should never block merging. Add the key in repo Settings → Secrets to
     # enable full AI review; until then PRs proceed without it.
+    #
+    # `continue-on-error` keeps a failed run from blocking the merge, but it
+    # does NOT stop the check from reporting `failure` in the PR checks list.
+    # A permanently-red advisory check trains reviewers to ignore red, so the
+    # keyless case is now detected up front and the run is skipped cleanly
+    # instead of failing. continue-on-error is retained for the case where the
+    # key IS set and the model call errors mid-run.
     continue-on-error: true
+    env:
+      # `secrets` is available in job-level `env` but not in job-level `if`,
+      # so the presence check is threaded through to the steps this way.
+      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
 
     steps:
+      - name: Report that AI review is disabled
+        if: env.HAS_ANTHROPIC_KEY != 'true'
+        run: |
+          echo "::notice title=Claude PR review skipped::Neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set, so the AI review did not run. This is a supported configuration — the review is advisory and never blocks merging. Set one of the secrets in Settings → Secrets to enable it."
+
       - name: Checkout PR code
-        uses: actions/checkout@v6
+        if: env.HAS_ANTHROPIC_KEY == 'true'
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Run Claude review
+        if: env.HAS_ANTHROPIC_KEY == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Inline prompt — keeps review behaviour under source control
           prompt: |
             You are reviewing a Spinr pull request. Load CLAUDE.md and the

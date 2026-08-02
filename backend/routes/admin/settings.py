@@ -76,6 +76,11 @@ _CREDENTIAL_FIELDS = frozenset(
         # without the token, and operators need to read them back to confirm
         # the rider/driver datasets aren't swapped. Only the token is masked.
         "meta_capi_access_token",
+        # SOS on-call paging routing key (ACTION_ITEMS.md B15(b)) — PagerDuty
+        # "Integration Key" or Opsgenie equivalent. The webhook URL is left
+        # visible (same treatment as lms_api_base_url); only the key is the
+        # secret. See utils/safety_paging.py.
+        "sos_paging_routing_key",
     }
 )
 
@@ -94,6 +99,13 @@ _CREDENTIAL_FIELDS = frozenset(
 # the token therefore requires the same privilege as revealing a credential.
 # meta_test_event_code is deliberately NOT here — it only routes events to the
 # Test Events tab and leaks nothing.
+#
+# sos_paging_webhook_url is the same shape of risk again: a settings-module
+# admin who could repoint it could redirect every future SOS page (which
+# carries ride_id / reported_by_user_id / a geohashed area — see
+# utils/safety_paging.py's PIPEDA note) to a destination they control, plus
+# backend SSRF via the outbound POST. Changing either half of the pair
+# requires the same privilege as revealing the routing key.
 _SUPER_ADMIN_ONLY_FIELDS = frozenset(
     {
         "lms_api_base_url",
@@ -101,6 +113,8 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
         "meta_rider_dataset_id",
         "meta_driver_dataset_id",
         "meta_capi_access_token",
+        "sos_paging_webhook_url",
+        "sos_paging_routing_key",
     }
 )
 
@@ -198,6 +212,15 @@ class SettingsUpdateRequest(BaseModel):
     # escalation). Edited via Settings → Safety. Blank disables outbound
     # email; WS broadcast + DB row still fire.
     safety_alert_emails: Optional[str] = None
+    # Real on-call paging for rider/driver SOS (ACTION_ITEMS.md B15(b)),
+    # additive to safety_alert_emails above — utils/safety_paging.py.
+    # webhook_url is plain; routing_key is a credential (masked, in
+    # _CREDENTIAL_FIELDS). Changing either is super_admin-only
+    # (_SUPER_ADMIN_ONLY_FIELDS). Empty webhook_url = disabled (default);
+    # this ships dark until an admin configures real PagerDuty/Opsgenie
+    # credentials.
+    sos_paging_webhook_url: Optional[str] = None
+    sos_paging_routing_key: Optional[str] = None
     # Dispatch & matching — also configurable per service area (area overrides global).
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
     ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)
@@ -278,6 +301,20 @@ class SettingsUpdateRequest(BaseModel):
         if v.startswith(("http://localhost", "http://127.0.0.1")):
             return v
         raise ValueError("lms_api_base_url must use https:// (http:// is allowed only for localhost)")
+
+    @field_validator("sos_paging_webhook_url")
+    @classmethod
+    def _sos_paging_webhook_url_scheme(cls, v: Optional[str]) -> Optional[str]:
+        """The routing key rides in every POST body to this host, and the
+        payload carries safety-incident data (ride_id, reported_by_user_id,
+        a geohashed area) — same TLS requirement as lms_api_base_url."""
+        if not v:
+            return v
+        if v.startswith("https://"):
+            return v
+        if v.startswith(("http://localhost", "http://127.0.0.1")):
+            return v
+        raise ValueError("sos_paging_webhook_url must use https:// (http:// is allowed only for localhost)")
 
 
 @router.get("/settings")

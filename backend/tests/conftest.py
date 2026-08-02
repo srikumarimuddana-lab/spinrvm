@@ -14,6 +14,15 @@ from typing import Any, Dict, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+
+# Pre-import pydantic.root_model so it's registered in sys.modules before
+# coverage.py tracing starts. Under `pytest --cov`, pydantic's
+# create_generic_submodel() (triggered by pyiceberg's IcebergRootModel via
+# storage3's analytics import) does sys.modules[created_model.__module__] and
+# can KeyError on 'pydantic.root_model' -- reproduces only with coverage
+# instrumentation active, not in a plain interpreter. Environment/tooling
+# quirk, unrelated to any application code.
+import pydantic.root_model  # noqa: F401,E402
 import pytest
 from fastapi.testclient import TestClient
 
@@ -193,23 +202,38 @@ def mock_supabase_client() -> MagicMock:
     mock_table.offset.return_value = mock_table
     mock_table.single.return_value = mock_table
 
-    # Mock execute to return async response
-    async def mock_execute():
+    # execute()/rpc() are synchronous in the real supabase-py client --
+    # production code always wraps the whole chain in
+    # `run_sync(lambda: supabase.table(...).execute())` (see
+    # repositories/_base.py, ride_repo.py, core/lifespan.py) and never
+    # awaits execute()/rpc() directly. An AsyncMock here produced a
+    # coroutine that synchronous code creates and then never awaits --
+    # silently leaking and failing an arbitrary other test on GC (A8).
+    def mock_execute():
         response = MagicMock()
         response.data = []
         response.count = 0
         return response
 
-    mock_table.execute = AsyncMock(side_effect=mock_execute)
+    mock_table.execute = MagicMock(side_effect=mock_execute)
     mock_client.table.return_value = mock_table
 
-    # Mock RPC method
-    async def mock_rpc(*args, **kwargs):
+    # Mock RPC method -- real supabase-py's client.rpc(name, params) returns a
+    # filter-request builder, not the response itself; .execute() on that
+    # builder returns the response (mirrors .table()'s chain above). Most
+    # tests already assume this two-step shape when they locally override
+    # `mock.rpc.return_value.execute.return_value` -- the base fixture must
+    # match it too, or a test that reaches this default (rather than
+    # overriding it) gets an unconfigured auto-mock in place of `res.data`.
+    mock_rpc_builder = MagicMock()
+
+    def mock_rpc_execute():
         response = MagicMock()
         response.data = None
         return response
 
-    mock_client.rpc = AsyncMock(side_effect=mock_rpc)
+    mock_rpc_builder.execute = MagicMock(side_effect=mock_rpc_execute)
+    mock_client.rpc = MagicMock(return_value=mock_rpc_builder)
 
     # Mock auth methods
     mock_client.auth = MagicMock()

@@ -9,6 +9,7 @@ best eligible promo auto-applied, rider-location biasing of place search,
 maps-budget gating, and that booking tools are hidden from the MCP surface.
 """
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1034,7 +1035,6 @@ class TestRiderLocation:
 
     @pytest.mark.anyio
     async def test_fresh_last_ride_carries_as_of_and_must_confirm_note(self):
-        from datetime import datetime, timedelta, timezone
 
         recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
         with _patch_last_ride([{**LAST_RIDE, "created_at": recent}]):
@@ -1048,7 +1048,6 @@ class TestRiderLocation:
     async def test_stale_last_ride_is_not_a_location(self):
         # A pickup from a ride weeks ago is not "where the rider is" — the
         # assistant must ask for a pickup instead of silently pointing there.
-        from datetime import datetime, timedelta, timezone
 
         stale = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
         with _patch_last_ride([{**LAST_RIDE, "created_at": stale}]):
@@ -1428,10 +1427,13 @@ class TestProposal:
     @pytest.mark.anyio
     async def test_proposal_emits_client_action_and_no_writes(self):
         insert = AsyncMock()
+        # Comfortably future — AI4's proposal-time validation (>=5 min lead)
+        # must let a normal scheduled time straight through unchanged.
+        future_scheduled_time = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
         args = dict(
             self.ARGS,
             promo_code="SAVE75",
-            scheduled_time="2026-06-12T20:00:00-06:00",
+            scheduled_time=future_scheduled_time,
             payment_method="wallet",
         )
         with (
@@ -1449,7 +1451,7 @@ class TestProposal:
         assert action["proposal"]["pickup_address"] == "123 Main St"
         assert action["proposal"]["vehicle_type_id"] == "vt-1"
         assert action["proposal"]["promo_code"] == "SAVE75"
-        assert action["proposal"]["scheduled_time"] == "2026-06-12T20:00:00-06:00"
+        assert action["proposal"]["scheduled_time"] == future_scheduled_time
         assert action["proposal"]["payment_method"] == "wallet"
         assert "do not claim the ride is booked" in result["message"]
         insert.assert_not_awaited()
@@ -1652,6 +1654,63 @@ class TestProposal:
         bad = dict(self.ARGS, pickup_lat=123.0)
         result, ok = await execute_tool("propose_ride_booking", bad, user=RIDER)
         assert ok is False
+
+
+class TestScheduledTimeValidation:
+    """AI4: a hallucinated/past scheduled_time must be rejected at proposal
+    time, before any card is shown — not only later at Confirm
+    (schemas.CreateRideRequest.validate_scheduled_time, unchanged by this
+    change). Every case here returns before any Maps call, so no area/geocode
+    patching is needed."""
+
+    ARGS = TestProposal.ARGS
+
+    @pytest.mark.anyio
+    async def test_past_time_rejected_with_structured_error(self):
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        args = dict(self.ARGS, scheduled_time=past)
+        result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        # Same shape as every other proposal-time refusal in this file
+        # (e.g. TestProposal.test_out_of_area_refused): a normal tool
+        # result carrying an "error" key, not a raised exception — the
+        # orchestrator/model can react to it and re-prompt the rider.
+        assert ok
+        assert "error" in result
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_malformed_time_rejected_with_structured_error(self):
+        args = dict(self.ARGS, scheduled_time="tomorrow afternoon sometime")
+        result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "error" in result
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_time_inside_five_minute_window_rejected(self):
+        # 2 minutes out — inside the >=5-min lead required by both this
+        # proposal-time check and the Confirm-time validator it mirrors.
+        too_soon = (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat()
+        args = dict(self.ARGS, scheduled_time=too_soon)
+        result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "error" in result
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_omitted_scheduled_time_unaffected(self):
+        # No scheduled_time at all (an immediate-pickup booking) must not
+        # trip this validation path.
+        insert = AsyncMock()
+        with (
+            _patch_area(),
+            patch("backend.db_supabase.insert_one", insert, create=True),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=RIDER)
+        assert ok
+        assert "error" not in result
+        assert "scheduled_time" not in result["_client_action"]["proposal"]
 
 
 def test_booking_tools_hidden_from_mcp():

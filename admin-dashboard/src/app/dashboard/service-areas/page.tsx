@@ -227,21 +227,21 @@ export default function ServiceAreasPage() {
     <div>
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Service Areas</h1>
-          <p className="text-gray-500 mt-1">Configure pricing, fees, taxes & subscriptions per area</p>
+          <h1 className="text-2xl font-bold text-foreground">Service Areas</h1>
+          <p className="text-muted-foreground mt-1">Configure pricing, fees, taxes & subscriptions per area</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-red-500 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-red-600">
+        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl font-semibold hover:bg-primary/90">
           <Plus className="h-5 w-5" /> New Area
         </button>
       </div>
 
       {/* Create Form */}
       {showCreate && (
-        <div className="bg-white rounded-2xl border p-6 mb-6 shadow-sm">
+        <div className="bg-card rounded-2xl border p-6 mb-6 shadow-sm">
           <h3 className="text-lg font-bold mb-4">Create Service Area</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">City Preset</label>
+              <label className="block text-sm font-medium text-muted-foreground mb-1">City Preset</label>
               <select className="w-full border rounded-xl px-4 py-2.5 text-sm" value={createForm.preset} onChange={e => handlePreset(e.target.value)}>
                 <option value="">Select city...</option>
                 {Object.entries(CITY_PRESETS).map(([k, v]) => <option key={k} value={k}>{v.city}, {v.province}</option>)}
@@ -249,27 +249,27 @@ export default function ServiceAreasPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">Area Name *</label>
+              <label className="block text-sm font-medium text-muted-foreground mb-1">Area Name *</label>
               <input className="w-full border rounded-xl px-4 py-2.5 text-sm" value={createForm.name} onChange={e => setCreateForm({...createForm, name: e.target.value})} placeholder="e.g. Saskatoon Metro" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">Province</label>
+              <label className="block text-sm font-medium text-muted-foreground mb-1">Province</label>
               <select className="w-full border rounded-xl px-4 py-2.5 text-sm" value={createForm.province} onChange={e => { const province = e.target.value; const defaults = regulatoryDefaultsForProvince(province); setCreateForm({...createForm, province, regulatory_authority: defaults.authority, regulatory_region: defaults.region}); }}>
                 {['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL','NT','YT','NU'].map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
           </div>
           <div className="flex items-center gap-4 mb-4">
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_active} onChange={e => setCreateForm({...createForm, is_active: e.target.checked})} className="accent-red-500" /> Active</label>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_active} onChange={e => setCreateForm({...createForm, is_active: e.target.checked})} className="accent-primary" /> Active</label>
           </div>
 
           {/* Geofence Map — always visible, draw polygon or select preset */}
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-600 mb-2">
-              Service Area Boundary {createForm.polygon.length === 0 && <span className="text-red-500">(select a preset or draw on the map)</span>}
+            <label className="block text-sm font-medium text-muted-foreground mb-2">
+              Service Area Boundary {createForm.polygon.length === 0 && <span className="text-destructive">(select a preset or draw on the map)</span>}
             </label>
             <div className="h-64 rounded-xl overflow-hidden border">
-              <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+              <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
                 <GeofenceMap
                   key={mapKey}
                   polygon={createForm.polygon}
@@ -285,20 +285,20 @@ export default function ServiceAreasPage() {
           </div>
 
           <div className="flex gap-3">
-            <button onClick={handleCreate} className="bg-red-500 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-red-600">Create</button>
-            <button onClick={() => setShowCreate(false)} className="bg-gray-100 text-gray-600 px-6 py-2.5 rounded-xl font-semibold">Cancel</button>
+            <button onClick={handleCreate} className="bg-primary text-primary-foreground px-6 py-2.5 rounded-xl font-semibold hover:bg-primary/90">Create</button>
+            <button onClick={() => setShowCreate(false)} className="bg-muted text-foreground px-6 py-2.5 rounded-xl font-semibold">Cancel</button>
           </div>
         </div>
       )}
 
       {/* Areas List */}
       {loading ? (
-        <div className="text-center py-12 text-gray-400">Loading...</div>
+        <div className="text-center py-12 text-muted-foreground">Loading...</div>
       ) : areas.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-2xl border">
-          <MapPin className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-bold text-gray-700">No service areas</h3>
-          <p className="text-gray-400">Create your first service area to start operations</p>
+        <div className="text-center py-16 bg-card rounded-2xl border">
+          <MapPin className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+          <h3 className="text-lg font-bold text-foreground">No service areas</h3>
+          <p className="text-muted-foreground">Create your first service area to start operations</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -306,22 +306,22 @@ export default function ServiceAreasPage() {
             const isExpanded = expandedId === area.id;
             const subRegions: any[] = area.sub_regions || [];
             return (
-              <div key={area.id} className="bg-white rounded-2xl border overflow-hidden">
+              <div key={area.id} className="bg-card rounded-2xl border overflow-hidden">
                 {/* Area Header — click to expand */}
                 <div className="flex items-center gap-4 p-5 cursor-pointer" role="button" tabIndex={0} aria-expanded={isExpanded} onClick={() => { const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); } }}>
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${area.is_active ? 'bg-green-100' : 'bg-gray-100'}`}>
-                    <MapPin className={`h-5 w-5 ${area.is_active ? 'text-green-600' : 'text-gray-400'}`} />
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${area.is_active ? 'bg-green-100' : 'bg-muted'}`}>
+                    <MapPin className={`h-5 w-5 ${area.is_active ? 'text-green-600' : 'text-muted-foreground'}`} />
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <h4 className="font-bold text-gray-900">{area.name}</h4>
+                      <h4 className="font-bold text-foreground">{area.name}</h4>
                       {area.is_airport && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded-md">AIRPORT</span>}
                       {!area.is_active && <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs font-bold rounded-md">INACTIVE</span>}
                       {subRegions.length > 0 && <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-bold rounded-md">{subRegions.length} airport zone{subRegions.length > 1 ? 's' : ''}</span>}
                     </div>
-                    <p className="text-sm text-gray-500">{area.city || ''}{area.province ? `, ${area.province}` : ''} · GST {area.gst_rate || 5}% · PST {area.pst_rate || 0}%</p>
+                    <p className="text-sm text-muted-foreground">{area.city || ''}{area.province ? `, ${area.province}` : ''} · GST {area.gst_rate || 5}% · PST {area.pst_rate || 0}%</p>
                   </div>
-                  <div className="text-sm text-gray-400">{area.vehicle_pricing?.length || 0} vehicles · {area.subscription_plan_ids?.length || 0} plans</div>
+                  <div className="text-sm text-muted-foreground">{area.vehicle_pricing?.length || 0} vehicles · {area.subscription_plan_ids?.length || 0} plans</div>
                   <button
                     type="button"
                     onClick={(e) => {
@@ -334,14 +334,14 @@ export default function ServiceAreasPage() {
                     <Radar className="h-3.5 w-3.5" />
                     View on live monitor
                   </button>
-                  {isExpanded ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
+                  {isExpanded ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
                 </div>
 
                 {/* Expanded Config */}
                 {isExpanded && (
                   <div className="border-t">
                     {/* Tabs */}
-                    <div className="flex gap-1 px-5 pt-3 bg-gray-50 overflow-x-auto">
+                    <div className="flex gap-1 px-5 pt-3 bg-muted overflow-x-auto">
                       {[
                         { key: 'general', label: 'General', icon: Settings },
                         { key: 'pricing', label: 'Vehicle Pricing', icon: Car },
@@ -353,7 +353,7 @@ export default function ServiceAreasPage() {
                         { key: 'cascade', label: 'Dispatch Cascade', icon: ArrowRightLeft },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
-                          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-white text-red-500 border-t-2 border-red-500' : 'text-gray-500 hover:text-gray-700'}`}>
+                          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-card text-primary border-t-2 border-primary' : 'text-muted-foreground hover:text-foreground'}`}>
                           <tab.icon className="h-4 w-4" /> {tab.label}
                         </button>
                       ))}
@@ -412,8 +412,8 @@ export default function ServiceAreasPage() {
                         <div>
                           <div className="flex items-center justify-between mb-4">
                             <div>
-                              <h4 className="font-bold text-gray-800">Airport Zones</h4>
-                              <p className="text-sm text-gray-500">Draw airport boundaries inside {area.name}. Rides to/from these zones get an extra airport surcharge.</p>
+                              <h4 className="font-bold text-foreground">Airport Zones</h4>
+                              <p className="text-sm text-muted-foreground">Draw airport boundaries inside {area.name}. Rides to/from these zones get an extra airport surcharge.</p>
                             </div>
                             {addAirportFor !== area.id && (
                               <button onClick={() => { setAddAirportFor(area.id); setAirportForm({ name: "", airport_fee: 2.0, polygon: [] }); setAirportMapKey(k => k + 1); }}
@@ -471,10 +471,10 @@ export default function ServiceAreasPage() {
 
                           {/* Existing Sub-regions */}
                           {subRegions.length === 0 && addAirportFor !== area.id ? (
-                            <div className="text-center py-10 bg-gray-50 rounded-xl">
-                              <Plane className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-                              <p className="text-gray-500 font-medium">No airport zones yet</p>
-                              <p className="text-gray-400 text-sm mt-1">Add an airport zone to automatically charge a surcharge for rides to/from the airport</p>
+                            <div className="text-center py-10 bg-muted rounded-xl">
+                              <Plane className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                              <p className="text-muted-foreground font-medium">No airport zones yet</p>
+                              <p className="text-muted-foreground text-sm mt-1">Add an airport zone to automatically charge a surcharge for rides to/from the airport</p>
                             </div>
                           ) : (
                             <div className="space-y-4">
@@ -560,7 +560,7 @@ export default function ServiceAreasPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -671,15 +671,15 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Area Name</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Area Name</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">City</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">City</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.city} onChange={e => setForm({ ...form, city: e.target.value })} />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Province</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Province</label>
           <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.province} onChange={e => {
             const province = e.target.value;
             const defaults = regulatoryDefaultsForProvince(province);
@@ -689,44 +689,44 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           </select>
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Authority</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Regulatory Authority</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_authority} onChange={e => setForm({ ...form, regulatory_authority: e.target.value })} placeholder="e.g. SGI, Calgary Livery, Toronto PTC" />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Region</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Regulatory Region</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_region} onChange={e => setForm({ ...form, regulatory_region: e.target.value })} placeholder="e.g. SK, AB, Calgary, Toronto" />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Requirements URL</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Requirements URL</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_requirements_url} onChange={e => setForm({ ...form, regulatory_requirements_url: e.target.value })} placeholder="Official local requirements link" />
         </div>
         <div className="md:col-span-3">
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Notes</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Regulatory Notes</label>
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[80px]" value={form.regulatory_notes} onChange={e => setForm({ ...form, regulatory_notes: e.target.value })} placeholder="Summarize local driver approval/licensing rules for this service area" />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1">Pickup Radius (km)</label>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Pickup Radius (km)</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.5" value={form.max_pickup_radius_km} onChange={e => setForm({ ...form, max_pickup_radius_km: e.target.value as any })} />
         </div>
         <div className="flex items-center gap-2 pt-5">
-          <label className="text-xs font-semibold text-gray-500">Active</label>
+          <label className="text-xs font-semibold text-muted-foreground">Active</label>
           <button onClick={() => setForm({ ...form, is_active: !form.is_active })}>
-            {form.is_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+            {form.is_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
         </div>
         <div className="flex items-center gap-2 pt-5">
-          <label className="text-xs font-semibold text-gray-500">Demand Heatmap</label>
+          <label className="text-xs font-semibold text-muted-foreground">Demand Heatmap</label>
           <button onClick={() => setForm({ ...form, show_demand_heatmap: !form.show_demand_heatmap })}>
-            {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+            {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
-          <span className="text-xs text-gray-400">Show ride demand overlay to drivers</span>
+          <span className="text-xs text-muted-foreground">Show ride demand overlay to drivers</span>
         </div>
       </div>
 
       {/* Surge pricing — lives here now, no separate /dashboard/pricing page */}
       <div>
         <div className="flex items-center justify-between mb-2">
-          <h4 className="font-bold text-gray-800">Surge Pricing</h4>
+          <h4 className="font-bold text-foreground">Surge Pricing</h4>
           {area.surge_source === "manual" && (
             <button
               type="button"
@@ -747,7 +747,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             </button>
           )}
         </div>
-        <p className="text-sm text-gray-500 mb-3">
+        <p className="text-sm text-muted-foreground mb-3">
           Temporarily raise fares in this area during high-demand periods. When active,
           every vehicle&apos;s fare is multiplied by the surge factor.
           {area.surge_source === "auto" && (
@@ -759,9 +759,9 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
         </p>
         <div className="flex items-center gap-2 pt-1">
           <button type="button" onClick={() => setForm({ ...form, surge_enabled: !form.surge_enabled })}>
-            {form.surge_enabled ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+            {form.surge_enabled ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
-          <label className="text-xs font-semibold text-gray-500">
+          <label className="text-xs font-semibold text-muted-foreground">
             Surge {form.surge_enabled ? "ON" : "off"}
           </label>
         </div>
@@ -769,7 +769,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end mt-3">
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Surge Multiplier</label>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">Surge Multiplier</label>
                 <input
                   className="w-full border rounded-lg px-3 py-2 text-sm"
                   type="number"
@@ -780,7 +780,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
                   onChange={e => setForm({ ...form, surge_multiplier: e.target.value as any })}
                 />
               </div>
-              <p className="text-[11px] text-gray-400 pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double · Auto cap = 2.5×</p>
+              <p className="text-[11px] text-muted-foreground pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double · Auto cap = 2.5×</p>
             </div>
             {needsJustification && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 mt-3">
@@ -802,11 +802,11 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
 
       {/* Driver Matching */}
       <div>
-        <h4 className="font-bold text-gray-800 mb-2">Driver Matching</h4>
-        <p className="text-sm text-gray-500 mb-3">Configure how drivers are matched to rides in this area.</p>
+        <h4 className="font-bold text-foreground mb-2">Driver Matching</h4>
+        <p className="text-sm text-muted-foreground mb-3">Configure how drivers are matched to rides in this area.</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Matching Algorithm</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Matching Algorithm</label>
             <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.driver_matching_algorithm} onChange={e => setForm({ ...form, driver_matching_algorithm: e.target.value })}>
               <option value="nearest">Nearest</option>
               <option value="rating_based">Rating Based</option>
@@ -815,30 +815,30 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             </select>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Search Radius (km)</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Search Radius (km)</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.5" value={form.search_radius_km} onChange={e => setForm({ ...form, search_radius_km: e.target.value as any })} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Min Driver Rating</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Min Driver Rating</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.1" min="1" max="5" value={form.min_driver_rating} onChange={e => setForm({ ...form, min_driver_rating: e.target.value as any })} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Simultaneous Offers</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Simultaneous Offers</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" min="1" max="10" value={form.max_simultaneous_offers} onChange={e => setForm({ ...form, max_simultaneous_offers: e.target.value as any })} />
           </div>
           <div className="flex items-center gap-2 pt-5">
             <input type="checkbox" id="use_eta" checked={form.use_eta_ranking} onChange={e => setForm({ ...form, use_eta_ranking: e.target.checked })} />
-            <label htmlFor="use_eta" className="text-sm font-medium text-gray-700">ETA Ranking</label>
+            <label htmlFor="use_eta" className="text-sm font-medium text-foreground">ETA Ranking</label>
           </div>
         </div>
       </div>
 
       {/* Geofence Editor */}
       <div>
-        <h4 className="font-bold text-gray-800 mb-2">Service Area Boundary</h4>
-        <p className="text-sm text-gray-500 mb-3">Draw or edit the polygon to define the service area boundary.</p>
+        <h4 className="font-bold text-foreground mb-2">Service Area Boundary</h4>
+        <p className="text-sm text-muted-foreground mb-3">Draw or edit the polygon to define the service area boundary.</p>
         <div className="h-80 rounded-xl overflow-hidden border">
-          <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+          <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
             <GeofenceMap
               key={`edit-${area.id}`}
               polygon={pendingPolygon ? pendingPolygon.coordinates[0].map((c: number[]) => ({ lat: c[1], lng: c[0] })) : getAreaPolygon(area)}
@@ -861,7 +861,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       <div className="flex items-center justify-between pt-2 border-t">
         <button onClick={onDelete} className="text-sm text-red-500 hover:underline">Delete this area</button>
         <button onClick={handleSave} disabled={saving}
-          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : 'bg-red-500 text-white hover:bg-red-600'} disabled:opacity-50`}>
+          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground hover:bg-primary/90'} disabled:opacity-50`}>
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save General Settings'}
         </button>
       </div>
@@ -875,11 +875,11 @@ function FieldInput({ label, value, type = "text", onSave }: { label: string; va
   useEffect(() => { setVal(String(value)); setDirty(false); }, [value]);
   return (
     <div>
-      <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
+      <label className="block text-xs font-semibold text-muted-foreground mb-1">{label}</label>
       <div className="flex gap-2">
         <input className="flex-1 border rounded-lg px-3 py-2 text-sm" type={type} step={type === 'number' ? '0.01' : undefined} value={val}
           onChange={e => { setVal(e.target.value); setDirty(true); }} />
-        {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="px-3 py-1 bg-red-500 text-white text-xs rounded-lg font-semibold">Save</button>}
+        {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="px-3 py-1 bg-primary text-primary-foreground text-xs rounded-lg font-semibold">Save</button>}
       </div>
     </div>
   );
@@ -891,10 +891,10 @@ function FieldTextarea({ label, value, placeholder, onSave }: { label: string; v
   useEffect(() => { setVal(String(value ?? '')); setDirty(false); }, [value]);
   return (
     <div>
-      <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
+      <label className="block text-xs font-semibold text-muted-foreground mb-1">{label}</label>
       <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={3} value={val} placeholder={placeholder}
         onChange={e => { setVal(e.target.value); setDirty(true); }} />
-      {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="mt-1 px-3 py-1 bg-red-500 text-white text-xs rounded-lg font-semibold">Save</button>}
+      {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="mt-1 px-3 py-1 bg-primary text-primary-foreground text-xs rounded-lg font-semibold">Save</button>}
     </div>
   );
 }
@@ -902,7 +902,7 @@ function FieldTextarea({ label, value, placeholder, onSave }: { label: string; v
 function _FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
   return (
     <div>
-      <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
+      <label className="block text-xs font-semibold text-muted-foreground mb-1">{label}</label>
       <select className="w-full border rounded-lg px-3 py-2 text-sm" value={value} onChange={e => onSave(e.target.value)}>
         {options.map(o => <option key={o} value={o}>{o}</option>)}
       </select>
@@ -913,9 +913,9 @@ function _FieldSelect({ label, value, options, onSave }: { label: string; value:
 function FieldToggle({ label, value, onSave }: { label: string; value: boolean; onSave: (v: boolean) => void }) {
   return (
     <div className="flex items-center gap-2">
-      <label className="text-xs font-semibold text-gray-500">{label}</label>
+      <label className="text-xs font-semibold text-muted-foreground">{label}</label>
       <button onClick={() => onSave(!value)}>
-        {value ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+        {value ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
       </button>
     </div>
   );
@@ -962,7 +962,7 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs text-gray-500 border-b">
+            <tr className="text-left text-xs text-muted-foreground border-b">
               <th className="pb-2 pr-2">Vehicle Type</th>
               <th className="pb-2 pr-2">Base Fare ($)</th>
               <th className="pb-2 pr-2">Per KM ($)</th>
@@ -985,7 +985,7 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
                 <tr key={i} className="border-b">
                   <td className="py-2 pr-2">
                     <select
-                      className="w-full border rounded-lg px-2 py-1.5 text-sm bg-white"
+                      className="w-full border rounded-lg px-2 py-1.5 text-sm bg-card"
                       value={currentVal}
                       onChange={e => update(i, 'vehicle_type', e.target.value)}
                     >
@@ -1007,7 +1007,7 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
                         value={(r as any)[f]} onChange={e => update(i, f, e.target.value)} />
                     </td>
                   ))}
-                  <td className="py-2"><button onClick={() => removeRow(i)} className="text-gray-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button></td>
+                  <td className="py-2"><button onClick={() => removeRow(i)} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /></button></td>
                 </tr>
               );
             })}
@@ -1020,10 +1020,10 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
         </p>
       )}
       <div className="flex gap-3 mt-3">
-        <button onClick={addRow} className="text-sm text-red-500 font-semibold hover:underline">+ Add vehicle type</button>
+        <button onClick={addRow} className="text-sm text-primary font-semibold hover:underline">+ Add vehicle type</button>
         <button
           onClick={() => { onSave(rows); setDirty(false); }}
-          className={`px-5 py-2 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+          className={`px-5 py-2 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
           disabled={!dirty}
         >
           {dirty ? 'Save Pricing*' : 'Saved'}
@@ -1083,10 +1083,10 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
       {/* Header */}
       <div className="flex items-start justify-between mb-5">
         <div>
-          <h4 className="font-bold text-gray-800 text-base">Required Documents</h4>
-          <p className="text-sm text-gray-500 mt-0.5">Define which documents drivers must upload to operate in this area.</p>
+          <h4 className="font-bold text-foreground text-base">Required Documents</h4>
+          <p className="text-sm text-muted-foreground mt-0.5">Define which documents drivers must upload to operate in this area.</p>
         </div>
-        <div className="flex items-center gap-4 text-xs text-gray-500">
+        <div className="flex items-center gap-4 text-xs text-muted-foreground">
           <span className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> {rows.length} total</span>
           <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> {requiredCount} required</span>
           <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-amber-500" /> {expiryCount} with expiry</span>
@@ -1095,31 +1095,31 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
 
       {/* Document Cards Grid */}
       {rows.length === 0 ? (
-        <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
-          <Image className="h-10 w-10 mx-auto mb-3 text-gray-300" />
-          <p className="text-sm font-medium text-gray-500">No documents required</p>
-          <p className="text-xs text-gray-400 mt-1">Add document types that drivers need to upload</p>
+        <div className="text-center py-12 bg-muted rounded-xl border-2 border-dashed border-border">
+          <Image className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+          <p className="text-sm font-medium text-muted-foreground">No documents required</p>
+          <p className="text-xs text-muted-foreground mt-1">Add document types that drivers need to upload</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {rows.map((r, i) => {
             const isEditing = editingIdx === i;
             return (
-              <div key={i} className={`rounded-xl border overflow-hidden transition-all ${isEditing ? 'ring-2 ring-red-200 border-red-300 shadow-md' : 'bg-white hover:shadow-sm border-gray-200'}`}>
+              <div key={i} className={`rounded-xl border overflow-hidden transition-all ${isEditing ? 'ring-2 ring-primary/30 border-primary/50 shadow-md' : 'bg-card hover:shadow-sm border-border'}`}>
                 {/* Card Header with preview */}
-                <div className={`px-4 py-3 flex items-center gap-3 ${isEditing ? 'bg-red-50' : 'bg-gray-50'}`}>
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${r.required !== false ? 'bg-emerald-100' : 'bg-gray-100'}`}>
-                    <FileText className={`h-5 w-5 ${r.required !== false ? 'text-emerald-600' : 'text-gray-400'}`} />
+                <div className={`px-4 py-3 flex items-center gap-3 ${isEditing ? 'bg-primary/10' : 'bg-muted'}`}>
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${r.required !== false ? 'bg-emerald-100' : 'bg-muted'}`}>
+                    <FileText className={`h-5 w-5 ${r.required !== false ? 'text-emerald-600' : 'text-muted-foreground'}`} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-gray-800 truncate">{r.label || 'Untitled Document'}</p>
-                    <p className="text-xs text-gray-400 font-mono">{r.key || 'no_key'}</p>
+                    <p className="text-sm font-bold text-foreground truncate">{r.label || 'Untitled Document'}</p>
+                    <p className="text-xs text-muted-foreground font-mono">{r.key || 'no_key'}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => moveDoc(i, i - 1)} disabled={i === 0} className="p-1 text-gray-300 hover:text-gray-500 disabled:opacity-30" title="Move up">
+                    <button onClick={() => moveDoc(i, i - 1)} disabled={i === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up">
                       <ChevronUp className="h-4 w-4" />
                     </button>
-                    <button onClick={() => moveDoc(i, i + 1)} disabled={i === rows.length - 1} className="p-1 text-gray-300 hover:text-gray-500 disabled:opacity-30" title="Move down">
+                    <button onClick={() => moveDoc(i, i + 1)} disabled={i === rows.length - 1} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down">
                       <ChevronDown className="h-4 w-4" />
                     </button>
                   </div>
@@ -1144,42 +1144,42 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
 
                 {/* Expand to edit or show actions */}
                 {isEditing ? (
-                  <div className="px-4 pb-4 space-y-3 border-t bg-white">
+                  <div className="px-4 pb-4 space-y-3 border-t bg-card">
                     <div className="pt-3">
-                      <label className="block text-[11px] font-semibold text-gray-500 mb-1">Document Label</label>
-                      <input className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-200 focus:border-red-300 outline-none" placeholder="e.g. Driver's License" value={r.label} onChange={e => update(i, 'label', e.target.value)} />
+                      <label className="block text-[11px] font-semibold text-muted-foreground mb-1">Document Label</label>
+                      <input className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" placeholder="e.g. Driver's License" value={r.label} onChange={e => update(i, 'label', e.target.value)} />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-semibold text-gray-500 mb-1">Key (identifier)</label>
-                      <input className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-red-200 focus:border-red-300 outline-none" placeholder="e.g. drivers_license" value={r.key} onChange={e => update(i, 'key', e.target.value)} />
+                      <label className="block text-[11px] font-semibold text-muted-foreground mb-1">Key (identifier)</label>
+                      <input className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" placeholder="e.g. drivers_license" value={r.key} onChange={e => update(i, 'key', e.target.value)} />
                     </div>
                     <div className="flex flex-col gap-2.5">
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input type="checkbox" checked={r.has_expiry} onChange={e => update(i, 'has_expiry', e.target.checked)} className="accent-red-500 w-4 h-4" />
+                        <input type="checkbox" checked={r.has_expiry} onChange={e => update(i, 'has_expiry', e.target.checked)} className="accent-primary w-4 h-4" />
                         <span>Requires expiry date</span>
                       </label>
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input type="checkbox" checked={r.required !== false} onChange={e => update(i, 'required', e.target.checked)} className="accent-red-500 w-4 h-4" />
+                        <input type="checkbox" checked={r.required !== false} onChange={e => update(i, 'required', e.target.checked)} className="accent-primary w-4 h-4" />
                         <span>Required</span>
                       </label>
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input type="checkbox" checked={!!r.requires_back_side} onChange={e => update(i, 'requires_back_side', e.target.checked)} className="accent-red-500 w-4 h-4" />
-                        <span>Requires both sides <span className="text-xs text-gray-400">(front &amp; back photo)</span></span>
+                        <input type="checkbox" checked={!!r.requires_back_side} onChange={e => update(i, 'requires_back_side', e.target.checked)} className="accent-primary w-4 h-4" />
+                        <span>Requires both sides <span className="text-xs text-muted-foreground">(front &amp; back photo)</span></span>
                       </label>
                     </div>
                     <div className="flex items-center justify-between pt-2">
-                      <button onClick={() => removeDoc(i)} className="flex items-center gap-1 text-sm text-red-500 hover:text-red-700 font-medium">
+                      <button onClick={() => removeDoc(i)} className="flex items-center gap-1 text-sm text-destructive hover:text-destructive/80 font-medium">
                         <Trash2 className="h-3.5 w-3.5" /> Remove
                       </button>
-                      <button onClick={() => setEditingIdx(null)} className="px-4 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-semibold hover:bg-gray-200">Done</button>
+                      <button onClick={() => setEditingIdx(null)} className="px-4 py-1.5 bg-muted text-foreground text-sm rounded-lg font-semibold hover:bg-muted/70">Done</button>
                     </div>
                   </div>
                 ) : (
                   <div className="px-4 pb-3 flex items-center justify-between">
-                    <button onClick={() => setEditingIdx(i)} className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 font-medium">
+                    <button onClick={() => setEditingIdx(i)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary font-medium">
                       <Pencil className="h-3 w-3" /> Edit
                     </button>
-                    <button onClick={() => removeDoc(i)} className="flex items-center gap-1 text-xs text-gray-300 hover:text-red-500">
+                    <button onClick={() => removeDoc(i)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive">
                       <Trash2 className="h-3 w-3" /> Remove
                     </button>
                   </div>
@@ -1192,12 +1192,12 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
 
       {/* Actions */}
       <div className="flex items-center gap-3 mt-5 pt-4 border-t">
-        <button onClick={addDoc} className="flex items-center gap-1.5 text-sm text-red-500 font-semibold hover:text-red-700 transition">
+        <button onClick={addDoc} className="flex items-center gap-1.5 text-sm text-primary font-semibold hover:text-primary/80 transition">
           <Plus className="h-4 w-4" /> Add document type
         </button>
         <div className="flex-1" />
         {dirty && <span className="text-xs text-amber-600 font-medium">Unsaved changes</span>}
-        <button onClick={() => { onSave(rows); setDirty(false); }} className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-red-500 text-white hover:bg-red-600 shadow-sm' : 'bg-gray-100 text-gray-400'}`}>
+        <button onClick={() => { onSave(rows); setDirty(false); }} className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm' : 'bg-muted text-muted-foreground'}`}>
           <span className="flex items-center gap-1.5"><CheckCircle className="h-4 w-4" /> Save Documents</span>
         </button>
       </div>
@@ -1271,51 +1271,51 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
             <div>
                 <div className="flex items-center justify-between mb-4">
                     <div>
-                        <h4 className="font-bold text-gray-800">Area Fees</h4>
-                        <p className="text-sm text-gray-500">Fees applied to rides in this area. Calculated dynamically based on type.</p>
+                        <h4 className="font-bold text-foreground">Area Fees</h4>
+                        <p className="text-sm text-muted-foreground">Fees applied to rides in this area. Calculated dynamically based on type.</p>
                     </div>
                     <button onClick={handleCreate} disabled={saving}
-                        className="flex items-center gap-1.5 bg-red-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
+                        className="flex items-center gap-1.5 bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-semibold hover:bg-primary/90 disabled:opacity-50">
                         <Plus className="h-4 w-4" /> Add Fee
                     </button>
                 </div>
 
                 {loading ? (
-                    <div className="text-center py-8 text-gray-400">Loading fees...</div>
+                    <div className="text-center py-8 text-muted-foreground">Loading fees...</div>
                 ) : fees.length === 0 ? (
-                    <div className="text-center py-8 bg-gray-50 rounded-xl border-2 border-dashed">
-                        <DollarSign className="h-8 w-8 text-gray-300 mx-auto mb-2" />
-                        <p className="text-sm text-gray-500">No fees configured</p>
-                        <p className="text-xs text-gray-400">Add fees like airport surcharge, night fee, city fee, etc.</p>
+                    <div className="text-center py-8 bg-muted rounded-xl border-2 border-dashed">
+                        <DollarSign className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                        <p className="text-sm text-muted-foreground">No fees configured</p>
+                        <p className="text-xs text-muted-foreground">Add fees like airport surcharge, night fee, city fee, etc.</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                         {fees.map(fee => (
-                            <div key={fee.id} className={`rounded-xl border p-4 ${fee.is_active ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                            <div key={fee.id} className={`rounded-xl border p-4 ${fee.is_active ? 'bg-card' : 'bg-muted opacity-60'}`}>
                                 <div className="flex items-start justify-between mb-3">
                                     <div>
-                                        <p className="font-bold text-gray-800">{fee.fee_name || fee.fee_type || 'Fee'}</p>
-                                        <p className="text-xs text-gray-400 mt-0.5">{fee.fee_type} · {fee.calc_mode || 'flat'}</p>
+                                        <p className="font-bold text-foreground">{fee.fee_name || fee.fee_type || 'Fee'}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{fee.fee_type} · {fee.calc_mode || 'flat'}</p>
                                     </div>
                                     <div className="text-right">
-                                        <p className="text-lg font-bold text-gray-900">
+                                        <p className="text-lg font-bold text-foreground">
                                             {fee.calc_mode === 'percentage' ? `${fee.amount}%` : `$${Number(fee.amount || 0).toFixed(2)}`}
                                             {fee.calc_mode === 'per_km' && '/km'}
                                         </p>
                                     </div>
                                 </div>
-                                {fee.description && <p className="text-xs text-gray-500 mb-3">{fee.description}</p>}
+                                {fee.description && <p className="text-xs text-muted-foreground mb-3">{fee.description}</p>}
                                 {fee.conditions && fee.conditions.start_hour !== undefined && (
-                                    <p className="text-xs text-gray-400 mb-3">Hours: {fee.conditions.start_hour}:00 - {fee.conditions.end_hour}:00</p>
+                                    <p className="text-xs text-muted-foreground mb-3">Hours: {fee.conditions.start_hour}:00 - {fee.conditions.end_hour}:00</p>
                                 )}
                                 <div className="flex items-center gap-2 pt-2 border-t">
-                                    <button onClick={() => setEditingFee(editingFee?.id === fee.id ? null : fee)} className="text-xs text-gray-400 hover:text-red-500 font-medium flex items-center gap-1">
+                                    <button onClick={() => setEditingFee(editingFee?.id === fee.id ? null : fee)} className="text-xs text-muted-foreground hover:text-primary font-medium flex items-center gap-1">
                                         <Pencil className="h-3 w-3" /> Edit
                                     </button>
-                                    <button onClick={() => handleUpdate(fee.id, { is_active: !fee.is_active })} className="text-xs text-gray-400 hover:text-gray-600 font-medium ml-auto">
+                                    <button onClick={() => handleUpdate(fee.id, { is_active: !fee.is_active })} className="text-xs text-muted-foreground hover:text-foreground font-medium ml-auto">
                                         {fee.is_active ? 'Disable' : 'Enable'}
                                     </button>
-                                    <button onClick={() => handleDelete(fee.id)} className="text-xs text-gray-300 hover:text-red-500 font-medium">
+                                    <button onClick={() => handleDelete(fee.id)} className="text-xs text-muted-foreground hover:text-destructive font-medium">
                                         <Trash2 className="h-3 w-3" />
                                     </button>
                                 </div>
@@ -1332,17 +1332,17 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
 
             {/* SECTION 2: Taxes */}
             <div>
-                <h4 className="font-bold text-gray-800 mb-3">Tax Configuration</h4>
-                <div className="bg-white rounded-xl border p-4">
+                <h4 className="font-bold text-foreground mb-3">Tax Configuration</h4>
+                <div className="bg-card rounded-xl border p-4">
                     <div className="flex items-center gap-4 mb-4">
                         <label className="flex items-center gap-2 text-sm">
                             <input type="radio" name={`tax-${areaId}`} checked={!area.hst_enabled}
-                                onChange={() => onFieldUpdate(areaId, 'hst_enabled', false)} className="accent-red-500" />
+                                onChange={() => onFieldUpdate(areaId, 'hst_enabled', false)} className="accent-primary" />
                             GST + PST (separate)
                         </label>
                         <label className="flex items-center gap-2 text-sm">
                             <input type="radio" name={`tax-${areaId}`} checked={!!area.hst_enabled}
-                                onChange={() => onFieldUpdate(areaId, 'hst_enabled', true)} className="accent-red-500" />
+                                onChange={() => onFieldUpdate(areaId, 'hst_enabled', true)} className="accent-primary" />
                             HST (harmonized)
                         </label>
                     </div>
@@ -1380,7 +1380,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
 
             {/* SECTION 3: Cancellation Fees */}
             <div>
-                <h4 className="font-bold text-gray-800 mb-3">Cancellation Fees</h4>
+                <h4 className="font-bold text-foreground mb-3">Cancellation Fees</h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <FieldInput label="Rider cancel — driver on the way ($)" value={area.rider_cancel_fee_before_driver || 0} type="number" onSave={v => onFieldUpdate(areaId, 'rider_cancel_fee_before_driver', parseFloat(v))} />
                     <FieldInput label="Rider cancel — driver arrived ($)" value={area.rider_cancel_fee_after_arrival || 4.50} type="number" onSave={v => onFieldUpdate(areaId, 'rider_cancel_fee_after_arrival', parseFloat(v))} />
@@ -1393,8 +1393,8 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
 
             {/* SECTION 4: Referral Rewards */}
             <div>
-                <h4 className="font-bold text-gray-800 mb-3">Referral Rewards</h4>
-                <p className="text-xs text-gray-500 mb-3">
+                <h4 className="font-bold text-foreground mb-3">Referral Rewards</h4>
+                <p className="text-xs text-muted-foreground mb-3">
                     Per-area referral rewards (CAD). Riders/drivers whose area resolves here see and earn these amounts; users not mapped to any area fall back to the global default. Set any reward to $0 to turn that side off (e.g. driver referee reward defaults to $0 — set it above 0 to pay a signup bonus to the referred driver). &quot;Rides within (days)&quot; is the deadline to complete the required rides before the referral expires unpaid — set 0 for no deadline.
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1407,7 +1407,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                     <FieldInput label="Driver — rides required" value={area.driver_referral_rides_required ?? 10} type="number" onSave={v => onFieldUpdate(areaId, 'driver_referral_rides_required', parseInt(v))} />
                     <FieldInput label="Driver — rides within (days)" value={area.driver_referral_window_days ?? 30} type="number" onSave={v => onFieldUpdate(areaId, 'driver_referral_window_days', parseInt(v))} />
                 </div>
-                <p className="text-xs text-gray-500 mt-4 mb-2">
+                <p className="text-xs text-muted-foreground mt-4 mb-2">
                     Referral Terms &amp; Conditions shown on the rider/driver &quot;Refer &amp; Earn&quot; screens. Leave blank to auto-generate the default sentence from the reward amounts above.
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1425,7 +1425,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={confirmFeeDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    <AlertDialogAction onClick={confirmFeeDelete} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
@@ -1448,26 +1448,26 @@ function FeeEditForm({ fee, feeTypes, calcModes, onSave, onCancel }: {
         <div className="mt-3 pt-3 border-t space-y-3">
             <div className="grid grid-cols-2 gap-3">
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Fee Name</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">Fee Name</label>
                     <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.fee_name}
                         onChange={e => setForm({ ...form, fee_name: e.target.value })} />
                 </div>
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Fee Type</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">Fee Type</label>
                     <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.fee_type}
                         onChange={e => setForm({ ...form, fee_type: e.target.value })}>
                         {feeTypes.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                     </select>
                 </div>
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Calculation Mode</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">Calculation Mode</label>
                     <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.calc_mode}
                         onChange={e => setForm({ ...form, calc_mode: e.target.value })}>
                         {calcModes.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                     </select>
                 </div>
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">
                         Amount {form.calc_mode === 'percentage' ? '(%)' : form.calc_mode === 'per_km' ? '($/km)' : '($)'}
                     </label>
                     <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.01"
@@ -1475,20 +1475,20 @@ function FeeEditForm({ fee, feeTypes, calcModes, onSave, onCancel }: {
                 </div>
             </div>
             <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Description (optional)</label>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">Description (optional)</label>
                 <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.description}
                     onChange={e => setForm({ ...form, description: e.target.value })} />
             </div>
             {form.fee_type === 'night' && (
                 <div className="grid grid-cols-2 gap-3">
                     <div>
-                        <label className="block text-xs font-semibold text-gray-500 mb-1">Start Hour (0-23)</label>
+                        <label className="block text-xs font-semibold text-muted-foreground mb-1">Start Hour (0-23)</label>
                         <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" min="0" max="23"
                             value={form.conditions.start_hour ?? 23}
                             onChange={e => setForm({ ...form, conditions: { ...form.conditions, start_hour: parseInt(e.target.value) } })} />
                     </div>
                     <div>
-                        <label className="block text-xs font-semibold text-gray-500 mb-1">End Hour (0-23)</label>
+                        <label className="block text-xs font-semibold text-muted-foreground mb-1">End Hour (0-23)</label>
                         <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" min="0" max="23"
                             value={form.conditions.end_hour ?? 5}
                             onChange={e => setForm({ ...form, conditions: { ...form.conditions, end_hour: parseInt(e.target.value) } })} />
@@ -1497,10 +1497,10 @@ function FeeEditForm({ fee, feeTypes, calcModes, onSave, onCancel }: {
             )}
             <div className="flex gap-2 pt-1">
                 <button onClick={async () => { setSaving(true); await onSave(form); setSaving(false); }} disabled={saving}
-                    className="bg-red-500 text-white px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
+                    className="bg-primary text-primary-foreground px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-primary/90 disabled:opacity-50">
                     {saving ? 'Saving...' : 'Save'}
                 </button>
-                <button onClick={onCancel} className="bg-gray-100 text-gray-600 px-4 py-1.5 rounded-lg text-sm font-semibold">Cancel</button>
+                <button onClick={onCancel} className="bg-muted text-foreground px-4 py-1.5 rounded-lg text-sm font-semibold">Cancel</button>
             </div>
         </div>
     );
@@ -1614,15 +1614,15 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
           <h5 className="font-bold mb-3">{editingId ? "Edit Plan" : "New Plan"}</h5>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Plan Name *</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Plan Name *</label>
               <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. Basic" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Price (CAD) *</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Price (CAD) *</label>
               <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.01" placeholder="19.99" value={form.price} onChange={e => setForm({...form, price: e.target.value})} />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Duration</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Duration</label>
               <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.duration_days} onChange={e => setForm({...form, duration_days: parseInt(e.target.value)})}>
                 {DURATION_OPTIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
               </select>
@@ -1630,7 +1630,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Rides Per Day</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Rides Per Day</label>
               <div className="flex gap-1.5 flex-wrap">
                 <button onClick={() => setForm({...form, rides_per_day: -1})} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${form.rides_per_day === -1 ? "bg-red-500 text-white border-red-500" : "bg-white border-gray-200"}`}>Unlimited</button>
                 {[4, 8, 12, 20].map(n => (
@@ -1639,12 +1639,12 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
               </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Description</label>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1">Description</label>
               <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Brief description" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
             </div>
           </div>
           <div className="mb-3">
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Features (comma-separated)</label>
+            <label className="block text-xs font-semibold text-muted-foreground mb-1">Features (comma-separated)</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Priority support, Surge protection" value={form.features} onChange={e => setForm({...form, features: e.target.value})} />
           </div>
           <div className="flex items-center gap-4 mb-4">
@@ -1855,7 +1855,7 @@ function CascadeEditor({
               <div key={idx} className="rounded-xl border bg-white p-4">
                 <div className="flex items-start gap-4">
                   <div className="flex-1">
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">When booked type is</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">When booked type is</label>
                     <select
                       className="w-full border rounded-lg px-3 py-2 text-sm"
                       value={rule.from}
@@ -1874,7 +1874,7 @@ function CascadeEditor({
                   </div>
 
                   <div className="flex-1">
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Also offer to drivers of</label>
+                    <label className="block text-xs font-semibold text-muted-foreground mb-1">Also offer to drivers of</label>
                     <div className="border rounded-lg p-2 space-y-1 min-h-[42px]">
                       {toOptions.length === 0 ? (
                         <p className="text-xs text-gray-400 px-1 py-1">No other vehicle types available</p>

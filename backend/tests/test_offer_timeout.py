@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.tests._factories import close_spawned_coro
+
 
 class TestOfferTimeoutHandler:
     """Tests for routes/rides._offer_timeout_handler."""
@@ -228,8 +230,10 @@ class TestDispatchHardening:
                 AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
             ),
             patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides._deps.spawn", MagicMock()),
-            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
+            # side_effect closes the coroutine handed to spawn()/create_task()
+            # instead of leaking it un-awaited (A8).
+            patch("backend.routes.rides._deps.spawn", MagicMock(side_effect=close_spawned_coro)),
+            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock(side_effect=close_spawned_coro)),
         ):
             await rides_mod.match_driver_to_ride(ride_id=self._RIDE_BASE["id"])
 
@@ -281,7 +285,8 @@ class TestDispatchHardening:
                 AsyncMock(return_value={"ride_offer_timeout_seconds": 22}),
             ),
             patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
-            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
+            # side_effect closes the spawned coroutine instead of leaking it (A8).
+            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock(side_effect=close_spawned_coro)),
             # Batch-offer dispatch inserts ride_offers rows (and does
             # best-effort quest-progress/incentive lookups) via
             # db_supabase.run_sync(lambda: supabase.table(...)...execute()) --

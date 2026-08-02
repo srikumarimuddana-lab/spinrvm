@@ -394,11 +394,16 @@ async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, 
 async def mark_stripe_event_processed(event_id: str) -> None:
     """Stamp processed_at=now() on a previously claimed stripe event row.
 
-    Called after the handler has finished the business-logic work for
-    an event. Failure here is non-fatal — the reconciliation job can
-    still distinguish processed vs. stuck events by the presence of
-    the updated_at stamp, and Stripe will not retry since we returned
-    2xx. Log and swallow.
+    Called after the handler has finished the business-logic work for an
+    event. Stripe will not retry since we already returned 2xx, so a
+    failure here cannot self-heal via the retry path — the row is left
+    stuck at processed_at=NULL. `utils/stripe_reconcile.py`'s daily tick
+    (`_reconcile_stuck_stripe_events`, ACTION_ITEMS.md C10) surfaces rows
+    like this to the audit log for manual review — detection only, it
+    deliberately does not re-run business logic (this row's side effects
+    already happened; replaying risks double-processing). The
+    `logger.error` below is still the fast/loud signal (Sentry-bridged);
+    the daily sweep is the backstop in case that signal is ever missed.
     """
     if not supabase:
         return
@@ -411,7 +416,14 @@ async def mark_stripe_event_processed(event_id: str) -> None:
     try:
         await run_sync(_fn)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"Failed to stamp processed_at on stripe event {event_id}: {e}")
+        logger.error(
+            f"Failed to stamp processed_at on stripe event {event_id}: {e!r}. "
+            "This event will remain stuck at processed_at=NULL until the "
+            "daily stripe_reconcile sweep surfaces it for manual review "
+            "(Stripe already got a 2xx and will not retry) -- "
+            "see ACTION_ITEMS.md C10.",
+            extra={"domain": "payments", "event_id": event_id},
+        )
 
 
 async def unclaim_stripe_event(event_id: str) -> bool:

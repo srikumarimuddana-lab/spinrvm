@@ -13,7 +13,7 @@
  * preserves it (keep_trip_pins), and prompt rule 6b tells the model to use
  * it verbatim without re-geocoding.
  */
-import type { LocationSuggestionCandidate } from '../types/ai';
+import type { AiAction, FareQuoteOption, LocationSuggestionCandidate } from '../types/ai';
 
 export type LocationRole = 'pickup' | 'dropoff' | null | undefined;
 
@@ -31,4 +31,36 @@ export function buildLocationChoiceMessage(
   const coords = `[${candidate.lat.toFixed(5)},${candidate.lng.toFixed(5)}]`;
   const suffix = role === 'pickup' ? ' as my pickup' : role === 'dropoff' ? ' as my dropoff' : '';
   return `Use ${label} ${coords}${suffix}.`;
+}
+
+type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
+
+/** The message a tapped quote option sends back to the assistant. The next
+ * turn sees only message text, so this must be self-contained — and it must
+ * carry the quote's exact [lat,lng] coordinates and vehicle id verbatim so
+ * the model books THE priced trip instead of re-geocoding the addresses (the
+ * old prose-only message caused a third independent geocode, moving pins and
+ * prices between the quote and the confirm card). Shared by the rider app's
+ * chat (`bookingProposal.ts` re-exports this) and the admin AI console, which
+ * mirrors the rider card so the console shows exactly what the rider would
+ * see. */
+export function buildQuoteBookingMessage(quote: FareQuoteAction, option: FareQuoteOption): string {
+  const endpoint = (label: 'from' | 'to', address?: string, lat?: number, lng?: number): string => {
+    const coords =
+      typeof lat === 'number' && typeof lng === 'number'
+        ? `[${lat.toFixed(5)},${lng.toFixed(5)}]`
+        : '';
+    const place = [address, coords].filter(Boolean).join(' ');
+    return place ? ` ${label} ${place}` : '';
+  };
+  const vehicle = option.vehicle_type ?? 'recommended option';
+  const vehicleId = option.vehicle_type_id ? ` (vehicle id ${option.vehicle_type_id})` : '';
+  const promo = option.promo_code ? ` with promo ${option.promo_code}` : '';
+  const total = option.final_total ? `, total $${option.final_total}` : '';
+  return (
+    `Book the ${vehicle}${vehicleId}` +
+    `${endpoint('from', quote.pickup_address, quote.pickup_lat, quote.pickup_lng)}` +
+    `${endpoint('to', quote.dropoff_address, quote.dropoff_lat, quote.dropoff_lng)}` +
+    `${promo}${total}.`
+  );
 }

@@ -31,19 +31,38 @@ Audit only. You report; the user fixes. Load `@.claude/context/domain-payments.m
 - Check `payment_retry.py` loop respects existing idempotency keys — don't create new ones on retry
 
 ## 4. Fare breakdown invariant
+
+Source of truth: `.claude/context/domain-payments.md` — mirror it exactly,
+don't paraphrase from memory. As of this writing:
+
 ```
-subtotal      = base + (per_km * dist) + (per_min * dur) + booking_fee
-subtotal      = max(subtotal, minimum_fare)
-surged        = subtotal * surge_multiplier      # NOT applied to booking_fee, NOT to corporate rides
-taxed         = surged + gst + pst               # GST 5%, PST 6% where applicable
-total         = taxed + tip                       # tip is post-tax, separate
-driver_payout = total - booking_fee - platform_share   # platform_share = 0 for Spinr consumer rides
+# Surge multiplies the distance and time components ONLY — never the base
+# fare, booking fee, or airport fee (see services/fare_service.py::calculate_fare).
+distance_fare = (per_km  * distance_km)  * surge_multiplier
+time_fare     = (per_min * duration_min) * surge_multiplier
+subtotal      = base_fare + distance_fare + time_fare + booking_fee + airport_fee
+subtotal      = max(subtotal, minimum_fare)        # minimum floor applied AFTER surge
+taxed         = subtotal + gst + pst               # corporate-paid rides: surge never applies
+total         = taxed + tip
+driver_payout = base_fare + distance_fare + time_fare   # 100% to driver; booking/airport are platform's
 ```
-- Surge applied **before** tax and **not** to booking fee
+- Surge multiplies **distance + time only** — flag any code that multiplies
+  `base_fare`, `booking_fee`, or `airport_fee` by `surge_multiplier`; that is
+  the bug this rule exists to catch, not a simplification of it
+- `airport_fee` is part of `subtotal` and is excluded from both surge and
+  driver payout, same as `booking_fee` — flag any fare-calc diff that drops
+  `airport_fee` from the invariant entirely (money silently missing from the
+  total) or folds it into a surged component
+- Surge applied **before** tax and **not** to booking fee or airport fee
 - Surge **never** applies to corporate-paid rides (policy)
 - Surge locked at fare estimate — never retroactive
 - `SURGE_CAP = 2.5` is the auto ceiling; manual override > 2.5 requires documented justification
 - Tip never included in the amount that gets rounded/taxed
+- `driver_payout` is **not** `total - booking_fee - platform_share` — it's
+  the sum of `base_fare + distance_fare + time_fare` directly; `platform_share`
+  isn't a subtracted line item in the current model, it's a red flag if
+  nonzero anywhere (see rule #7) — don't reconstruct payout by subtraction,
+  verify it matches the three named components
 
 ## 5. Receipt line items (transparency is a differentiator)
 Must appear as separate lines — never bundled into "service fee" or "other":

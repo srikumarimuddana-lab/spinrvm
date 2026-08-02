@@ -1,0 +1,633 @@
+"""Coverage tests for backend/routes/admin/service_areas.py.
+
+Closes the coverage gap (65.80% -> target >=70%, per ACTION_ITEMS.md item 4 /
+A1b Track 1 series). TEST-ONLY change — no application code touched.
+
+Priority order (per CLAUDE.md / this series' established pattern):
+  1. validation-error paths (400s: airport bbox guard, airport-subregion
+     guard, surge_multiplier bounds/justification)
+  2. not-found / empty-result shapes (tax config default, vehicle pricing)
+  3. DB-failure propagation (503s: surge status)
+  4. success-path shape assertions for the large, mostly-untested
+     update/delete/fees/tax/vehicle-pricing handlers.
+
+Uses ``patch("backend.routes.admin.service_areas.db_supabase.<fn>", ...)``
+(the pattern already used by test_service_area_create_regulatory.py in this
+file) rather than mocking the raw supabase client chain, since the handlers
+call the ``db_supabase`` module functions directly.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import pydantic
+import pytest
+from fastapi import HTTPException
+
+from backend.routes.admin.service_areas import (
+    AreaFeeCreateRequest,
+    AreaFeeUpdateRequest,
+    AreaTaxRequest,
+    ServiceAreaCreateRequest,
+    ServiceAreaUpdateRequest,
+    SurgePricingRequest,
+    admin_create_area_fee,
+    admin_create_service_area,
+    admin_delete_area_fee,
+    admin_delete_service_area,
+    admin_get_area_fees,
+    admin_get_area_tax,
+    admin_get_service_areas,
+    admin_get_surge_status,
+    admin_get_vehicle_pricing,
+    admin_update_area_fee,
+    admin_update_area_tax,
+    admin_update_service_area,
+    admin_update_surge_pricing,
+)
+
+_ADMIN = {"id": "admin-1", "email": "admin@spinr.ca", "role": "super_admin"}
+
+
+def _patches(**overrides):
+    """Return a dict of default AsyncMock patches for db_supabase + side helpers,
+    merged with any per-test overrides."""
+    defaults = {
+        "backend.routes.admin.service_areas.invalidate_fare_cache": AsyncMock(),
+        "backend.routes.admin.service_areas.log_admin_action": AsyncMock(),
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+# ── admin_get_service_areas: parent/child nesting ───────────────────────
+
+
+class TestGetServiceAreas:
+    @pytest.mark.anyio
+    async def test_nests_sub_regions_under_parent(self):
+        rows = [
+            {"id": "parent-1", "name": "Regina", "parent_service_area_id": None},
+            {"id": "child-1", "name": "YQR", "parent_service_area_id": "parent-1"},
+        ]
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.get_rows",
+            AsyncMock(return_value=rows),
+        ):
+            result = await admin_get_service_areas()
+
+        assert len(result) == 1
+        assert result[0]["id"] == "parent-1"
+        assert len(result[0]["sub_regions"]) == 1
+        assert result[0]["sub_regions"][0]["id"] == "child-1"
+
+    @pytest.mark.anyio
+    async def test_no_areas_returns_empty_list(self):
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.get_rows",
+            AsyncMock(return_value=[]),
+        ):
+            result = await admin_get_service_areas()
+        assert result == []
+
+
+# ── admin_create_service_area: validation guards ────────────────────────
+
+
+class TestCreateServiceAreaGuards:
+    @pytest.mark.anyio
+    async def test_airport_polygon_too_large_rejected(self):
+        # Bounding box ~ city-sized (~1 degree lat span => ~111km), way over
+        # the 10km cap for an airport zone.
+        req = ServiceAreaCreateRequest(
+            name="Regina Airport",
+            is_airport=True,
+            parent_service_area_id="parent-1",
+            polygon=[
+                {"lat": 50.0, "lng": -104.0},
+                {"lat": 51.0, "lng": -104.0},
+                {"lat": 51.0, "lng": -103.0},
+            ],
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_create_service_area(req, admin=_ADMIN)
+        assert exc_info.value.status_code == 400
+        assert "too large" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_airport_on_top_level_row_rejected(self):
+        req = ServiceAreaCreateRequest(
+            name="Regina",
+            is_airport=True,
+            parent_service_area_id=None,
+            polygon=[{"lat": 50.0, "lng": -104.0}],
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_create_service_area(req, admin=_ADMIN)
+        assert exc_info.value.status_code == 400
+        assert "sub-region" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_happy_path_inserts_and_returns_area_id(self):
+        insert_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                insert_one=insert_one,
+                get_rows=AsyncMock(return_value=[]),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaCreateRequest(name="Saskatoon", city="Saskatoon")
+            result = await admin_create_service_area(req, admin=_ADMIN)
+
+        assert "area_id" in result
+        insert_one.assert_awaited_once()
+        table, doc = insert_one.await_args.args
+        assert table == "service_areas"
+        assert doc["name"] == "Saskatoon"
+
+    @pytest.mark.anyio
+    async def test_subscription_required_forces_spinr_pass_enabled(self):
+        insert_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                insert_one=insert_one,
+                get_rows=AsyncMock(return_value=[]),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaCreateRequest(name="Moose Jaw", subscription_required=True, spinr_pass_enabled=False)
+            await admin_create_service_area(req, admin=_ADMIN)
+
+        _, doc = insert_one.await_args.args
+        assert doc["subscription_required"] is True
+        assert doc["spinr_pass_enabled"] is True
+
+    @pytest.mark.anyio
+    async def test_seeds_vehicle_pricing_from_active_vehicle_types(self):
+        insert_one = AsyncMock()
+        vt_rows = [{"name": "sedan", "is_active": True}, {"name": "suv", "is_active": True}]
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                insert_one=insert_one,
+                get_rows=AsyncMock(return_value=vt_rows),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaCreateRequest(name="Regina")
+            await admin_create_service_area(req, admin=_ADMIN)
+
+        _, doc = insert_one.await_args.args
+        assert len(doc["vehicle_pricing"]) == 2
+        assert {row["vehicle_type"] for row in doc["vehicle_pricing"]} == {"sedan", "suv"}
+
+
+# ── admin_update_service_area: validation + coercion branches ───────────
+
+
+class TestUpdateServiceAreaGuards:
+    @pytest.mark.anyio
+    async def test_polygon_flip_to_airport_blocked_when_top_level(self):
+        existing = {"id": "area-1", "is_airport": False, "parent_service_area_id": None, "polygon": []}
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.find_one",
+            AsyncMock(return_value=existing),
+        ):
+            req = ServiceAreaUpdateRequest(is_airport=True)
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_update_service_area("area-1", req, admin=_ADMIN)
+        assert exc_info.value.status_code == 400
+        assert "sub-region" in exc_info.value.detail
+
+    def test_surge_multiplier_out_of_range_rejected_by_pydantic_422(self):
+        """Regression test for issue #3069: the handler's own manual
+        `sm < 1.0 or sm > _SURGE_MAX` re-check was dead code — Pydantic's
+        `Field(ge=1.0, le=10.0)` on `ServiceAreaUpdateRequest.surge_multiplier`
+        already matches `_SURGE_MAX` exactly and rejects out-of-range values
+        with a 422 before the handler ever runs. The dead branch was removed;
+        this test pins that the boundary is still enforced (now solely at the
+        Pydantic layer)."""
+        with pytest.raises(pydantic.ValidationError):
+            ServiceAreaUpdateRequest(surge_multiplier=10.01)
+        with pytest.raises(pydantic.ValidationError):
+            ServiceAreaUpdateRequest(surge_multiplier=0.99)
+
+    @pytest.mark.anyio
+    async def test_surge_above_cap_without_justification_rejected(self):
+        req = ServiceAreaUpdateRequest(surge_multiplier=3.0)
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+        assert exc_info.value.status_code == 400
+        assert "justification" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_surge_above_cap_with_justification_logs_and_succeeds(self):
+        log_admin_action = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", log_admin_action),
+        ):
+            req = ServiceAreaUpdateRequest(
+                surge_multiplier=4.0, surge_justification="Approved by legal — special event"
+            )
+            result = await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        assert result == {"message": "Service area updated"}
+        # Two log_admin_action calls: one for the override, one for the update.
+        assert log_admin_action.await_count == 2
+        actions = [c.args[1] for c in log_admin_action.await_args_list]
+        assert "surge_override_above_cap" in actions
+
+    @pytest.mark.anyio
+    async def test_surge_above_cap_allowed_when_disabling_surge(self):
+        """An above-cap multiplier being turned OFF (surge_enabled=False)
+        should not require justification."""
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(surge_multiplier=5.0, surge_enabled=False)
+            result = await admin_update_service_area("area-1", req, admin=_ADMIN)
+        assert result == {"message": "Service area updated"}
+
+    @pytest.mark.anyio
+    async def test_subscription_required_true_forces_spinr_pass_enabled(self):
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(subscription_required=True)
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        _, _, payload = update_one.await_args.args
+        assert payload["subscription_required"] is True
+        assert payload["spinr_pass_enabled"] is True
+
+    @pytest.mark.anyio
+    async def test_spinr_pass_disable_coerced_back_on_when_subscription_required_in_db(self):
+        update_one = AsyncMock()
+        existing = {"subscription_required": True}
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                find_one=AsyncMock(return_value=existing),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(spinr_pass_enabled=False)
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        _, _, payload = update_one.await_args.args
+        assert payload["spinr_pass_enabled"] is True
+
+    @pytest.mark.anyio
+    async def test_disabling_surge_clears_active_and_multiplier(self):
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(surge_enabled=False)
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        _, _, payload = update_one.await_args.args
+        assert payload["surge_enabled"] is False
+        assert payload["surge_active"] is False
+        assert payload["surge_multiplier"] == 1.0
+
+    @pytest.mark.anyio
+    async def test_airport_fee_zero_turns_off_is_airport(self):
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(airport_fee=0)
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        _, _, payload = update_one.await_args.args
+        assert payload["is_airport"] is False
+
+    @pytest.mark.anyio
+    async def test_empty_payload_skips_db_write(self):
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()) as inv,
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest()
+            result = await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        update_one.assert_not_awaited()
+        inv.assert_not_awaited()
+        assert result == {"message": "Service area updated"}
+
+
+# ── admin_delete_service_area ────────────────────────────────────────────
+
+
+class TestDeleteServiceArea:
+    @pytest.mark.anyio
+    async def test_deletes_invalidates_cache_and_logs(self):
+        delete_many = AsyncMock()
+        log_admin_action = AsyncMock()
+        with (
+            patch("backend.routes.admin.service_areas.db_supabase.delete_many", delete_many),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()) as inv,
+            patch("backend.routes.admin.service_areas.log_admin_action", log_admin_action),
+        ):
+            result = await admin_delete_service_area("area-1", admin=_ADMIN)
+
+        delete_many.assert_awaited_once_with("service_areas", {"id": "area-1"})
+        inv.assert_awaited_once()
+        log_admin_action.assert_awaited_once()
+        assert result == {"message": "Service area deleted"}
+
+
+# ── admin_update_surge_pricing ───────────────────────────────────────────
+
+
+class TestUpdateSurgePricing:
+    @pytest.mark.anyio
+    async def test_activate_surge_updates_area_and_inserts_history_row(self):
+        update_one = AsyncMock()
+        insert_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                insert_one=insert_one,
+                get_rows=AsyncMock(return_value=[]),  # no existing surge_pricing row
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = SurgePricingRequest(multiplier=1.5, is_active=True)
+            result = await admin_update_surge_pricing("area-1", req, admin=_ADMIN)
+
+        assert result == {"message": "Surge pricing updated"}
+        area_call = update_one.await_args_list[0]
+        assert area_call.args[0] == "service_areas"
+        assert area_call.args[2]["surge_enabled"] is True
+        assert area_call.args[2]["surge_active"] is True
+        insert_one.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_deactivate_surge_resets_multiplier_and_updates_existing_row(self):
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                insert_one=AsyncMock(),
+                get_rows=AsyncMock(return_value=[{"id": "surge-1"}]),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = SurgePricingRequest(multiplier=1.0, is_active=False)
+            await admin_update_surge_pricing("area-1", req, admin=_ADMIN)
+
+        # Second update_one call updates the existing surge_pricing row.
+        surge_call = update_one.await_args_list[1]
+        assert surge_call.args[0] == "surge_pricing"
+
+
+# ── admin_get_surge_status ────────────────────────────────────────────────
+
+
+class TestGetSurgeStatus:
+    @pytest.mark.anyio
+    async def test_happy_path_returns_status(self):
+        with patch(
+            "backend.utils.surge_engine.get_surge_status",
+            AsyncMock(return_value={"areas": []}),
+        ):
+            result = await admin_get_surge_status()
+        assert result == {"areas": []}
+
+    @pytest.mark.anyio
+    async def test_db_error_returns_503(self):
+        with patch(
+            "backend.utils.surge_engine.get_surge_status",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_get_surge_status()
+        assert exc_info.value.status_code == 503
+
+
+# ── area fees CRUD ────────────────────────────────────────────────────────
+
+
+class TestAreaFees:
+    @pytest.mark.anyio
+    async def test_get_area_fees_returns_rows(self):
+        rows = [{"id": "fee-1", "fee_name": "Booking"}]
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.get_rows",
+            AsyncMock(return_value=rows),
+        ):
+            result = await admin_get_area_fees("area-1")
+        assert result == rows
+
+    @pytest.mark.anyio
+    async def test_create_area_fee_inserts_and_returns_doc(self):
+        insert_one = AsyncMock()
+        with patch("backend.routes.admin.service_areas.db_supabase.insert_one", insert_one):
+            req = AreaFeeCreateRequest(fee_name="Peak", fee_type="custom", amount=2.5)
+            result = await admin_create_area_fee("area-1", req)
+
+        assert result["fee_name"] == "Peak"
+        assert result["service_area_id"] == "area-1"
+        insert_one.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_update_area_fee_only_sends_provided_fields(self):
+        update_one = AsyncMock()
+        with patch("backend.routes.admin.service_areas.db_supabase.update_one", update_one):
+            req = AreaFeeUpdateRequest(amount=9.99)
+            result = await admin_update_area_fee("area-1", "fee-1", req)
+
+        assert result == {"message": "Area fee updated"}
+        table, filters, updates = update_one.await_args.args
+        assert table == "area_fees"
+        assert filters == {"id": "fee-1"}
+        assert updates["amount"] == 9.99
+        assert "fee_name" not in updates
+
+    @pytest.mark.anyio
+    async def test_update_area_fee_empty_payload_skips_write(self):
+        update_one = AsyncMock()
+        with patch("backend.routes.admin.service_areas.db_supabase.update_one", update_one):
+            req = AreaFeeUpdateRequest()
+            result = await admin_update_area_fee("area-1", "fee-1", req)
+
+        update_one.assert_not_awaited()
+        assert result == {"message": "Area fee updated"}
+
+    @pytest.mark.anyio
+    async def test_delete_area_fee(self):
+        delete_many = AsyncMock()
+        with patch("backend.routes.admin.service_areas.db_supabase.delete_many", delete_many):
+            result = await admin_delete_area_fee("area-1", "fee-1")
+
+        delete_many.assert_awaited_once_with("area_fees", {"id": "fee-1"})
+        assert result == {"message": "Area fee deleted"}
+
+
+# ── area tax config ────────────────────────────────────────────────────────
+
+
+class TestAreaTax:
+    @pytest.mark.anyio
+    async def test_get_area_tax_returns_defaults_when_area_missing(self):
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.get_rows",
+            AsyncMock(return_value=[]),
+        ):
+            result = await admin_get_area_tax("missing-area")
+
+        assert result["service_area_id"] == "missing-area"
+        assert result["gst_enabled"] is True
+        assert result["gst_rate"] == 5.0
+        assert result["pst_enabled"] is False
+
+    @pytest.mark.anyio
+    async def test_get_area_tax_returns_row_values(self):
+        row = {
+            "gst_enabled": False,
+            "gst_rate": 0,
+            "pst_enabled": True,
+            "pst_rate": 6.0,
+            "hst_enabled": False,
+            "hst_rate": 0,
+        }
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.get_rows",
+            AsyncMock(return_value=[row]),
+        ):
+            result = await admin_get_area_tax("area-1")
+
+        assert result["pst_enabled"] is True
+        assert result["pst_rate"] == 6.0
+
+    @pytest.mark.anyio
+    async def test_update_area_tax_writes_and_returns_new_values(self):
+        update_one = AsyncMock()
+        updated_row = {
+            "gst_enabled": True,
+            "gst_rate": 5.0,
+            "pst_enabled": True,
+            "pst_rate": 6.0,
+            "hst_enabled": False,
+            "hst_rate": 0,
+        }
+        with patch.multiple(
+            "backend.routes.admin.service_areas.db_supabase",
+            update_one=update_one,
+            get_rows=AsyncMock(return_value=[updated_row]),
+        ):
+            req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0)
+            result = await admin_update_area_tax("area-1", req)
+
+        update_one.assert_awaited_once()
+        assert result["pst_enabled"] is True
+        assert result["pst_rate"] == 6.0
+
+    @pytest.mark.anyio
+    async def test_update_area_tax_empty_payload_skips_write_still_returns_row(self):
+        update_one = AsyncMock()
+        row = {
+            "gst_enabled": True,
+            "gst_rate": 5.0,
+            "pst_enabled": False,
+            "pst_rate": 0,
+            "hst_enabled": False,
+            "hst_rate": 0,
+        }
+        with patch.multiple(
+            "backend.routes.admin.service_areas.db_supabase",
+            update_one=update_one,
+            get_rows=AsyncMock(return_value=[row]),
+        ):
+            req = AreaTaxRequest()
+            result = await admin_update_area_tax("area-1", req)
+
+        update_one.assert_not_awaited()
+        assert result["gst_rate"] == 5.0
+
+
+# ── vehicle pricing ─────────────────────────────────────────────────────
+
+
+class TestVehiclePricing:
+    @pytest.mark.anyio
+    async def test_returns_vehicle_types_and_fare_configs(self):
+        vt = [{"name": "sedan"}]
+        fc = [{"vehicle_type": "sedan", "base_fare": 5.0}]
+
+        async def _get_rows(table, *args, **kwargs):
+            if table == "vehicle_types":
+                return vt
+            return fc
+
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.get_rows",
+            AsyncMock(side_effect=_get_rows),
+        ):
+            result = await admin_get_vehicle_pricing("area-1")
+
+        assert result["vehicle_types"] == vt
+        assert result["fare_configs"] == fc
+
+    @pytest.mark.anyio
+    async def test_missing_rows_default_to_empty_lists(self):
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.get_rows",
+            AsyncMock(return_value=None),
+        ):
+            result = await admin_get_vehicle_pricing("area-1")
+
+        assert result["vehicle_types"] == []
+        assert result["fare_configs"] == []

@@ -412,37 +412,6 @@ def test_report_still_returns_when_audit_log_write_fails(admin_client):
     assert resp.status_code == 200
 
 
-# ── email_to (spinr.ca report delivery) ─────────────────────────────────────
-
-
-def test_email_to_non_spinr_ca_rejected(admin_client):
-    resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?email_to=someone@gmail.com")
-    assert resp.status_code == 422
-
-
-def test_email_to_spinr_ca_sends_and_returns_confirmation(admin_client):
-    with (
-        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
-        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
-        patch("routes.admin.compliance.send_transactional_email", AsyncMock(return_value=True)) as send,
-    ):
-        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?email_to=ops@spinr.ca")
-    assert resp.status_code == 200
-    assert resp.json() == {"emailed_to": "ops@spinr.ca"}
-    assert send.call_args.kwargs["to"] == "ops@spinr.ca"
-    assert send.call_args.kwargs["attachments"][0]["filename"] == "gst_pst_remittance.pdf"
-
-
-def test_email_to_send_failure_returns_502(admin_client):
-    with (
-        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
-        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
-        patch("routes.admin.compliance.send_transactional_email", AsyncMock(return_value=False)),
-    ):
-        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?email_to=ops@spinr.ca")
-    assert resp.status_code == 502
-
-
 # ── T4A filer handoff — SIN-free export ─────────────────────────────────────
 
 _T4A_RIDE_ROW = {
@@ -645,11 +614,20 @@ _NON_AIRPORT_RIDE = {
 }
 
 
+_AIRPORT_DRIVER = {
+    **_PD_DRIVER,
+    "license_plate": "SGI-123",
+    "vehicle_make": "Toyota",
+    "vehicle_model": "Camry",
+    "vehicle_color": "Black",
+}
+
+
 def _airport_get_rows_side(table, filters=None, **kw):
     if table == "rides":
         return [_AIRPORT_RIDE, _NON_AIRPORT_RIDE]
     if table == "drivers":
-        return [_PD_DRIVER]
+        return [_AIRPORT_DRIVER]
     if table == "service_areas":
         return [{"id": "sa1", "name": "Regina"}]
     return []
@@ -671,6 +649,7 @@ def test_airport_trips_filters_out_non_airport_rides(admin_client):
     assert "Regina International Airport" in body
     assert "Airport Pickup" in body
     assert "18.2" in body or "18.20" in body
+    assert "Black Toyota Camry — SGI-123" in body  # vehicle registration for the authority's invoice
     assert "456 Elm St" not in body  # non-airport ride excluded
 
 

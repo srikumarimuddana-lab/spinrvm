@@ -3138,6 +3138,30 @@ async def admin_get_payouts(
 # and returns 404 (the admin dashboard then crashes on the missing stats
 # response). Any future /payouts/<literal> route must go above the
 # {payout_id} handler for the same reason.
+@router.get("/payouts/stats")
+async def admin_get_payout_stats():
+    """Get payout stats: total paid, pending, failed."""
+    try:
+        stats = await db.rpc("admin_payout_stats", {})
+    except Exception:
+        logger.error("payout stats query failed", exc_info=True)
+        stats = None
+    row = stats[0] if isinstance(stats, list) and stats else stats
+    if not isinstance(row, dict):
+        row = {}
+
+    def _d(key: str) -> float:
+        return round(float(Decimal(str(row.get(key) or 0))), 2)
+
+    return {
+        "total_paid": _d("total_paid"),
+        "total_pending": _d("total_pending"),
+        "total_failed": _d("total_failed"),
+        "payout_count": int(row.get("payout_count") or 0),
+        "pending_count": int(row.get("pending_count") or 0),
+    }
+
+
 @router.get("/payouts/{payout_id}")
 async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
     """Return a single payout record by ID."""
@@ -3407,28 +3431,4 @@ async def admin_close_payout_period(
         "payout_count": len(payout_ids),
         "total_amount": total_amount,
         "audit_log_id": audit_id,
-    }
-
-
-@router.get("/payouts/stats")
-async def admin_get_payout_stats():
-    """Get payout stats: total paid, pending, failed."""
-    try:
-        stats = await db.rpc("admin_payout_stats", {})
-    except Exception:
-        logger.error("payout stats query failed", exc_info=True)
-        stats = None
-    row = stats[0] if isinstance(stats, list) and stats else stats
-    if not isinstance(row, dict):
-        row = {}
-
-    def _d(key: str) -> float:
-        return round(float(Decimal(str(row.get(key) or 0))), 2)
-
-    return {
-        "total_paid": _d("total_paid"),
-        "total_pending": _d("total_pending"),
-        "total_failed": _d("total_failed"),
-        "payout_count": int(row.get("payout_count") or 0),
-        "pending_count": int(row.get("pending_count") or 0),
     }

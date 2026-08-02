@@ -41,6 +41,7 @@ different failure mode over the same lines.
 | New/modified `backend/migrations/*.sql` | `spinr-migration-reviewer` |
 | `backend/routes/safety.py`, `routes/sos.py`, `services/insurance_*.py`, `utils/emergency_*.py` (`area:safety`) | `spinr-security-auditor` **and** `spinr-regulatory-compliance-checker` |
 | Anything touching driver eligibility, trip/GPS retention, receipt tax line items, accessibility (WAV/service animal), logging/analytics/Sentry payloads, or data-deletion flows | `spinr-regulatory-compliance-checker` |
+| `backend/ai/**`, `backend/routes/ai.py`, `backend/routes/admin/ai_console.py`, `rider-app/app/ai-assistant.tsx` (`area:ai`) | `spinr-ai-guardrail-reviewer` |
 
 `spinr-regulatory-compliance-checker` explicitly isn't path-scoped in its own
 definition ("compliance issues can appear anywhere") — if the diff touches
@@ -119,4 +120,4 @@ says `FIX BLOCKERS` regardless of what anything else found.
 For a single-domain deep dive instead of the full router: `/fare-audit`
 (money), `/migration-check` (migrations), `/security-check`,
 `/dispatch-check`, `/surge-check`, `/corporate-check`, `/insurance-check`,
-`/compliance-check`.
+`/compliance-check`, `/ai-check` (AI/LLM surface).

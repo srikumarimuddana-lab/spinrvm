@@ -32,15 +32,15 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache pip packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements-locked.txt') }}
@@ -102,10 +102,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -127,15 +127,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: frontend/node_modules
           key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/yarn.lock') }}
@@ -168,15 +168,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: driver-app/node_modules
           # No restore-keys: a partial restore from an older key keeps a
@@ -222,15 +222,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: rider-app/node_modules
           key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
@@ -270,15 +270,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: admin-dashboard/node_modules
           # No restore-keys: a partial restore from an older key (e.g. before
@@ -323,9 +323,9 @@ jobs:
       run:
         working-directory: admin-dashboard
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -381,27 +381,57 @@ jobs:
       run:
         working-directory: admin-dashboard
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      # `continue-on-error: true` above stops a baseline-less run blocking a
+      # merge, but it does NOT stop the check reporting `failure` — so this
+      # gate has been permanently red since it was added, for a reason the job
+      # comment itself documents as expected. A check that is always red stops
+      # being read, and then a real failure arrives looking like the noise.
+      #
+      # Detect the missing baselines up front and skip cleanly instead. This
+      # also avoids `npm ci` + a Chromium download + a full Next.js production
+      # build on every PR purely to fail at the last step.
+      #
+      # Seed baselines with .github/workflows/update-visual-baselines.yml; the
+      # moment any `*-snapshots/*.png` is committed, every step below runs
+      # exactly as before with no further change here.
+      - name: Check for committed visual baselines
+        id: baselines
+        run: |
+          COUNT=$(find e2e -type f -name '*.png' -path '*-snapshots*' 2>/dev/null | wc -l)
+          if [ "$COUNT" -gt 0 ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Found $COUNT committed baseline screenshot(s) — running visual regression."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Visual regression skipped::No Playwright snapshot baselines are committed under admin-dashboard/e2e/**-snapshots/, so there is nothing to compare against. Seed them via the update-visual-baselines workflow to enable this gate."
+          fi
+
+      - uses: actions/setup-node@v7
+        if: steps.baselines.outputs.present == 'true'
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: admin-dashboard/package-lock.json
 
       - name: Install dependencies
+        if: steps.baselines.outputs.present == 'true'
         run: npm ci
 
       - name: Install Playwright browsers
+        if: steps.baselines.outputs.present == 'true'
         run: npx playwright install --with-deps chromium
 
       - name: Build Next.js app
+        if: steps.baselines.outputs.present == 'true'
         run: npm run build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
           BACKEND_URL: http://localhost:8000
 
       - name: Start Next.js and run visual regression tests
+        if: steps.baselines.outputs.present == 'true'
         run: |
           npx next start &
           npx wait-on http://localhost:3000 --timeout 30000
@@ -413,7 +443,11 @@ jobs:
           CI: true
 
       - name: Upload Playwright report
-        if: always()
+        # `always()` would also fire on the skip path, where no report exists —
+        # producing the "No files were found with the provided path" warning
+        # that made this job look like it ran and found nothing, rather than
+        # like it never ran at all.
+        if: always() && steps.baselines.outputs.present == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: visual-regression-report
@@ -437,14 +471,14 @@ jobs:
       run:
         working-directory: rider-app
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: rider-app/node_modules
           key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
@@ -488,14 +522,14 @@ jobs:
       run:
         working-directory: driver-app
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: driver-app/node_modules
           key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
@@ -535,7 +569,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Railway is the primary backend host (CLAUDE.md). --fail-with-body
       # ensures a non-zero exit on HTTP 4xx/5xx so the Render fallback
@@ -565,10 +599,10 @@ jobs:
     if: false
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -597,10 +631,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -637,7 +671,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[build]')
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup EAS
         uses: expo/expo-github-action@v8
@@ -665,7 +699,7 @@ jobs:
       security-events: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history required for trufflehog --since-commit
 
@@ -713,7 +747,7 @@ jobs:
       id-token: write    # cosign keyless OIDC signing (main only)
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build backend Docker image
         run: |
@@ -721,6 +755,59 @@ jobs:
             --file backend/Dockerfile \
             --tag spinr-backend:ci-${{ github.sha }} \
             backend/
+
+      # ── TEMPORARY DIAGNOSTIC — CR-2026-002 / issue #3048 ──────────────────
+      # Remove once the msgpack/setuptools finding is explained.
+      #
+      # Trivy reports msgpack 1.1.2 (HIGH) and setuptools 70.3.0 (HIGH) while
+      # its own per-file inventory of the SAME image lists msgpack 1.2.1 and
+      # setuptools 83.0.0. Two hypotheses remain; static analysis has already
+      # ruled out the others:
+      #   - ruled out: a lockfile downgrade. requirements-locked.txt pins
+      #     msgpack==1.2.1 and does not pin setuptools at all, so the install
+      #     after `pip install --upgrade setuptools` cannot pull either back.
+      #   - ruled out: stale files entering via `COPY . .`. .dockerignore
+      #     excludes venv/.venv/*.egg-info and no site-packages or .dist-info
+      #     is committed under backend/.
+      #   - still open (A): a SECOND copy of each package exists in the image
+      #     (e.g. pip vendors its own msgpack) and Trivy reports that one.
+      #   - still open (B): Trivy is preferring an embedded/third-party SBOM
+      #     over its live filesystem scan, as its own WARN in the log suggests.
+      #
+      # The `find` below discriminates: if it prints a 1.1.2/70.3.0 path, it is
+      # (A) and the fix is to remove or exclude that copy. If the only versions
+      # present are 1.2.1/83.0.0, it is (B) and the fix is a scan-invocation
+      # change. Never fails the job — diagnostic only.
+      - name: "DIAGNOSTIC (CR-2026-002): locate every msgpack/setuptools copy"
+        continue-on-error: true
+        run: |
+          IMG=spinr-backend:ci-${{ github.sha }}
+
+          echo "::group::pip list — authoritative installed versions"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "pip list 2>/dev/null | grep -Ei '^(msgpack|setuptools|pip)[[:space:]]'" || true
+          echo "::endgroup::"
+
+          echo "::group::every msgpack/setuptools metadata dir on the filesystem"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "find / -xdev \( -iname 'msgpack*' -o -iname 'setuptools*' \) \
+               \( -name '*.dist-info' -o -name '*.egg-info' \) -print 2>/dev/null" || true
+          echo "::endgroup::"
+
+          echo "::group::pip's vendored packages — pip bundles its own msgpack"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "cat /usr/local/lib/python3.12/site-packages/pip/_vendor/vendor.txt 2>/dev/null || \
+             ls /usr/local/lib/python3.12/site-packages/pip/_vendor/ 2>/dev/null" || true
+          echo "::endgroup::"
+
+          echo "::group::any other python installation on the image"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "ls -d /usr/lib/python3*/dist-packages /usr/local/lib/python3*/site-packages 2>/dev/null" || true
+          echo "::endgroup::"
+
+          echo "::group::SBOM/attestation surface — hypothesis (B)"
+          docker image inspect "$IMG" --format '{{json .Config.Labels}}' || true
+          echo "::endgroup::"
 
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0

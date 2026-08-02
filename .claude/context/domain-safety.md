@@ -5,20 +5,36 @@ _Load when working on: SOS flow, emergency contacts, insurance period transition
 ## Key files
 
 - `backend/routes/safety.py` — SOS trigger, emergency contact CRUD, incident reports
-- `backend/services/insurance_period_service.py` — period transition logging
+- `backend/utils/insurance_periods.py` — period transition logging
 - `backend/utils/audit_logger.py` — append-only safety audit trail
-- `backend/routes/chat.py` — in-ride chat with profanity/PII filters
-- `rider-app/src/screens/SOSScreen.tsx`, `driver-app/src/screens/SOSScreen.tsx`
+- `backend/routes/rides/chat.py` — in-ride chat with profanity/PII filters
+- `rider-app/app/report-safety.tsx`, `driver-app/app/report-safety.tsx`
 
 ## SOS flow (non-negotiable behavior)
 
 Spinr SOS is an **assist**, not a replacement for 911.
 
-1. User holds SOS button 3 s (prevents accidental trigger)
+1. User holds SOS button 1.2 s (`SOS_HOLD_MS` in `shared/components/SOSButton.tsx`; prevents accidental trigger)
 2. Client posts `/safety/sos` with `{ride_id?, lat, lng, user_id}` — fire-and-forget, retry 3×
 3. Backend creates `safety_incidents` row (append-only) and in parallel:
    - Notifies all emergency contacts via SMS (Twilio) with rider name + last-known location link
-   - Pages on-call safety team (PagerDuty → Slack `#safety-incidents`)
+   - Broadcasts a WS event to the admin dashboard, emails the safety distribution list, and logs a
+     `logger.critical()` line
+   - Pages on-call via `utils/safety_paging.py::page_on_call` (ACTION_ITEMS.md B15(b), built
+     2026-08-01) — a best-effort, non-blocking webhook POST (PagerDuty Events API v2 shape by
+     default: `{"routing_key", "event_action": "trigger", "payload": {...}}`; provider-agnostic —
+     pointing `sos_paging_webhook_url` at an Opsgenie webhook that accepts/adapts that shape is a
+     config change, not a rewrite) called from `trigger_emergency`
+     (`backend/routes/rides/safety.py`) right alongside the `notify_safety_team` call.
+     **Currently dark/disabled by default**: `sos_paging_webhook_url` in `app_settings` is unset,
+     since no real PagerDuty/Opsgenie account exists yet to configure it against — `page_on_call`
+     logs at debug and returns `False` with no HTTP call in that state, and never raises, so its
+     absence changes nothing about today's SOS flow. An admin can turn it on by setting
+     `sos_paging_webhook_url` (+ optionally `sos_paging_routing_key`, masked like other
+     credentials) via the admin settings API — `super_admin`-only, since redirecting the
+     destination is an SSRF/exfil risk (mirrors the `lms_api_base_url`/`lms_api_key` gate). The
+     payload carries only IDs (`incident_id`, `ride_id`, `reported_by_user_id`) and a geohashed
+     area (`utils.pii.geohash`) — never raw lat/lng, name, email, or phone (PIPEDA).
    - Pushes `sos_acknowledged` WS event back to the user app
 4. App shows a one-tap **"Call 911"** button — we never auto-dial
 5. Safety team opens live view of ride (driver ID, vehicle, route trace, audio recording if enabled)
@@ -27,7 +43,7 @@ Hard rules:
 - **Never auto-dial 911.** Jurisdictional routing is unreliable; wrong PSAP wastes seconds.
 - **Never claim to replace emergency services** in UX copy. Use "We'll alert your emergency contacts and our safety team."
 - **Never gate SOS behind auth refresh.** If the JWT is expired, still accept the request with the user_id claim and flag for review.
-- **Never silently drop an SOS** on DB failure — fall back to direct Twilio + PagerDuty call with best-effort data.
+- **Never silently drop an SOS** on DB failure. `trigger_emergency` (`backend/routes/rides/safety.py`) wraps the `safety_incidents` insert in a try/except (mirrors `backend/routes/safety.py`'s `POST /safety/report`, PR #2931) and returns a clean 503 instead of a 500 so the client's retry logic (see step 2) can recover. There is no non-DB-dependent fallback path today (e.g. a direct Twilio SMS bypassing the DB write) — a sustained outage across all client retries still means zero emergency-contact SMS and zero safety-team notification fire. **Decided 2026-08-01 (product call, relayed via engineering — not directly reviewed against this doc): not building this fallback.** The existing 3× client retry (1s/2s backoff) plus the persistent amber "Not Sent — Call 911 directly" fallback UI is judged sufficient residual-risk mitigation for the ~3-4s outage window a sustained failure across all retries implies. See `ACTION_ITEMS.md` B15(a) for the full rationale.
 
 ## Emergency contacts
 
@@ -82,5 +98,5 @@ Rules specific to safety domain:
 - Don't log raw GPS coordinates in incident narratives — geohashed area only (PIPEDA)
 - Don't expose emergency contact phone numbers in any API response to the driver or other party
 - Don't mark an SOS as "resolved" automatically — requires safety team acknowledgment
-- Don't skip the 3-second hold on SOS — accidental triggers erode response trust
+- Don't skip the 1.2-second hold on SOS — accidental triggers erode response trust
 - Don't reuse `safety_incidents.id` as a public reference — use a separate opaque `incident_ref` for user-facing correspondence

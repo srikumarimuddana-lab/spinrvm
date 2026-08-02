@@ -339,6 +339,47 @@ def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: 
             ws.cell(row=r, column=col, value=_sanitize_csv_cell(row.get(name)))
 
 
+def write_branded_grouped_table(
+    ws, fieldnames: list[str], groups: list[tuple[dict, list[dict]]], start_row: int = DEFAULT_TABLE_START_ROW
+) -> None:
+    """Like write_branded_table, but each group is (parent_row, child_rows):
+    the parent (trip summary) row is written expanded at Excel outline
+    level 0, its child (per-phase) rows written directly below it at
+    outline level 1 and collapsed (hidden) by default. Lets an admin
+    expand one trip to see its Period 2/Period 3 km without every phase
+    row cluttering the sheet by default — xlsx only (openpyxl's native
+    row-grouping feature); PDF/CSV/Word have no collapse mechanism and
+    always render every row flat via write_branded_table instead."""
+    from openpyxl.styles import Font, PatternFill
+
+    header_fill = PatternFill(start_color=HEADER_BG_HEX, end_color=HEADER_BG_HEX, fill_type="solid")
+    header_font = Font(name=BRAND_FONT, bold=True, color="212121")
+    for col, name in enumerate(fieldnames, start=1):
+        cell = ws.cell(row=start_row, column=col, value=name.replace("_", " ").title())
+        cell.fill = header_fill
+        cell.font = header_font
+
+    # Summary (parent) row sits ABOVE the detail (child) rows it
+    # summarizes -- matches the trip-then-phases order we write in, and is
+    # what makes the collapse/expand [+]/[-] control appear next to the
+    # parent row rather than below the last child.
+    ws.sheet_properties.outlinePr.summaryBelow = False
+
+    bold_font = Font(name=BRAND_FONT, bold=True)
+    r = start_row + 1
+    for parent, children in groups:
+        for col, name in enumerate(fieldnames, start=1):
+            cell = ws.cell(row=r, column=col, value=_sanitize_csv_cell(parent.get(name)))
+            cell.font = bold_font
+        r += 1
+        for child in children:
+            for col, name in enumerate(fieldnames, start=1):
+                ws.cell(row=r, column=col, value=_sanitize_csv_cell(child.get(name)))
+            ws.row_dimensions[r].outlineLevel = 1
+            ws.row_dimensions[r].hidden = True
+            r += 1
+
+
 def new_branded_document(title: str, subtitle: "str | list[str]" = ""):
     """Return a python-docx Document with a Spinr-branded title block: the
     logo image (if the asset exists), a dark heading (not brand-red — a

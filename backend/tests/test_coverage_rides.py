@@ -24,6 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.tests._factories import close_spawned_coro
+
 # ── minimal ride factory ───────────────────────────────────────────────────────
 
 _RIDER_ID = "rider-001"
@@ -1426,7 +1428,8 @@ async def test_match_driver_to_ride_assigns_driver():
         patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
         patch("backend.routes.rides._deps.manager") as mock_manager,
         patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
-        patch("backend.routes.rides._deps.asyncio.create_task"),
+        # side_effect closes the spawned coroutine instead of leaking it (A8).
+        patch("backend.routes.rides._deps.asyncio.create_task", side_effect=close_spawned_coro),
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[driver])
@@ -2469,6 +2472,7 @@ async def test_rider_complete_ride_quota_notify_failure_is_swallowed():
         mock_db.update_one = AsyncMock(return_value=ride)
         mock_db.set_driver_available = AsyncMock()
         mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+
         # The unconditional ride_completed notices (to driver + rider) are NOT
         # wrapped in try/except -- only the LATER quota "auto_offline" message
         # is. Only fail that one, or we'd be asserting something the code
@@ -2534,14 +2538,26 @@ async def test_rider_complete_ride_quest_scheduling_failure_is_swallowed():
 
     ride = _ride(status="in_progress", rider_id=_RIDER_ID)
     completed_ride = {**ride, "status": "completed"}
+
+    # _deps.spawn is used for BOTH the live-activity update (unwrapped) and
+    # the quest-progress scheduling (wrapped in try/except) -- let the first
+    # call through and only fail the second. Each call still gets its
+    # coroutine argument closed (via close_spawned_coro) so it doesn't leak
+    # un-awaited and fail an unrelated test on GC (A8).
+    _spawn_call_count = [0]
+
+    def _spawn_first_ok_then_fails(coro, *_args, **_kwargs):
+        close_spawned_coro(coro)
+        _spawn_call_count[0] += 1
+        if _spawn_call_count[0] == 1:
+            return None
+        raise RuntimeError("event loop full")
+
     with (
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
         patch("utils.spinr_pass.force_offline_if_exhausted", AsyncMock(return_value=None)),
-        # _deps.spawn is used for BOTH the live-activity update (unwrapped) and
-        # the quest-progress scheduling (wrapped in try/except) -- let the
-        # first call through and only fail the second.
-        patch("backend.routes.rides._deps.spawn", side_effect=[None, RuntimeError("event loop full")]),
+        patch("backend.routes.rides._deps.spawn", side_effect=_spawn_first_ok_then_fails),
     ):
         mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
         mock_db.update_one = AsyncMock(return_value=ride)
@@ -2621,7 +2637,9 @@ async def test_get_ride_receipt_success():
 async def test_get_ride_receipt_no_driver_shows_unknown():
     from backend.routes.rides import get_ride_receipt
 
-    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id=None, corporate_account_id=None)
+    ride = _ride(
+        status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id=None, corporate_account_id=None
+    )
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
@@ -2634,7 +2652,9 @@ async def test_get_ride_receipt_no_driver_shows_unknown():
 async def test_get_ride_receipt_includes_vehicle_type():
     from backend.routes.rides import get_ride_receipt
 
-    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id="vt-1", corporate_account_id=None)
+    ride = _ride(
+        status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id="vt-1", corporate_account_id=None
+    )
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[{"id": "vt-1", "name": "XL"}])
@@ -2646,7 +2666,9 @@ async def test_get_ride_receipt_includes_vehicle_type():
 async def test_get_ride_receipt_corporate_account_shows_company_payment_method():
     from backend.routes.rides import get_ride_receipt
 
-    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id=None, corporate_account_id="corp-1")
+    ride = _ride(
+        status="completed", rider_id=_RIDER_ID, driver_id=None, vehicle_type_id=None, corporate_account_id="corp-1"
+    )
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[{"id": "corp-1", "company_name": "Acme Inc"}])
@@ -3384,7 +3406,14 @@ async def test_get_ride_driver_earnings_snapshot_preferred_over_live_fields():
     ride = _ride(
         status="completed",
         driver_id=None,
-        driver_earnings_snapshot={"total": 20.0, "fare": 15.0, "tip": 3.0, "cancel_fee": 0, "tax": 2.0, "incentive": 1.0},
+        driver_earnings_snapshot={
+            "total": 20.0,
+            "fare": 15.0,
+            "tip": 3.0,
+            "cancel_fee": 0,
+            "tax": 2.0,
+            "incentive": 1.0,
+        },
     )
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)

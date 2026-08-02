@@ -2,7 +2,14 @@
 
 Delegate to the `spinr-regulatory-compliance-checker` agent to review driver
 eligibility, retention carve-outs, tax line items, accessibility, and PII
-logging in the current diff (or a named scope).
+logging in the current diff (or a named scope). When the diff touches the
+AI/LLM surface, also dispatch `spinr-ai-guardrail-reviewer` in parallel (same
+dual-dispatch pattern as `/review`'s safety row and `/security-check`'s AI
+wiring) — the PIPEDA ban-list applies to provider-egress traffic exactly like
+it applies to logs and analytics, but only `spinr-ai-guardrail-reviewer` has
+the per-path context (each provider adapter, each tool module, the
+persistence/cache sinks) to verify it's actually enforced there rather than
+just checking that `scrub_pii` exists somewhere in the codebase.
 
 ## Usage
 
@@ -23,7 +30,12 @@ logging in the current diff (or a named scope).
    - `PR N` → pulls the PR diff via the GitHub MCP tools
 2. Loads context: `@.claude/context/regulatory-sk.md`
 3. Dispatches the `spinr-regulatory-compliance-checker` subagent with the full scope
-4. Presents the agent's report to the user — no edits without explicit approval
+4. If the scope includes `backend/ai/**`, `backend/routes/ai.py`,
+   `backend/routes/admin/ai_console.py`, or `rider-app/app/ai-assistant.tsx`,
+   also dispatches `spinr-ai-guardrail-reviewer` **in parallel** with the same
+   scope — independent audits over the same diff, not a sequential pass
+5. Presents both agents' reports to the user, each under its own heading —
+   no edits without explicit approval
 
 ## What gets checked
 
@@ -38,9 +50,14 @@ From the agent:
 - **Consent** — copy changes paired with a consent-version bump
 - **Data residency** — no non-Canadian region config without legal sign-off
 
+From `spinr-ai-guardrail-reviewer`, when dispatched:
+
+- **PII scrubbing on every provider-egress path independently** — orchestrator (both live-stream and persisted-message sinks), each of the three provider adapters, every `tools_*.py` module, `mcp_server.py`, `response_cache.py` — verified per-path, not inferred from one clean grep hit
+- **PIPEDA ban-list applied to provider payloads**, not just logs — raw GPS, full phone/name/email, gov IDs, exact addresses must never reach Anthropic/OpenAI/Gemini either
+
 ## Output
 
-The agent's report:
+`spinr-regulatory-compliance-checker`'s report:
 
 ```
 SPINR REGULATORY COMPLIANCE AUDIT — <scope>
@@ -50,6 +67,24 @@ WARNINGS ...
 VERIFIED ...
 VERDICT: SAFE TO MERGE / FIX BLOCKERS / NEEDS LEGAL REVIEW
 ```
+
+If `spinr-ai-guardrail-reviewer` was also dispatched (AI-surface paths in
+scope), its report follows under its own heading, verbatim — don't merge or
+paraphrase the two reports into one:
+
+```
+SPINR AI GUARDRAIL AUDIT — <scope>
+===================================
+BLOCKERS ...
+WARNINGS ...
+OPEN BACKLOG TOUCHED ...
+VERIFIED ...
+VERDICT: SAFE TO MERGE / FIX BLOCKERS / NEEDS PRODUCT+LEGAL REVIEW
+```
+
+When both ran, the overall verdict is the worst of the two — never soften
+one agent's verdict because the other came back clean (same rule `/review`
+and `/security-check` use for their rollups).
 
 ## When to run
 

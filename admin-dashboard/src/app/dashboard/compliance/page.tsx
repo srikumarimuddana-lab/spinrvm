@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Download, Loader2, FileText, Mail } from "lucide-react";
+import { Download, Loader2, FileText } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useAuthStore } from "@/store/authStore";
+import { monthToDateDefaults } from "@/lib/utils";
 import {
     downloadAirportTrips,
     downloadDriverRoster,
@@ -21,33 +22,26 @@ import {
     downloadInsuranceBillingKnightArcher,
     downloadInsuranceBillingSgi,
     downloadT4aFilerHandoff,
-    emailDriverRoster,
-    emailGstPstRemittance,
-    emailInsuranceBillingKnightArcher,
-    emailInsuranceBillingSgi,
     type ComplianceReportFormat,
 } from "@/lib/api";
-
-/** 1st of the current month, and today — the default window every
- * date-ranged Compliance report uses when an admin hasn't picked their
- * own From/To. YYYY-MM-DD, matching the backend's date_from/date_to. */
-function monthToDateDefaults(): { from: string; to: string } {
-    const now = new Date();
-    const from = new Date(now.getFullYear(), now.getMonth(), 1);
-    const toIso = (d: Date) => d.toISOString().slice(0, 10);
-    return { from: toIso(from), to: toIso(now) };
-}
 
 /** Shared From/To date-range control for every date-ranged Compliance
  * report — replaces the old rolling-N-days shorthand dropdown. Defaults
  * to the current calendar month, matching the backend's own default when
- * date_from/date_to are omitted. */
+ * date_from/date_to are omitted.
+ *
+ * `idPrefix` keeps each call site's From/To ids unique — only one
+ * TabsContent is mounted at a time (Radix doesn't forceMount here), so
+ * literal collisions can't happen today, but four call sites share this
+ * component and ids are cheap to keep unique regardless. */
 function DateRangeFields({
+    idPrefix,
     from,
     to,
     onFromChange,
     onToChange,
 }: {
+    idPrefix: string;
     from: string;
     to: string;
     onFromChange: (v: string) => void;
@@ -56,12 +50,12 @@ function DateRangeFields({
     return (
         <>
             <div className="space-y-1.5">
-                <Label>From</Label>
-                <Input type="date" className="w-40" value={from} onChange={(e) => onFromChange(e.target.value)} />
+                <Label htmlFor={`${idPrefix}-from`}>From</Label>
+                <Input id={`${idPrefix}-from`} type="date" className="w-40" value={from} onChange={(e) => onFromChange(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-                <Label>To</Label>
-                <Input type="date" className="w-40" value={to} onChange={(e) => onToChange(e.target.value)} />
+                <Label htmlFor={`${idPrefix}-to`}>To</Label>
+                <Input id={`${idPrefix}-to`} type="date" className="w-40" value={to} onChange={(e) => onToChange(e.target.value)} />
             </div>
         </>
     );
@@ -75,30 +69,6 @@ const FORMATS: { value: ComplianceReportFormat; label: string }[] = [
 ];
 
 const DRIVER_STATUSES = ["active", "pending", "needs_review", "suspended", "banned"];
-
-/** Inline "email to @spinr.ca" control shared by all three report cards —
- * a small text input + send button next to the existing Download button,
- * not a separate flow, so it doesn't require re-selecting the report's
- * filters. */
-function EmailReportControl({ onSend, loading }: { onSend: (email: string) => Promise<void>; loading: boolean }) {
-    const [email, setEmail] = useState("");
-    const valid = /^[^\s@]+@spinr\.ca$/i.test(email.trim());
-    return (
-        <div className="flex items-center gap-1.5">
-            <Input
-                placeholder="name@spinr.ca"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-48"
-            />
-            <Button variant="outline" disabled={!valid || loading} onClick={() => onSend(email.trim())}>
-                {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
-                Email
-            </Button>
-            <Hint text="Reports can only be emailed to a @spinr.ca address — this sends the same report currently configured above instead of downloading it." />
-        </div>
-    );
-}
 
 function triggerBrowserDownload(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob);
@@ -127,12 +97,10 @@ export default function CompliancePage() {
     const [gstPstTo, setGstPstTo] = useState(monthDefaults.to);
     const [gstPstFormat, setGstPstFormat] = useState<ComplianceReportFormat>("pdf");
     const [gstPstLoading, setGstPstLoading] = useState(false);
-    const [gstPstEmailLoading, setGstPstEmailLoading] = useState(false);
 
     const [rosterFormat, setRosterFormat] = useState<ComplianceReportFormat>("pdf");
     const [rosterStatus, setRosterStatus] = useState("all");
     const [rosterLoading, setRosterLoading] = useState(false);
-    const [rosterEmailLoading, setRosterEmailLoading] = useState(false);
 
     const [t4aYear, setT4aYear] = useState(new Date().getFullYear() - 1);
     const [t4aFormat, setT4aFormat] = useState<ComplianceReportFormat>("xlsx");
@@ -143,13 +111,11 @@ export default function CompliancePage() {
     const [sgiTo, setSgiTo] = useState(monthDefaults.to);
     const [sgiFormat, setSgiFormat] = useState<ComplianceReportFormat>("pdf");
     const [sgiLoading, setSgiLoading] = useState(false);
-    const [sgiEmailLoading, setSgiEmailLoading] = useState(false);
 
     const [kaFrom, setKaFrom] = useState(monthDefaults.from);
     const [kaTo, setKaTo] = useState(monthDefaults.to);
     const [kaFormat, setKaFormat] = useState<ComplianceReportFormat>("pdf");
     const [kaLoading, setKaLoading] = useState(false);
-    const [kaEmailLoading, setKaEmailLoading] = useState(false);
 
     const [airportFrom, setAirportFrom] = useState(monthDefaults.from);
     const [airportTo, setAirportTo] = useState(monthDefaults.to);
@@ -158,16 +124,8 @@ export default function CompliancePage() {
 
     if (!allowed) return null;
 
-    // `onEmailError` used the same "Could not generate report" title as
-    // download failures, which is misleading when the report generated
-    // fine and only the send step failed (e.g. SES/Resend misconfigured) —
-    // an admin reading "generate" would assume the report itself is broken
-    // and go looking in the wrong place.
     const onError = (e: any) =>
         toast({ title: "Could not generate report", description: e?.message || "Unknown error", variant: "destructive" });
-    const onEmailError = (e: any) =>
-        toast({ title: "Could not email report", description: e?.message || "Unknown error", variant: "destructive" });
-    const onEmailed = (email: string) => toast({ title: "Report sent", description: `Emailed to ${email}.` });
 
     const onDownloadGstPst = async () => {
         setGstPstLoading(true);
@@ -178,17 +136,6 @@ export default function CompliancePage() {
             onError(e);
         } finally {
             setGstPstLoading(false);
-        }
-    };
-    const onEmailGstPst = async (email: string) => {
-        setGstPstEmailLoading(true);
-        try {
-            await emailGstPstRemittance(gstPstFormat, email, gstPstFrom, gstPstTo);
-            onEmailed(email);
-        } catch (e: any) {
-            onEmailError(e);
-        } finally {
-            setGstPstEmailLoading(false);
         }
     };
 
@@ -204,17 +151,6 @@ export default function CompliancePage() {
             onError(e);
         } finally {
             setRosterLoading(false);
-        }
-    };
-    const onEmailRoster = async (email: string) => {
-        setRosterEmailLoading(true);
-        try {
-            await emailDriverRoster(rosterFormat, email, rosterStatus === "all" ? undefined : rosterStatus);
-            onEmailed(email);
-        } catch (e: any) {
-            onEmailError(e);
-        } finally {
-            setRosterEmailLoading(false);
         }
     };
 
@@ -241,17 +177,6 @@ export default function CompliancePage() {
             setSgiLoading(false);
         }
     };
-    const onEmailSgi = async (email: string) => {
-        setSgiEmailLoading(true);
-        try {
-            await emailInsuranceBillingSgi(sgiFormat, email, sgiFrom, sgiTo);
-            onEmailed(email);
-        } catch (e: any) {
-            onEmailError(e);
-        } finally {
-            setSgiEmailLoading(false);
-        }
-    };
 
     const onDownloadKa = async () => {
         setKaLoading(true);
@@ -262,17 +187,6 @@ export default function CompliancePage() {
             onError(e);
         } finally {
             setKaLoading(false);
-        }
-    };
-    const onEmailKa = async (email: string) => {
-        setKaEmailLoading(true);
-        try {
-            await emailInsuranceBillingKnightArcher(kaFormat, email, kaFrom, kaTo);
-            onEmailed(email);
-        } catch (e: any) {
-            onEmailError(e);
-        } finally {
-            setKaEmailLoading(false);
         }
     };
 
@@ -326,6 +240,7 @@ export default function CompliancePage() {
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
                                 <DateRangeFields
+                                    idPrefix="gst-pst"
                                     from={gstPstFrom}
                                     to={gstPstTo}
                                     onFromChange={setGstPstFrom}
@@ -337,7 +252,7 @@ export default function CompliancePage() {
                                         value={gstPstFormat}
                                         onValueChange={(v) => setGstPstFormat(v as ComplianceReportFormat)}
                                     >
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -355,7 +270,6 @@ export default function CompliancePage() {
                                     )}
                                     Download
                                 </Button>
-                                <EmailReportControl onSend={onEmailGstPst} loading={gstPstEmailLoading} />
                             </div>
                         </CardContent>
                     </Card>
@@ -381,6 +295,7 @@ export default function CompliancePage() {
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
                                 <DateRangeFields
+                                    idPrefix="sgi"
                                     from={sgiFrom}
                                     to={sgiTo}
                                     onFromChange={setSgiFrom}
@@ -389,7 +304,7 @@ export default function CompliancePage() {
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={sgiFormat} onValueChange={(v) => setSgiFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -407,7 +322,6 @@ export default function CompliancePage() {
                                     )}
                                     Download
                                 </Button>
-                                <EmailReportControl onSend={onEmailSgi} loading={sgiEmailLoading} />
                             </div>
                         </CardContent>
                     </Card>
@@ -431,11 +345,11 @@ export default function CompliancePage() {
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
-                                <DateRangeFields from={kaFrom} to={kaTo} onFromChange={setKaFrom} onToChange={setKaTo} />
+                                <DateRangeFields idPrefix="ka" from={kaFrom} to={kaTo} onFromChange={setKaFrom} onToChange={setKaTo} />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={kaFormat} onValueChange={(v) => setKaFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -453,7 +367,6 @@ export default function CompliancePage() {
                                     )}
                                     Download
                                 </Button>
-                                <EmailReportControl onSend={onEmailKa} loading={kaEmailLoading} />
                             </div>
                         </CardContent>
                     </Card>
@@ -481,7 +394,7 @@ export default function CompliancePage() {
                                 <div className="space-y-1.5">
                                     <Label>Status</Label>
                                     <Select value={rosterStatus} onValueChange={setRosterStatus}>
-                                        <SelectTrigger className="w-44">
+                                        <SelectTrigger className="w-44" aria-label="Status">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -498,7 +411,7 @@ export default function CompliancePage() {
                                         value={rosterFormat}
                                         onValueChange={(v) => setRosterFormat(v as ComplianceReportFormat)}
                                     >
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -516,7 +429,6 @@ export default function CompliancePage() {
                                     )}
                                     Download
                                 </Button>
-                                <EmailReportControl onSend={onEmailRoster} loading={rosterEmailLoading} />
                             </div>
                         </CardContent>
                     </Card>
@@ -545,8 +457,9 @@ export default function CompliancePage() {
                             <CardContent className="space-y-4">
                                 <div className="flex flex-wrap items-end gap-4">
                                     <div className="space-y-1.5">
-                                        <Label>Tax year</Label>
+                                        <Label htmlFor="t4a-tax-year">Tax year</Label>
                                         <Input
+                                            id="t4a-tax-year"
                                             type="number"
                                             className="w-28"
                                             value={t4aYear}
@@ -558,7 +471,7 @@ export default function CompliancePage() {
                                     <div className="space-y-1.5">
                                         <Label>Format</Label>
                                         <Select value={t4aFormat} onValueChange={(v) => setT4aFormat(v as ComplianceReportFormat)}>
-                                            <SelectTrigger className="w-32">
+                                            <SelectTrigger className="w-32" aria-label="Format">
                                                 <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent>
@@ -580,8 +493,8 @@ export default function CompliancePage() {
                                 <p className="text-xs text-muted-foreground">
                                     Super admin only — this export surfaces verified legal name and mailing
                                     address in bulk, more sensitive than the aggregate totals in the other
-                                    reports on this page. No email option; download and hand off through your
-                                    own secure channel to the filer.
+                                    reports on this page. Download and hand off through your own secure
+                                    channel to the filer.
                                 </p>
                             </CardContent>
                         </Card>
@@ -598,15 +511,18 @@ export default function CompliancePage() {
                             <CardDescription className="flex items-start gap-1.5">
                                 <span>
                                     Completed rides with &quot;airport&quot; in the pickup or dropoff address —
-                                    trip type, distance, rider, driver, and service area — for airport
-                                    ground-transportation program reporting.
+                                    date/time, trip type, rider, driver, vehicle registration, pickup/dropoff
+                                    points, distance, and service area — for the airport authority to invoice
+                                    Spinr per trip. Pickup and dropoff counts are broken out in the report so
+                                    they can be reconciled against the authority&apos;s per-trip fee separately.
                                 </span>
-                                <Hint text="Matched by a text search on the pickup/dropoff address, not a dedicated airport flag — Spinr doesn't yet link rides to a specific pickup venue. Column set follows the general convention most North American airport TNC programs use (date/time, rider, driver, pickup-vs-dropoff, distance) — confirm against your specific airport authority's actual reporting requirements before submitting." />
+                                <Hint text="Matched by a text search on the pickup/dropoff address, not a dedicated airport flag — Spinr doesn't yet link rides to a specific pickup venue. Column set follows the general convention most North American airport TNC programs use (date/time, rider, driver, vehicle, pickup-vs-dropoff, distance) — confirm against your specific airport authority's actual reporting requirements before submitting." />
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
                                 <DateRangeFields
+                                    idPrefix="airport"
                                     from={airportFrom}
                                     to={airportTo}
                                     onFromChange={setAirportFrom}
@@ -615,7 +531,7 @@ export default function CompliancePage() {
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={airportFormat} onValueChange={(v) => setAirportFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32">
+                                        <SelectTrigger className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>

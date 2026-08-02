@@ -36,7 +36,7 @@ None currently open in production (pre-launch).
 
 ## Do not touch this sprint
 
-- `backend/routes/rides.py` ride-state machine paths other than the rating endpoint and payment guard — active area, coordinate before touching
+- `backend/routes/rides/` ride-state machine modules (`lifecycle.py`, `booking.py`, `matching.py`, etc.) other than the rating endpoint and payment guard — active area, coordinate before touching
 - `admin-dashboard/src/store/authStore.ts` — A-P0-1 has shipped; further changes to token storage need a fresh ticket and broader review
 
 ## Recently shipped
@@ -150,7 +150,7 @@ _None._
 | Commit / PR | What |
 |---|---|
 | `c5abb75` | **Critical regression fix**: `audit_logger.py` + migration 57 — `audit_logs` INSERT used non-existent columns `actor_id/actor_role/resource`; every admin audit write was a silent no-op; daily retention tick was rolling back. Fixed: `entity_type`/`entity_id` mapping; migration 57 uses `CREATE OR REPLACE` to repair `purge_pii_retention()`. |
-| `180bfd4` | **DV-9**: `driver-app/_layout.tsx` — `addNotificationResponseReceivedListener` added; push-notification taps now route to `/driver/` (ride offer) or `/driver/notifications` (all other types) instead of silent no-op. |
+| `180bfd4` | **DV-9**: `driver-app/app/_layout.tsx` — `addNotificationResponseReceivedListener` added; push-notification taps now route to `/driver/` (ride offer) or `/driver/notifications` (all other types) instead of silent no-op. |
 | `99f7810` | **F-section**: `backend/utils/stripe_reconcile.py` — daily 02:00 UTC Stripe ↔ DB reconciliation cron; detects `DB_PAID_STRIPE_MISSING`, `DB_PAID_STRIPE_MISMATCH`, `DB_PAID_AMOUNT_MISMATCH`, `STRIPE_ORPHAN`; logs at ERROR (→ Sentry) + writes to `audit_logs`. |
 
 > **Migration note (2026-04-29):** Multiple migrations share numeric prefixes (08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58) — all pre-existing convention violations. The runner uses the full filename as idempotency key so they apply correctly. Cannot be renamed after merge. On `main`, the highest slot used is `59_reconciliation_discrepancies.sql`. PR #240 (in-flight) claims **60** (`60_wav_dispatch.sql`) and **61** (`61_drivers_total_ratings.sql`). **Next free slot after #240 merges: 62.** A CI prefix-uniqueness check has been added to the migration safety gate to prevent new collisions.

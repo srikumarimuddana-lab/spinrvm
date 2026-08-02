@@ -351,6 +351,78 @@ export const getDriverPayoutsSummary = (id: string) =>
 export const refreshDriverStripeKyc = (id: string) =>
     request<{ status: string }>(`/api/admin/drivers/${id}/refresh-stripe-kyc`, { method: "POST" });
 
+/* ── Driver earnings statements ──────────────────────────
+ * Weekly/monthly statements the backend statement job emails to drivers
+ * (backend/utils/driver_statement_job.py). Admin can list what was sent,
+ * download the same PDF for any period or date range, and re-send it to
+ * the driver. Statements regenerate from live data on every call, so an
+ * admin download and the driver's emailed copy can never diverge. */
+
+export type DriverStatementPeriodType = "weekly" | "monthly" | "custom";
+
+export interface DriverStatement {
+    id: string;
+    period_type: DriverStatementPeriodType;
+    period_start: string;
+    period_end: string;
+    /** claimed | sent | failed | skipped_no_email | skipped_inactive */
+    status: string;
+    totals: {
+        earnings?: Record<string, string>;
+        payouts_total?: string;
+        trips?: number;
+    } | null;
+    email_sent_at: string | null;
+    created_at: string | null;
+}
+
+export const getDriverStatements = (driverId: string, limit = 24) =>
+    request<{ statements: DriverStatement[] }>(
+        `/api/admin/drivers/${driverId}/statements?limit=${limit}`,
+    );
+
+/** Either an anchored period (period_type + period_start, what the job
+ *  sent) or a custom inclusive date range (start + end, the payout-tab
+ *  date filter). The backend rejects a selection that is neither. */
+export type StatementSelection =
+    | { period_type: "weekly" | "monthly"; period_start: string }
+    | { start: string; end: string };
+
+const statementParams = (selection: StatementSelection) =>
+    new URLSearchParams(selection as unknown as Record<string, string>).toString();
+
+/** Statement PDF bytes. Uses a raw authed fetch (not request<T>, which
+ *  parses JSON) — same pattern as the compliance report downloads. */
+export async function downloadDriverStatement(
+    driverId: string,
+    selection: StatementSelection,
+): Promise<{ blob: Blob; filename: string }> {
+    const { useAuthStore } = await import("@/store/authStore");
+    const token = useAuthStore.getState().token;
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(
+        `/api/admin/drivers/${driverId}/statements/pdf?${statementParams(selection)}`,
+        { headers },
+    );
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not generate statement (${res.status})`);
+    }
+    const suffix =
+        "period_start" in selection
+            ? `${selection.period_type}-${selection.period_start}`
+            : `${selection.start}_${selection.end}`;
+    return { blob: await res.blob(), filename: `spinr-statement-${suffix}.pdf` };
+}
+
+/** Email the same statement to the driver's on-file address. */
+export const emailDriverStatement = (driverId: string, selection: StatementSelection) =>
+    request<{ sent: boolean; period_label: string }>(
+        `/api/admin/drivers/${driverId}/statements/email?${statementParams(selection)}`,
+        { method: "POST" },
+    );
+
 export interface RevealSinResponse {
     sin: string;
     sin_last4: string;

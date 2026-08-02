@@ -75,6 +75,37 @@ async def test_driver_annual_earnings_handles_none_earnings():
     assert total == Decimal("0")
 
 
+@pytest.mark.asyncio
+async def test_driver_annual_earnings_includes_stripe_synced_payouts():
+    """Legacy-era income synced from Stripe transfer history
+    (payout_type='stripe_sync') counts toward the $500 threshold and the
+    notified amount — the old app's rides were never imported, so the synced
+    payouts are the only record of that income."""
+    rides = [_make_ride("d1", "300.00")]
+    synced = [
+        {"driver_id": "d1", "payout_type": "stripe_sync", "amount": 250.25},
+        {"driver_id": "d1", "payout_type": "stripe_sync", "amount": "100.00"},
+    ]
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "rides":
+            return rides
+        if table == "payouts":
+            assert filters["payout_type"] == "stripe_sync"
+            assert filters["created_at"]["$gte"].startswith("2025-01-01")
+            assert filters["created_at"]["$lt"].startswith("2026-01-01")
+            return synced
+        return []
+
+    with patch("utils.t4a_annual_job.db_supabase") as mock_db:
+        mock_db.get_rows = AsyncMock(side_effect=_get_rows)
+        from utils.t4a_annual_job import _driver_annual_earnings
+
+        total = await _driver_annual_earnings("d1", 2025)
+
+    assert total == Decimal("650.25")
+
+
 # ---------------------------------------------------------------------------
 # _run_issuance
 # ---------------------------------------------------------------------------

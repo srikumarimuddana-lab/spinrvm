@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` — added B-AI1 + AI1–AI13 from the AI/MCP guardrail audit). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c (open) — full-repo scoping pass done (Sub-tiers A/B/C), first file (`utils/reconciliation.py`, 16%→90%) closed; AI15 added and closed same-day (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -213,15 +213,17 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   money/dispatch paths now meet their coverage floors.
   </details>
 
-### A1b. Backend test-coverage floor for the rest of the codebase (scoped, not started)
-- [ ] **Status:** open — scoping only, no work started. Raised 2026-07-27 when
+### A1b. Backend test-coverage floor — Track 1 (money/safety/compliance-adjacent)
+- [x] **Status:** closed (2026-08-01) — Track 1 complete. Raised 2026-07-27 when
   the user asked why A1 only touched money/dispatch paths rather than the
   whole backend. Answer: A1's mandate (CLAUDE.md) is explicitly ≥90% for
   payments/fare and ≥80% for rides/dispatch — not a whole-codebase target.
   The global CI floor (`backend/pytest.ini`) is only 60%, and everything
-  outside A1's file list currently sits there or below. This item scopes
-  what a deliberate *next* push would look like, split into two tracks so
-  a future session can pick either without re-deriving priority order.
+  outside A1's file list currently sits there or below. This item originally
+  scoped two tracks; Track 2 (breadth, lower urgency) was never started and
+  is spun off as its own item, **A1c**, below — closing this item's
+  acceptance against Track 1 only, which is fully done (all four priority
+  groups below at or above their 80%/90% targets).
 - **Why:** the same logic that justified A1 (higher-risk code deserves a
   higher bar) applies to other domains this session never touched —
   corporate billing, safety/SOS, auth/RLS, and admin actions all have
@@ -393,13 +395,38 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        410, new-user creation (+ `create_user` DB-failure → 503, never
        mints a token for an unpersisted row), and 4 OTP-record validation
        branches (wrong code, expired, malformed/missing `expires_at`).
-       Still open in this file: the company-email-OTP flow
-       (`send_company_email_otp`/`verify_company_email_otp`),
-       `firebase_auth_login`, `refresh_access_token`,
-       `logout`/`logout_all`, and `reactivate_account` — none of these
-       endpoints have direct tests yet; large remaining scope, not
-       pursued further in this pass. See
-       `docs/change-log/2026-07-29-a1b-verify-otp-coverage.md`.
+       See `docs/change-log/2026-07-29-a1b-verify-otp-coverage.md`.
+       **Update 2026-07-30 — now 66%**: added 44 more tests
+       (`tests/test_auth_remaining_endpoints.py`) covering the
+       company-email-OTP flow (`send_company_email_otp`/
+       `verify_company_email_otp`), `firebase_auth_login`,
+       `refresh_access_token`, `logout`/`logout_all`, and
+       `reactivate_account` — success paths, validation-error branches,
+       and DB-failure propagation. No application code changed, no bugs
+       found. Remaining gap is deeper validation branches and the
+       dual-import fallback. See
+       `docs/change-log/2026-07-30-a1b-auth-remaining-endpoints-coverage.md`.
+       **Update 2026-08-01 — done, 84.6%**: closed the last real gap —
+       `GET /me`'s three failure branches (`profile_complete` self-heal DB
+       write, rider ride-count fetch, driver-onboarding-status derivation)
+       had zero coverage despite each being explicitly commented as a
+       "must log, never silently swallow" path (one citing B-P1-5 /
+       CLAUDE.md directly). Added `TestGetMeFailureBranches` (3 tests,
+       `tests/test_auth_remaining_endpoints.py`) confirming all three
+       already correctly log-and-continue — no bug found, closes coverage
+       on already-correct behavior. Also added 6 tests to
+       `tests/test_auth_send_otp.py` for `send_otp`'s rate-limit (per-
+       minute/hourly 429), Redis-fail-closed 503, production-without-
+       Twilio 503, and OTP-store-write-failure 503 branches. No
+       application code changed. Full suite: `6715 passed, 8 skipped,
+       1 xfailed, 0 failed`. Remaining 15.4% is dual-import fallback plus
+       lower-value validation/log-only branches — diminishing returns, not
+       pursued further. See
+       `docs/change-log/2026-08-01-a1b-routes-auth-coverage-finish.md`.
+       **This closes Track 1 item 3 (auth/RLS-adjacent code) — every file
+       in this item is now at or above its target, and with items 1
+       (corporate), 2 (safety), and 4 (`backend/routes/admin/`) already
+       closed, Track 1 of A1b is now fully complete.**
      - `routes/admin/auth.py` — **done, 94%** (was 70%, re-measured fresh
        against the full suite — the previously-tracked 64-70% figure was in
        the right ballpark). The endpoint was well-covered for login/MFA/
@@ -464,30 +491,394 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
        endpoint's own `valid` set does not (and vice versa for
        `"needs_review"`), so some pydantic-valid status values 400 at the
        handler's internal guard.
-- **Approach — Track 2 (breadth, lower urgency):** everything else currently
-  below the 60% CI floor or in the 60-80% band with no explicit target —
-  utils/services not touched by Track 1. Lower priority; only worth
-  picking up once Track 1 is done or if a specific file becomes a live
-  incident source.
-- **Explicitly NOT recommended:** raising the CI floor to 80% uniformly
-  across the whole backend in one move. Many low-risk files (CSV export
-  helpers, LMS integration, one-off admin scripts) would cost
-  disproportionate effort for coverage that doesn't reduce real risk —
-  same diminishing-returns logic that stopped A1's `matching.py` pass at
-  79.4% rather than chasing the last 0.6%.
-- **Also explicitly out of scope for this item:** frontend test coverage
-  (rider-app/driver-app/admin-dashboard — React Native / Next.js, not
-  measured or covered by anything in A1/A1b) and a correctness audit of
+     - `backend/routes/admin/analytics.py` — **done, 91%** (was ~24%, lowest
+       -covered file in `routes/admin/`). Added `tests/test_admin_analytics_
+       coverage.py` (24 tests) covering `cancellation-reasons`,
+       `driver-acceptance`, `overview` (incl. Redis cache hit/corrupt-cache/
+       set-failure paths), `dashboard`, `demand-forecast`(+summary), and
+       `driver-offer-stats`/`-trends` — happy path, empty/zero-division
+       guards, and the 503-on-DB-error path for each. `surge-history` was
+       already covered by `test_admin_surge_history.py`. Test-only, no bugs
+       found. See `docs/change-log/2026-07-29-a1b-admin-analytics-incentives-coverage.md`.
+     - `backend/routes/admin/incentives.py` — **done, 98%** (was ~34%).
+       Driver-incentive/bonus program management is money-adjacent (bonus
+       payouts to drivers), so create/update/toggle/delete were prioritized
+       over the read-only list/stats endpoints. Added `tests/test_admin_
+       incentives_coverage.py` (24 tests, incl. `bonus_amount` boundary
+       validation at the >500/<=0 Pydantic gate and the 503-on-DB-error path
+       for every write endpoint). Test-only, no bugs found. See
+       `docs/change-log/2026-07-29-a1b-admin-analytics-incentives-coverage.md`.
+     - `backend/routes/admin/rides.py` — **34% → 42% (2026-07-30) → two
+       independent, concurrent 2026-08-01 sessions both picked up the
+       deferred read/list/export/analytics gap, unaware of each other; both
+       landed, reconciled here rather than picking one over the other:**
+       - **Batch 2** (PR #3057) extended the existing
+         `tests/test_admin_rides_coverage.py` in place (57 → 81 tests, 24
+         new), measured single-file (`--cov=routes.admin.rides` against that
+         file alone): **42%/52.35% → 70%**. Closed ride location-trail/live/
+         invoice, send-receipt, heatmap-data, earnings (+/rides +/overview),
+         export/rides, export/drivers, payouts/overview (incl. the
+         no-drivers-in-area empty-shell branch), dashboard `/stats`,
+         fare-estimate, promo/preview, and the places-proxy not-configured
+         503 guards. Full-suite `--cov` re-measurement wasn't obtained in
+         that session (sandbox-specific coverage-instrumentation/
+         `pyiceberg` import interaction) — see
+         `docs/change-log/2026-08-01-a1b-admin-rides-coverage-batch2.md`.
+       - **This session** (unaware of #3057 in flight, branched from main
+         before it merged) added a *second*, separate file,
+         `tests/test_admin_rides_read_endpoints_coverage.py` (41 tests,
+         overlapping in target endpoints with batch 2 above but written
+         independently), and — per this task's own instruction not to trust
+         the stale 42% figure — re-measured **full-suite** coverage twice
+         (before and after its own changes, both against a pre-#3057 base):
+         **already 80%** (242/1190 uncovered) *before* this session added
+         anything, because the backend suite had grown from ~5610 to 6576
+         tests since 2026-07-30 via unrelated A1b work, several of which
+         incidentally exercise this file as a side effect. This session's 41
+         new tests all pass (suite pass count rose 6576→6617) but did not
+         move the aggregate number (byte-identical 242-line gap before/
+         after) — every line they touch was already reachable elsewhere.
+         See `docs/change-log/2026-07-30-a1b-admin-rides-coverage.md` and
+         `docs/change-log/2026-08-01-a1b-admin-rides-coverage-continued.md`.
+       - **Net effect:** both sessions' test files are kept (some endpoint
+         overlap between them is redundant but harmless — extra CI time, no
+         correctness risk); no application code was changed by either; no
+         new bugs found by either. `routes/admin/rides.py` is confirmed
+         clear of the 70% admin-routes target by two different measurement
+         methods (single-file 70%, full-suite 80%) using two independently
+         written test suites — about as solid a confirmation as this
+         backlog's convention produces. Neither session independently
+         re-confirmed a **full-suite** number *after* both sets of tests
+         landed together; if that number matters later, it's a cheap
+         re-run, not a re-investigation.
+     - `routes/admin/support.py` (disputes, support-ticket CRUD, flags,
+       complaints) — was ~39%, now 97% (267 stmts, 8 missed: two narrow
+       DB-exception logging branches at 220/228, the `updated_at`-set
+       branches at 374/376/451, and line 177/551 filter edges). 40 new
+       tests in `backend/tests/test_admin_support_routes.py`, following the
+       `get_admin_user` dependency-override pattern from
+       `test_support_tickets_service_area_routes.py`. Bug found, not fixed
+       (test-only scope): `admin_get_dispute_stats` does
+       `Decimal(str(d.get("refund_amount") or 0))` inside a bare
+       `except (TypeError, ValueError)` — a non-numeric `refund_amount`
+       string raises `decimal.InvalidOperation`, which is not caught, so
+       the stats endpoint 500s instead of tolerating the bad row. See
+       `docs/change-log/2026-07-29-a1b-admin-support-coverage.md`.
+     - `routes/admin/support_tickets.py` (Zoho Desk proxy: config, sync,
+       dashboard, trends, ticket list/search/reply/comment/patch/tags) —
+       was ~43%, now 91% (357 stmts, 31 missed — mostly `ImportError`
+       fallback branches for the dual-import pattern, and a few narrow
+       Zoho-error edges not exercised: e.g. `update_config`'s no-op
+       `data_center` normalization skip, `/tickets/{id}/threads` error
+       paths already covered by other error-path tests but not every
+       endpoint's Zoho-error branch). 35 new tests in
+       `backend/tests/test_admin_support_tickets_routes.py` (service-area
+       and AI-suggest routes already had dedicated coverage in
+       `test_support_tickets_service_area_routes.py` /
+       `test_support_tickets_ai_suggest.py` and were intentionally not
+       duplicated).
+     - `promotions.py`: 48% → 89% (combined with pre-existing
+       `test_admin_promo_stats.py`) via new `tests/test_admin_promotions_crud.py`
+       — prioritized the money-adjacent create/update/delete paths (discount
+       value validation, code uppercasing, optional-field insert/update
+       fallback, audit logging) over read-only stats. See
+       `docs/change-log/2026-07-29-a1b-admin-promotions-faqs-venues-coverage.md`.
+     - `faqs.py`: 42% → 97% via new `tests/test_admin_faqs_crud.py` — FAQ
+       CRUD, embedding-invalidation-on-edit branch, and the three
+       notification-broadcast audiences (all/riders/drivers).
+     - `venues.py`: 43% → 100% via new `tests/test_admin_venues_crud.py` —
+       venue CRUD, 404-not-found and 503-db-error branches, audit logging.
+     - `backend/routes/admin/wallet.py` — **99%** (was low, exact baseline
+       not separately tracked). Added `tests/test_admin_wallet_endpoints.py`
+       (rider-wallet admin read/adjust endpoints).
+     - `backend/routes/admin/rider_import.py` — **89%**. Added
+       `tests/test_admin_rider_import.py`.
+     - `backend/routes/admin/users.py` — **74%**. Added
+       `tests/test_admin_users_management.py`.
+       All three: no application code changed, no bugs found. Full suite
+       not re-run locally this pass (relying on this PR's CI as the
+       regression gate — see
+       `docs/change-log/2026-07-30-a1b-admin-wallet-users-coverage.md`).
+     - `backend/routes/admin/maintenance.py` — **99%**. Added
+       `tests/test_admin_maintenance_coverage.py`.
+     - `backend/routes/admin/vehicle_fleet.py` — **94%**. Added
+       `tests/test_admin_vehicle_fleet_coverage.py`.
+     - `backend/routes/admin/staff.py` — **89%**. Added
+       `tests/test_admin_staff_coverage.py` (internal-staff account CRUD:
+       password validation, role presets, super_admin demotion guard,
+       session revoke on deactivation, credential stripping).
+       All three: no application code changed, no bugs found. Full suite
+       not re-run locally this pass (relying on this PR's CI as the
+       regression gate — see
+       `docs/change-log/2026-07-30-a1b-admin-maintenance-fleet-staff-coverage.md`).
+     - `backend/routes/admin/subscriptions.py` — 68.42% → **98%**. Added
+       `tests/test_admin_subscriptions_coverage.py` (32 tests: Spinr Pass
+       plan CRUD, subscription-stats aggregation, subscription-payments
+       pagination/date-filter/legacy-tax-row branches, tax-config update,
+       offer-analytics pagination/truncation/date-parsing, invoice
+       download/resend 404/429/502 branches). No application code changed,
+       no bugs found. See
+       `docs/change-log/2026-08-01-a1b-admin-subscriptions-coverage.md`.
+     - `backend/routes/admin/service_areas.py` — 65.80% → **91%**. Added
+       `tests/test_admin_service_areas_coverage.py` (32 tests): service-area
+       create/update/delete (airport bbox + subregion guards, surge-above-cap
+       justification gate, `subscription_required`↔`spinr_pass_enabled`
+       coercion, vehicle-pricing auto-seed), surge-pricing activate/deactivate,
+       surge-status 503, area-fees CRUD, area-tax get/update, vehicle-pricing
+       get. No application code changed. Found (not fixed, flagged in PR):
+       the handler's manual `surge_multiplier` range check is dead code —
+       `ServiceAreaUpdateRequest`'s Pydantic `Field(ge=1.0, le=10.0)` already
+       matches `_SURGE_MAX` exactly, so out-of-range values 422 before the
+       handler's own 400 branch is ever reached. Full suite re-run locally
+       this pass — see
+       `docs/change-log/2026-08-01-a1b-admin-service-areas-coverage.md`.
+     - `routes/admin/monitoring.py`: 54% → 96% (live-map driver/ride
+       fetchers, Redis health/connectivity/flush-prefix, WebSocket health,
+       infrastructure snapshot). See
+       `docs/change-log/2026-07-29-a1b-admin-monitoring-messaging-legal-coverage.md`.
+     - `routes/admin/messaging.py`: 60% → 97% (recipient resolution +
+       service-area filter, per-channel senders, `_fan_out` stats
+       write-back including the failure-to-persist path, audience-preview,
+       suppressions). Same change-log entry.
+     - `routes/admin/legal_documents.py`: 47% → 100% (upsert version-bump
+       semantics — PIPEDA consent-version tracking). Same change-log entry.
+- **Track 2 (breadth) spun off:** see **A1c** below — not part of this
+  item's acceptance. Note: one Track 2 file (`repositories/wallet_repo.py`)
+  was already picked up under this item on 2026-08-01, before the Track 2
+  split — its progress is preserved under A1c, not lost.
+- **Also explicitly out of scope for this item (unchanged):** frontend test
+  coverage (rider-app/driver-app/admin-dashboard — React Native / Next.js,
+  not measured or covered by anything in A1/A1b) and a correctness audit of
   fare/pricing *values* (e.g. whether Economy vs. XL vehicle-type pricing
   in `fare_configs` is intentional — that data lives in the live DB via the
   admin dashboard's Service Areas → Vehicle Pricing editor, not in this
   repo, and needs a live DB read to answer, not a coverage pass). Both are
   real, separate asks the user raised in the same session as A1b's
   scoping — track them as their own items if/when the user wants them
-  picked up, don't fold them into A1b.
-- **Acceptance:** not yet defined — pick a track and file list with the
-  user before starting; don't assume "cover everything to 80%" is the
-  goal without confirming, per the "explicitly NOT recommended" note above.
+  picked up.
+- **Acceptance:** ✅ met for Track 1 — all four priority groups (corporate
+  billing, safety/SOS, auth/RLS, admin routes) measured and closed at or
+  above their 80%/90% targets, per the file-by-file breakdown above. Track 2
+  acceptance was never defined and now lives under A1c, not here.
+
+### A1c. Backend test-coverage floor — Track 2 (breadth, lower priority, in progress)
+- [ ] **Status:** open — spun off from A1b (2026-08-01) when A1b's Track 1
+  work closed out. One file already done (below, picked up under A1b before
+  the split); the rest of Track 2 is unscoped.
+- **Why:** same logic as A1/A1b (higher-risk code deserves a higher bar),
+  but for everything *outside* the money/safety/compliance-adjacent set
+  Track 1 already covers — utils/services with no explicit coverage target,
+  currently sitting at or below the global 60% CI floor. Lower real-world
+  consequence than Track 1's scope, hence lower priority — not launch-gating
+  on its own.
+- **Files:**
+  - `backend/repositories/wallet_repo.py` (444 lines — wallet & Stripe
+    repository: atomic wallet RPCs, promo application, fare-split, Stripe
+    event helpers; extracted from `db_supabase.py` per Phase 4 god-object
+    decomposition) — **40% → 99%** (2026-08-01, both numbers measured via
+    the full `pytest tests/ -q --cov=repositories.wallet_repo`, not a
+    keyword-filtered subset — 169 stmts, 102→2 missed). Had no dedicated
+    test file; only indirect coverage as a side effect of route-level tests
+    (`test_wallet.py`, `test_p2_promo_wallet_loyalty.py`,
+    `test_p3_wallet_concurrency.py`, `test_p3_promo_concurrency.py`,
+    `test_webhooks_main.py`, etc.) and `test_wallet_apply_delta_contract.py`
+    (SQL-migration-text assertions only, no Python execution). Treated as
+    money-adjacent per CLAUDE.md's Critical Conventions (wallet deltas,
+    Decimal handling, Stripe idempotency), so targeted the same ≥80%+ bar
+    as Track 1. Added `backend/tests/test_wallet_repo.py` (67 tests): happy
+    path + DB-error-propagation for all 12 public functions
+    (`wallet_increment_balance`, `wallet_apply_credit`, `wallet_apply_delta`
+    incl. floor/clamp_to_floor branches, `wallet_pay_for_ride` incl. all 4
+    typed `ValueError` translations, `wallet_transfer` incl. list-vs-dict
+    RPC-row shape, `increment_promo_uses`/`claim_promo_user_slot`
+    (parametrized True/1/list/False/None/empty branches),
+    `release_promo_user_slot`, `fare_split_pay_share`, `claim_stripe_event`
+    (all 3 duplicate-detection message-pattern branches + the stuck-vs-
+    processed distinction), `mark_stripe_event_processed`,
+    `unclaim_stripe_event`). Remaining 2 uncovered lines are the dual-import
+    `except ImportError` fallback (structurally untestable in a single
+    process, per this repo's own documented convention). Test-only PR — no
+    application code changed. **Bug found, not fixed (test-only scope):**
+    `mark_stripe_event_processed` swallows a DB/payment error via
+    `logger.warning(...)` + continue and always returns `None` regardless of
+    success or failure, matching the exact pattern CLAUDE.md's "Do not
+    silently swallow errors" section forbids for payment errors — the
+    caller cannot detect the stamp failed short of grepping logs. Contrast
+    with the sibling `unclaim_stripe_event`, which signals the same class of
+    failure to its caller via a boolean return (documented as "the caller
+    must escalate on False") — not a swallow. `mark_stripe_event_processed`'s
+    docstring argues the trade-off is bounded (Stripe already got its 2xx;
+    a reconciliation job distinguishes stuck-vs-processed rows via
+    `stripe_events.processed_at`), so it is likely not a live financial-
+    correctness bug today, but it is a real deviation from the documented
+    convention and worth a follow-up decision (fix vs. formally accept).
+    **Second finding, also not fixed (pre-existing test-suite reliability
+    bug, not application code):** running the new test file as part of the
+    full suite (not in isolation) initially produced 53 failures, all
+    `ServiceUnavailableException("database")` from `repositories/_base.py`'s
+    deadline-exhausted guard — root-caused to `tests/test_utils_extended.py`'s
+    `TestDeadline*` class, several of whose tests call
+    `utils/deadline.py:set_request_deadline(...)` directly and never reset
+    the `contextvars.ContextVar` afterward (no `reset_token` cleanup), so a
+    permanently-past deadline leaks into every later test in the same pytest
+    process that calls `run_sync` — order-dependent, same failure class as
+    the already-tracked A8 (leaked-coroutine test pollution). Worked around
+    locally with an autouse fixture in `test_wallet_repo.py` that resets the
+    contextvar to `None` before each test (see the file's `_clear_request_deadline`
+    fixture for the full writeup); did not touch `test_utils_extended.py`
+    itself since that's a different file/feature, out of scope for a
+    wallet_repo-coverage PR. A future session should either fix
+    `test_utils_extended.py`'s cleanup or add a session-scoped autouse
+    contextvar reset to `conftest.py` so no other file has to defend against
+    this individually.
+    See `docs/change-log/2026-08-01-a1b-wallet-repo-coverage.md`.
+  - **Full-repo scoping pass (2026-08-01)** — measured every non-test,
+    non-migration backend file via a single full-suite
+    `pytest tests/ -q --cov=. --cov-report=json` run (315 files, 78.5%
+    aggregate). 88 files sit below 80%; excluding `wallet_repo.py` (above,
+    already closed) and everything Track 1 already owns
+    (`routes/admin/`, corporate, safety, auth). Also surfaced: one
+    pre-existing flaky test, `test_e2e_ride_lifecycle.py::
+    TestRideLifecycleConcurrency::test_two_drivers_accepting_same_ride_one_wins`
+    (passes standalone, intermittently fails under full-suite load —
+    timing-sensitive, not investigated further, not blocking).
+    - **Sub-tier A — money/ride/dispatch-adjacent, arguably deserves
+      Track-1-grade priority despite living in "Track 2"** (recommend
+      picking up first):
+      - `repositories/ride_repo.py` — **done, 84.1%** (was 54.83%, 383
+        stmts, 61 missing). Ride state persistence layer. Had no dedicated
+        test file; only indirect coverage via route-level tests. Added
+        `tests/test_ride_repo_coverage.py` (74 tests): `_safe_route_segments`
+        allowlist-projection branches (malformed/out-of-range/unknown-
+        provider coordinate rejection), route-snapshot signed-URL
+        happy/error paths, `_project_route_detail`'s v1-legacy vs.
+        v2-segmented-geometry branches (completion-point validation,
+        snapshot-URL signing-failure graceful-degrade, revision-mismatch
+        skip), `get_ride`/`insert_ride`/`update_ride` happy paths and
+        unconfigured/DB-failure branches, `claim_ride_payment_processing`'s
+        atomic payment-status race guard (both claimed and
+        already-claimed-by-concurrent-request outcomes), `get_rides_for_user`/
+        `get_rides_for_driver` (status/date-range filters),
+        `get_ride_details_enriched`'s minimal-ride (no rider/driver) and
+        incentive-claims-fetch-failure-degrades-gracefully paths,
+        `create_flag`'s auto-ban-at-3-active-flags threshold for both rider
+        and driver targets, complaint/lost-and-found CRUD, and
+        `get_live_ride_data`/`get_user_status`/`get_flags_for_target`. No
+        application code changed. No bugs found — every DB-touching
+        function either raises via `run_sync`'s `DatabaseError` wrapper or
+        degrades soft exactly as documented (e.g. `_project_route_detail`'s
+        signed-URL signing failure). Full suite: `6904 passed, 8 skipped,
+        1 xfailed, 0 failed`. See
+        `docs/change-log/2026-08-02-a1b-ride-repo-coverage.md`.
+      - `routes/websocket.py` — **done, 80.3%** (569 stmts, 112 missing,
+        up from 50.44%) — WS auth + dispatch fan-out. Nine existing WS test
+        files covered handshake/auth edge cases, per-user rate limiting,
+        live-location durability/revocation guards, health, and fan-out
+        metrics, but none drove the main receive loop end-to-end. Added
+        `tests/test_websocket_coverage.py` (35 tests) via
+        `TestClient.websocket_connect`: message-size guard, malformed JSON,
+        `driver_location`/`location_batch` persistence + rider/admin
+        fan-out (integrity check pass/fail, throttled DB write, breadcrumb
+        buffering with session-revoked skip, ETA cache hit/miss), batch
+        rate-limit and session-revoked-ack paths,
+        `ride_status_update`/`chat_message`/`get_nearby_drivers`/admin
+        snapshot handling, the disconnect/exception cleanup tail, and
+        `heartbeat_task`/`_handle_driver_ws_disconnect` edge branches
+        (stale-pong close, token-version/Firebase-watermark revocation,
+        newer-socket-already-reconnected skip, idle-driver-skips-broadcast,
+        audit-log-failure-still-broadcasts). No application code changed.
+        One pre-existing (not fixed) behavior gap noted: `location_batch`
+        with an empty `points: []` list never sends a `location_batch_ack`
+        — the ack call lives inside a guard that's falsy for an empty
+        (but well-typed) list. Full suite: `6865 passed, 8 skipped,
+        1 xfailed, 0 failed`. See
+        `docs/change-log/2026-08-02-a1b-websocket-coverage.md`.
+      - `routes/drivers/subscriptions.py` — 60.52% (575 stmts, 227
+        missing) — Spinr Pass, money-adjacent (NOT the same file as
+        `routes/admin/subscriptions.py`, already closed under Track 1 —
+        this is the driver-facing one).
+      - Rest of the unevenly-covered `routes/drivers/` package: `ride_flow.py`
+        (66.30%), `ride_cancel.py` (51.75%), `ride_reads.py` (58.95%),
+        `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`
+        (38.82%), `_shared.py` (51.32%), `status.py` (48.39%),
+        `profile.py` (67.65%).
+      - `utils/redis_client.py` — 55.00% (220 stmts, 99 missing) —
+        presence/rate-limit backbone; `utils/redis_client.py` falling back
+        silently to in-process dict (per CLAUDE.md) makes this worth
+        testing both modes.
+    - **Sub-tier B — below 60%, genuinely lower-risk breadth** (utils/services,
+      admin-adjacent tooling, third-party integrations):
+      `routes/main.py` (**0%**, 52 stmts — worth a quick look at what this
+      even is before writing tests for it), `utils/t4a_pdf.py` (4.40%),
+      `utils/subscription_invoice_pdf.py` (7.97%),
+      `services/zoho_desk_db.py` (11.76%), ~~`utils/reconciliation.py`
+      (15.69%)~~ **done, see below**, `utils/demand_forecast.py` (18.52%),
+      `utils/zoho_desk_sync.py` (22.33%), `utils/analytics.py` (22.70%),
+      `routes/lost_and_found.py` (25.85%), `services/stripe_kyc_sync.py`
+      (30.70%), `utils/marketing_push.py` (33.33%), `utils/ws_pubsub.py`
+      (38.46%), `services/data_transfer/bundle_document_uploader.py`
+      (38.75%), `routes/users.py` (39.86%), `routes/support.py` (42.22%),
+      `repositories/corporate_repo.py` (42.29%), `utils/push_retry.py`
+      (45.30%), `routes/maps_proxy.py` (51.35%),
+      `utils/route_validation.py` (53.33%), `utils/scheduled_rides.py`
+      (55.40%), `utils/suspension_reactivation.py` (55.93%),
+      `utils/route_snapshot.py` (57.08%), `utils/stuck_ride_sweeper.py`
+      (57.32%), `core/security.py` (57.89%), `core/lifespan.py` (58.52% —
+      note: the 16-background-loop startup/shutdown module central to
+      issue #2981's fix; any new tests here should account for the
+      `ENV=="test"` no-op guard added in that fix), `routes/marketing.py`
+      (58.57%), `utils/document_expiry.py` (58.71%).
+    - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
+      scoping note** (55 more files, not itemized individually here —
+      notable large ones: `routes/webhooks.py` 75.40%/748 stmts Stripe-
+      adjacent, `routes/promotions.py` 65.85%, `utils/payment_retry.py`
+      72.54%, `repositories/driver_repo.py` 72.99%, `routes/disputes.py`
+      73.88% — full list reproducible via the same `--cov=.` command
+      above; a future session should re-run it rather than trust this
+      snapshot going stale).
+    - First file since this scoping pass picked up below.
+  - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
+    `financial_events` reconciliation loop — the only alarm for a Stripe/DB
+    financial drift going undetected) — **16% → 90%** (2026-08-01, measured
+    via `pytest tests/test_reconciliation.py --cov=utils.reconciliation`;
+    102 stmts, 10 missed). Had no dedicated test file. Picked ahead of
+    Sub-tier B's raw ranking (lower than `t4a_pdf.py`'s 4% and
+    `subscription_invoice_pdf.py`'s 8%) specifically for real-world
+    consequence — a silent bug here means a real financial discrepancy goes
+    undetected, not just untested, unlike a cosmetic PDF-rendering bug.
+    Added `backend/tests/test_reconciliation.py` (19 tests): the loop's
+    survive-a-failing-tick behavior, the before-2am / lock-not-acquired /
+    lock-acquired branches of `_maybe_run_tick`, `_run_reconciliation`'s
+    stripe-key-not-configured / other-RuntimeError / generic-exception /
+    financial-events-query-failure early returns, the exact `> threshold`
+    (not `>=`) 1-cent boundary, `_sum_stripe_intents`'s pagination and
+    succeeded-only filter, `_sum_financial_events`'s None-skip and
+    empty-`.data` handling, and `_record_discrepancy`'s insert shape plus
+    its swallow-on-failure contract. Test-only, no application code changed,
+    no bugs found. Full suite re-run after: 6801 passed (was 6782), 0
+    failed, 0 new warnings. See
+    `docs/change-log/2026-08-01-a1c-reconciliation-coverage.md`.
+  - Rest of Sub-tier A/B/C above: not yet started — pick one file/PR at a
+    time, ≤3 files per subtask, per the same pattern Track 1 followed.
+- **Approach:** everything currently below the 60% CI floor or in the
+  60-80% band with no explicit target, that Track 1 didn't already touch.
+  Only worth picking up once a specific file becomes a live incident source,
+  or if the user explicitly wants full-backend breadth next.
+- **Explicitly NOT recommended:** raising the CI floor to 80% uniformly
+  across the whole backend in one move. Many low-risk files (CSV export
+  helpers, LMS integration, one-off admin scripts) would cost
+  disproportionate effort for coverage that doesn't reduce real risk —
+  same diminishing-returns logic that stopped A1's `matching.py` pass at
+  79.4% rather than chasing the last 0.6%.
+- **Also explicitly out of scope:** frontend test coverage
+  (rider-app/driver-app/admin-dashboard — React Native / Next.js) and a
+  correctness audit of fare/pricing *values* (that data lives in the live
+  DB, not this repo, and needs a live DB read to answer, not a coverage
+  pass). Real, separate asks — track as their own items if/when wanted,
+  don't fold into A1c.
+- **Acceptance:** not yet defined — pick a file list with the user before
+  starting; don't assume "cover everything to 80%" is the goal without
+  confirming.
 
 ### A2. Post-deploy smoke test in CI
 - [x] **Status:** done — already implemented before this checklist was last
@@ -705,47 +1096,116 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   regressions elsewhere.
 
 ### A8. Leaked un-awaited AsyncMock coroutines fail an arbitrary unrelated test under pytest 9
-- [ ] **Status:** open — diagnosed 2026-07-29 while verifying the admin driver
-  search fix (`claude/admin-driver-search-design-ryh7yc`). Not fixed there: the
-  leaks are in test files that change did not touch, and closing them is its own
-  scoped cleanup.
+- [x] **Status:** done (2026-07-30). Fixed on branch `claude/a8-asyncmock-leak-fix`
+  (5 commits). Diagnosed 2026-07-29 while verifying the admin driver search fix
+  (`claude/admin-driver-search-design-ryh7yc`); not fixed there since the leaks
+  were in test files that change didn't touch. Picked up as its own scoped task
+  2026-07-30, re-diagnosed from scratch with `PYTHONTRACEMALLOC=5` (captures the
+  real allocation site, not just the incidental GC-timing location the warning
+  surfaces at) rather than trusting the original diagnosis's file list, which
+  turned out not to match — see note below.
 - **Symptom:** a full-suite run fails one test that passes in isolation, and
-  *which* test fails changes between runs at the same commit. Observed:
-  `test_compliance_reports_http.py::test_knight_archer_report_filters_by_status`
-  failed one full-suite run and passed the next at an identical commit, while
-  passing 5/5 in isolation.
-- **Root cause:** several test files leave `AsyncMock` coroutines un-awaited
-  (`RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never
-  awaited`). The warning surfaces whenever the GC happens to collect the
-  coroutine — not where it was created. pytest 9's `_pytest/unraisableexception`
-  plugin **re-raises** collected unraisable errors (`raise errors[0]`), so the
-  test executing at that moment fails. Blame is therefore assigned by GC timing,
-  and *any* change to test count or ordering reshuffles the victim. Confirmed
-  present at baseline: `tests/test_ride_accept_flow.py` +
-  `tests/test_drivers_extended.py` alone emit 7 such warnings on an unmodified
-  checkout.
+  *which* test fails changes between runs at the same commit. Observed (2026-07-29):
+  `test_compliance_reports_http.py::test_knight_archer_report_filters_by_status`;
+  observed again independently (2026-07-30) as
+  `test_compliance_reports_http.py::test_driver_roster_filters_by_status` failing
+  on PR #2903's `backend-test` CI run — same file, same root cause, different
+  victim test, exactly matching the "any change to test count or ordering
+  reshuffles the victim" mechanism below.
+- **Root cause — two distinct bugs, not one:**
+  1. **Mock-shape mismatch.** `tests/conftest.py`'s `autouse=True` fixture
+     `mock_supabase_client` (applied to every test via `patch_external_dependencies`)
+     set `.rpc` and `.table().execute` as `AsyncMock`, but production code always
+     calls both **synchronously** — `repositories/_base.py`, `wallet_repo.py`,
+     `ride_repo.py`, and `core/lifespan.py` all do
+     `await run_sync(lambda: supabase.table(...).execute())`; the lambda body
+     itself is never awaited. The mismatch created a coroutine every time
+     synchronous code called the mocked method, which was then discarded
+     un-awaited. Fixing this also surfaced a second, independent pre-existing bug
+     it had been masking: the fixture's `.rpc` didn't model the real two-step
+     `.rpc(name, params).execute()` chain (unlike `.table()`, and unlike ~10
+     other test files that already correctly override
+     `mock.rpc.return_value.execute.return_value = ...`) — `test_credit_happy_path`
+     was silently relying on an earlier `AttributeError` from the async bug to
+     produce its (test-tolerated) 503 path; once that async bug was fixed, the
+     RPC chain's missing `.execute()` step surfaced as a real `decimal.InvalidOperation`
+     crash instead. Fixed both together.
+  2. **`spawn()`/`asyncio.create_task()` seam leaks.** Production fire-and-forget
+     dispatch (`_deps.spawn(some_coroutine(...))`, used for push notifications,
+     guest-booking notifications, quest progress, live-activity updates, batch
+     offer-timeout scheduling) evaluates `some_coroutine(...)` to build the
+     coroutine *before* `spawn()` — or, one layer deeper, `asyncio.create_task()`,
+     the seam `spawn()`'s own docstring says tests are expected to intercept — ever
+     runs. A bare `MagicMock()` standing in for either records the call and
+     returns without ever awaiting or closing that coroutine argument. Real
+     `asyncio.create_task()` takes ownership of it; the fix mirrors that by
+     explicitly closing it (`tests/_factories.py:close_spawned_coro`, a shared
+     `side_effect` helper — not `conftest.py`, since pytest loads conftest by
+     file path and `from tests.conftest import X` doesn't work from other test
+     modules, an existing convention already documented at the top of
+     `_factories.py`).
+  Both bugs independently produce the identical symptom (a leaked, un-awaited
+  coroutine, warned about at an arbitrary later GC point), which is why they
+  were investigated and fixed together as one item.
 - **Why it matters:** this makes the suite an unreliable merge gate — a green
   run does not mean the leaks are gone, and a red run points at an innocent
-  test. It also burns review time re-diagnosing the same thing each session
-  (this entry exists so the next session doesn't).
-- **Fix (proposed):** find every `AsyncMock` whose call result is never awaited
-  (`grep` for `AsyncMock(` used as a sync `side_effect`/`return_value` on a
-  method the code under test calls synchronously — e.g. `supabase.rpc(...)`
-  chains inside `run_sync` lambdas) and make the mock synchronous
-  (`MagicMock`) where the production call site is synchronous. Add
-  `-W error::RuntimeWarning` for the leak class once clean so it cannot
-  regress silently.
-- **Files (known leak sources, non-exhaustive):**
-  `backend/tests/test_ride_accept_flow.py`, `backend/tests/test_drivers_extended.py`,
-  `backend/tests/test_e2e_ride_lifecycle.py`, `backend/tests/test_estimate_ghost_driver_filter.py`
-- **Acceptance:** full backend suite produces zero
-  "coroutine ... was never awaited" warnings, and 3 consecutive full-suite runs
-  at the same commit fail no tests.
+  test. It also burns review time re-diagnosing the same thing each session.
+- **Files actually fixed (verified via `PYTHONTRACEMALLOC=5`, not the original
+  diagnosis's file list — see below):** `backend/tests/conftest.py`,
+  `backend/tests/test_auth.py`, `backend/tests/test_offer_timeout.py`,
+  `backend/tests/test_dispatch_metrics.py`,
+  `backend/tests/test_dispatch_presence_failopen.py`,
+  `backend/tests/test_company_guest_booking.py`,
+  `backend/tests/test_corporate_company_bookings_coverage.py`,
+  `backend/tests/test_corporate_company_bookings_routes.py`,
+  `backend/tests/test_coverage_rides.py` (14 individual leak sites total across
+  these 9 files), plus the new shared helper `backend/tests/_factories.py` and
+  the enforcement rule in `backend/pytest.ini`.
+- **Note on the original "known leak sources" list:** the 2026-07-29 diagnosis
+  named `test_ride_accept_flow.py` + `test_drivers_extended.py` (7 warnings on
+  an unmodified checkout) plus `test_e2e_ride_lifecycle.py` and
+  `test_estimate_ghost_driver_filter.py`. None of these four appeared in this
+  session's `PYTHONTRACEMALLOC=5` full-suite runs (multiple runs, zero
+  ambiguity — tracemalloc reports the true allocation site, not the GC-timing
+  victim). Given 3 consecutive full-suite runs at the current commit are
+  completely clean (see Acceptance below), those four files' leaks were most
+  likely already fixed independently between 2026-07-29 and this session — not
+  re-verified against that specific commit range, but the current, actual state
+  of `main` is confirmed clean regardless of how it got there.
+- **Enforcement (the "regress silently" half of the original fix proposal) —
+  also had a real bug, found and fixed.** The original proposal
+  ("Add `-W error::RuntimeWarning`... once clean") doesn't work as literally
+  written: the warning's actual category is
+  `pytest.PytestUnraisableExceptionWarning`, not `RuntimeWarning` — the
+  coroutine finalizer routes through `sys.unraisablehook`, which pytest's
+  `unraisableexception` plugin wraps and re-emits; the embedded traceback text
+  merely *mentions* "RuntimeWarning" inside the wrapped message. Confirmed with
+  a disposable scratch test (`m = AsyncMock(); m()`, never awaited): under a
+  bare `error::RuntimeWarning` filter it silently kept passing, 5/5 runs, no
+  visible error at all. The correct filter also needs the inline `(?s)` DOTALL
+  flag in its message regex — the wrapped message embeds a multi-line
+  traceback before the "was never awaited" text, and `.` doesn't match
+  newlines by default, so an otherwise-correct message pattern still silently
+  never matches without it. Fixed filter (in `backend/pytest.ini`), reverified
+  against the same scratch test: 5/5 runs correctly failed, each one correctly
+  attributed to the actual leaking test rather than an arbitrary later one.
+  Kept a second, narrower plain-`RuntimeWarning` rule too, since repeated runs
+  of the identical scratch leak showed both delivery paths occur depending on
+  GC timing on a given run — one rule alone isn't sufficient.
+- **Acceptance:** ✅ met. Full backend suite produces zero
+  "coroutine ... was never awaited" warnings (confirmed via
+  `PYTHONTRACEMALLOC=5` runs during the fix, and via 3 consecutive default runs
+  after), and 3 consecutive full-suite runs at the same final commit all show
+  identical results — `5953 passed, 8 skipped, 1 xfailed, 5 warnings` (checked
+  the content of all 5: one unrelated pre-existing `StarletteDeprecationWarning`
+  about `httpx`/`starlette.testclient`, and four `InsecureKeyLengthWarning`
+  from `test_auth.py`/`test_middleware_user_id.py` deliberately using
+  short JWT test keys — none are leaks), exit code 0 each — and fail no tests.
 
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
-- [ ] **Status:** open — found 2026-07-30 while adding migration 274. Migration
+- [ ] **Status:** open — found 2026-07-30 while adding migration 275. Migration
   274 itself is clean (verified by simulating the runner's splitter); this is a
   pre-existing defect in the runner affecting **34 already-merged migrations**.
 - **Files:** `backend/scripts/migrate.py:195` (`_apply_migration_autocommit`),
@@ -1396,31 +1856,73 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   the larger proposal.
 
 ### B15. Rider/driver SOS: DB insert has no fallback on failure, and "PagerDuty" in domain-safety.md doesn't exist in code
-- [ ] **Status:** open — found 2026-07-30 while tracing the SOS flow against
-  `.claude/context/domain-safety.md`'s documented behavior. Not fixed yet;
-  logging as a tracked finding per user instruction rather than fixing inline,
-  so it can be picked up as its own scoped change with a Change Impact Log
-  (touches a live safety surface).
-- **Why:** `trigger_emergency` (`backend/routes/rides/safety.py:38-83`) —
-  the rider/driver in-ride SOS endpoint — calls
+- [ ] **Status:** partially done — the DB-insert-fallback / try-except
+  sub-finding is **fixed and merged**: PR #2931
+  (https://github.com/srikumarimuddana-lab/spinrvm/pull/2931) wraps the
+  `safety_incidents` insert in `trigger_emergency`
+  (`backend/routes/rides/safety.py`) in a try/except mirroring
+  `backend/routes/safety.py:98-105`'s pattern — logs the full exception and
+  returns a clean 503 instead of an unhandled 500. The two documentation
+  inaccuracies noted below (PagerDuty claim, 3s hold duration) are also
+  **fixed** in `.claude/context/domain-safety.md` (2026-08-01,
+  `docs/change-log/2026-08-01-b15-doc-cleanup.md`). The three remaining
+  sub-decisions from the original finding are now resolved as follows
+  (product calls, relayed via engineering 2026-08-01 — **not** directly
+  reviewed against the design docs by the product owner, noted explicitly
+  per that relay):
+  - **(a) Non-DB-dependent fallback (e.g. direct Twilio SMS bypassing the
+    DB write) for the sustained-outage case: DECIDED — not building it.**
+    Rationale: the existing 3× client retry (1s/2s backoff) plus the
+    persistent amber "Not Sent — Call 911 directly" fallback UI is judged
+    sufficient residual-risk mitigation for the ~3-4s outage window a
+    sustained failure across all retries implies. `.claude/context/domain-safety.md`
+    updated 2026-08-01 to record this as a closed decision rather than an
+    open question.
+  - **(b) Real on-call paging (PagerDuty/Opsgenie): DECIDED — build it,
+    and it is now built**, shipped dark/disabled by default
+    (`docs/change-log/2026-08-01-b15b-sos-paging.md`). New
+    `backend/utils/safety_paging.py::page_on_call`, called from
+    `trigger_emergency` right alongside the existing `notify_safety_team`
+    call, best-effort/non-blocking (never raises, a failure is logged and
+    swallowed like every other SOS side effect in that function). Config
+    (`sos_paging_webhook_url`, `sos_paging_routing_key`) lives in
+    `app_settings`, same pattern as Stripe/Twilio/Meta credentials —
+    empty `sos_paging_webhook_url` (the shipped default, since no real
+    PagerDuty/Opsgenie account exists yet) means zero HTTP calls and zero
+    behavior change. `.claude/context/domain-safety.md` updated to
+    describe the new channel as dark/disabled.
+  - **(c) Rideless/standalone SOS path (see "Also noted" below): STILL
+    UNDECIDED.** No product call has been made on this one — explicitly
+    not addressed by this update, not silently dropped. Remains open.
+  Checkbox stays `[ ]` solely because of (c) — (a) and (b) are both closed
+  decisions now (one "won't build", one "built"), but the entry as a whole
+  isn't done until (c) gets a product call too.
+- **Why (original finding, now fixed by PR #2931 — kept for record):**
+  `trigger_emergency` (`backend/routes/rides/safety.py:38-83`) —
+  the rider/driver in-ride SOS endpoint — called
   `await _deps.db_supabase.insert_one("safety_incidents", incident)` at
-  line 83 with **no surrounding try/except**. If that insert throws, the
-  request 500s before any of the subsequent steps run: the admin WS
+  line 83 with **no surrounding try/except**. If that insert threw, the
+  request 500'd before any of the subsequent steps ran: the admin WS
   broadcast, the safety-team email (`notify_safety_team`), and the
-  emergency-contact SMS loop are all sequenced *after* the insert in the
+  emergency-contact SMS loop were all sequenced *after* the insert in the
   same function body. Its sibling endpoint for non-urgent reports,
   `backend/routes/safety.py:98-105` (`POST /safety/report`), wraps the
   identical-purpose insert in a try/except that logs the full exception and
-  returns a clean 503 — `trigger_emergency` doesn't follow that pattern.
-  Separately, `.claude/context/domain-safety.md` describes a rule that a DB
+  returns a clean 503 — `trigger_emergency` didn't follow that pattern.
+  PR #2931 closed this gap by wrapping the insert in a try/except mirroring
+  the sibling pattern. Separately, `.claude/context/domain-safety.md`
+  described a rule that a DB
   failure on SOS should "fall back to direct Twilio + PagerDuty call with
   best-effort data" — grepped the whole backend for "pagerduty"
   (case-insensitive) and found zero implementation matches anywhere. What
   actually fires today on a successful SOS is a WS broadcast to the admin
   dashboard + an email to a safety distribution list + a `logger.critical()`
   line — no paging mechanism that would reach an on-call person not actively
-  watching the dashboard or a log stream. The doc describes intended
-  behavior that was either never built or removed without a doc update.
+  watching the dashboard or a log stream. The doc described intended
+  behavior that was either never built or removed without a doc update;
+  `.claude/context/domain-safety.md` has since been corrected (2026-08-01)
+  to describe the actual channels. Real paging has since been decided and
+  built — see Status (b) above and `docs/change-log/2026-08-01-b15b-sos-paging.md`.
 - **Severity note (calibrated, not worst-case):** the client
   (`shared/components/SOSButton.tsx`) retries 3× (1s/2s backoff) and never
   shows a false "Alert Sent" — it only confirms success after a real 200,
@@ -1441,23 +1943,53 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   rider who feels unsafe while waiting for pickup or just after drop-off has
   no in-app SOS path today, only a prompt to call 911 themselves. Product
   decision, not obviously a bug, but worth a deliberate call rather than
-  silent-by-omission. Doc also says hold duration is "3s"; code
-  (`SOS_HOLD_MS`) is 1200ms — minor doc inaccuracy, fix alongside.
-- **Files:** `backend/routes/rides/safety.py` (add try/except around the
-  `insert_one` at line 83, mirroring `backend/routes/safety.py:98-105`'s
-  pattern — 503 on failure, full exception logged, never a silent 500);
-  `.claude/context/domain-safety.md` (correct the PagerDuty claim to match
-  actual notification channels, or file a decision to build real paging;
-  correct hold duration 3s → 1.2s; clarify the ride-required constraint).
-- **Approach:** wrap the insert per the sibling pattern first (small, low
-  risk, matches an existing precedent in the same codebase). Then decide,
-  as a separate follow-up: (a) whether SOS needs a non-DB-dependent
-  fallback path for the sustained-outage case (e.g. direct Twilio SMS to
-  safety on-call using only in-memory ride/user context, bypassing the DB
-  write), and (b) whether real paging (PagerDuty/Opsgenie) should be built
-  or the doc should stop claiming it exists.
-- **Acceptance:** not yet defined — this entry exists so the finding isn't
-  lost; scope the fix and acceptance criteria when picked up.
+  silent-by-omission — **still open, not addressed by this update.** Doc
+  also said hold duration is "3s"; code (`SOS_HOLD_MS`) is 1200ms — minor
+  doc inaccuracy, **fixed** 2026-08-01 alongside the PagerDuty correction.
+- **Files:**
+  - `backend/routes/rides/safety.py` — **done**, PR #2931 wrapped the
+    `insert_one` in a try/except mirroring
+    `backend/routes/safety.py:98-105`'s pattern (503 on failure, full
+    exception logged, never a silent 500). **2026-08-01:** also gained the
+    (b) paging call — see below.
+  - `.claude/context/domain-safety.md` — **done**, 2026-08-01: corrected the
+    PagerDuty claim to match actual notification channels (admin WS
+    broadcast + safety distribution-list email + `logger.critical()`, noted
+    as a known gap rather than invented as fixed) and corrected hold
+    duration 3s → 1.2s. The ride-required constraint (rideless SOS) was
+    intentionally **not** touched — see "Also noted" above, it's a product
+    decision, not a doc-accuracy issue. **2026-08-01 (same day, follow-up
+    commit):** updated again to describe the new (b) paging channel and
+    record the (a) "not building it" decision.
+  - `backend/utils/safety_paging.py` — **new, 2026-08-01 (b):**
+    `page_on_call` helper, provider-agnostic webhook POST (PagerDuty Events
+    API v2 shape by default), reads `sos_paging_webhook_url` /
+    `sos_paging_routing_key` from `app_settings`, defaults to disabled
+    no-op, never raises.
+  - `backend/schemas.py`, `backend/routes/admin/settings.py` — **new,
+    2026-08-01 (b):** `sos_paging_webhook_url` / `sos_paging_routing_key`
+    added to `AppSettings` + the admin settings API (masked routing key,
+    `super_admin`-only to change, `https://` required on the webhook URL —
+    same treatment as the `lms_api_base_url`/`lms_api_key` pair).
+  - `backend/tests/test_sos_paging.py`, `backend/tests/test_admin_settings_lms_gate.py`
+    — **new/extended, 2026-08-01 (b):** unit + integration coverage for the
+    paging helper and its admin-settings gating.
+  - Full before/after, risk, and rollback detail:
+    `docs/change-log/2026-08-01-b15b-sos-paging.md`.
+- **Approach:** insert-wrap step is done. (a) and (b) are now decided (see
+  Status above — (a) won't build, (b) built dark). Only (c) remains open,
+  requiring a product decision before any engineering work: whether a
+  rideless/standalone SOS path should exist at all (see "Also noted").
+- **Acceptance:** insert-wrap + doc-accuracy sub-items are done (PR #2931 +
+  2026-08-01 doc cleanup). (a) is done (decision recorded, no code
+  required). (b) is done: `page_on_call` fires with the correct payload
+  shape when `app_settings` has paging configured, is a no-op when it
+  doesn't, and a paging HTTP failure never blocks the SOS response — all
+  three covered by `backend/tests/test_sos_paging.py`; see the change-log
+  for full verification detail including what was **not** verified (no real
+  PagerDuty/Opsgenie account to test against). (c) has no acceptance
+  criteria yet — still undecided, entry stays open until a product call is
+  made.
 
 ### B16. Driver SOS UX doesn't implement the discretion the design sketch chose it for
 - [ ] **Status:** open — found 2026-07-30, same trace session as B15, this
@@ -1465,7 +1997,20 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   doc: `.planning/sketches/010-rider-sos/index.html` and
   `.planning/sketches/011-driver-sos/index.html`. Product/design call, not
   a pure code bug — logging as a tracked finding per user instruction
-  rather than redesigning inline.
+  rather than redesigning inline. **2026-08-01 update (product call,
+  relayed via engineering — not directly reviewed against the sketch by the
+  product owner, noted explicitly per that relay): design intent
+  confirmed — the discreet-hold-shield design is still wanted for the
+  driver surface. Implementation is explicitly deferred to its own
+  dedicated follow-up, not scheduled as part of this task.** Rationale for
+  the deferral (not the design call itself): this is real mobile
+  safety-UX work — new component, hold-vs-tap duality, a Safety overlay
+  screen, per-contact notified list, discreet-mode toggle — and bundling
+  live UI changes to a safety-critical surface into the same
+  CI-usage-constrained combined change as B15(b)'s backend paging work
+  would be irresponsible. No code changed for B16 by this update — see
+  Approach below for the scoping note carried forward for whoever picks
+  this up next.
 - **Why:** sketch 011's stated design question is *"Can a driver call for
   help with one hand while driving [without alerting a threatening
   passenger]?"* It mocks 3 variants and explicitly rejects the
@@ -1497,18 +2042,18 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   `shared/components/SOSButton.tsx`, `driver-app/app/driver/(tabs)/index.tsx`,
   `.planning/sketches/010-rider-sos/index.html`,
   `.planning/sketches/011-driver-sos/index.html`.
-- **Approach:** needs a product decision before any code: (a) confirm the
-  discreet-hold-shield design is still wanted for the driver surface (it
-  may have been deprioritized after the sketch phase — worth confirming
-  rather than assuming), (b) if yes, scope it as its own feature build
-  (new component or a `discreet` prop on `SOSButton` that swaps the
-  success path from `Alert.alert()` to a silent toast, plus the tap-opens-
-  overlay affordance) rather than folding it into B15's DB-fallback fix,
-  since this is UX surface area, not a backend reliability fix, (c) if the
-  rider/driver split was intentionally abandoned in favor of one shared
-  component, update the sketches or archive them so they stop describing
-  intent nobody plans to build.
-- **Acceptance:** not yet defined — pending the product decision above.
+- **Approach:** (a) is now **decided** — design intent confirmed, see Status
+  above. Still needed before any code, carried forward for the dedicated
+  follow-up: (b) scope it as its own feature build (new component or a
+  `discreet` prop on `SOSButton` that swaps the success path from
+  `Alert.alert()` to a silent toast, plus the tap-opens-overlay affordance)
+  rather than folding it into B15's DB-fallback fix, since this is UX
+  surface area, not a backend reliability fix, (c) if the rider/driver split
+  was intentionally abandoned in favor of one shared component, update the
+  sketches or archive them so they stop describing intent nobody plans to
+  build.
+- **Acceptance:** not yet defined — pending the dedicated follow-up
+  scoping (b)/(c) above into concrete acceptance criteria.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
@@ -1552,6 +2097,166 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   end, not just that it deploys.
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
+
+### C6. `docker-image-scan` (Trivy): stale-pinned base image confirmed; msgpack mystery now solved (Trivy false positive)
+- [x] **Status:** done — both findings now fully explained. Base-image
+  staleness was fixed 2026-08-01 (digest refreshed, see update below). The
+  msgpack finding is **resolved: it's a Trivy tool false positive, not a
+  real vulnerable dependency** — see "msgpack mystery: SOLVED" below. The
+  actual scan-config remediation (stop Trivy from trusting a stale embedded
+  SBOM) is filed as **CR-2026-002**, GitHub issue
+  [#3048](https://github.com/srikumarimuddana-lab/spinrvm/issues/3048), and
+  tracked there rather than here. Originally found 2026-07-30 while
+  triaging `docker-image-scan` on
+  PR #2931 (a backend change, so this wasn't waved off as the usual
+  unrelated-base-image noise without checking), then reproduced identically
+  on PR #2934 (a *docs-only* PR touching zero backend files) — same two HIGH
+  findings, byte-for-byte: `msgpack` `GHSA-6v7p-g79w-8964` (installed 1.1.2,
+  fixed 1.2.1) and `setuptools` `CVE-2025-47273` (installed 70.3.0, fixed
+  78.1.1), against `spinr-backend:ci-<sha>`.
+- **First hypothesis (stale Docker layer cache) — investigated and
+  retracted.** Located the job (`.github/workflows/ci.yml:705`,
+  `docker-image-scan`): it runs on a fresh `ubuntu-latest` runner (a new VM
+  per job, empty local Docker cache) with a bare `docker build --tag
+  spinr-backend:ci-${{ github.sha }}` — no `--cache-from`, no
+  `docker/setup-buildx-action`, no registry cache. There is no persistent
+  cache mechanism here for a *build* to be stale from. That theory doesn't
+  fit this workflow's actual shape.
+- **Confirmed, real, separate finding: the base image pin is genuinely
+  stale.** `backend/Dockerfile:12,36` pins
+  `python:3.12.9-slim@sha256:48a11b7...`, captured **2026-04-29** per its own
+  comment, which also says "refresh quarterly." Today is 2026-07-30 — three
+  months past that cadence, and past the quarterly mark. This alone would
+  explain OS-level (Debian) drift and plausibly `setuptools` specifically:
+  Python's official Docker images bundle a fixed `ensurepip`-provided
+  setuptools version tied to that image build date, and while the Dockerfile
+  does run `pip install --upgrade pip setuptools` right after, that upgrade
+  not visibly taking effect (or being satisfied by whatever's already
+  resolvable at that point) is plausible but **not directly confirmed** —
+  didn't reproduce a live build to verify.
+- **`msgpack` remains genuinely unexplained.** Unlike setuptools, msgpack
+  isn't part of any base image — it's installed exclusively via `pip install
+  --require-hashes -r requirements-locked.txt`
+  (`backend/Dockerfile:32,54`), and the lockfile (confirmed by direct read)
+  pins `msgpack==1.2.1` with hashes. `--require-hashes` mode cannot silently
+  substitute a different version. Also noticed but not chased further: the
+  Dockerfile has two nearly-identical stages (an unnamed first stage
+  building into `/install`, and a `runtime` stage that does its own
+  independent `pip install` rather than `COPY --from=` the first stage's
+  output) — the first stage's output appears to go unused, which is odd but
+  doesn't by itself explain a version mismatch in the stage that's actually
+  used.
+- **Why it matters:** the base-image staleness is real and actionable on its
+  own regardless of the msgpack mystery. The unexplained msgpack finding
+  matters more: if `--require-hashes` can produce a package version that
+  doesn't match its own lockfile, either something about this
+  investigation's assumptions is wrong, or there's a real, more concerning
+  build-reproducibility bug worth a second, deeper look (ideally with an
+  actual local Docker build reproduced end-to-end, which wasn't available in
+  this session — no Docker daemon in the sandbox).
+- **Files:** `backend/Dockerfile` (base image digest, lines 12 & 36),
+  `backend/requirements-locked.txt`, `.github/workflows/ci.yml` (the
+  `docker-image-scan` job, line 705).
+- **Approach:** (1) refresh the base image digest per
+  `docs/runbooks/docker-image-pinning.md` — straightforward, do this
+  regardless; (2) actually build `backend/Dockerfile` locally/in a scratch
+  CI run and run `pip show msgpack` inside the resulting image to see what
+  really gets installed and why, before assuming any explanation.
+- **Acceptance:** base image digest refreshed and confirmed current;
+  msgpack's installed-vs-locked mismatch either reproduced-and-explained or
+  confirmed to no longer reproduce after a clean rebuild.
+- **Update (2026-08-01) — base-image-staleness half only, done; msgpack half
+  still open.** This sandbox had no Docker daemon (`docker version` connects
+  fine to the client but `dial unix /var/run/docker.sock: connect: no such
+  file or directory` on the API — confirmed still true, not assumed). The
+  proxy also blocks the Docker Hub blob CDN outright (`recentRelayFailures`
+  in `$HTTPS_PROXY/__agentproxy/status` shows repeated `connect_rejected` /
+  gateway 403 for `production.cloudfront.docker.com`), so a plain `docker
+  pull` / `docker manifest inspect` (the runbook's documented procedure)
+  fails partway through. Worked around it by hitting the Docker registry
+  v2 HTTP API directly (`auth.docker.io` for a pull token, then
+  `registry-1.docker.io/v2/library/python/manifests/<tag>` with an
+  `Accept: application/vnd.oci.image.index.v1+json` header for the
+  `Docker-Content-Digest` response header) plus the `hub.docker.com/v2`
+  metadata API for cross-checks — neither needs a blob download, and both
+  are apparently unblocked by the proxy.
+  - Found the pinned tag `python:3.12.9-slim`'s digest **had not moved at
+    all** since the 2026-04-29 capture (`sha256:48a11b7...` — verified
+    byte-identical via the registry API). Docker Hub does not rebuild a
+    fixed patch-version tag after newer patches ship, so re-pinning that
+    same tag would have been a no-op that didn't actually close any CVE
+    gap — which defeats the stated purpose of the quarterly cadence.
+  - Confirmed via the registry API, the Hub metadata API, and the floating
+    `python:3.12-slim` alias (which always tracks the newest 3.12.x patch)
+    — all three agree — that the current latest patch is `3.12.13-slim` at
+    digest `sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd042
+    66317710de`, last published 2026-07-16.
+  - Bumped `backend/Dockerfile` (both stages) to `python:3.12.13-slim` at
+    that verified digest; see `docs/change-log/
+    2026-08-01-refresh-docker-base-image-digest.md` for the full Change
+    Impact Log. **Not verified**: no local Docker build was possible (no
+    daemon), so this is unverified beyond "the digest is real and current
+    per two independent Docker-operated APIs" — `docker-image-scan` in CI
+    on the draft PR is the actual build+Trivy verification.
+  - Also noticed, out of scope for this pass: a second, apparently-unused
+    root-level `Dockerfile` (different build recipe — venv + plain
+    `requirements.txt`, no `--require-hashes`) pins the *same* stale
+    `3.12.9-slim` digest via its own comment ("Q-5"). Neither `railway.json`
+    nor `backend/fly.toml` reference it (`railway.json` explicitly points
+    at `backend/Dockerfile`), so it looks orphaned rather than a live
+    build path — left untouched since it's outside this task's scope, but
+    worth a follow-up to confirm it's dead and either delete it or bring
+    it in sync.
+  - **msgpack half of C6 is untouched and still open** — genuinely
+    requires a real Docker build to investigate, which remains unavailable
+    in this environment.
+- **msgpack mystery: SOLVED (2026-08-01), separately from the base-image
+  work above.** Investigated PR #3044's `docker-image-scan` job (run
+  `30713789884`, job `91406577991`) and the identical `G6 · Trivy container
+  scan` job in `security-gates.yml` (run `30713789883`, job
+  `91405783086`) — same PR, same commit, both Trivy invocations agree.
+  Conclusion: **this is a Trivy tool false positive, not a real vulnerable
+  dependency.** Evidence, in order:
+  1. `backend/requirements.txt` and `backend/requirements-locked.txt` both
+     already pin `msgpack==1.2.1` — the version Trivy itself calls "fixed".
+  2. The actual `docker build` step's own pip install output in the job log
+     shows the real, live install: `Successfully installed pip-26.2
+     setuptools-83.0.0` and `Collecting msgpack==1.2.1 (from
+     -r requirements-locked.txt (line 1746))` — both packages install at
+     patched-or-newer versions, confirmed directly in the build log, not
+     inferred.
+  3. Trivy's **own** per-file python-pkg inventory table, printed earlier in
+     the same scan run, lists
+     `usr/local/lib/python3.12/site-packages/msgpack-1.2.1.dist-info/METADATA`
+     and `.../setuptools-83.0.0.dist-info/METADATA` — both with **zero**
+     findings. Trivy's live filesystem scan correctly sees the patched
+     versions.
+  4. Yet Trivy's summary "Python (python-pkg)" vulnerability table, printed
+     immediately after in the same tool invocation, reports Installed
+     Version `1.1.2` / `70.3.0` for those same two packages — directly
+     contradicting its own per-file table from the same run.
+  5. The scan log includes Trivy's own warning right before this
+     contradiction: `WARN Third-party SBOM may lead to inaccurate
+     vulnerability detection`. Strong evidence Trivy is trusting a
+     stale/incorrect embedded SBOM (most likely a Docker BuildKit
+     provenance/SBOM attestation baked into the image) for vulnerability
+     *matching*, while still using its own live filesystem scan for the
+     per-file inventory listing — two different data sources disagreeing
+     inside one Trivy run.
+  6. This exact false positive was observed **identically** across PRs
+     #3033, #3042, #3043, and #3044 — confirming it reproduces on every
+     backend image build regardless of the PR's actual diff, consistent
+     with a scan-tooling issue rather than a real per-commit regression.
+  - **Filed as CR-2026-002**, GitHub issue
+    [#3048](https://github.com/srikumarimuddana-lab/spinrvm/issues/3048)
+    (`[CR] Trivy container-scan (G6 / docker-image-scan) reports
+    false-positive HIGH findings for msgpack/setuptools — trusting a stale
+    embedded SBOM over its own live scan`). That issue carries the actual
+    proposed fix (likely `--provenance=false --sbom=false` on the `docker
+    build` step, or forcing Trivy to regenerate its own SBOM instead of
+    consuming the embedded one) — not re-implemented here; this entry only
+    documents that the mystery itself is solved and points to the CR for
+    the scan-config remediation.
 
 ### B-AI1. Corporate rider booking via AI chat bypasses corporate billing
 - [x] **Status:** done (2026-07-29) — found by the 2026-07-28 AI guardrail
@@ -1602,6 +2307,248 @@ _Last updated: 2026-07-28 (branch `claude/rider-ai-location-selection-yn0mem` �
   strongest verification available here. Also not exercised against a real
   backend/Supabase instance or a live corporate membership.
 
+### C7. AI PR review is off by design (cost) — DECIDED 2026-08-01: stays off
+- [x] **Status:** closed — **decision taken: leave `ANTHROPIC_API_KEY` unset.**
+  The per-PR API spend is not justified at this repo's volume (~24 merged
+  PRs/day). The workflow remains in the repo, scoped and skipping cleanly;
+  setting the secret is the only step needed to reverse this, so nothing is
+  lost but the running cost. Docs corrected to match in the same change:
+  `.claude/README.md` previously told readers to set the secret and described
+  the deep agent audit as part of the PR pipeline — it now states the review
+  is off and points at the on-demand path instead.
+- **Compensating control (important):** the `spinr-*` audit agents still
+  exist and still work — they are just not automatic. For any diff touching
+  money, auth, migrations, dispatch, or safety, invoke
+  `spinr-security-auditor` / `spinr-money-auditor` /
+  `spinr-migration-reviewer` **manually** via the Agent tool before merge.
+  The semantic rules listed below are the ones no static gate can catch, so
+  skipping the manual pass on those surfaces is where the real exposure sits.
+- **Correction to this entry's earlier wording:** it previously said
+  `CLAUDE.md`'s PR-review-handling section "assumes an automated reviewer
+  exists and has nothing to act on". That conflated two different reviewers.
+  `CLAUDE.md:55-63` is about **Codex** (`chatgpt-codex-connector`), a
+  separate GitHub App unaffected by `ANTHROPIC_API_KEY`; it was never
+  describing this workflow. Nothing in `CLAUDE.md` referenced the Claude
+  review at all — the inaccurate claims were in `.claude/README.md`.
+- **Separately worth checking (not part of this decision):** no Codex review
+  appeared on #3037, #3070, #3074 or #3086 either. If Codex is also inactive,
+  `CLAUDE.md:55-63` is instructing agents to act on findings that never
+  arrive — but that is a different integration with a different cause, and
+  was not investigated here rather than assumed.
+- **Prior analysis retained below.** **Amended 2026-08-01
+  — the original wording of this entry was wrong** and is corrected here.
+  It claimed the missing `ANTHROPIC_API_KEY` was an invisible capability
+  gap. It is not: `.github/workflows/claude-review.yml:44-47` documents
+  keyless operation explicitly — *"Review is advisory — a missing/invalid
+  ANTHROPIC_API_KEY or model error should never block merging… until then
+  PRs proceed without it"* — with `continue-on-error: true` to match. The
+  key is unset deliberately, to avoid per-PR API spend. That is a
+  legitimate call, and this entry now tracks the trade-off rather than
+  reporting a fault.
+- **What is factually true:** the job runs and exits without reviewing.
+  Confirmed from job logs
+  [`91408169618`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30714687039/job/91408169618)
+  and `91408494259` (PR #3037) and again on #3070 — the env block prints
+  `ANTHROPIC_API_KEY:` with no value. PRs #3037, #3070 and #3074 each merged
+  with zero automated review.
+- **The reporting bug (fixed 2026-08-01):** `continue-on-error` stops a
+  failed run blocking the merge but does **not** stop the check reporting
+  `failure`, so the advisory gate showed permanently red. That is an active
+  harm independent of the cost question — a check that is always red trains
+  reviewers to ignore red, and it demonstrably did: the C8 entry below was
+  filed because red gates had become background noise. The keyless case now
+  skips cleanly with a notice instead of failing.
+- **What is actually lost while it stays off:** narrow but well-placed. The
+  static gates (Bandit, Semgrep ×2, Gitleaks ×2, pip-audit, yarn/npm audit,
+  ESLint security, plus the 7 guardrails) cannot check Spinr's *semantic*
+  rules — `Decimal`-only money arithmetic, `claim_stripe_event` before
+  webhook processing, ride state-machine transition guards, the
+  `is_available ⇒ is_online` invariant, Period 2 starting at
+  `driver_assigned`, the 2.5× surge cap, GPS/PII in logs. The three agents
+  this workflow runs (`spinr-security-auditor`, `spinr-money-auditor`,
+  `spinr-migration-reviewer`) exist for exactly that, and it is the class of
+  bug that costs most during live app testing.
+- **Why it was expensive:** ~24 PRs/day merge to `main`, and the workflow
+  triggered on `synchronize` — every push, not every PR — so real volume was
+  roughly 50–80 runs/day. Each run paid a large fixed cost (three agents
+  each loading `CLAUDE.md` plus domain context) regardless of diff size, so
+  a one-line markdown PR cost about what a payments refactor did.
+- **Action / decision:** trigger scoping has been applied (drop
+  `synchronize`, `paths-ignore` for markdown/`docs/`/`.claude/`), which
+  removes most of the wasted volume while keeping coverage on code. What
+  remains is a business decision: **set the key with a capped spend limit and
+  billing alert, run one week, and price it from real numbers** — or leave
+  it off permanently, in which case also drop `CLAUDE.md`'s
+  PR-review-handling assumption that an automated reviewer exists, so the
+  docs stop describing a reviewer that does not run.
+- **Owner / follow-up:** needs someone with repo-secret and billing access;
+  not fixable from a PR branch.
+
+### C8. ~~`driver-app-test` reported success while its test fails locally~~ — RESOLVED, was my own measurement error (no gate defect)
+- [x] **Status:** closed 2026-08-01, same day it was filed. **There is no gate
+  reliability problem. The entry as originally written was wrong** and is
+  corrected here rather than deleted, because the reasoning error is the
+  useful part.
+- **What the original entry claimed:** that `driver-app-test` concluded
+  `success` on PR #3037 commit `4a5c976` (job
+  [`91408494120`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30714809531/job/91408494120),
+  19:29 UTC) while the same test failed locally on the same day, and that
+  nothing explained the pass.
+- **Actual explanation:** GitHub Actions `pull_request` workflows check out
+  the **merge ref** (`refs/pull/N/merge` — branch merged with base), not the
+  branch head. `.github/workflows/ci.yml` does not override this with an
+  explicit `ref:`, so it gets the default. The fixture fix
+  [#3042](https://github.com/srikumarimuddana-lab/spinrvm/pull/3042)
+  (`0bb951e`) merged to `main` at **19:05 UTC**. Every `driver-app-test` run
+  before that time tested a merge with a `main` that lacked the fix and
+  failed; the 19:29 run tested a merge with a `main` that had it and passed.
+  My local run failed because my working tree was #3037's branch, based on
+  pre-#3042 `main` — so I was comparing CI's *merged* tree against a *stale
+  unmerged* one and reading the difference as a CI defect.
+- **Verification:** on `main` at `7a53caa`,
+  `cd driver-app && TZ=UTC npx jest __tests__/components/ActivityView.test.tsx`
+  → **6 passed, 6 total**, on 2026-08-01 (the 1st, the day the old fixture
+  was supposed to fail).
+- **Lesson worth keeping:** "CI disagrees with my local run" is not evidence
+  of a CI defect until the two are known to be testing the same tree. For
+  `pull_request` workflows they are not the same tree by default. Check what
+  landed on the base branch between the two runs before escalating —
+  `git log --oneline <base>` over the relevant window would have caught this
+  in one command.
+- **Related:** [#3041](https://github.com/srikumarimuddana-lab/spinrvm/issues/3041)
+  (the fixture bug itself) was already fixed by #3042 and is closed. The
+  diagnosis recorded in that issue — `Math.max(1, getDate() - 10)` collapsing
+  the fixture date onto today when today is the 1st — was correct; only my
+  later claim that it was still unfixed was wrong.
+
+### C9. Codex auto-review stopped on 30 July — combined with C7, this repo has **no** automated PR review
+- [ ] **Status:** open. The `chatgpt-codex-connector` GitHub App is installed
+  and has worked — it has commented on **183 PRs** historically — but it has
+  reviewed nothing for two days. This is a **stall, not an absence**, which
+  should make the cause findable.
+- **Evidence (2026-08-01):**
+  - `commenter:app/chatgpt-codex-connector` → 183 PRs total.
+  - Sorted by most recent, the newest is **#2877, created 2026-07-30T00:11Z**.
+  - Restricting to `created:>=2026-07-30` returns **exactly one** result —
+    that same #2877.
+  - PRs #2878 → #3096 (roughly 200, including every PR merged on 1 August)
+    have **no** Codex comment at all.
+  - Method note: the search operator requires the `app/` prefix.
+    `commenter:chatgpt-codex-connector` without it returns 0 results even
+    though the app is active — a false negative that a control query
+    (`commenter:app/github-actions` → 1079) caught. Anyone re-checking this
+    should run the control first.
+- **Why it matters:** `CLAUDE.md`'s PR-review-handling section instructs every
+  agent session to *always* check Codex comments and act on them. For ~200
+  consecutive PRs there have been none, so that instruction has had nothing
+  behind it. Worse, silence reads as "no findings" rather than "no reviewer" —
+  the same failure mode as a permanently-red check. Combined with **C7** (the
+  Claude agent audit deliberately off on cost grounds), **this repo currently
+  has no automated PR review from either vendor**, while in live app testing.
+- **Action:** diagnose why Codex stopped around 29–30 July. Plausible and
+  unchecked: lapsed subscription or billing state, revoked/expired app
+  installation token, a config change in that window, or an org-level policy
+  change. All are visible in GitHub app settings and the Codex dashboard —
+  neither readable from a PR branch, so this needs someone with org access.
+- **Interim mitigation (applied 2026-08-01):** `CLAUDE.md` now states both
+  reviewers are inactive and directs sessions to run the `spinr-*` audit
+  agents manually for diffs touching money, auth, migrations, dispatch, or
+  safety. That is a social control, not an enforced one.
+- **Note:** if the decision is that Codex stays off too, the honest follow-up
+  is to delete the PR-review-handling section rather than leave it describing
+  a workflow nobody runs — the same cleanup done for the Claude reviewer in
+  #3096.
+
+### C10. No reconciliation job for `stripe_events` rows stuck at `processed_at IS NULL`
+- [x] **Status:** closed 2026-08-01, same day it was filed — found while
+  fixing the `mark_stripe_event_processed` silent-error-swallow bug flagged
+  by the `repositories/wallet_repo.py` coverage pass (PR #3098), fixed in
+  the same session.
+- **What's wrong:** two places in this codebase claim, in comments, that a
+  background job reconciles `stripe_events` rows left with
+  `processed_at IS NULL` — `repositories/wallet_repo.py`'s old
+  `mark_stripe_event_processed` docstring ("the reconciliation job can still
+  distinguish processed vs. stuck events") and `routes/webhooks.py:1578`
+  ("Leave processed_at NULL for unknown/unhandled events so the nightly
+  reconciliation job can replay them"). **Neither job exists.** Verified via
+  `grep -rn "processed_at" backend/ --include="*.py"` and
+  `grep -n "processed_at\|stripe_events" backend/utils/stripe_reconcile.py`
+  (0 hits) — `utils/stripe_reconcile.py` (one of the 17 startup loops per
+  `CLAUDE.md`) does not reference `stripe_events` or `processed_at` at all.
+  The only code that ever reads `processed_at` back is the reactive,
+  retry-triggered check inside `claim_stripe_event` (logs
+  `logger.critical(...STUCK...)` on a duplicate-key insert) — which only
+  fires if Stripe retries the *same* `event_id`, and Stripe won't retry an
+  event that already got a 2xx response.
+- **Two distinct row classes are affected, both silently unreconciled:**
+  1. Rows where the webhook handler finished all side effects and returned
+     2xx, but the final `mark_stripe_event_processed` DB write itself then
+     failed (now logged loudly as of the fix below, but still never
+     replayed/re-stamped).
+  2. Rows for unknown/unhandled Stripe event types (`routes/webhooks.py`
+     `else` branch, ~line 1571) — deliberately left `processed_at IS NULL`
+     "so the nightly reconciliation job can replay them if they later
+     become actionable." No such nightly job exists to do that replay.
+- **Why it matters:** both comments describe a safety net for exactly the
+  kind of state-inconsistency `CLAUDE.md`'s money/payments rules exist to
+  prevent, and neither safety net is real. Low likelihood (requires a DB
+  write to fail at exactly the wrong moment, or a new/renamed Stripe event
+  type to arrive), but silent and undetectable if it happens — there's
+  currently no dashboard, admin query, or alert that would ever surface a
+  `stripe_events` row stuck at `processed_at IS NULL`.
+- **Files:** `backend/utils/stripe_reconcile.py` (where the sweep would
+  live, alongside its existing Stripe-reconciliation responsibilities),
+  `backend/repositories/wallet_repo.py` (`mark_stripe_event_processed`),
+  `backend/routes/webhooks.py` (~line 1578, the unhandled-event-type path).
+- **Fix:** added `_reconcile_stuck_stripe_events()` to
+  `backend/utils/stripe_reconcile.py`, called from the existing daily
+  `_run_reconciliation_tick()` (02:00 UTC, same Redis leader lock as the
+  rest of that file — no new loop, reuses existing replay-safety
+  infrastructure rather than adding an 18th startup loop). Queries
+  `stripe_events` for `processed_at IS NULL` rows older than a 5-minute
+  grace window (matching `migrations/22_stripe_events.sql`'s own original
+  design comment) and surfaces each as a `STRIPE_EVENT_STUCK_UNPROCESSED`
+  discrepancy: `logger.error` (Sentry-bridged, `domain=payments`) plus the
+  existing `audit_logs` summary row this file already writes daily.
+- **Scope decision — detection/alert only, deliberately not auto-replay:**
+  the original migration comment and both stale code comments this item
+  found said a job "should replay" stuck events. Did not build that.
+  `utils/stripe_reconcile.py`'s own established pattern for every other
+  discrepancy type in this file (`STRIPE_ORPHAN`, `RIDE_PAYMENT_STUCK_PROCESSING`,
+  payout discrepancies) is detection-only, with auto-heal — where it exists
+  at all (`_maybe_heal_stuck_processing`) — behind an explicit, default-OFF
+  app-setting flag. Matched that convention: for a stuck `stripe_events` row,
+  "replay" would mean re-running webhook business logic against a stored
+  payload, which risks double-processing a row whose side effects already
+  succeeded (the DB-write-failure case is exactly that — only the final
+  stamp failed, everything else already happened). Distinguishing
+  "safe to replay" from "already done" would require trusting the payload's
+  own claims, which this job does not do. Surfaced for manual review instead.
+- **Both row classes now covered:** the DB-write-failure case (row class 1)
+  also still logs `logger.error` at the point of failure itself
+  (`mark_stripe_event_processed`, fixed earlier the same session) as the
+  fast/loud signal; this sweep is the daily backstop in case that signal is
+  ever missed. The unhandled-event-type case (row class 2) had no prior
+  signal at all — this sweep is its only coverage, so it will typically
+  surface up to ~24h after the event, not immediately (acceptable: `CLAUDE.md`
+  itself notes ~24h daily cadence matches the bar already set for the
+  other discrepancy types in this same file).
+- **Files:** `backend/utils/stripe_reconcile.py` (new function
+  `_reconcile_stuck_stripe_events`, new `_STUCK_STRIPE_EVENT_AFTER` constant,
+  wired into `_run_reconciliation_tick`'s summary), `backend/tests/test_stripe_reconcile.py`
+  (4 new tests), `backend/repositories/wallet_repo.py` and
+  `backend/routes/webhooks.py` (comments corrected to point at the sweep
+  instead of describing a job that didn't exist).
+- **Verification:** `pytest tests/test_stripe_reconcile.py -q` → 45 passed
+  (41 pre-existing + 4 new); new function individually measured at 100%
+  coverage (`--cov=utils.stripe_reconcile`, no missed lines in its range).
+  Full suite re-run — see the fix's own change-log for the exact count.
+- **Acceptance:** met — a deliberately-stuck `stripe_events` row is detected
+  and surfaced (alerted, not replayed — see scope decision above) within
+  one daily sweep, with 4 regression tests proving it (aged-row flagged,
+  fresh-row skipped, missing-timestamp over-reported rather than hidden,
+  query-failure never raises).
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
@@ -1618,17 +2565,33 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   Redis errors (`backend/ai/orchestrator.py:82-84`). One user on many IPs, or
   a Redis blip, removes the LLM-cost ceiling (kill switch remains the hard
   stop). Consider a user-keyed limiter + fail-closed above a generous floor.
-- [ ] **AI2. Assistant output is persisted un-scrubbed** — only the user
+- [x] **AI2. Assistant output is persisted un-scrubbed** — only the user
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with
   `conversations.py`'s stated contract and Sentry's strict scrubbing.
-- [ ] **AI3. No cap on parallel tool calls per iteration** —
+  Done (2026-07-30, PR #2914): `orchestrator.py` now scrubs `final_text`
+  into `stored_text` via `scrub_pii(..., keep_trip_pins=True)` before
+  `append_message`/`store_cached` — the live SSE stream to the client is
+  unaffected, only the persisted/cached copy changes. Regression test
+  `test_assistant_text_is_pii_scrubbed_before_persistence` in
+  `test_ai_orchestrator.py`. See
+  `docs/change-log/2026-07-30-ai-assistant-output-pii-scrub.md`.
+- [x] **AI3. No cap on parallel tool calls per iteration** —
   `orchestrator.py` gathers all requested calls unbounded (6 iterations ×
   N calls, each able to hit Google Maps). Cap per-iteration fan-out (e.g. 5).
-- [ ] **AI4. `scheduled_time` reaches the proposal unvalidated** —
+  Done (2026-08-01): `MAX_TOOL_CALLS_PER_ITERATION = 5` in `orchestrator.py`;
+  excess calls in a turn get a synthetic budget-exceeded tool_result (not
+  dropped) and a `logger.warning` + `spinr_ai_tool_calls_capped_total` metric.
+  See `docs/change-log/2026-08-01-ai3-tool-call-cap.md`.
+- [x] **AI4. `scheduled_time` reaches the proposal unvalidated** —
   `tools_booking.py` accepts any ≤80-char string; a hallucinated/past ISO
   time renders on the card and only fails at Confirm. Validate ISO-8601 +
-  ≥5-min lead at proposal time.
+  ≥5-min lead at proposal time. Done (2026-08-01) — branch
+  `claude/ai4-validate-scheduled-time`: `propose_ride_booking` now parses
+  `scheduled_time` with `datetime.fromisoformat` and requires ≥5-min lead
+  before building the card, returning a structured `{"error": ...}` result
+  on failure (same shape as the existing out-of-area refusal); the
+  Confirm-time validator in `schemas.py` is unchanged (defense in depth).
 - [ ] **AI5. `find_place` offers out-of-service-area street addresses** —
   the area filter is skipped for street-address-shaped queries
   (`tools_booking.py:538-539`), so a rider can pick a location the booking
@@ -1645,12 +2608,18 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   (`rider-app/app/ai-assistant.tsx`); backend self-contained messages
   mitigate, but a stale-yet-consistent quote re-books at a possibly different
   price. Consider disabling cards older than the latest assistant turn.
-- [ ] **AI9. Admin AI console quote-card tap still prose-only** — same
+- [x] **AI9. Admin AI console quote-card tap still prose-only** — same
   defect class fixed for suggestions;
   `admin-dashboard/.../ai-console/page.tsx:125-131` drops `[lat,lng]` and
   vehicle id. Move `buildQuoteBookingMessage` into
   `shared/utils/aiLocationMessages.ts` (re-export shim in
   `rider-app/components/bookingProposal.ts`) and use it in the console.
+  Done (2026-08-01) — branch `claude/ai9-admin-quote-card-coords`:
+  `buildQuoteBookingMessage` moved into `shared/utils/aiLocationMessages.ts`;
+  `rider-app/components/bookingProposal.ts` re-exports it (rider call site
+  unchanged); the admin console's quote-card `onClick` now calls the shared
+  builder instead of its own prose-only template. See
+  `docs/change-log/2026-08-01-ai9-admin-quote-card-coords.md`.
 - [ ] **AI10. No conversation-level concurrency lock server-side** — two
   clients on one `conversation_id` interleave `append_message` writes and
   race history snapshots (client is single-flight only).
@@ -1658,10 +2627,15 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   to cancel rides, but there is no `cancel`/`ride_issue` escalation category
   and no deep link to the ride screen — riders get a support ticket for a
   self-serve action.
-- [ ] **AI12. Admin console endpoint has no rate limiter and a stale
+- [x] **AI12. Admin console endpoint has no rate limiter and a stale
   docstring** — `routes/admin/ai_console.py` claims turns count against the
   daily cap; the orchestrator deliberately exempts them, and the endpoint has
   no `@ai_chat_limit` equivalent (super-admin-only + audited, so low risk).
+  Done (2026-08-01): docstring now states the actual exemption (orchestrator's
+  `_over_daily_cap`, gated on `admin_actor_id is None`); added
+  `admin_ai_console_limit` (20/minute, matches `admin_ai_suggest_limit`'s
+  admin+paid-LLM precedent) as a defensive ceiling on `POST /admin/ai/chat`.
+  See `docs/change-log/2026-08-01-ai12-admin-console-rate-limit.md`.
 - [ ] **AI14. Accepted risk: a tapped suggestion is trusted even when its
   geocode is only APPROXIMATE** — prompt rule 6b (PR #2774) treats any
   rider-tapped `location_suggestions` candidate as confirmed, so a numbered
@@ -1685,6 +2659,28 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   internal jargon; nothing greps the reply stream. A lightweight post-filter
   for snake_case tool names in assistant text would make the secrecy rule
   structural.
+- [x] **AI15. `backend/ai/pii.py` had no card-number or government-ID/SIN
+  scrubbing** — `scrub_pii()` covered phones, emails, GPS coordinates, and
+  postal codes but had zero regex coverage for payment card numbers, and zero
+  coverage (with no documented mitigation, unlike the "names" gap) for
+  government ID/SIN numbers. Both are explicit `CLAUDE.md` PIPEDA ban-list
+  items; either would have reached a third-party LLM provider and
+  `ai_messages` persistence unredacted if a rider pasted one into AI chat or
+  a support ticket. Found by the newly-added `spinr-ai-guardrail-reviewer`
+  agent's first real end-to-end `/ai-check` run, auditing `pii.py` itself.
+  Done (2026-08-01, PR #3133): added a card-number pattern gated on
+  recognized card-network IIN prefixes (Visa, Mastercard, Amex, Discover —
+  same prefix-discriminator principle this file already used for phone
+  numbers) and a grouped 3-3-3 SIN pattern (bare ungrouped 9 digits
+  deliberately not matched — no reliable discriminator, would repeat this
+  file's own documented timestamp-collision regression). Driver's license
+  numbers remain out of scope (no fixed cross-provincial format); mitigated
+  via data-minimization same as names. Also synced
+  `backend/utils/log_guard.py`'s `_SCREEN` cheap pre-filter, without which
+  the new patterns would exist in `pii.py` but never fire on the loguru sink
+  path. Verified with a full `pytest` run post-merge (76/76 passing in
+  `test_ai_pii.py` + `test_log_guard.py`, including 16 new tests). See
+  `docs/change-log/2026-08-01-ai-pii-card-govid-coverage.md`.
 
 - [ ] **D1. PostGIS surge query** — `surge_engine.py` caps at 500 drivers with Python
   point-in-polygon; move the count server-side when driver count approaches the cap.

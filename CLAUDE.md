@@ -53,8 +53,15 @@ Do not rely on "commit, observe, roll back if broken" for anything touching a li
 9. **Escalate, don't silently ship, when in doubt** — if blast radius is unclear, you can't verify all consumers of something shared (no time, no test coverage, unclear ownership), or the change touches rides/payments/auth/corporate/safety and you're not confident of the full impact, use `AskUserQuestion` before merging rather than shipping and watching for fallout.
 
 ### PR review handling (Codex auto-review)
+
+> **Status as of 2026-08-01: no automated PR review is running on this repo, from either vendor.**
+> - **Codex has been silent since 30 July.** The app is installed and has reviewed 183 PRs historically, but its last comment was on #2877 (created 2026-07-30). Roughly 200 PRs since (#2878 onward) have had none. Cause not yet diagnosed — see `ACTION_ITEMS.md` C9.
+> - **The Claude agent audit (`claude-review.yml`) is off by design** — `ANTHROPIC_API_KEY` deliberately unset on cost grounds, see C7.
+>
+> The guidance below stays in force and applies unchanged if Codex resumes — but **do not wait for a Codex review that may never arrive**, and do not treat its absence as "no findings." Until one of the two is restored, a PR touching money, auth, migrations, dispatch, or safety should get a **manual** pass with `spinr-security-auditor` / `spinr-money-auditor` / `spinr-migration-reviewer` via the Agent tool before merge.
+
 - When subscribed to a PR (or asked to look at one), **do not chase CI checks** — skip `yarn audit` / `npm audit` / lint / deploy status unless the user explicitly asks. Pre-existing dependency-audit failures on surfaces a PR doesn't touch are not this PR's job.
-- **Always** check the PR's review comments from Codex (`chatgpt-codex-connector`) and act on them without being reminded:
+- **When a Codex review is present**, check its comments (`chatgpt-codex-connector`) and act on them without being reminded:
   1. For each unresolved Codex comment, verify the claim against the actual code — confirm it's true, partially true, or wrong.
   2. If true (or partially), fix it. If it's wrong or not applicable, leave it and say why in the reply.
   3. Reply to each thread (via `mcp__github__add_reply_to_pull_request_comment`) noting the fix commit SHA or the reason it needs no action.
@@ -73,6 +80,7 @@ Sprint-scoped and domain-deep context is loaded on demand, not baked into this f
 - `@.claude/context/domain-corporate.md` — corporate account/membership/policy lifecycle, cascade-effect checklist, flag conventions
 - `@.claude/context/domain-safety.md` — SOS, insurance periods, emergency flows
 - `@.claude/context/regulatory-sk.md` — Saskatchewan Transportation Act obligations
+- `@.claude/context/brand-spinr.md` — brand colors, typography, and logo assets; load for any customer-facing marketing/creative work
 
 ## Project Overview
 
@@ -124,7 +132,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 - `backend/server.py` — app factory; mounts ~25 routers
 - `backend/core/config.py` — pydantic-settings `Settings`; fails fast in production on weak secrets
-- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 16 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, stuck-ride sweeper, push retry, loop watchdog)
+- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 17 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
 - `backend/core/middleware.py` — CORS, security headers, rate limiting (SlowAPI + Redis)
 - `backend/db_supabase.py` — ~66 helper functions wrapping `supabase-py` via `run_sync()` (thread-pool with one retry on H2 GOAWAY)
 - `backend/socket_manager.py` — `ConnectionManager` (in-process WS registry); delegates to Redis pub/sub when active
@@ -148,7 +156,7 @@ This is intentional (`python -m backend.server` vs top-level). Do not simplify a
 
 **Ride state machine** — always guard transitions with `_require_ride_in_state()`. `cancelled` is only valid before `in_progress`. State changes must emit a WebSocket event.
 
-Valid states and transitions (source: `backend/routes/rides.py`):
+Valid states and transitions (source: `backend/routes/rides/` — see `lifecycle.py`, `booking.py`, `matching.py`):
 
 ```
                 ┌─► cancelled (rider/driver/system, pre-trip only)
@@ -213,7 +221,7 @@ Auto-mode tiers (demand / supply ratio → multiplier):
 - Never apply surge to scheduled rides booked outside the surge window
 - Surge does not apply to corporate account-paid rides (policy; verify in fare service)
 
-**Token lifetimes** — access tokens: 15 min (rider/driver), 12 hr (admin). Refresh tokens: 30 days, stored as SHA-256 hash, rotated on every use. Mobile clients auto-retry 401s via Axios interceptor after token refresh.
+**Token lifetimes** — access tokens: 15 min (rider/driver), 1 hr (admin). Refresh tokens: 30 days, stored as SHA-256 hash, rotated on every use. Mobile clients auto-retry 401s via Axios interceptor after token refresh.
 
 **Insurance periods (TNC commercial insurance)** — every moment a driver spends in the app maps to one of four periods. Misclassification is a regulatory and insurance liability. Derive period from ride state, not from the driver UI:
 
@@ -259,9 +267,12 @@ Sentry tags (attach to every captured event):
 - `env`: `production` / `staging` / `development`
 
 Metric naming — Prometheus/OpenMetrics snake_case `spinr_<domain>_<metric>_<unit>`
-(counters end `_total`, latency histograms end `_duration_ms`). `utils/metrics.py`
-is the source of truth and the exposition format `utils/metrics.render_prometheus`
-emits; dashboards/alerts must use these names (the older dotted
+(counters end `_total`, latency histograms end `_duration_ms`). The metric names
+themselves are defined at their emitting call sites (e.g.
+`services/dispatch_service.py`, `services/payment_service.py`,
+`utils/stripe_reconcile.py`); `utils/metrics.py` provides the underlying
+counter/gauge registry and the exposition format `utils/metrics.render_prometheus`
+emits. Dashboards/alerts must use these names (the older dotted
 `spinr.<domain>.<metric>.<unit>` spelling is **not** what the code emits — do not
 write alerts against it):
 - `spinr_dispatch_offer_sent_total`

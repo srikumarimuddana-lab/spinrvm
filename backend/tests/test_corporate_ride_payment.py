@@ -88,7 +88,7 @@ def _get_rows_side_effect(*args, **kwargs):
     return []
 
 
-def _mock_create_ride_deps(*, memberships=None, allowance=None, policy=None):
+def _mock_create_ride_deps(*, memberships=None, allowance=None, policy=None, company_status="active"):
     return {
         "routes.rides._deps.db_supabase.find_one": AsyncMock(
             return_value={"id": "rider_1", "status": "active", "stripe_customer_id": None}
@@ -113,6 +113,14 @@ def _mock_create_ride_deps(*, memberships=None, allowance=None, policy=None):
         "routes.rides._deps.db.find_one": AsyncMock(
             return_value={"id": "rider_1", "status": "active", "stripe_customer_id": None}
         ),
+        # require_company_bookable() (corporate + admin portal review, Critical
+        # #1 — the work_profile path now shares this guard instead of its own
+        # inline status check) does its own get_app_settings() fetch and a
+        # get_corporate_account_by_id() lookup on the real backend.db_supabase
+        # singleton — both must be mocked explicitly or the guard 403s before
+        # any of the tests below reach the branch they're actually testing.
+        "routes.rides._deps.get_app_settings": AsyncMock(return_value={}),
+        "backend.db_supabase.get_corporate_account_by_id": AsyncMock(return_value={"status": company_status}),
     }
 
 
@@ -222,6 +230,31 @@ def test_work_profile_tags_ride_as_company_allowance(test_client, rider_override
     assert inserted_data.get("corporate_account_id") == _CORP_COMPANY_ID
 
 
+def test_work_profile_pending_verification_company_returns_400(test_client, rider_override):
+    """Corporate + admin portal review, Critical #1: a company still in
+    pending_verification (never approved through KYB, so it has no wallet
+    row yet) must be blocked from work_profile booking the same way
+    suspended/closed companies already were — previously this path's own
+    inline check only matched literal "suspended"/"closed", silently letting
+    a never-verified company's owner book a ride that would later settle
+    with no money moved at all (see settle_corporate's new missing-wallet
+    guard, tested separately in test_settle_no_wallet_leaves_pending_below)."""
+    membership = {"id": _MEMBER_ID, "company_id": _CORP_COMPANY_ID, "policy_override": False}
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 500, "used": 0}
+    deps = _mock_create_ride_deps(
+        memberships=[membership], allowance=allowance, policy={}, company_status="pending_verification"
+    )
+    patchers, _ = _apply_all_patches(deps)
+    body = {**_BASE_RIDE_BODY, "work_profile": True, "corporate_account_id": _CORP_COMPANY_ID}
+    try:
+        resp = test_client.post("/api/v1/rides", json=body, headers=_APP_CHECK_HEADERS)
+    finally:
+        for p in patchers:
+            p.stop()
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["reason"] == "company_inactive"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  B. process_payment() — company_allowance branch
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,8 +294,12 @@ def _mock_process_payment_deps(*, allowance, membership=None):
         "routes.rides._deps.db_supabase.update_ride": AsyncMock(return_value=None),
         "routes.rides._deps.db_supabase.get_user_by_id": AsyncMock(return_value=None),
         "routes.rides._deps.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
-        "backend.services.payment_service.corporate_allowance_service.apply_ride_debit": AsyncMock(return_value={"transaction_id": "t1"}),
-        "backend.services.payment_service.corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
+        "backend.services.payment_service.corporate_allowance_service.apply_ride_debit": AsyncMock(
+            return_value={"transaction_id": "t1"}
+        ),
+        "backend.services.payment_service.corporate_wallet_service.apply_adjustment": AsyncMock(
+            return_value={"transaction_id": "t2"}
+        ),
     }
 
 
@@ -320,7 +357,9 @@ def test_company_allowance_debits_allowance_fully_when_sufficient(test_client, r
             p.stop()
 
     mocks["backend.services.payment_service.corporate_allowance_service.apply_ride_debit"].assert_called_once()
-    call_kwargs = mocks["backend.services.payment_service.corporate_allowance_service.apply_ride_debit"].call_args.kwargs
+    call_kwargs = mocks[
+        "backend.services.payment_service.corporate_allowance_service.apply_ride_debit"
+    ].call_args.kwargs
     assert call_kwargs["amount"] == pytest.approx(25.0)
     assert call_kwargs["wallet_id"] == _WALLET_ID
     assert call_kwargs["allowance_id"] == _ALLOWANCE_ID
@@ -356,7 +395,9 @@ def test_company_allowance_splits_when_allowance_partial(test_client, rider_over
         for p in patchers:
             p.stop()
 
-    rollback_kwargs = mocks["backend.services.payment_service.corporate_allowance_service.apply_ride_debit"].call_args.kwargs
+    rollback_kwargs = mocks[
+        "backend.services.payment_service.corporate_allowance_service.apply_ride_debit"
+    ].call_args.kwargs
     assert rollback_kwargs["amount"] == pytest.approx(10.0)
 
     adj_kwargs = mocks["backend.services.payment_service.corporate_wallet_service.apply_adjustment"].call_args.kwargs
@@ -590,3 +631,36 @@ async def test_settle_without_stamp_falls_back_to_rider_membership():
     mocks[base + "db_supabase.list_active_memberships_for_user"].assert_called_once_with("rider_1")
     rollback_kwargs = mocks[base + "corporate_allowance_service.apply_ride_debit"].call_args.kwargs
     assert rollback_kwargs["member_id"] == _MEMBER_ID
+
+
+@pytest.mark.anyio
+async def test_settle_no_wallet_leaves_pending_and_moves_no_money():
+    """Corporate + admin portal review, Critical #1: a company with no wallet
+    row (e.g. self-serve-signed-up, never completed KYB) must fail loudly at
+    settlement, not silently succeed. Previously both the allowance-debit and
+    master-fallback branches were gated on corp_wallet.get("id"), which is
+    falsy with no wallet — neither executed, no exception was raised, and the
+    ride fell through to payment_status="paid" with zero money moved."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 200, "used": 0}
+    rider_membership = {
+        "id": _MEMBER_ID,
+        "company_id": _CORP_COMPANY_ID,
+        "user_id": "rider_1",
+        "status": "active",
+    }
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[rider_membership])
+    base = "backend.services.payment_service."
+    deps[base + "db_supabase.get_corporate_wallet_by_company"] = AsyncMock(return_value=None)
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
+
+    assert result.success is False
+    assert result.status_code == 503
+    mocks[base + "corporate_allowance_service.apply_ride_debit"].assert_not_called()
+    mocks[base + "corporate_wallet_service.apply_adjustment"].assert_not_called()
+    mocks[base + "db_supabase.insert_one"].assert_not_called()
+    pending_writes = [
+        c
+        for c in mocks[base + "db_supabase.update_ride"].call_args_list
+        if c.args[1].get("payment_status") == "pending"
+    ]
+    assert pending_writes, "ride must be left payment_status=pending, never paid"

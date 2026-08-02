@@ -882,17 +882,25 @@ async def create_ride(
         # on the MEMBER's own status, never the company's, so without this a
         # suspended/closed company's still-active members could keep booking
         # work_profile rides indefinitely. See corporate module review Finding 1.
+        # Shared with the company_allowance path via require_company_bookable
+        # (corporate + admin portal review, Critical #1) — this was previously
+        # its own inline check that only blocked suspended/closed, missing
+        # pending_verification entirely: a self-serve-signed-up, never-KYB'd
+        # company has no wallet row yet, so a work_profile ride against it
+        # settled with neither the allowance nor master-fallback branch ever
+        # firing (both gated on a wallet id that's simply absent) and fell
+        # through to payment_status="paid" with zero money moved.
         try:
             _bk_settings_wp = await _deps.get_app_settings() or {}
         except Exception:
             _bk_settings_wp = {}
-        if _bk_settings_wp.get("corporate_inactive_company_blocks_booking", True):
-            _corp_company_row_wp = await _deps.db_supabase.get_corporate_account_by_id(_corp_company_id)
-            if _corp_company_row_wp and (_corp_company_row_wp.get("status") or "").lower() in ("suspended", "closed"):
-                raise HTTPException(
-                    status_code=400,
-                    detail={"reason": "company_inactive"},
-                )
+        try:
+            await _deps.require_company_bookable(_corp_company_id, settings=_bk_settings_wp)
+        except HTTPException as _company_bookable_exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "company_inactive"},
+            ) from _company_bookable_exc
 
         # 1. Resolve active membership
         _memberships = await _deps.db_supabase.list_active_memberships_for_user(current_user["id"])

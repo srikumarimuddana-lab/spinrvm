@@ -401,6 +401,28 @@ async def settle_corporate(
     allowance = await db_supabase.get_member_allowance(membership["id"]) or {}
     corp_wallet = await db_supabase.get_corporate_wallet_by_company(company_id) or {}
 
+    if not corp_wallet.get("id"):
+        # No wallet exists yet (e.g. a self-serve-signed-up company that never
+        # completed KYB — a wallet row is only created on KYB approval).
+        # Neither the allowance-debit nor master-fallback branches below can
+        # execute without a wallet id; letting the ride silently reach
+        # payment_status="paid" with zero money moved is the free-ride gap
+        # closed at booking time by the require_company_bookable guard (see
+        # corporate + admin portal review, Critical #1). This is a
+        # defense-in-depth backstop for that gap, not the primary fix — fail
+        # loudly instead of settling against a wallet that doesn't exist.
+        logger.error(
+            "[PAYMENT] company %s has no wallet — cannot settle ride %s against it",
+            company_id,
+            ride_id,
+        )
+        await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+        return PaymentResult(
+            success=False,
+            error="Corporate wallet not found",
+            status_code=503,
+        )
+
     total = _round(_d(str(total_charge)))
     if allowance.get("type") == "unlimited":
         allowance_debit = total

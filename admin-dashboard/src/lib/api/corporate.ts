@@ -168,6 +168,30 @@ export const walletAdjust = (
         { method: "POST", body: JSON.stringify(body) }
     );
 
+// Corporate + admin portal review, round 2: "no portfolio-level view of
+// corporate wallet risk."
+export type WalletRiskFlag = "negative_balance" | "at_floor" | "below_autotopup_threshold" | "low_balance_no_autotopup";
+
+export interface WalletRiskEntry {
+    wallet_id: string;
+    company_id: string;
+    company_name: string | null;
+    company_status: string | null;
+    balance: string;
+    soft_negative_floor: string;
+    auto_topup_enabled: boolean;
+    risk_flags: WalletRiskFlag[];
+}
+
+export interface WalletRiskPortfolio {
+    total_wallets: number;
+    flagged_count: number;
+    wallets: WalletRiskEntry[];
+}
+
+export const getWalletRiskPortfolio = () =>
+    request<WalletRiskPortfolio>("/api/admin/corporate-accounts/wallet-portfolio");
+
 /* ── Corporate members / allowances (Plan 3) ── */
 export type CorporateMemberRole = "owner" | "admin" | "member";
 export type CorporateMemberStatus = "invited" | "active" | "suspended" | "removed";

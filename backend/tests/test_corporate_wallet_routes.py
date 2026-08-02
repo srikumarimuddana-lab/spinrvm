@@ -291,3 +291,62 @@ def test_adjust_daily_cap_defaults_when_unconfigured(test_client, admin_override
         )
     assert resp.status_code == 429, resp.text
     m_adjust.assert_not_awaited()
+
+
+# ── wallet risk portfolio ────────────────────────────────────────────────
+# Corporate + admin portal review, round 2: "no portfolio-level view of
+# corporate wallet risk."
+
+
+def test_wallet_portfolio_returns_flagged_count(test_client, admin_override):
+    rows = [
+        {
+            "wallet_id": "w1",
+            "company_id": "c1",
+            "company_name": "Acme",
+            "company_status": "active",
+            "balance": "-25.00",
+            "soft_negative_floor": "-50.00",
+            "auto_topup_enabled": False,
+            "risk_flags": ["negative_balance"],
+        },
+        {
+            "wallet_id": "w2",
+            "company_id": "c2",
+            "company_name": "Beta",
+            "company_status": "active",
+            "balance": "500.00",
+            "soft_negative_floor": "-50.00",
+            "auto_topup_enabled": False,
+            "risk_flags": [],
+        },
+    ]
+    with patch("routes.corporate_wallet.list_wallet_risk_portfolio", AsyncMock(return_value=rows)):
+        resp = test_client.get("/api/admin/corporate-accounts/wallet-portfolio")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_wallets"] == 2
+    assert body["flagged_count"] == 1
+    assert body["wallets"] == rows
+
+
+def test_wallet_portfolio_empty_when_no_wallets(test_client, admin_override):
+    with patch("routes.corporate_wallet.list_wallet_risk_portfolio", AsyncMock(return_value=[])):
+        resp = test_client.get("/api/admin/corporate-accounts/wallet-portfolio")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_wallets"] == 0
+    assert body["flagged_count"] == 0
+    assert body["wallets"] == []
+
+
+def test_wallet_portfolio_does_not_collide_with_company_wallet_route(test_client, admin_override):
+    """The static /wallet-portfolio path and the dynamic /{company_id}/wallet
+    path must not shadow each other — a below-minimum topup on a literal
+    company_id of "wallet-portfolio" would be a red flag if they collided,
+    but the real check is that the portfolio route itself resolves to its
+    own handler, not get_wallet's 404-on-missing-wallet path."""
+    with patch("routes.corporate_wallet.list_wallet_risk_portfolio", AsyncMock(return_value=[])):
+        resp = test_client.get("/api/admin/corporate-accounts/wallet-portfolio")
+    assert resp.status_code == 200
+    assert "wallets" in resp.json()

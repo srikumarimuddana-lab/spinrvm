@@ -458,6 +458,74 @@ async def mark_low_balance_notified(*, wallet_id: str) -> None:
     await run_sync(_fn)
 
 
+async def list_wallet_risk_portfolio() -> List[Dict[str, Any]]:
+    """Every corporate wallet annotated with risk flags, for the admin
+    portfolio-risk view (Corporate + admin portal review, round 2: "no
+    portfolio-level view of corporate wallet risk"). Reuses the same
+    "filter cross-column comparisons in Python" pattern as
+    list_wallets_needing_autotopup / list_wallets_low_balance_no_autotopup
+    (PostgREST can't compare balance to a sibling threshold column
+    server-side).
+
+    Company name/status is resolved via a second query on the returned
+    company_ids, not a PostgREST embed -- see CLAUDE.md's convention for
+    a name/email lookup spanning two tables: resolve IDs first, filter
+    the second query with $in. Guards the empty-wallets case so the
+    second query is never issued with an empty id list.
+    """
+
+    def _fn():
+        return supabase.table("corporate_wallets").select("*").execute()
+
+    res = await run_sync(_fn)
+    wallets = _rows_from_res(res)
+    if not wallets:
+        return []
+
+    company_ids = [w["company_id"] for w in wallets if w.get("company_id")]
+    accounts_by_id: Dict[str, Dict[str, Any]] = {}
+    if company_ids:
+
+        def _fn2():
+            return supabase.table("corporate_accounts").select("id,name,status").in_("id", company_ids).execute()
+
+        accounts_res = await run_sync(_fn2)
+        accounts_by_id = {a["id"]: a for a in _rows_from_res(accounts_res)}
+
+    out: List[Dict[str, Any]] = []
+    for w in wallets:
+        balance = Decimal(str(w.get("balance") or 0))
+        floor = Decimal(str(w.get("soft_negative_floor") if w.get("soft_negative_floor") is not None else -50))
+        threshold = w.get("auto_topup_threshold")
+        auto_topup_enabled = bool(w.get("auto_topup_enabled"))
+
+        flags: List[str] = []
+        if balance < 0:
+            flags.append("negative_balance")
+        if balance <= floor:
+            flags.append("at_floor")
+        if threshold is not None and balance < Decimal(str(threshold)):
+            flags.append("below_autotopup_threshold" if auto_topup_enabled else "low_balance_no_autotopup")
+
+        account = accounts_by_id.get(w.get("company_id"), {})
+        out.append(
+            {
+                "wallet_id": w.get("id"),
+                "company_id": w.get("company_id"),
+                "company_name": account.get("name"),
+                "company_status": account.get("status"),
+                "balance": str(balance),
+                "soft_negative_floor": str(floor),
+                "auto_topup_enabled": auto_topup_enabled,
+                "risk_flags": flags,
+            }
+        )
+
+    # Riskiest first: any flag beats none, most-negative balance beats less-negative.
+    out.sort(key=lambda r: (0 if r["risk_flags"] else 1, Decimal(r["balance"])))
+    return out
+
+
 async def list_wallet_transactions(*, wallet_id: str, skip: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
     """Return the most recent ledger entries for a wallet, newest first."""
     upper = skip + max(limit, 1) - 1

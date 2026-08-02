@@ -17,6 +17,7 @@ try:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_rows,
+        list_wallet_risk_portfolio,
         list_wallet_transactions,
         update_corporate_wallet_config,
     )
@@ -31,6 +32,7 @@ except ImportError:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_rows,
+        list_wallet_risk_portfolio,
         list_wallet_transactions,
         update_corporate_wallet_config,
     )
@@ -95,6 +97,26 @@ async def _check_daily_adjust_cap(admin_id: str, amount: Decimal) -> None:
                 "Have a second admin process the remainder, or wait until tomorrow (UTC)."
             ),
         )
+
+
+@router.get("/wallet-portfolio")
+async def get_wallet_risk_portfolio(current_admin: dict = Depends(get_admin_user)):
+    """Portfolio-level view across every company's wallet, for spotting
+    risk without opening each account one at a time. Corporate + admin
+    portal review, round 2: "no portfolio-level view of corporate wallet
+    risk."
+
+    Single static path, registered before the /{company_id}/wallet dynamic
+    route below -- no collision since it's a different path shape (one
+    segment vs two), but ordered first for clarity regardless.
+    """
+    wallets = await list_wallet_risk_portfolio()
+    flagged = [w for w in wallets if w["risk_flags"]]
+    return {
+        "total_wallets": len(wallets),
+        "flagged_count": len(flagged),
+        "wallets": wallets,
+    }
 
 
 @router.get("/{company_id}/wallet")

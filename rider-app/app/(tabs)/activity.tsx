@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from 'expo-router/react-navigation';
 import SkeletonBox from '../../components/SkeletonBox';
 import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';

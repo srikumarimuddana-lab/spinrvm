@@ -7,11 +7,15 @@ Reads available to any active member use require_company_member.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
+import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 
 try:
     from ..db_supabase import (  # type: ignore
@@ -22,6 +26,7 @@ try:
         get_corporate_member_by_id,
         get_corporate_policy,
         get_corporate_wallet_by_company,
+        get_default_payment_method,
         get_member_allowance,
         list_allowed_domains,
         list_company_allowance_requests,
@@ -59,6 +64,7 @@ except ImportError:
         get_corporate_member_by_id,
         get_corporate_policy,
         get_corporate_wallet_by_company,
+        get_default_payment_method,
         get_member_allowance,
         list_allowed_domains,
         list_company_allowance_requests,
@@ -104,6 +110,11 @@ try:
     from ..utils.audit_logger import log_user_action  # type: ignore
 except ImportError:
     from utils.audit_logger import log_user_action  # type: ignore
+
+try:
+    from ..utils.money import dollars_to_cents  # type: ignore
+except ImportError:
+    pass  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -1008,3 +1019,97 @@ async def billing_transactions(
         "currency": wallet.get("currency") or "CAD",
         "transactions": txns,
     }
+
+
+class SelfServeTopUpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: Decimal = Field(..., ge=Decimal("100"), le=Decimal("10000"), description="CAD between 100 and 10000")
+    payment_method_id: Optional[str] = None
+    client_idempotency_key: Optional[str] = None
+
+
+@router.post("/wallet/topup")
+async def self_serve_wallet_topup(
+    company_id: str,
+    body: SelfServeTopUpRequest,
+    guard=Depends(require_company_admin),
+):
+    """Company-admin self-serve wallet top-up (corporate + admin portal
+    review round 2 — business decision: self-serve funding via Stripe).
+
+    Deliberately mirrors routes/corporate_wallet.py::manual_topup's amount
+    bounds, idempotency-key scheme, and Stripe PaymentIntent shape exactly
+    — same metadata (scope=corporate_topup, company_id, wallet_id), so the
+    existing payment_intent.succeeded webhook handler (routes/webhooks.py)
+    credits the wallet identically whether a Spinr admin or a company admin
+    initiated the charge. `initiated_by` carries the company-admin's own
+    user id, not a Spinr staff id, so the ledger/audit trail already
+    distinguishes who actually paid.
+    """
+    company = await get_corporate_account_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if company.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Company is not active")
+    if not company.get("stripe_customer_id"):
+        raise HTTPException(status_code=409, detail="Company has no Stripe customer on file")
+
+    wallet = await get_corporate_wallet_by_company(company_id)
+    if not wallet:
+        raise HTTPException(status_code=500, detail="Wallet not provisioned")
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    payment_method_id = body.payment_method_id
+    if not payment_method_id:
+        payment_method_id = await get_default_payment_method(company["stripe_customer_id"], stripe_secret)
+    if not payment_method_id:
+        raise HTTPException(
+            status_code=422,
+            detail="No payment method on file — provide payment_method_id or save a default card first",
+        )
+
+    intent_kwargs = dict(
+        amount=dollars_to_cents(body.amount),
+        currency="cad",
+        customer=company["stripe_customer_id"],
+        payment_method=payment_method_id,
+        off_session=True,
+        confirm=True,
+        # Server-side off_session confirm: disable redirect-based payment
+        # methods so Stripe doesn't demand a return_url — same reasoning as
+        # the internal-admin manual_topup this mirrors.
+        automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+        metadata={
+            "scope": "corporate_topup",
+            "company_id": company_id,
+            "wallet_id": wallet["id"],
+            "initiated_by": guard["user"]["id"],
+        },
+        api_key=stripe_secret,
+        idempotency_key=(
+            body.client_idempotency_key
+            or f"corp-selfserve-topup-{wallet['id']}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
+        ),
+    )
+    intent = await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**intent_kwargs))
+
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_wallet_self_serve_topup",
+            resource="corporate_wallet",
+            resource_id=str(wallet["id"]),
+            details={"company_id": company_id, "amount": str(body.amount), "payment_intent_id": intent.id},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_wallet_self_serve_topup wallet=%s",
+            wallet["id"],
+            exc_info=True,
+        )
+
+    return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}

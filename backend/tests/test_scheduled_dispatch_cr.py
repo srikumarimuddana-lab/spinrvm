@@ -141,6 +141,88 @@ class TestScheduledDispatch:
         push.assert_awaited_once()
         assert push.await_args.args[0] == RIDER_ID
 
+    async def test_defer_below_threshold_sends_routine_notice_only(self):
+        """Finding #03: below the escalation threshold, only the routine
+        'waiting on your other trip' push fires — no error log, no metric,
+        no admin broadcast."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+
+        def _raise_conflict(*_a, **_k):
+            raise RuntimeError('duplicate key value violates unique constraint "rides_one_active_per_rider"')
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=_raise_conflict)),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "redis_incr", AsyncMock(return_value=1)),
+            patch.object(sr, "redis_expire", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+        ):
+            await sr._dispatch_scheduled_ride(ride)
+
+        admin_bcast.assert_not_awaited()
+        push.assert_awaited_once()
+        assert push.await_args.args[1] == "Your scheduled ride is waiting"
+
+    async def test_defer_at_threshold_escalates_once(self):
+        """At exactly _SCHEDULE_DEFER_ESCALATE_AFTER deferrals, escalate:
+        error log + metric + admin broadcast + the distinct escalated push —
+        not a hard cancel, the ride keeps retrying."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+
+        def _raise_conflict(*_a, **_k):
+            raise RuntimeError('duplicate key value violates unique constraint "rides_one_active_per_rider"')
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=_raise_conflict)),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "redis_incr", AsyncMock(return_value=sr._SCHEDULE_DEFER_ESCALATE_AFTER)),
+            patch.object(sr, "redis_expire", AsyncMock()),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+        ):
+            await sr._dispatch_scheduled_ride(ride)
+
+        admin_bcast.assert_awaited_once()
+        admin_payload = admin_bcast.await_args.args[0]
+        assert admin_payload["type"] == "scheduled_ride_stuck"
+        assert admin_payload["ride_id"] == RIDE_ID
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_defer_exhausted_total")
+        push.assert_awaited_once()
+        assert push.await_args.args[1] == "Still working on your scheduled ride"
+
+    async def test_defer_past_threshold_does_not_re_escalate_every_tick(self):
+        """Once past the threshold, the admin broadcast and metric fire only
+        on the tick that first crosses it — not on every subsequent tick —
+        so ops isn't paged repeatedly for the same still-stuck ride."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+
+        def _raise_conflict(*_a, **_k):
+            raise RuntimeError('duplicate key value violates unique constraint "rides_one_active_per_rider"')
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=_raise_conflict)),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "redis_incr", AsyncMock(return_value=sr._SCHEDULE_DEFER_ESCALATE_AFTER + 5)),
+            patch.object(sr, "redis_expire", AsyncMock()),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+        ):
+            await sr._dispatch_scheduled_ride(ride)
+
+        admin_bcast.assert_not_awaited()
+        metric_inc.assert_not_called()
+        # The rider still gets nudged (its own 1h dedupe key governs repeats).
+        push.assert_awaited_once()
+
     async def test_check_queries_scheduled_status(self):
         """check_scheduled_rides must read rows in status='scheduled'."""
         from backend.utils import scheduled_rides as sr

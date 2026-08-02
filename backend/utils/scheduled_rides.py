@@ -26,13 +26,13 @@ try:
     from ..features import send_push_notification
     from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
-    from .redis_client import redis_set_nx
+    from .redis_client import redis_expire, redis_incr, redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
     from socket_manager import manager  # type: ignore[no-redef]
     from utils.datetime_utils import parse_iso_utc
-    from utils.redis_client import redis_set_nx  # type: ignore[no-redef]
+    from utils.redis_client import redis_expire, redis_incr, redis_set_nx  # type: ignore[no-redef]
 
 try:
     from .metrics import inc as _metric_inc
@@ -47,33 +47,100 @@ logger = logging.getLogger(__name__)
 # worth watching as scheduled-ride volume grows.
 _SCHEDULED_RIDES_TICK_LIMIT = 100
 
+# Escalation threshold for a scheduled ride stuck deferring on the
+# rides_one_active_per_rider conflict (see _dispatch_scheduled_ride). This is
+# a tick count, not a wall-clock guarantee — with multiple replicas each
+# running their own ~60s-jittered loop, the same ride can be deferred (and
+# counted) more than once per real minute, so this fires at or before
+# _SCHEDULE_DEFER_ESCALATE_AFTER minutes of real elapsed time, not exactly at it.
+# Deliberately does NOT cancel the ride — the conflict may still resolve on
+# its own once the rider's other trip ends; this only makes a stuck ride
+# visible instead of retrying forever in silence.
+_SCHEDULE_DEFER_ESCALATE_AFTER = 20
+_SCHEDULE_DEFER_COUNT_TTL = 3600  # well past the escalation threshold; a
+# ride that eventually dispatches or gets cancelled just lets this expire.
 
-async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict) -> None:
+
+async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict, *, escalated: bool = False) -> None:
     """Tell the rider their scheduled ride is waiting on their current trip.
 
     De-duped via a Redis NX key (1h TTL) so a rider on a long trip isn't pinged
     every 60-second dispatcher tick. Best-effort — a notification failure must
-    never break the retry loop.
+    never break the retry loop. ``escalated=True`` sends a distinct,
+    more actionable message once the defer count crosses
+    _SCHEDULE_DEFER_ESCALATE_AFTER, using its own dedupe key so it can fire
+    even after the routine "waiting" notice already has.
     """
     if not rider_id:
         return
+    dedupe_key = f"spinr:sched_delay_notified:{ride_id}" + (":escalated" if escalated else "")
     try:
         # redis_set_nx returns True only for the first caller within the TTL.
-        if not await redis_set_nx(f"spinr:sched_delay_notified:{ride_id}", "1", ttl=3600):
+        if not await redis_set_nx(dedupe_key, "1", ttl=3600):
             return
     except Exception as dedup_err:
         # Redis unavailable — fall through and notify (worst case: a duplicate
         # push), rather than swallow the alert entirely.
         logger.debug(f"scheduled dispatch: delay-notice dedup check failed for {ride_id}: {dedup_err}")
     try:
-        await send_push_notification(
-            rider_id,
-            "Your scheduled ride is waiting",
-            "We'll start finding a driver as soon as your current trip ends.",
-            data={"type": "scheduled_ride_delayed", "ride_id": ride_id},
-        )
+        if escalated:
+            await send_push_notification(
+                rider_id,
+                "Still working on your scheduled ride",
+                "Your ride is taking longer than expected to start because your other trip "
+                "hasn't finished yet. We'll keep trying — contact support if you'd like to cancel or rebook.",
+                data={"type": "scheduled_ride_delayed_escalated", "ride_id": ride_id},
+            )
+        else:
+            await send_push_notification(
+                rider_id,
+                "Your scheduled ride is waiting",
+                "We'll start finding a driver as soon as your current trip ends.",
+                data={"type": "scheduled_ride_delayed", "ride_id": ride_id},
+            )
     except Exception as e:
         logger.warning(f"scheduled dispatch: delayed-notice push failed for {ride_id}: {e}")
+
+
+async def _track_defer_and_maybe_escalate(ride_id: str, rider_id, ride: dict) -> None:
+    """Count consecutive active-ride-conflict deferrals for this ride and,
+    past the threshold, escalate: an error-level log, a metric, an
+    admin-visible broadcast, and a distinct rider notification — instead of
+    retrying forever with only a per-tick warning log as the only trace.
+    """
+    defer_count = 0
+    try:
+        counter_key = f"spinr:sched_defer_count:{ride_id}"
+        defer_count = await redis_incr(counter_key)
+        await redis_expire(counter_key, _SCHEDULE_DEFER_COUNT_TTL)
+    except Exception as counter_err:
+        logger.debug(f"scheduled dispatch: defer-count tracking failed for {ride_id}: {counter_err}")
+
+    if defer_count < _SCHEDULE_DEFER_ESCALATE_AFTER:
+        await _notify_schedule_delayed(ride_id, rider_id, ride)
+        return
+
+    # redis_incr is atomic, so exactly one caller observes the threshold
+    # value first even with multiple replicas polling concurrently — this
+    # branch runs once per escalation, not once per tick thereafter.
+    if defer_count == _SCHEDULE_DEFER_ESCALATE_AFTER:
+        logger.error(
+            f"scheduled dispatch: ride {ride_id} has been deferred {defer_count} times on an "
+            "active-ride conflict with no resolution — escalating"
+        )
+        _metric_inc("spinr_dispatch_scheduled_defer_exhausted_total")
+        try:
+            await manager.broadcast_to_admins(
+                {
+                    "type": "scheduled_ride_stuck",
+                    "ride_id": ride_id,
+                    "rider_id": rider_id,
+                    "defer_count": defer_count,
+                }
+            )
+        except Exception as admin_err:
+            logger.warning(f"scheduled dispatch: stuck-ride admin broadcast failed for {ride_id}: {admin_err}")
+    await _notify_schedule_delayed(ride_id, rider_id, ride, escalated=True)
 
 
 async def _dispatch_scheduled_ride(ride: dict):
@@ -120,7 +187,7 @@ async def _dispatch_scheduled_ride(ride: dict):
                 logger.warning(
                     f"scheduled dispatch deferred: rider has an active ride; ride {ride_id} stays 'scheduled' for retry"
                 )
-                await _notify_schedule_delayed(ride_id, rider_id, ride)
+                await _track_defer_and_maybe_escalate(ride_id, rider_id, ride)
                 return
             raise
         if not claimed:

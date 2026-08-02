@@ -69,6 +69,18 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     strategy:
+      # Without this, one failing module cancels the others mid-run and their
+      # lint status is never reported. Observed 2026-08-02 on PR #3246:
+      # driver-app failed (it could not install — @testing-library/jest-dom
+      # required node >=22 while this job pinned 20) and rider-app came back
+      # `cancelled`, so neither mobile app was actually linted by this security
+      # gate. The node pin has since been fixed; this stops the next failure in
+      # any one module from silently taking the others with it.
+      #
+      # Same defect as the G4b matrix, fixed in #3109 — when adding a matrix
+      # here, default to fail-fast: false unless the legs genuinely share a
+      # failure mode.
+      fail-fast: false
       matrix:
         module: [rider-app, driver-app, admin-dashboard]
     steps:

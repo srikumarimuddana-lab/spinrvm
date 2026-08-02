@@ -14,7 +14,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 import stripe
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -112,9 +112,14 @@ except ImportError:
     from utils.audit_logger import log_user_action  # type: ignore
 
 try:
+    from ..utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore
+except ImportError:
+    from utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore
+
+try:
     from ..utils.money import dollars_to_cents  # type: ignore
 except ImportError:
-    pass  # type: ignore
+    from utils.money import dollars_to_cents  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -995,6 +1000,90 @@ async def billing_statement(
         "line_items": line_items,
         "summary": _aggregate_rows(all_rows),
     }
+
+
+async def _fetch_all_month_rows(company_id: str, from_iso: str, to_iso: str) -> list[dict]:
+    """Page through every ride_payment_sources row for a month, uncapped.
+
+    Extracted so build_full_month_statement (below) doesn't duplicate this
+    loop a third time — billing_summary/billing_statement above keep their
+    own inline copies untouched to avoid any risk to their existing tests.
+    """
+    all_rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        page = await list_company_ride_payment_sources(
+            company_id=company_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
+        )
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return all_rows
+
+
+async def build_full_month_statement(company_id: str, month: str) -> dict:
+    """Full (unpaginated) statement for a month: every line item plus the
+    aggregated summary. Corporate + admin portal review, round 2,
+    "invoicing" — feeds the PDF download routes (this file's
+    /billing/statements/{month}/pdf below, and the internal-admin mirror
+    in routes/corporate_accounts.py), which need the complete line-item
+    table rather than billing_statement's paginated JSON page.
+    """
+    from_iso, to_iso = _month_bounds(month)
+    all_rows = await _fetch_all_month_rows(company_id, from_iso, to_iso)
+    all_rows = await _attach_ride_tax(all_rows)
+    return {
+        "month": month,
+        "from": from_iso,
+        "to": to_iso,
+        "line_items": all_rows,
+        "summary": _aggregate_rows(all_rows),
+    }
+
+
+@router.get("/billing/statements/{month}/pdf")
+async def billing_statement_pdf(
+    company_id: str,
+    month: str,
+    guard=Depends(require_company_admin),
+):
+    """Downloadable PDF invoice for a monthly statement (corporate + admin
+    portal review round 2, business decision: downloadable PDF invoice per
+    statement period). Record-only — renders the same numbers
+    billing_statement already computes; does not move money."""
+    company = await get_corporate_account_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    statement = await build_full_month_statement(company_id, month)
+    pdf_bytes = generate_corporate_statement_pdf(company, statement)
+
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_statement_pdf_download",
+            resource="corporate_account",
+            resource_id=company_id,
+            details={"month": month},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_statement_pdf_download company=%s",
+            company_id,
+            exc_info=True,
+        )
+
+    filename = f"spinr-corporate-statement-{company_id[:8]}-{month}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/billing/transactions")

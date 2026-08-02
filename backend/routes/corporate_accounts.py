@@ -54,6 +54,11 @@ except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore[no-redef]
 
 try:
+    from ..utils.corporate_statement_pdf import generate_corporate_statement_pdf
+except ImportError:
+    from utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore[no-redef]
+
+try:
     from ..services.corporate_membership_service import bootstrap_owner
 except ImportError:
     from services.corporate_membership_service import bootstrap_owner  # type: ignore[no-redef]
@@ -494,6 +499,57 @@ async def admin_view_kyb_document(
 
     content_type, _ = mimetypes.guess_type(storage_key)
     return Response(content=data, media_type=content_type or "application/octet-stream")
+
+
+@router.get("/{company_id}/billing/statements/{month}/pdf")
+async def admin_download_corporate_statement_pdf(
+    company_id: str,
+    month: str,
+    current_admin: dict = Depends(get_current_admin),
+):
+    """Internal-admin mirror of the company-portal PDF invoice download
+    (routes/corporate_company.py::billing_statement_pdf). Corporate +
+    admin portal review round 2, business decision: downloadable PDF
+    invoice per statement period, "available to company admins in the
+    portal and internal admins." Reuses the exact same aggregation
+    (build_full_month_statement) and renderer (generate_corporate_statement_pdf)
+    so a Spinr admin and the company's own admin see byte-identical
+    documents — no separate admin-side computation to drift from it.
+    """
+    try:
+        from .corporate_company import build_full_month_statement
+    except ImportError:
+        from routes.corporate_company import build_full_month_statement  # type: ignore[no-redef]
+
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    company = await get_corporate_account_by_id(normalized_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Corporate account not found")
+
+    statement = await build_full_month_statement(normalized_id, month)
+    pdf_bytes = generate_corporate_statement_pdf(company, statement)
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="corporate_statement_pdf_download",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={"month": month},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_statement_pdf_download company=%s",
+            normalized_id,
+            exc_info=True,
+        )
+
+    filename = f"spinr-corporate-statement-{normalized_id[:8]}-{month}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("", response_model=CorporateAccountCreatedResponse, status_code=status.HTTP_201_CREATED)

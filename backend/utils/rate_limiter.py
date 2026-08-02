@@ -304,6 +304,14 @@ data_transfer_import_commit_limit = default_limiter.limit("10/hour")
 booking_import_validate_limit = default_limiter.limit("30/hour")
 booking_import_commit_limit = default_limiter.limit("10/hour")
 
+# Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
+# report, no writes); /commit creates user + driver rows. Same shape as
+# data_transfer_import/booking_import above: commit is the write path and
+# gets the tighter limit so a compromised or scripted admin session can't
+# mass-create driver accounts unbounded. Corporate + admin portal review,
+# gap #45 — this endpoint previously had no rate limit at all.
+driver_import_commit_limit = default_limiter.limit("10/hour")
+
 # Admin Data Transfer jobs (list/detail/download-link) — read-only status
 # polling, but download-link regeneration mints a fresh signed Storage URL
 # each call; bound it the same as other admin list/detail endpoints.

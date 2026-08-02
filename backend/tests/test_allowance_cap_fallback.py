@@ -65,9 +65,10 @@ async def test_cap_exceeded_routes_fare_to_master():
 
 
 @pytest.mark.anyio
-async def test_non_cap_error_still_raises():
-    """A different RPC error must NOT be swallowed as a cap breach."""
-    apply_ride_debit = AsyncMock(side_effect=DatabaseError(details={"original": "wallet_below_floor: new=-5 floor=0"}))
+async def test_unrecognized_error_still_raises():
+    """A genuinely unrecognized RPC error must NOT be swallowed as either a
+    cap breach or a floor breach — it should still surface loudly."""
+    apply_ride_debit = AsyncMock(side_effect=DatabaseError(details={"original": "wallet not found: wallet_1"}))
 
     with (
         patch(
@@ -86,3 +87,41 @@ async def test_non_cap_error_still_raises():
         pytest.raises(DatabaseError),
     ):
         await settle_corporate(_RIDE, "ride_1", Decimal("20.00"), Decimal("0.00"))
+
+
+@pytest.mark.anyio
+async def test_allowance_debit_below_floor_fails_cleanly_instead_of_rerouting():
+    """Corporate + admin portal review, Critical #2: once the allowance-debit
+    call is floor-protected, a wallet_below_floor breach must NOT be treated
+    as a cap-exceeded breach (which would incorrectly reroute to the
+    master-fallback debit — a debit that would just hit the identical floor
+    again, since it's the same wallet). It must fail the settlement cleanly:
+    ride left pending, no master debit attempted, no exception escapes."""
+    apply_ride_debit = AsyncMock(side_effect=DatabaseError(details={"original": "wallet_below_floor: new=-5 floor=0"}))
+    apply_adjustment = AsyncMock()
+    update_ride = AsyncMock()
+
+    with (
+        patch(
+            "backend.services.payment_service.db_supabase.get_corporate_member_by_id", AsyncMock(return_value=_member())
+        ),
+        patch(
+            "backend.services.payment_service.db_supabase.get_member_allowance",
+            AsyncMock(return_value={"id": "allow_1", "type": "fixed_recurring", "amount": "50.00", "used": "10.00"}),
+        ),
+        patch(
+            "backend.services.payment_service.db_supabase.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "wallet_1"}),
+        ),
+        patch("backend.services.payment_service.db_supabase.get_corporate_policy", AsyncMock(return_value={})),
+        patch("backend.services.payment_service.db_supabase.update_ride", update_ride),
+        patch("backend.services.payment_service.corporate_allowance_service.apply_ride_debit", apply_ride_debit),
+        patch("backend.services.payment_service.corporate_wallet_service.apply_adjustment", apply_adjustment),
+    ):
+        result = await settle_corporate(_RIDE, "ride_1", Decimal("20.00"), Decimal("0.00"))
+
+    assert result.success is False
+    assert result.status_code == 503
+    apply_adjustment.assert_not_called()
+    pending_writes = [c for c in update_ride.call_args_list if c.args[1].get("payment_status") == "pending"]
+    assert pending_writes, "ride must be left payment_status=pending"

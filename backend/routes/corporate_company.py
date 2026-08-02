@@ -273,6 +273,63 @@ async def _maybe_revoke_access_on_removal(
         )
 
 
+async def _maybe_log_role_or_policy_override_change(
+    *,
+    company_id: str,
+    member_id: str,
+    existing: dict,
+    patch: dict,
+    actor: dict,
+) -> None:
+    """Audit-log role and policy_override changes on a member update.
+
+    Every member status transition in this file is already audit-logged
+    (_maybe_revoke_access_on_removal / _maybe_log_reactivation), but role
+    (a privilege change — member vs admin) and policy_override (whether a
+    member is exempt from company-wide fare/surge policy) went through the
+    same PATCH endpoint with no audit trail at all. Corporate + admin
+    portal review, gap #38.
+    """
+    if "role" in patch and patch["role"] != existing.get("role"):
+        try:
+            await log_user_action(
+                user=actor,
+                action="corporate_member_role_changed",
+                resource="corporate_member",
+                resource_id=str(member_id),
+                details={
+                    "company_id": company_id,
+                    "old_role": existing.get("role"),
+                    "new_role": patch["role"],
+                },
+            )
+        except Exception:
+            logger.error(
+                "Audit log failed for corporate_member_role_changed member=%s",
+                member_id,
+                exc_info=True,
+            )
+    if "policy_override" in patch and patch["policy_override"] != existing.get("policy_override"):
+        try:
+            await log_user_action(
+                user=actor,
+                action="corporate_member_policy_override_changed",
+                resource="corporate_member",
+                resource_id=str(member_id),
+                details={
+                    "company_id": company_id,
+                    "old_policy_override": existing.get("policy_override"),
+                    "new_policy_override": patch["policy_override"],
+                },
+            )
+        except Exception:
+            logger.error(
+                "Audit log failed for corporate_member_policy_override_changed member=%s",
+                member_id,
+                exc_info=True,
+            )
+
+
 async def _maybe_log_reactivation(
     *,
     company_id: str,
@@ -369,6 +426,13 @@ async def update_member(
             new_status=patch["status"],
             actor=guard["user"],
         )
+    await _maybe_log_role_or_policy_override_change(
+        company_id=company_id,
+        member_id=member_id,
+        existing=existing,
+        patch=patch,
+        actor=guard["user"],
+    )
     return updated
 
 
@@ -484,7 +548,18 @@ async def add_domain(
     body: AllowedDomainCreate,
     guard=Depends(require_company_admin),
 ):
-    return await add_allowed_domain(company_id=company_id, domain=body.domain)
+    result = await add_allowed_domain(company_id=company_id, domain=body.domain)
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_allowed_domain_added",
+            resource="corporate_allowed_domain",
+            resource_id=body.domain,
+            details={"company_id": company_id},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_allowed_domain_added company=%s", company_id, exc_info=True)
+    return result
 
 
 @router.delete("/allowed-domains/{domain}")
@@ -494,6 +569,16 @@ async def remove_domain(
     guard=Depends(require_company_admin),
 ):
     await delete_allowed_domain(company_id=company_id, domain=domain.lower())
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_allowed_domain_removed",
+            resource="corporate_allowed_domain",
+            resource_id=domain.lower(),
+            details={"company_id": company_id},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_allowed_domain_removed company=%s", company_id, exc_info=True)
     return {"status": "ok"}
 
 
@@ -532,12 +617,33 @@ async def decide_allowance_request(
             notes=f"approved request {request_id}",
             floor=Decimal(str(wallet.get("soft_negative_floor", "-50"))),
         )
-    return await update_allowance_request(
+    result = await update_allowance_request(
         request_id=request_id,
         status=new_status,
         reviewed_by=guard["user"]["id"],
         decision_notes=body.note,
     )
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_allowance_request_decided",
+            resource="corporate_allowance_request",
+            resource_id=str(request_id),
+            details={
+                "company_id": company_id,
+                "member_id": request["member_id"],
+                "decision": new_status,
+                "amount": str(request.get("amount")) if body.approve else None,
+                "note": body.note,
+            },
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_allowance_request_decided request=%s",
+            request_id,
+            exc_info=True,
+        )
+    return result
 
 
 # ---------- Policy ----------

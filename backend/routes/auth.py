@@ -43,6 +43,7 @@ try:
         TokenExpiredException,
     )
     from ..utils.error_keys import ErrorKeys
+    from ..utils.metrics import inc as _metric_inc
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.redis_client import (
         redis_delete,
@@ -92,6 +93,7 @@ except ImportError:
         TokenExpiredException,
     )
     from utils.error_keys import ErrorKeys
+    from utils.metrics import inc as _metric_inc
     from utils.rate_limiter import default_limiter as limiter
     from utils.redis_client import (
         redis_delete,
@@ -226,6 +228,7 @@ async def _record_otp_failure(phone: str) -> None:
             # via logger.error so on-call can correlate spikes to potential
             # credential-stuffing campaigns. Audit row also written below.
             logger.error(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
+            _metric_inc("spinr_auth_otp_lockout_total")
             try:
                 import asyncio
 

@@ -25,10 +25,21 @@ const HOURS_OPTIONS = [
   { value: "72", label: "Next 72h" },
 ];
 
-const CONFIDENCE_COLORS: Record<string, string> = {
-  high: "bg-green-100 text-green-700",
-  medium: "bg-amber-100 text-amber-700",
-  low: "bg-gray-100 text-gray-500",
+// The forecast is a historical-average lookup (see backend/utils/
+// demand_forecast.py's module docstring), not a trained model with a
+// real uncertainty estimate — so the badge describes what the number is
+// GROUNDED IN (data provenance), not a "confidence" level, which would
+// overstate the rigor behind an average-of-past-Tuesdays calculation.
+// Corporate + admin portal review, Admin #3.
+const DATA_BASIS_LABELS: Record<string, string> = {
+  historical_average: "Based on historical data",
+  limited_history: "Based on limited history",
+  default_pattern: "Estimated (no history yet)",
+};
+const DATA_BASIS_COLORS: Record<string, string> = {
+  historical_average: "bg-green-100 text-green-700",
+  limited_history: "bg-amber-100 text-amber-700",
+  default_pattern: "bg-gray-100 text-gray-500",
 };
 
 export default function ForecastPage() {
@@ -118,8 +129,8 @@ export default function ForecastPage() {
               <div className="text-2xl font-bold mt-1">
                 {summary.current_hour?.predicted_rides || 0} rides
               </div>
-              <Badge className={CONFIDENCE_COLORS[summary.confidence] || "bg-gray-100"}>
-                {summary.confidence} confidence
+              <Badge className={DATA_BASIS_COLORS[summary.data_basis] || "bg-gray-100"}>
+                {DATA_BASIS_LABELS[summary.data_basis] || summary.data_basis}
               </Badge>
             </CardContent>
           </Card>

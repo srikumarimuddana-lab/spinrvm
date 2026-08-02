@@ -300,9 +300,15 @@ async def get_audit_logs(
     if search:
         term = search.strip()
         if term:
+            # entity_id is the column every current writer (log_admin_action,
+            # log_user_action, the PII-reveal endpoint below) actually
+            # populates — resource_id is the pre-migration-57 legacy column
+            # that nothing writes anymore. Searching resource_id silently
+            # matched zero modern rows instead of erroring, so this was a
+            # quiet SOC search gap, not a crash.
             filters["$or"] = [
                 {"actor_id": {"$regex": term, "$options": "i"}},
-                {"resource_id": {"$regex": term, "$options": "i"}},
+                {"entity_id": {"$regex": term, "$options": "i"}},
                 {"details": {"$regex": term, "$options": "i"}},
             ]
     logs = await db_supabase.get_rows("audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset)

@@ -3,7 +3,6 @@
 Extracted from db_supabase.py (Phase 2 of god-object decomposition).
 """
 
-import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -12,6 +11,7 @@ from loguru import logger
 
 try:
     from ._base import (
+        _apply_filters,
         _rows_from_res,
         _serialize_for_api,
         _single_row_from_res,
@@ -20,6 +20,7 @@ try:
     )
 except ImportError:
     from repositories._base import (
+        _apply_filters,
         _rows_from_res,
         _serialize_for_api,
         _single_row_from_res,
@@ -53,11 +54,23 @@ async def get_all_corporate_accounts(
         query = supabase.table("corporate_accounts").select("*").range(skip, skip + limit - 1)
 
         if search:
-            # Escape special PostgREST ilike characters to prevent filter injection
-            safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            # Strip characters that could break PostgREST filter syntax
-            safe = re.sub(r"[,\.\(\)]", "", safe)
-            query = query.or_(f"name.ilike.%{safe}%,contact_name.ilike.%{safe}%,contact_email.ilike.%{safe}%")
+            # Shared $regex/$or escaping (repositories/_base.py._apply_filters)
+            # instead of a hand-rolled escape+strip — see corporate module
+            # review gap #42. _build_or_clause_term's $regex branch escapes
+            # LIKE wildcards (_escape_like) and PostgREST or()-group reserved
+            # characters (_postgrest_pattern) rather than silently stripping
+            # them, so a search term containing a comma or parenthesis still
+            # matches instead of having that character dropped.
+            query = _apply_filters(
+                query,
+                {
+                    "$or": [
+                        {"name": {"$regex": search, "$options": "i"}},
+                        {"contact_name": {"$regex": search, "$options": "i"}},
+                        {"contact_email": {"$regex": search, "$options": "i"}},
+                    ]
+                },
+            )
 
         if is_active is not None:
             query = query.eq("is_active", is_active)
@@ -179,11 +192,17 @@ async def list_corporate_accounts_filtered(
         if size_tier:
             q = q.eq("size_tier", size_tier)
         if search:
-            # Escape PostgREST ilike special chars to prevent filter injection
-            # (same pattern as get_all_corporate_accounts above).
-            safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            safe = re.sub(r"[,\.\(\)]", "", safe)
-            q = q.or_(f"name.ilike.%{safe}%,legal_name.ilike.%{safe}%")
+            # Shared $regex/$or escaping — see get_all_corporate_accounts above
+            # and corporate module review gap #42.
+            q = _apply_filters(
+                q,
+                {
+                    "$or": [
+                        {"name": {"$regex": search, "$options": "i"}},
+                        {"legal_name": {"$regex": search, "$options": "i"}},
+                    ]
+                },
+            )
         q = q.order("created_at", desc=True).range(skip, skip + limit - 1)
         return _rows_from_res(q.execute())
 

@@ -24,20 +24,33 @@ Reports carry only ``old_driver_id`` / ``field`` / ``message`` — never raw PII
 """
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 try:
     from ...dependencies import get_admin_user
     from ...services import driver_import_service as import_svc
     from ...utils.audit_logger import log_admin_action
+    from ...utils.driver_import_token import (
+        DriverImportTokenError,
+        sign_driver_import_token,
+        verify_driver_import_token,
+    )
+    from ...utils.rate_limiter import driver_import_commit_limit
 except ImportError:
     from dependencies import get_admin_user  # noqa: F401
     from services import driver_import_service as import_svc  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.driver_import_token import (  # noqa: F401
+        DriverImportTokenError,
+        sign_driver_import_token,
+        verify_driver_import_token,
+    )
+    from utils.rate_limiter import driver_import_commit_limit  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +66,18 @@ def _serialize_items(items: list[import_svc.ImportErrorItem]) -> list[dict[str, 
     return [{"old_driver_id": i.old_driver_id, "field": i.field, "message": i.message} for i in items]
 
 
-async def _read_csv_rows(drivers_csv: UploadFile) -> list[dict[str, str]]:
+async def _read_csv_rows(drivers_csv: UploadFile) -> tuple[list[dict[str, str]], str]:
+    """Return the parsed rows plus a sha256 of the raw CSV bytes.
+
+    The hash binds a validate-minted token to this exact file content (gap
+    #45) — re-parsing alone can't tell the commit call whether the CSV
+    changed since validate, since two different files can parse to
+    superficially similar row counts.
+    """
     raw = await drivers_csv.read()
     if len(raw) > MAX_CSV_BYTES:
         raise HTTPException(status_code=413, detail=f"CSV exceeds the {MAX_CSV_BYTES // 1000} KB limit")
+    csv_sha256 = hashlib.sha256(raw).hexdigest()
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as e:
@@ -67,7 +88,7 @@ async def _read_csv_rows(drivers_csv: UploadFile) -> list[dict[str, str]]:
         raise HTTPException(status_code=422, detail=str(e)) from e
     if len(rows) > MAX_ROWS:
         raise HTTPException(status_code=422, detail=f"CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import")
-    return rows
+    return rows, csv_sha256
 
 
 async def _build_plan(
@@ -91,9 +112,9 @@ async def _build_plan(
     return await asyncio.to_thread(import_svc.build_plan, rows, [], None, service_area, batch)
 
 
-def _report(plan: Any, batch: str, total_rows: int) -> dict[str, Any]:
+def _report(plan: Any, batch: str, total_rows: int, validation_token: Optional[str] = None) -> dict[str, Any]:
     skipped_resume = sum(1 for w in plan.warnings if w.field == "resume")
-    return {
+    report: dict[str, Any] = {
         "batch": batch,
         "can_commit": len(plan.errors) == 0,
         "counts": {
@@ -106,6 +127,9 @@ def _report(plan: Any, batch: str, total_rows: int) -> dict[str, Any]:
         "warnings": _serialize_items(plan.warnings),
         "errors": _serialize_items(plan.errors),
     }
+    if validation_token is not None:
+        report["validation_token"] = validation_token
+    return report
 
 
 @router.post("/drivers/import/validate")
@@ -116,24 +140,46 @@ async def validate_driver_import(
     batch: Optional[str] = Form(None),
     admin: dict = Depends(get_admin_user),
 ):
-    """Dry-run: parse + validate the CSV and return the report. No writes."""
+    """Dry-run: parse + validate the CSV and return the report. No writes.
+
+    The response carries a validation_token bound to (batch, sha256(csv),
+    admin.id) — /commit requires it, closing gap #45 (commit previously
+    accepted any CSV with no proof a prior validate call ever happened).
+    """
     batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    rows = await _read_csv_rows(drivers_csv)
+    rows, csv_sha256 = await _read_csv_rows(drivers_csv)
     plan = await _build_plan(rows, service_area_id, service_area_name, batch)
-    return _report(plan, batch, len(rows))
+    validation_token = sign_driver_import_token(batch=batch, csv_sha256=csv_sha256, admin_id=admin["id"])
+    return _report(plan, batch, len(rows), validation_token)
 
 
 @router.post("/drivers/import/commit")
+@driver_import_commit_limit
 async def commit_driver_import(
+    request: Request,
     drivers_csv: UploadFile = File(...),
     service_area_id: Optional[str] = Form(None),
     service_area_name: Optional[str] = Form(None),
     batch: Optional[str] = Form(None),
+    validation_token: str = Form(...),
     admin: dict = Depends(get_admin_user),
 ):
-    """Re-validate the CSV and, only if clean, create the user + driver rows."""
+    """Re-validate the CSV and, only if clean, create the user + driver rows.
+
+    Requires validation_token from a prior /validate call for this exact
+    (batch, CSV content, admin) — gap #45. A missing/expired/mismatched
+    token means either validate was never called or the file changed
+    since, and is refused before any plan-building or writes happen.
+    """
     batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    rows = await _read_csv_rows(drivers_csv)
+    rows, csv_sha256 = await _read_csv_rows(drivers_csv)
+    try:
+        verify_driver_import_token(validation_token, batch=batch, csv_sha256=csv_sha256, admin_id=admin["id"])
+    except DriverImportTokenError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Validate this CSV before committing (or re-validate — the file or batch changed): {e}",
+        ) from e
     plan = await _build_plan(rows, service_area_id, service_area_name, batch)
 
     if plan.errors:

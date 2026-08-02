@@ -183,6 +183,34 @@ class TestSlowapi429ResponseShape:
         assert response.headers["RateLimit-Remaining"] == "0"
         assert response.headers["RateLimit-Reset"] == "3600"
 
+    @pytest.mark.asyncio
+    async def test_429_emits_rate_limit_violation_metric(self):
+        """Corporate + admin portal review, SOC gap #46: every 429 through
+        this handler must increment spinr_rate_limit_violation_total,
+        labeled by path, so violations are visible on the infra
+        monitoring page without grepping logs."""
+        from unittest.mock import MagicMock, patch
+
+        from fastapi import Request
+        from limits import parse as parse_limit
+
+        from utils.rate_limiter import rate_limit_exceeded_handler
+
+        rl_item = parse_limit("5 per 1 minute")
+        fake_exc = RateLimitExceeded(MagicMock(limit=rl_item))
+
+        request = MagicMock(spec=Request)
+        request.url.path = "/api/v1/rides"
+        request.method = "POST"
+        request.client = MagicMock(host="127.0.0.1")
+        request.headers = {}
+
+        with patch("utils.rate_limiter._metric_inc") as mock_inc:
+            response = await rate_limit_exceeded_handler(request, fake_exc)
+
+        assert response.status_code == 429
+        mock_inc.assert_called_once_with("spinr_rate_limit_violation_total", {"path": "/api/v1/rides"})
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OTP lockout 429 — separate handler, must mirror the same shape

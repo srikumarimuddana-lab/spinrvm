@@ -73,6 +73,61 @@ def test_reject_kyb_flips_status_to_suspended(test_client, admin_override):
     assert resp.json()["status"] == "suspended"
 
 
+def test_kyb_review_wallet_failure_is_partial_success(test_client, admin_override):
+    """Corporate + admin portal review, gap #40: record_kyb_decision already
+    committed status='active' before the wallet step runs, so a wallet
+    failure must not raise a 503 that hides the fact the company is already
+    approved — same partial-success shape as owner_bootstrap_error."""
+    with (
+        patch(
+            "db_supabase.record_kyb_decision",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "routes.corporate_accounts.ensure_corporate_wallet",
+            AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": ""}),
+        ),
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "active"  # status change already committed
+    assert data["wallet_provisioning_error"] is True
+    assert data["stripe_customer_creation_error"] is False
+
+
+def test_kyb_review_success_reports_no_provisioning_errors(test_client, admin_override):
+    with (
+        patch(
+            "db_supabase.record_kyb_decision",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "routes.corporate_accounts.ensure_corporate_wallet",
+            AsyncMock(return_value={"id": "w1"}),
+        ),
+        patch(
+            "routes.corporate_accounts.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": ""}),
+        ),
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["wallet_provisioning_error"] is False
+    assert data["stripe_customer_creation_error"] is False
+
+
 def test_kyb_review_404_on_missing_company(test_client, admin_override):
     with patch(
         "db_supabase.record_kyb_decision",

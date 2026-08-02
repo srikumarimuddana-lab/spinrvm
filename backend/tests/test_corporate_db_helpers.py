@@ -24,6 +24,49 @@ async def test_list_companies_by_status_filter(mock_supabase_client):
 
 
 @pytest.mark.asyncio
+async def test_list_companies_search_uses_shared_or_escaping(mock_supabase_client):
+    """Corporate + admin portal review, gap #42: get_all_corporate_accounts
+    and list_corporate_accounts_filtered used to hand-roll ilike escaping
+    and then STRIP reserved characters (,.()) from the search term instead
+    of escaping them — silently mangling a legitimate search like
+    "Acme, Inc". Now routed through repositories._base._apply_filters'
+    shared $or/$regex handling, which escapes (not strips) them."""
+    table = mock_supabase_client.table.return_value
+    table.range.return_value = table
+    table.or_.return_value = table
+    table.execute = MagicMock(return_value=_fake_resp([{"id": "c1", "name": "Acme, Inc"}]))
+    with patch("repositories.corporate_repo.supabase", mock_supabase_client):
+        from db_supabase import list_corporate_accounts_filtered
+
+        rows = await list_corporate_accounts_filtered(
+            status=None, size_tier=None, search="Acme, Inc", skip=0, limit=50
+        )
+    assert rows == [{"id": "c1", "name": "Acme, Inc"}]
+    or_arg = table.or_.call_args.args[0]
+    # The comma must be escaped (\,), not silently dropped from the term.
+    assert r"Acme\, Inc" in or_arg
+    assert "name.ilike." in or_arg
+    assert "legal_name.ilike." in or_arg
+
+
+@pytest.mark.asyncio
+async def test_get_all_corporate_accounts_search_uses_shared_or_escaping(mock_supabase_client):
+    table = mock_supabase_client.table.return_value
+    table.range.return_value = table
+    table.or_.return_value = table
+    table.execute = MagicMock(return_value=_fake_resp([{"id": "c1", "name": "Acme, Inc"}]))
+    with patch("repositories.corporate_repo.supabase", mock_supabase_client):
+        from db_supabase import get_all_corporate_accounts
+
+        rows = await get_all_corporate_accounts(search="Acme, Inc")
+    assert rows == [{"id": "c1", "name": "Acme, Inc"}]
+    or_arg = table.or_.call_args.args[0]
+    assert r"Acme\, Inc" in or_arg
+    assert "contact_name.ilike." in or_arg
+    assert "contact_email.ilike." in or_arg
+
+
+@pytest.mark.asyncio
 async def test_update_company_status(mock_supabase_client):
     table = mock_supabase_client.table.return_value
     table.update.return_value = table  # wire the chain

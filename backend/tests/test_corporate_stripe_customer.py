@@ -100,3 +100,41 @@ def test_stripe_customer_skipped_when_no_secret(test_client, admin_override):
     assert resp.status_code == 200, resp.text
     m_create.assert_not_called()
     m_update.assert_not_awaited()
+
+
+def test_stripe_customer_creation_failure_is_partial_success(test_client, admin_override):
+    """Corporate + admin portal review, gap #40: record_kyb_decision already
+    committed status='active' before this step runs, so a Stripe API
+    failure must not raise — the response surfaces
+    stripe_customer_creation_error=True instead, matching
+    create_corporate_account's owner_bootstrap_error partial-success shape."""
+    active_row = corporate_account_row("active", id="c1", stripe_customer_id=None)
+    with (
+        patch(
+            "db_supabase.record_kyb_decision",
+            AsyncMock(return_value=active_row),
+        ),
+        patch(
+            "routes.corporate_accounts.ensure_corporate_wallet",
+            AsyncMock(return_value={"id": "w1"}),
+        ),
+        patch(
+            "routes.corporate_accounts.update_corporate_stripe_customer_id",
+            AsyncMock(),
+        ) as m_update,
+        patch(
+            "routes.corporate_accounts.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_123"}),
+        ),
+        patch("stripe.Customer.create", side_effect=RuntimeError("stripe unreachable")),
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "active"  # status change already committed
+    assert data["wallet_provisioning_error"] is False
+    assert data["stripe_customer_creation_error"] is True
+    m_update.assert_not_awaited()

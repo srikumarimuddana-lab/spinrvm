@@ -30,9 +30,15 @@ _ADMIN_CTX = {
 async def test_create_section_scopes_to_company():
     from backend.routes.corporate_company_bookings import SectionCreate, create_section
 
-    with patch(_CCB + "db_supabase.insert_one", AsyncMock(side_effect=lambda t, row: row)) as ins:
+    with (
+        patch(_CCB + "db_supabase.insert_one", AsyncMock(side_effect=lambda t, row: row)) as ins,
+        patch(_CCB + "log_user_action", AsyncMock()),
+    ):
         row = await create_section(SectionCreate(name="  Service Department "), _ADMIN_CTX)
 
+    # First insert_one call is the section row itself; the audit-log write
+    # (added for gap #38) is a separate, mocked-away log_user_action call
+    # above, not a second insert_one on this table.
     assert ins.call_args.args[0] == "corporate_sections"
     assert row["company_id"] == _COMPANY_ID
     assert row["name"] == "Service Department"
@@ -73,6 +79,24 @@ async def test_create_section_duplicate_name_is_409():
 
 
 @pytest.mark.anyio
+async def test_create_section_writes_audit_log():
+    """Corporate + admin portal review, gap #38: section create/update/
+    archive never wrote an audit trail."""
+    from backend.routes.corporate_company_bookings import SectionCreate, create_section
+
+    with (
+        patch(_CCB + "db_supabase.insert_one", AsyncMock(side_effect=lambda t, row: row)),
+        patch(_CCB + "log_user_action", AsyncMock()) as mock_audit,
+    ):
+        row = await create_section(SectionCreate(name="Showroom"), _ADMIN_CTX)
+
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_section_created"
+    assert mock_audit.await_args.kwargs["resource_id"] == row["id"]
+    assert mock_audit.await_args.kwargs["details"]["company_id"] == _COMPANY_ID
+
+
+@pytest.mark.anyio
 async def test_update_section_cross_company_is_404():
     from backend.routes.corporate_company_bookings import SectionUpdate, update_section
 
@@ -100,6 +124,42 @@ async def test_update_section_applies_trimmed_patch():
     assert row["name"] == "New Name"
     # The handler strips before persisting — the raw padded value must never reach the DB.
     assert upd.call_args.args[2] == {"name": "New Name"}
+
+
+@pytest.mark.anyio
+async def test_update_section_writes_audit_log():
+    from backend.routes.corporate_company_bookings import SectionUpdate, update_section
+
+    existing = {"id": "sec1", "company_id": _COMPANY_ID, "name": "Old", "status": "active"}
+    with (
+        patch(_CCB + "db_supabase.get_rows", AsyncMock(return_value=[existing])),
+        patch(
+            _CCB + "db_supabase.update_one",
+            AsyncMock(return_value={**existing, "name": "New Name"}),
+        ),
+        patch(_CCB + "log_user_action", AsyncMock()) as mock_audit,
+    ):
+        await update_section("sec1", SectionUpdate(name="New Name"), _ADMIN_CTX)
+
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_section_updated"
+    assert mock_audit.await_args.kwargs["resource_id"] == "sec1"
+    assert mock_audit.await_args.kwargs["details"]["changes"] == {"name": "New Name"}
+
+
+@pytest.mark.anyio
+async def test_update_section_empty_patch_does_not_write_audit_log():
+    from backend.routes.corporate_company_bookings import SectionUpdate, update_section
+
+    existing = {"id": "sec1", "company_id": _COMPANY_ID, "name": "Old", "status": "active"}
+    with (
+        patch(_CCB + "db_supabase.get_rows", AsyncMock(return_value=[existing])),
+        patch(_CCB + "db_supabase.update_one", AsyncMock()),
+        patch(_CCB + "log_user_action", AsyncMock()) as mock_audit,
+    ):
+        await update_section("sec1", SectionUpdate(), _ADMIN_CTX)
+
+    mock_audit.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -176,6 +236,26 @@ async def test_archive_never_deletes():
 
     assert row["status"] == "archived"
     assert upd.call_args.args[2] == {"status": "archived"}, "archive is a status flip, not a delete"
+
+
+@pytest.mark.anyio
+async def test_archive_section_writes_audit_log():
+    from backend.routes.corporate_company_bookings import archive_section
+
+    section = {"id": "sec1", "company_id": _COMPANY_ID, "name": "Showroom", "status": "active"}
+    with (
+        patch(_CCB + "db_supabase.get_rows", AsyncMock(return_value=[section])),
+        patch(
+            _CCB + "db_supabase.update_one",
+            AsyncMock(return_value={**section, "status": "archived"}),
+        ),
+        patch(_CCB + "log_user_action", AsyncMock()) as mock_audit,
+    ):
+        await archive_section("sec1", _ADMIN_CTX)
+
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_section_archived"
+    assert mock_audit.await_args.kwargs["resource_id"] == "sec1"
 
 
 @pytest.mark.anyio

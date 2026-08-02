@@ -1231,6 +1231,40 @@ export default function SettingsPage() {
                     {!mfaAvailable && (
                         <p className="text-sm text-muted-foreground">Two-factor authentication is not available on this deployment.</p>
                     )}
+                    {/* Corporate + admin portal review, High #5: the dual-approval
+                        gate for large PII-bearing exports (driver/rider bulk
+                        exports, compliance reports over 1,000 rows) already exists
+                        in the backend but had no settings field or UI to turn it
+                        on — it could previously only be flipped via a direct SQL
+                        update. Off by default (same posture as the appearance
+                        beta flag above); requires a second super_admin's approval
+                        on each gated export once enabled, per the existing
+                        Export Approvals queue. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Data Export Approvals</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="dual_approval_exports_enabled">
+                                        Require a second super admin to approve large PII exports
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        When on, large driver/rider bulk exports and compliance reports over
+                                        1,000 rows need a second super admin&apos;s sign-off before they run —
+                                        see the Export Approvals queue under Records. Off by default.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="dual_approval_exports_enabled"
+                                    checked={settings.dual_approval_exports_enabled ?? false}
+                                    onCheckedChange={(v) => update("dual_approval_exports_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
                 </TabsContent>
                 </Tabs>
             )}

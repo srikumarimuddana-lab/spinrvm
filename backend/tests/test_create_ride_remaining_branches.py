@@ -340,6 +340,10 @@ async def test_work_profile_without_membership_raises_400():
             AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
         ),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        # require_company_bookable() reaches the real backend.db_supabase
+        # singleton via its own local import, bypassing the whole-module
+        # `_deps.db_supabase` replace below.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
 
@@ -392,6 +396,7 @@ async def test_work_profile_policy_violation_raises_400():
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_FailedPolicy())),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
 
@@ -442,6 +447,7 @@ async def test_work_profile_low_allowance_raises_400():
         ),
         patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
 
@@ -794,6 +800,12 @@ async def test_work_profile_blocks_booking_for_suspended_company():
             AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
         ),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        # require_company_bookable() (corporate + admin portal review, Critical
+        # #1 — work_profile now shares this guard instead of its own inline
+        # check) reaches the real backend.db_supabase singleton via its own
+        # local import, bypassing the whole-module `_deps.db_supabase` replace
+        # below.
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "suspended"})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
 

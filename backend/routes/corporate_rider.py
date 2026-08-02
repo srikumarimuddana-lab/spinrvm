@@ -18,6 +18,7 @@ try:
         list_active_memberships_for_user,
         list_company_allowance_requests,
         list_pending_allowance_requests_for_member,
+        upsert_member_allowance,
     )
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas.corporate import AllowanceRequestCreate  # type: ignore
@@ -39,6 +40,7 @@ except ImportError:
         list_active_memberships_for_user,
         list_company_allowance_requests,
         list_pending_allowance_requests_for_member,
+        upsert_member_allowance,
     )
     from dependencies import get_current_user  # type: ignore
     from schemas.corporate import AllowanceRequestCreate  # type: ignore
@@ -264,6 +266,16 @@ async def submit_request(
                 actor_user_id=current_user["id"],
                 notes=f"auto_approved request {row.get('id', '')}",
                 floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
+            )
+            # Corporate + admin portal review, High #1: auto_approved_this_period
+            # was never incremented anywhere in the codebase, so the
+            # `used_auto < auto_monthly` cap check above was always comparing
+            # against a permanent 0 — auto-approval had no effective per-period
+            # limit. This is the only place a request gets auto-approved, so
+            # the increment belongs here, immediately after the grant succeeds.
+            await upsert_member_allowance(
+                member_id=membership["id"],
+                patch={"auto_approved_this_period": used_auto + 1},
             )
         return row
     return await insert_allowance_request(

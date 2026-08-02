@@ -153,13 +153,13 @@ const NAV_GROUPS: NavGroup[] = [
             // "compliance" module) — this single nav entry is intentionally
             // visible to EITHER group, matching /dashboard/records/page.tsx's
             // own per-tab visibility logic exactly: `module: "compliance"`
-            // with no `superAdminOnly` means isSuperAdmin (super_admin OR
-            // admin role, see NAV_GROUPS filter above) OR the compliance
-            // module makes this entry visible — the page itself then shows
-            // only the tabs that specific user can actually use, or a
-            // "no access" state if none apply (e.g. an "admin"-role user
-            // with no compliance module: sidebar shows the entry, page
-            // shows only the tabs their role satisfies).
+            // with no `superAdminOnly` means isSuperAdmin (role ===
+            // "super_admin" only, see NAV_GROUPS filter above) OR the
+            // compliance module makes this entry visible — the page itself
+            // then shows only the tabs that specific user can actually
+            // use, or a "no access" state if none apply (e.g. a staff
+            // member with no compliance module and no super_admin role
+            // never sees this entry at all).
             { href: "/dashboard/records", label: "Records & Compliance", icon: Upload, module: "compliance" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
         ],
@@ -174,7 +174,18 @@ export function Sidebar() {
     const { user } = useAuthStore();
 
     const userModules = user?.modules || [];
-    const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'admin';
+    // Corporate + admin portal review, Admin #4: this used to also treat
+    // role === "admin" as a full-bypass super admin. "admin" is a real,
+    // separate role in the backend's _admin_roles set (dependencies/
+    // __init__.py) that — unlike super_admin — does NOT bypass
+    // require_module() checks; it's scoped by its own `modules` grant
+    // exactly like operations/support/finance/custom. The bootstrap
+    // legacy admin (admin-001) is minted with role: "super_admin", not
+    // "admin", so this fallback was never even covering that case — it
+    // was just showing every nav entry to any "admin"-role staff member
+    // regardless of their actual module grants, which the backend would
+    // then 403 on click.
+    const isSuperAdmin = user?.role === 'super_admin';
 
     // Live counts for sidebar badges. Fetched once on mount + every 60s
     // so the admin sees an up-to-date backlog without reloading. Only

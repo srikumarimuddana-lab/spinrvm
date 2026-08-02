@@ -16,6 +16,7 @@ the POST /bookings pydantic body to a QUERY param, 422ing every real booking
 (same failure mode documented in corporate_signup.py; auth.py precedent).
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +36,7 @@ try:
     from ..features import compute_fare_estimate
     from ..services.company_booking_service import create_company_guest_booking
     from ..services.corporate_policy_service import require_company_bookable
+    from ..utils.audit_logger import log_user_action
     from ..utils.error_handling import db_error_text
     from ..validators import validate_phone
 except ImportError:
@@ -43,8 +45,11 @@ except ImportError:
     from features import compute_fare_estimate  # type: ignore
     from services.company_booking_service import create_company_guest_booking  # type: ignore
     from services.corporate_policy_service import require_company_bookable  # type: ignore
+    from utils.audit_logger import log_user_action  # type: ignore
     from utils.error_handling import db_error_text  # type: ignore
     from validators import validate_phone  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company Bookings"])
 
@@ -393,6 +398,16 @@ async def create_section(body: SectionCreate, ctx: dict = Depends(require_compan
         if "duplicate" in msg or "unique" in msg or "23505" in msg:
             raise HTTPException(status_code=409, detail="A section with this name already exists.") from e
         raise
+    try:
+        await log_user_action(
+            user=ctx["user"],
+            action="corporate_section_created",
+            resource="corporate_section",
+            resource_id=row["id"],
+            details={"company_id": ctx["company_id"], "name": row["name"]},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_section_created section=%s", row["id"], exc_info=True)
     return inserted or row
 
 
@@ -420,6 +435,16 @@ async def update_section(
         if "duplicate" in msg or "unique" in msg or "23505" in msg:
             raise HTTPException(status_code=409, detail="A section with this name already exists.") from e
         raise
+    try:
+        await log_user_action(
+            user=ctx["user"],
+            action="corporate_section_updated",
+            resource="corporate_section",
+            resource_id=section_id,
+            details={"company_id": ctx["company_id"], "changes": patch},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_section_updated section=%s", section_id, exc_info=True)
     return updated or {**existing[0], **patch}
 
 
@@ -435,6 +460,16 @@ async def archive_section(section_id: str, ctx: dict = Depends(require_company_a
     if not existing:
         raise HTTPException(status_code=404, detail="Section not found")
     updated = await db_supabase.update_one("corporate_sections", {"id": section_id}, {"status": "archived"})
+    try:
+        await log_user_action(
+            user=ctx["user"],
+            action="corporate_section_archived",
+            resource="corporate_section",
+            resource_id=section_id,
+            details={"company_id": ctx["company_id"], "name": existing[0].get("name")},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_section_archived section=%s", section_id, exc_info=True)
     return updated or {**existing[0], "status": "archived"}
 
 

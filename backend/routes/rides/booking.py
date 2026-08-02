@@ -740,7 +740,12 @@ async def create_ride(
         _policy_result = await _deps.evaluate_policy_for_ride(
             corporate_account_id=body.corporate_account_id,
             rider_id=current_user["id"],
-            estimated_fare=total_fare,
+            # grand_total (base + area fees + tax), not total_fare — total_fare
+            # excludes area fees/tax, so a ride could clear max_fare_per_ride
+            # against total_fare while the actual charge (grand_total, still
+            # excluding tip which isn't known until after the trip) is over
+            # the company's cap. Corporate + admin portal review, gap #39.
+            estimated_fare=grand_total,
             ride_type="standard",
             pickup_time=_policy_pickup_time,
         )
@@ -882,17 +887,25 @@ async def create_ride(
         # on the MEMBER's own status, never the company's, so without this a
         # suspended/closed company's still-active members could keep booking
         # work_profile rides indefinitely. See corporate module review Finding 1.
+        # Shared with the company_allowance path via require_company_bookable
+        # (corporate + admin portal review, Critical #1) — this was previously
+        # its own inline check that only blocked suspended/closed, missing
+        # pending_verification entirely: a self-serve-signed-up, never-KYB'd
+        # company has no wallet row yet, so a work_profile ride against it
+        # settled with neither the allowance nor master-fallback branch ever
+        # firing (both gated on a wallet id that's simply absent) and fell
+        # through to payment_status="paid" with zero money moved.
         try:
             _bk_settings_wp = await _deps.get_app_settings() or {}
         except Exception:
             _bk_settings_wp = {}
-        if _bk_settings_wp.get("corporate_inactive_company_blocks_booking", True):
-            _corp_company_row_wp = await _deps.db_supabase.get_corporate_account_by_id(_corp_company_id)
-            if _corp_company_row_wp and (_corp_company_row_wp.get("status") or "").lower() in ("suspended", "closed"):
-                raise HTTPException(
-                    status_code=400,
-                    detail={"reason": "company_inactive"},
-                )
+        try:
+            await _deps.require_company_bookable(_corp_company_id, settings=_bk_settings_wp)
+        except HTTPException as _company_bookable_exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "company_inactive"},
+            ) from _company_bookable_exc
 
         # 1. Resolve active membership
         _memberships = await _deps.db_supabase.list_active_memberships_for_user(current_user["id"])
@@ -904,10 +917,13 @@ async def create_ride(
             )
 
         # 2–4. Fetch allowance + policy, evaluate all rules.
+        # grand_total, not total_fare — see the company_allowance path above
+        # (gap #39): total_fare excludes area fees/tax, so it understates
+        # what will actually be charged against max_fare_per_ride.
         _policy_result = await _deps.evaluate_policy_for_ride(
             corporate_account_id=_corp_company_id,
             rider_id=current_user["id"],
-            estimated_fare=total_fare,
+            estimated_fare=grand_total,
             ride_type=body.vehicle_type_id or "standard",
             pickup_time=_policy_pickup_time,
             policy_override=_membership.get("policy_override", False),

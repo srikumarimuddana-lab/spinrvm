@@ -268,6 +268,21 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
     if req.modules is not None:
         updates["modules"] = [m for m in req.modules if m in AVAILABLE_MODULES]
 
+    # Admin access tokens carry role/modules as trusted JWT claims (see
+    # dependencies.get_admin_user — unlike rider/driver, they are NOT
+    # re-read from the DB on every request). Without a token_version bump
+    # here, a demoted-or-reduced admin's already-issued access token keeps
+    # granting the OLD role/modules for up to its full 1hr TTL, and the
+    # matching refresh token would silently mint more tokens carrying the
+    # stale claims. Force re-auth on any actual role/modules change so the
+    # new claims take effect within this same request cycle instead of
+    # persisting for up to an hour (H6).
+    _role_changed = req.role is not None and req.role != s.get("role")
+    _modules_changed = "modules" in updates and updates["modules"] != (s.get("modules") or [])
+    if (_role_changed or _modules_changed) and "token_version" not in updates:
+        updates["token_version"] = int(s.get("token_version") or 0) + 1
+        await revoke_all_for_user(staff_id)
+
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("admin_staff", {"id": staff_id}, updates)

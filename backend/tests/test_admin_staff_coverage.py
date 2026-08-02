@@ -8,8 +8,9 @@ focusing on the admin-access-control-relevant branches:
   - create_staff: password validation, duplicate email, role presets vs
     custom modules, audit logging, password hash never returned
   - update_staff: super_admin promotion re-auth, last-super_admin
-    demotion guard, is_active=False token_version bump + session revoke,
-    role-preset module snap, audit logging
+    demotion guard, is_active=False / role-change / modules-change
+    token_version bump + session revoke (H6), role-preset module snap,
+    audit logging
   - delete_staff: self-delete block, session revoke before delete, audit
   - list_staff / get_staff: credential stripping
   - list_modules: static payload
@@ -291,6 +292,7 @@ class TestUpdateStaff:
             patch.object(staff_mod.db_supabase, "update_one", AsyncMock()),
             patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
             patch.object(staff_mod, "verify_password", return_value=(True, None)),
+            patch.object(staff_mod, "revoke_all_for_user", AsyncMock()),
         ):
             result = await staff_mod.update_staff("staff-1", req, admin=SUPER)
         assert result == {"success": True}
@@ -305,6 +307,7 @@ class TestUpdateStaff:
             patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[_staff_row(role="operations")])),
             patch.object(staff_mod.db_supabase, "update_one", AsyncMock()),
             patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+            patch.object(staff_mod, "revoke_all_for_user", AsyncMock()),
         ):
             result = await staff_mod.update_staff("staff-1", req, admin=actor)
         assert result == {"success": True}
@@ -328,6 +331,7 @@ class TestUpdateStaff:
             patch.object(staff_mod.db_supabase, "count_documents", AsyncMock(return_value=2)),
             patch.object(staff_mod.db_supabase, "update_one", AsyncMock()),
             patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+            patch.object(staff_mod, "revoke_all_for_user", AsyncMock()),
         ):
             result = await staff_mod.update_staff("staff-1", req, admin=SUPER)
         assert result == {"success": True}
@@ -366,6 +370,7 @@ class TestUpdateStaff:
             patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[_staff_row(role="operations")])),
             patch.object(staff_mod.db_supabase, "update_one", AsyncMock(side_effect=_capture_update)),
             patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+            patch.object(staff_mod, "revoke_all_for_user", AsyncMock()),
         ):
             await staff_mod.update_staff("staff-1", req, admin=SUPER)
 
@@ -387,6 +392,117 @@ class TestUpdateStaff:
             await staff_mod.update_staff("staff-1", req, admin=SUPER)
 
         assert updates_seen["modules"] == ["dashboard"]
+
+    @pytest.mark.asyncio
+    async def test_role_change_bumps_token_version_and_revokes_sessions(self):
+        """H6: an admin access token carries role/modules as trusted JWT
+        claims (never re-read from the DB per-request), so a role change
+        must force re-auth the same way deactivation already does —
+        otherwise the demoted/promoted admin's live token keeps granting
+        the OLD role for up to its 1hr TTL."""
+        req = staff_mod.StaffUpdateRequest(role="finance")
+        revoke = AsyncMock()
+        updates_seen = {}
+
+        async def _capture_update(table, match, updates):
+            updates_seen.update(updates)
+
+        with (
+            patch.object(
+                staff_mod.db_supabase,
+                "get_rows",
+                AsyncMock(return_value=[_staff_row(role="operations", token_version=2)]),
+            ),
+            patch.object(staff_mod.db_supabase, "update_one", AsyncMock(side_effect=_capture_update)),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+            patch.object(staff_mod, "revoke_all_for_user", revoke),
+        ):
+            result = await staff_mod.update_staff("staff-1", req, admin=SUPER)
+
+        assert result == {"success": True}
+        assert updates_seen["role"] == "finance"
+        assert updates_seen["token_version"] == 3
+        revoke.assert_awaited_once_with("staff-1")
+
+    @pytest.mark.asyncio
+    async def test_modules_change_bumps_token_version_without_role_change(self):
+        """A custom-modules-only edit (no role change) must also force
+        re-auth, since modules are trusted JWT claims too."""
+        req = staff_mod.StaffUpdateRequest(modules=["dashboard", "support"])
+        revoke = AsyncMock()
+        updates_seen = {}
+
+        async def _capture_update(table, match, updates):
+            updates_seen.update(updates)
+
+        with (
+            patch.object(
+                staff_mod.db_supabase,
+                "get_rows",
+                AsyncMock(return_value=[_staff_row(modules=["dashboard"], token_version=0)]),
+            ),
+            patch.object(staff_mod.db_supabase, "update_one", AsyncMock(side_effect=_capture_update)),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+            patch.object(staff_mod, "revoke_all_for_user", revoke),
+        ):
+            await staff_mod.update_staff("staff-1", req, admin=SUPER)
+
+        assert updates_seen["modules"] == ["dashboard", "support"]
+        assert updates_seen["token_version"] == 1
+        revoke.assert_awaited_once_with("staff-1")
+
+    @pytest.mark.asyncio
+    async def test_identical_role_and_modules_does_not_bump_token_version(self):
+        """Re-submitting the same role/modules (e.g. the admin-dashboard
+        form re-posting the full object) must not force every admin to
+        re-log-in on a true no-op."""
+        req = staff_mod.StaffUpdateRequest(role="operations", modules=["dashboard"])
+        revoke = AsyncMock()
+        updates_seen = {}
+
+        async def _capture_update(table, match, updates):
+            updates_seen.update(updates)
+
+        with (
+            patch.object(
+                staff_mod.db_supabase,
+                "get_rows",
+                AsyncMock(return_value=[_staff_row(role="operations", modules=["dashboard"])]),
+            ),
+            patch.object(staff_mod.db_supabase, "update_one", AsyncMock(side_effect=_capture_update)),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+            patch.object(staff_mod, "revoke_all_for_user", revoke),
+        ):
+            await staff_mod.update_staff("staff-1", req, admin=SUPER)
+
+        assert "token_version" not in updates_seen
+        revoke.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_deactivation_with_role_change_bumps_token_version_once(self):
+        """is_active=False and a role change in the same request must not
+        double-increment token_version or double-call revoke."""
+        req = staff_mod.StaffUpdateRequest(is_active=False, role="finance")
+        revoke = AsyncMock()
+        updates_seen = {}
+
+        async def _capture_update(table, match, updates):
+            updates_seen.update(updates)
+
+        with (
+            patch.object(
+                staff_mod.db_supabase,
+                "get_rows",
+                AsyncMock(return_value=[_staff_row(role="operations", token_version=5)]),
+            ),
+            patch.object(staff_mod.db_supabase, "update_one", AsyncMock(side_effect=_capture_update)),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+            patch.object(staff_mod, "revoke_all_for_user", revoke),
+        ):
+            await staff_mod.update_staff("staff-1", req, admin=SUPER)
+
+        assert updates_seen["token_version"] == 6
+        revoke.assert_awaited_once_with("staff-1")
 
     @pytest.mark.asyncio
     async def test_no_op_update_skips_db_write(self):

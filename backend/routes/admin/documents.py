@@ -128,6 +128,7 @@ async def admin_get_document_requirements():
 @router.post("/documents/requirements")
 async def admin_create_document_requirement(
     requirement: DocumentRequirementCreateRequest,
+    admin: dict = Depends(get_admin_user),
 ):
     """Create a new document requirement."""
     doc = {
@@ -139,11 +140,23 @@ async def admin_create_document_requirement(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("document_requirements", doc)
-    return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    requirement_id = str(row.get("id") if row and isinstance(row, dict) else "")
+    await log_admin_action(
+        admin,
+        "document_requirement_created",
+        "document_requirements",
+        requirement_id,
+        {"name": requirement.name, "document_type": requirement.document_type},
+    )
+    return {"requirement_id": requirement_id}
 
 
 @router.put("/documents/requirements/{requirement_id}")
-async def admin_update_document_requirement(requirement_id: str, requirement: DocumentRequirementUpdateRequest):
+async def admin_update_document_requirement(
+    requirement_id: str,
+    requirement: DocumentRequirementUpdateRequest,
+    admin: dict = Depends(get_admin_user),
+):
     """Update a document requirement."""
     updates: Dict[str, Any] = {}
     if requirement.name is not None:
@@ -160,13 +173,27 @@ async def admin_update_document_requirement(requirement_id: str, requirement: Do
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("document_requirements", {"id": requirement_id}, updates)
+        await log_admin_action(
+            admin,
+            "document_requirement_updated",
+            "document_requirements",
+            requirement_id,
+            {k: v for k, v in updates.items() if k != "updated_at"},
+        )
     return {"message": "Document requirement updated"}
 
 
 @router.delete("/documents/requirements/{requirement_id}")
-async def admin_delete_document_requirement(requirement_id: str):
+async def admin_delete_document_requirement(requirement_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a document requirement."""
     await db_supabase.delete_one("document_requirements", {"id": requirement_id})
+    await log_admin_action(
+        admin,
+        "document_requirement_deleted",
+        "document_requirements",
+        requirement_id,
+        {},
+    )
     return {"message": "Document requirement deleted"}
 
 

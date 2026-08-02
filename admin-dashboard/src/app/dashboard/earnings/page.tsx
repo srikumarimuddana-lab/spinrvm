@@ -42,9 +42,14 @@ export default function EarningsPage() {
     // The Referrals tab calls /api/admin/referrals/leaderboard, which is gated by
     // the `drivers` module on the backend. Only show it to admins who actually
     // have drivers access — otherwise they'd see the tab and hit a 403.
+    // Corporate + admin portal review, Admin #4: role === "admin" alone
+    // does NOT grant drivers access on the backend (only super_admin
+    // bypasses require_module), so it must not grant it here either —
+    // the previous check let exactly the 403 this comment warns about
+    // happen for any admin-role user without the drivers module.
     const user = useAuthStore((s) => s.user);
     const canSeeReferrals =
-        user?.role === "super_admin" || user?.role === "admin" || (user?.modules ?? []).includes("drivers");
+        user?.role === "super_admin" || (user?.modules ?? []).includes("drivers");
 
     if (!allowed) return null;
     return (

@@ -327,6 +327,20 @@ class TestAuditLogs:
         assert len(filters["$or"]) == 3
 
     @pytest.mark.asyncio
+    async def test_get_audit_logs_search_matches_entity_id_not_legacy_resource_id(self):
+        """SOC fix: every current writer (log_admin_action, log_user_action,
+        the PII-reveal endpoint) populates audit_logs.entity_id, not the
+        pre-migration-57 legacy resource_id column that nothing writes
+        anymore. Searching resource_id silently matched zero modern rows —
+        lock in entity_id so this doesn't regress."""
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+            await maint.get_audit_logs(limit=10, offset=0, action=None, entity_type=None, search="abc", _admin=ADMIN)
+        _, filters = mock.call_args.args
+        searched_fields = {list(clause.keys())[0] for clause in filters["$or"]}
+        assert searched_fields == {"actor_id", "entity_id", "details"}
+        assert "resource_id" not in searched_fields
+
+    @pytest.mark.asyncio
     async def test_get_audit_logs_blank_search_after_strip_ignored(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(limit=10, offset=0, action=None, entity_type=None, search="   ", _admin=ADMIN)

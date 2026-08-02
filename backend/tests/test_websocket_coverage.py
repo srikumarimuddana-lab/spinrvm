@@ -329,6 +329,23 @@ def test_location_batch_non_list_points_acks_zero(app_with_ws):
         _stop(patches)
 
 
+def test_location_batch_empty_points_list_acks_zero(app_with_ws):
+    # Regression test for #3175: a well-formed but empty points list
+    # previously fell through the `and points` truthiness guard and got no
+    # ack at all, unlike the not-a-list case above.
+    patches = _start(*_driver_auth_patches())
+    try:
+        client = TestClient(app_with_ws)
+        with client.websocket_connect(f"/ws/driver/{_DRIVER_USER['id']}") as ws:
+            ws.send_json({"type": "auth", "token": "tok"})
+            ws.receive_json()
+            ws.send_json({"type": "location_batch", "points": []})
+            msg = ws.receive_json()
+            assert msg == {"type": "location_batch_ack", "count": 0}
+    finally:
+        _stop(patches)
+
+
 @pytest.mark.anyio
 async def test_location_batch_rate_limit_exceeded(app_with_ws):
     extra = [

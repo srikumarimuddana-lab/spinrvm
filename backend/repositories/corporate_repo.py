@@ -1135,4 +1135,49 @@ async def update_corporate_subscription(subscription_id: str, patch: Dict[str, A
 
     return await run_sync(_fn)
 
+
+# ============ Corporate Section Budgets (visibility-only) Functions ============
+
+
+async def record_section_spend(*, section_id: str, month: str, amount: Decimal) -> Decimal:
+    """Atomically add `amount` to a section's running month-to-date spend
+    total via the corporate_section_spend_add RPC (migration 281) — a
+    single-statement upsert-increment, safe under concurrency without a
+    row lock. Visibility only: never raises for "over budget," there is no
+    budget-cap enforcement here. Returns the new running total.
+    """
+
+    def _fn():
+        return supabase.rpc(
+            "corporate_section_spend_add",
+            {"p_section_id": section_id, "p_month": month, "p_delta": str(amount)},
+        ).execute()
+
+    res = await run_sync(_fn)
+    data = getattr(res, "data", None)
+    return Decimal(str(data)) if data is not None else Decimal("0")
+
+
+async def get_section_spend_map(section_ids: List[str], month: str) -> Dict[str, Decimal]:
+    """Batch-read current month-to-date spend for a set of sections.
+
+    Returns {section_id: used}; a section with no rows for `month` (no
+    settled rides yet, or the column predates this feature) is simply
+    absent from the dict — callers should default missing keys to 0.
+    """
+    if not section_ids:
+        return {}
+
+    def _fn():
+        return (
+            supabase.table("corporate_section_spend")
+            .select("section_id,used")
+            .in_("section_id", section_ids)
+            .eq("month", month)
+            .execute()
+        )
+
+    rows = _rows_from_res(await run_sync(_fn))
+    return {r["section_id"]: Decimal(str(r.get("used") or 0)) for r in rows}
+
     return await run_sync(_ins)

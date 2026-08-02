@@ -118,7 +118,15 @@ async def forecast_demand(
     Uses historical averages by day-of-week/hour when data is available,
     otherwise falls back to the default demand pattern.
 
-    Returns list of {hour, day_name, predicted_rides, confidence, is_peak}.
+    Returns list of {hour, day_name, predicted_rides, data_basis, is_peak}.
+
+    ``data_basis`` describes what the number is grounded in — NOT a
+    statistical confidence interval. This module is a historical-average
+    lookup (see module docstring: "heuristic-based prediction engine"),
+    not a trained model with an actual error/uncertainty estimate.
+    Labeling it "high/medium/low confidence" (the pre-fix field name)
+    overstated the rigor behind a plain average-of-past-Tuesdays
+    calculation. Corporate + admin portal review, Admin #3.
     """
     historical = await _get_historical_hourly_demand(area_id, lookback_days)
     has_data = any(historical.get(d, {}).get(h, 0) > 0 for d in range(7) for h in range(24))
@@ -149,10 +157,10 @@ async def forecast_demand(
 
         if has_data:
             predicted = historical.get(day, {}).get(hour, 0)
-            confidence = "high" if lookback_days >= 14 else "medium"
+            data_basis = "historical_average" if lookback_days >= 14 else "limited_history"
         else:
             predicted = DEFAULT_HOURLY_PATTERN.get(hour, 0.3) * DAY_MULTIPLIERS.get(day, 1.0) * 10
-            confidence = "low"
+            data_basis = "default_pattern"
 
         is_peak = predicted >= peak_threshold and predicted > 0
 
@@ -162,7 +170,7 @@ async def forecast_demand(
                 "hour": hour,
                 "day_name": day_name,
                 "predicted_rides": round(predicted, 1),
-                "confidence": confidence,
+                "data_basis": data_basis,
                 "is_peak": is_peak,
             }
         )
@@ -195,6 +203,6 @@ async def get_forecast_summary(
         "total_predicted_24h": round(total_predicted, 0),
         "avg_hourly": avg_hourly,
         "peak_hours_count": len(peak_hours),
-        "confidence": current["confidence"] if current else "low",
+        "data_basis": current["data_basis"] if current else "default_pattern",
         "forecast": forecast,
     }

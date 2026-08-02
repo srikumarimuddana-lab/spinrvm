@@ -160,7 +160,7 @@ async def corporate_autotopup_loop() -> None:
         try:
             await run_autotopup_tick()
         except Exception as e:
-            logger.error("autotopup loop error: %s", e)
+            logger.error("autotopup loop error: %s", e, exc_info=True)
             _had_error = True
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "corporate_autotopup"})
         if _had_error:

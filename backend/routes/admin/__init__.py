@@ -19,7 +19,7 @@ could `POST /api/admin/staff` to create themselves as a super-admin.
 by server.py as a separate router and stays public so the dashboard
 can reach /api/admin/auth/login without a token.
 
-Auth coverage audit — 2026-05-06
+Auth coverage audit — 2026-05-06 (corrected 2026-08-02)
 ----------------------------------
 All admin API endpoints have been audited for authentication gating.
 Coverage is provided by two complementary mechanisms:
@@ -27,18 +27,36 @@ Coverage is provided by two complementary mechanisms:
 1. Router-level dependency (this file):
    ``admin_router = APIRouter(dependencies=[Depends(get_admin_user)])``
    covers every sub-router included via ``admin_router.include_router()``.
-   This is the primary gate for all sub-routers in this package.
+   This is the primary gate for all sub-routers in this package,
+   including ``monitoring_router`` (see below) and every ``require_module``/
+   ``require_super_admin``-gated sub-router further down this file.
 
 2. Per-handler ``Depends(get_admin_user)`` in function signatures:
-   Used by ``routes/admin/monitoring.py``, which is mounted directly on
-   ``app`` (not via ``admin_router``) in server.py. Every endpoint in
-   that file carries the dependency individually.
+   ``routes/admin/monitoring.py`` also carries the dependency on every
+   individual handler. Corporate + admin portal review, Admin #5: this
+   comment previously claimed monitoring.py was "mounted directly on
+   app (not via admin_router)" as the reason for the per-handler
+   dependency — that stopped being true when ``monitoring_router`` was
+   added to ``admin_router.include_router()`` below (with
+   ``require_module("dashboard")``), so it is now double-gated: the
+   router-level dependency, the module-gate at its include_router() call,
+   AND its own per-handler dependency. The per-handler checks are
+   redundant defense-in-depth now, not the sole gate the old comment
+   described — correcting the claim rather than removing the (harmless)
+   redundant checks themselves.
 
 Excluded from ``admin_router`` by design (public):
    - ``admin_auth_router`` (login, session, logout, MFA, refresh, unlock)
      — mounted separately by server.py; login must be reachable pre-auth.
 
-No unprotected admin API endpoints exist as of this audit.
+No unprotected admin API endpoints exist as of this audit. Scope note:
+this audit covers routers assembled into ``admin_router`` by this file.
+Corporate account/wallet routers (``routes/corporate_accounts.py``,
+``routes/corporate_wallet.py``) are a separate top-level ``routes/``
+module, not part of this package, and are mounted independently in
+server.py with their own ``require_module("corporate_accounts")`` gate
+(corporate + admin portal review, Critical #3) — out of this docstring's
+scope, not an omission from it.
 """
 
 from fastapi import APIRouter, Depends

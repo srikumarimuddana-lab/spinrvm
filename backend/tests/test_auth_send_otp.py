@@ -184,6 +184,35 @@ class TestVerifyOtpLockoutHelpers:
                 asyncio.run(auth._check_otp_lockout(PHONE))
         assert excinfo.value.status_code == 429
 
+    def test_record_otp_failure_at_threshold_emits_lockout_metric(self):
+        """Corporate + admin portal review, SOC gap #46: the lockout trigger
+        (5th failure) had no metric — an on-call engineer had no way to see
+        OTP brute-force activity on the infra monitoring page without
+        grepping logs for OTP_LOCKOUT_TRIGGERED."""
+        from backend.routes import auth
+
+        with (
+            patch("backend.routes.auth.redis_incr", AsyncMock(return_value=auth.settings.OTP_MAX_FAILURES)),
+            patch("backend.routes.auth.redis_expire", AsyncMock()),
+            patch("backend.routes.auth.redis_set", AsyncMock()),
+            patch("backend.routes.auth._audit_log_user", AsyncMock()),
+            patch("backend.routes.auth._metric_inc") as mock_inc,
+        ):
+            asyncio.run(auth._record_otp_failure(PHONE))
+        mock_inc.assert_called_once_with("spinr_auth_otp_lockout_total")
+
+    def test_record_otp_failure_below_threshold_does_not_emit_metric(self):
+        from backend.routes import auth
+
+        with (
+            patch("backend.routes.auth.redis_incr", AsyncMock(return_value=1)),
+            patch("backend.routes.auth.redis_expire", AsyncMock()),
+            patch("backend.routes.auth.redis_set", AsyncMock()),
+            patch("backend.routes.auth._metric_inc") as mock_inc,
+        ):
+            asyncio.run(auth._record_otp_failure(PHONE))
+        mock_inc.assert_not_called()
+
 
 class TestVerifyOtpDbErrorIsNotAWrongCode:
     """C3: if get_otp_record_by_phone raises (a DB blip), verify_otp must

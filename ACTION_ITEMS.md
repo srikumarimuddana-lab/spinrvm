@@ -1028,9 +1028,9 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         rider-with-active-ride/rider-without-active-ride/404/DB-exception-
         degrades-to-403 branches — the rider-facing safe projection was
         also asserted to strip PII fields), and `profile.py`'s
-        `get_driver_config` exception fallback,
-        `update_my_driver`'s auto-create-driver-row and vehicle-change →
-        `needs_review` re-review branches (asserting
+        `get_driver_config` exception fallback, `update_my_driver`'s
+        auto-create-driver-row and vehicle-change → `needs_review`
+        re-review branches (asserting
         `record_period_transition(driver_id, 0)` fires per the Period 0-3
         insurance state machine), `get_demand_heatmap`, and the
         destination-mode 404 branches. Test-only, no application code
@@ -2359,11 +2359,13 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
 
-### C6. `docker-image-scan` (Trivy): stale-pinned base image confirmed; msgpack mystery now solved (Trivy false positive)
-- [x] **Status:** done — both findings now fully explained. Base-image
-  staleness was fixed 2026-08-01 (digest refreshed, see update below). The
-  msgpack finding is **resolved: it's a Trivy tool false positive, not a
-  real vulnerable dependency** — see "msgpack mystery: SOLVED" below. The
+### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
+- [x] **Status:** done — but **the "false positive" conclusion recorded here
+  on 2026-08-01 was WRONG, and is corrected below.** Both findings were
+  genuine. Base-image staleness was fixed 2026-08-01 (digest refreshed).
+  The msgpack/setuptools findings were fixed 2026-08-02 by removing pip from
+  the runtime image (#3246) — see "CORRECTION 2026-08-02" below. Trivy was
+  reporting accurately the entire time. The
   actual scan-config remediation (stop Trivy from trusting a stale embedded
   SBOM) is filed as **CR-2026-002**, GitHub issue
   [#3048](https://github.com/srikumarimuddana-lab/spinrvm/issues/3048), and
@@ -2471,8 +2473,55 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   - **msgpack half of C6 is untouched and still open** — genuinely
     requires a real Docker build to investigate, which remains unavailable
     in this environment.
-- **msgpack mystery: SOLVED (2026-08-01), separately from the base-image
-  work above.** Investigated PR #3044's `docker-image-scan` job (run
+- **CORRECTION (2026-08-02): the "false positive" conclusion below is WRONG.**
+  The findings were real. A diagnostic step added to `docker-image-scan`
+  (#3113) and run on `main` at `24b3e49`
+  ([job 91442197631](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30727439028/job/91442197631))
+  inspected the built image directly and found:
+  - `pip list` → `msgpack 1.2.1`, `setuptools 83.0.0`, `pip 26.2`
+  - on disk → only `msgpack-1.2.1.dist-info` and `setuptools-83.0.0.dist-info`
+  - **`pip/_vendor/vendor.txt` → `msgpack==1.1.2` and `setuptools==70.3.0`**
+  - `docker image inspect … Config.Labels` → `null` (no Docker *attestation*)
+
+  A follow-up diagnostic by another contributor found the missing piece: pip
+  also ships its **own CycloneDX SBOM** at `pip/_vendor/bom.cdx.json`, listing
+  those two versions with proper `pkg:pypi/...` purls. Trivy auto-detects any
+  `*.cdx.json` / `*.spdx.json` inside a scanned image and — exactly as its own
+  `WARN Third-party SBOM may lead to inaccurate vulnerability detection` says —
+  prefers that component list over its live filesystem scan for vulnerability
+  matching, while still using the live scan for the per-file inventory table.
+  That is why the two tables in one Trivy run contradicted each other.
+
+  So both halves are true, and the original either/or framing was the mistake:
+  the versions really are declared inside the image (not invented by Trivy),
+  **and** Trivy reached them by preferring a third-party SBOM over its own scan.
+
+  **Two independent fixes have landed:**
+  1. **#3246** — pip removed from the runtime image after dependency install,
+     with a build-time assertion. This removes `bom.cdx.json` *and* pip's
+     vendored code, and takes a package manager out of a production image.
+     `G6 · Trivy container scan` passed for the first time on that PR.
+  2. **`skip-files: '**/pip/_vendor/bom.cdx.json'`** on all four trivy-action
+     steps (`ci.yml` ×2, `security-gates.yml` ×2), so Trivy ignores that one
+     file rather than trusting it.
+
+  With pip gone, (2) now targets a file that no longer exists — harmless, and
+  worth keeping as a guard in case pip ever returns to the image. **Note the
+  ordering risk:** `skip-files` alone would have been a suppression. Had it
+  landed without (1), pip's vendored code would still be in the image and the
+  scanner would have been configured not to see it.
+
+  **Why the original reasoning failed:** every check in the superseded block
+  below confirms the *application's* msgpack is 1.2.1. None looked for a
+  second copy, and none looked for an SBOM file inside the filesystem — only
+  for a Docker attestation label, which was legitimately `null`. "Our pin is
+  correct, therefore the scanner is wrong" skipped asking where else that
+  version string could come from.
+
+- ~~**msgpack mystery: SOLVED (2026-08-01)**~~ — **SUPERSEDED, see the
+  correction directly above. The conclusion in this block is incorrect and is
+  retained only because the reasoning error is instructive.** Investigated PR
+  #3044's `docker-image-scan` job (run
   `30713789884`, job `91406577991`) and the identical `G6 · Trivy container
   scan` job in `security-gates.yml` (run `30713789883`, job
   `91405783086`) — same PR, same commit, both Trivy invocations agree.
@@ -2608,6 +2657,18 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   backend/Supabase instance or a live corporate membership.
 
 ### C7. AI PR review is off by design (cost) — DECIDED 2026-08-01: stays off
+- **Duplicate of existing CRs — noted 2026-08-02.** This was filed as a new
+  finding without first searching `label:change-request`. It restates
+  [#2503](https://github.com/srikumarimuddana-lab/spinrvm/issues/2503)
+  ("Missing Anthropic credentials secret breaks the `review` CI check on
+  every PR", open since 2026-07-27) and
+  [#2497](https://github.com/srikumarimuddana-lab/spinrvm/issues/2497)
+  (closed, same ground). The decision recorded below — leave the key unset —
+  is the new part and stands; #2503 should be closed against it rather than
+  left open describing an unresolved problem. **Check the open CR list before
+  filing anything here**; several other entries from the same session turned
+  out to be tracked already (#2771 deploy-backend, #2656/#2861 backend-test
+  DSN, #3256 driver-app E2E, #3083 admin Playwright).
 - [x] **Status:** closed — **decision taken: leave `ANTHROPIC_API_KEY` unset.**
   The per-PR API spend is not justified at this repo's volume (~24 merged
   PRs/day). The workflow remains in the repo, scoped and skipping cleanly;

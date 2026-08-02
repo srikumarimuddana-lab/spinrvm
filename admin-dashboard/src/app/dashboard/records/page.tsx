@@ -73,8 +73,13 @@ function RecordsPageInner() {
     // Mirrors the exact checks each embedded page's own hook/inline gate
     // uses — kept as plain booleans here (no redirect side effect) since
     // multiple tabs with different requirements share this one page.
+    // Corporate + admin portal review, Admin #4: dropped the
+    // role === "admin" bypass — "admin" does not bypass the backend's
+    // require_module("compliance") check, so it must not bypass it here
+    // either (an admin-role user with no compliance module previously
+    // saw this tab and got 403'd on every call inside it).
     const isSuperAdmin = user?.role === "super_admin";
-    const hasComplianceModule = isSuperAdmin || user?.role === "admin" || (user?.modules ?? []).includes("compliance");
+    const hasComplianceModule = isSuperAdmin || (user?.modules ?? []).includes("compliance");
 
     const canView: Record<TabSlug, boolean> = {
         "data-transfer": isSuperAdmin,

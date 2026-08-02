@@ -6,7 +6,7 @@ import sys
 # Add the current directory to Python path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as _Request
 from starlette.responses import Response as _Response
@@ -15,6 +15,7 @@ from core.config import settings
 from core.lifespan import lifespan
 from core.middleware import init_middleware
 from core.security import init_firebase
+from dependencies import require_module
 
 _depr_logger = _logging.getLogger("spinr.deprecated_routes")
 
@@ -316,11 +317,11 @@ v1_api_router.include_router(documents_router)
 v1_api_router.include_router(admin_documents_router)
 v1_api_router.include_router(drivers_router)
 v1_api_router.include_router(admin_router)
-v1_api_router.include_router(corporate_accounts_router)
+v1_api_router.include_router(corporate_accounts_router, dependencies=[Depends(require_module("corporate_accounts"))])
 # Canonical /api/v1 twin for the corporate wallet admin routes
 # (/admin/corporate-accounts/{id}/wallet/...). Also mounted at /api below for
 # backward compat; the admin dashboard now calls the /api/v1 paths.
-v1_api_router.include_router(corporate_wallet_router)
+v1_api_router.include_router(corporate_wallet_router, dependencies=[Depends(require_module("corporate_accounts"))])
 v1_api_router.include_router(users_router)
 v1_api_router.include_router(addresses_router)
 v1_api_router.include_router(payments_router)
@@ -385,8 +386,10 @@ app.include_router(settings_router, prefix="/api/v1")
 # Mount admin routes under /api so the admin dashboard can reach them at /api/admin/...
 app.include_router(admin_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
-app.include_router(corporate_accounts_router, prefix="/api")
-app.include_router(corporate_wallet_router, prefix="/api")
+app.include_router(
+    corporate_accounts_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))]
+)
+app.include_router(corporate_wallet_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))])
 # Corporate member/allowance/domain endpoints served at root (`/company/{id}/...`)
 # because the rider app calls /company/{id}/policy and /company/{id}/allowances
 # without an /api prefix (verified in workProfileStore.ts). Do not remove until

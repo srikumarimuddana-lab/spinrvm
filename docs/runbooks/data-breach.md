@@ -76,11 +76,17 @@ SELECT COUNT(DISTINCT rider_id)
 FROM rides
 WHERE created_at BETWEEN '<breach_start>'::timestamptz AND '<breach_end>'::timestamptz;
 
--- Audit log entries for the affected endpoint / RLS bypass window
-SELECT COUNT(DISTINCT user_id)
+-- Audit log entries for the affected endpoint / RLS bypass window.
+-- audit_logs has no user_id column — entity_id is the affected record's
+-- ID (e.g. the rider/driver whose data the action touched); actor_id is
+-- who performed the action. For counting affected individuals, filter to
+-- the relevant entity_type so entity_id isn't counting unrelated rows
+-- (rides, corporate accounts, etc.) that happen to share the action name.
+SELECT COUNT(DISTINCT entity_id)
 FROM audit_logs
 WHERE created_at BETWEEN '<breach_start>'::timestamptz AND '<breach_end>'::timestamptz
-  AND action LIKE '%<endpoint>%';
+  AND action LIKE '%<endpoint>%'
+  AND entity_type IN ('users', 'drivers');
 ```
 
 ### 1c. Determine "real risk of significant harm" (PIPEDA threshold)

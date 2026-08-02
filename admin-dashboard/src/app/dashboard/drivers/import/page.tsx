@@ -198,7 +198,14 @@ export default function BulkImportPage() {
         if (!file || !report?.can_commit) return;
         setCommitting(true);
         try {
-            const res = await adminCommitDriverImport(file, importOpts());
+            // batch + validationToken must come from this exact report — the
+            // backend binds the token to (batch, CSV bytes, admin) and
+            // refuses commit otherwise (gap #45).
+            const res = await adminCommitDriverImport(file, {
+                ...importOpts(),
+                batch: report.batch,
+                validationToken: report.validation_token,
+            });
             if (res.committed) {
                 setCommittedSummary(
                     `Imported ${res.imported_drivers ?? 0} drivers (${res.imported_users ?? 0} accounts).` +

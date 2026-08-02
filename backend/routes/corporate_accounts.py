@@ -133,6 +133,19 @@ class CorporateAccountCreatedResponse(CorporateAccountDetailResponse):
     owner_bootstrap_error: bool = False
 
 
+class KYBReviewResponse(CorporateAccountDetailResponse):
+    """kyb-review response = the account + provisioning outcome. Approval is
+    a DB-status -> wallet -> Stripe-customer sequence with no compensating
+    rollback; same partial-success shape as CorporateAccountCreatedResponse's
+    owner_bootstrap_error, so a step failing after the status has already
+    flipped to 'active' is surfaced explicitly instead of raising a 503 that
+    hides the fact the status change already committed. Corporate + admin
+    portal review, gap #40."""
+
+    wallet_provisioning_error: bool = False
+    stripe_customer_creation_error: bool = False
+
+
 class CorporateAccountUpdate(BaseModel):
     """Staff update payload. M1.6: gained the rich B2B fields — previously the
     thin schema silently DROPPED legal_name/business_number/tax_region/
@@ -305,7 +318,7 @@ async def kyb_document_confirm(
     return {"success": True, "submitted_at": row.get("kyb_submitted_at")}
 
 
-@router.post("/{company_id}/kyb-review", response_model=CorporateAccountDetailResponse)
+@router.post("/{company_id}/kyb-review", response_model=KYBReviewResponse)
 async def kyb_review(
     company_id: str,
     decision: KYBReviewDecision,
@@ -316,6 +329,16 @@ async def kyb_review(
 
     Approve → status='active'. Reject → status='suspended' so the company
     can re-upload and be re-reviewed from the queue.
+
+    Approval is a DB-status -> wallet -> Stripe-customer sequence with no
+    compensating rollback for the status flip. Corporate + admin portal
+    review, gap #40: this used to raise a 503 from the wallet step, which
+    hid the fact that record_kyb_decision had already committed
+    status='active' — the admin saw a scary error for a company that was,
+    in fact, already approved. Same partial-success shape as
+    create_corporate_account's owner_bootstrap_error: each provisioning
+    step is independently caught, logged loudly (ops follow-up), and
+    surfaced as a boolean on the response instead of raised.
     """
     _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
 
@@ -330,31 +353,44 @@ async def kyb_review(
     if not row:
         raise HTTPException(status_code=404, detail="Corporate account not found")
 
+    wallet_provisioning_error = False
+    stripe_customer_creation_error = False
     if decision.approve:
         try:
             await ensure_corporate_wallet(company_id=normalized_id)
-        except Exception as wallet_err:
-            logger.error(f"[KYB] Wallet creation failed for company {normalized_id}: {wallet_err}")
-            raise HTTPException(
-                status_code=503,
-                detail="KYB approved but wallet provisioning failed — please retry",
-            ) from wallet_err
+        except Exception:
+            logger.error(
+                "[KYB] Wallet creation failed for company %s — status is already 'active' with no "
+                "wallet; needs manual follow-up (re-run kyb-review or provision the wallet directly).",
+                normalized_id,
+                exc_info=True,
+            )
+            wallet_provisioning_error = True
         if not row.get("stripe_customer_id"):
-            settings = await get_app_settings()
-            stripe_secret = settings.get("stripe_secret_key", "")
-            if stripe_secret:
-                import stripe
+            try:
+                settings = await get_app_settings()
+                stripe_secret = settings.get("stripe_secret_key", "")
+                if stripe_secret:
+                    import stripe
 
-                customer = await asyncio.to_thread(
-                    lambda: stripe.Customer.create(
-                        email=row.get("billing_email"),
-                        name=row.get("legal_name") or row.get("name"),
-                        metadata={"corporate_account_id": normalized_id},
-                        api_key=stripe_secret,
-                        idempotency_key=f"cus-create-corp-{normalized_id}",
+                    customer = await asyncio.to_thread(
+                        lambda: stripe.Customer.create(
+                            email=row.get("billing_email"),
+                            name=row.get("legal_name") or row.get("name"),
+                            metadata={"corporate_account_id": normalized_id},
+                            api_key=stripe_secret,
+                            idempotency_key=f"cus-create-corp-{normalized_id}",
+                        )
                     )
+                    await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
+            except Exception:
+                logger.error(
+                    "[KYB] Stripe customer creation failed for company %s — status is already 'active' "
+                    "with no Stripe customer; needs manual follow-up before the first billing event.",
+                    normalized_id,
+                    exc_info=True,
                 )
-                await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
+                stripe_customer_creation_error = True
 
     # M2.3: notify the company of the decision — best-effort; the portal's
     # verification page (derived state + review note) is the durable signal.
@@ -398,6 +434,8 @@ async def kyb_review(
                 "decision": "approved" if decision.approve else "rejected",
                 "reviewer_id": current_admin["id"],
                 "note": decision.note,
+                "wallet_provisioning_error": wallet_provisioning_error,
+                "stripe_customer_creation_error": stripe_customer_creation_error,
             },
         )
     except Exception as _ae:
@@ -406,7 +444,11 @@ async def kyb_review(
             exc_info=True,
         )
 
-    return row
+    return {
+        **row,
+        "wallet_provisioning_error": wallet_provisioning_error,
+        "stripe_customer_creation_error": stripe_customer_creation_error,
+    }
 
 
 @router.get("/{company_id}/kyb/view")
@@ -766,7 +808,11 @@ async def change_company_status(
                     stripe_customer_id=row.get("stripe_customer_id"),
                     actor_user_id=str(current_admin.get("id") or ""),
                 )
-                if winddown_result.get("stripe_error") or winddown_result.get("unrefundable_amount", "0.00") != "0.00":
+                if (
+                    winddown_result.get("stripe_error")
+                    or winddown_result.get("unrefundable_amount", "0.00") != "0.00"
+                    or winddown_result.get("ledger_write_failed")
+                ):
                     logger.error(
                         "Corporate wallet close wind-down incomplete for company %s: %s",
                         normalized_id,

@@ -16,6 +16,14 @@ export interface DriverImportReport {
     counts: { rows: number; users: number; drivers: number; updated: number; skipped_resume: number };
     warnings: DriverImportReportItem[];
     errors: DriverImportReportItem[];
+    // Proves a /validate call happened for this exact (batch, CSV bytes,
+    // admin) — /commit requires it back. See corporate + admin portal
+    // review, gap #45. Optional: the locally-reconstructed "commit was
+    // refused, here's why" report (built from DriverImportCommitResult
+    // when the backend re-validation fails) never carries one — that's
+    // fine, since the fix is always to re-validate anyway, which mints
+    // a fresh token.
+    validation_token?: string;
 }
 export interface DriverImportCommitResult {
     batch: string;
@@ -33,6 +41,9 @@ export interface DriverImportOptions {
     serviceAreaId?: string;
     serviceAreaName?: string;
     batch?: string;
+    // Required for /commit (gap #45) — pass report.validation_token from
+    // the preceding /validate call. Omitted for /validate itself.
+    validationToken?: string;
 }
 
 function driverImportFormData(file: File, opts?: DriverImportOptions): FormData {
@@ -41,6 +52,7 @@ function driverImportFormData(file: File, opts?: DriverImportOptions): FormData 
     if (opts?.serviceAreaId) fd.append("service_area_id", opts.serviceAreaId);
     if (opts?.serviceAreaName) fd.append("service_area_name", opts.serviceAreaName);
     if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.validationToken) fd.append("validation_token", opts.validationToken);
     return fd;
 }
 

@@ -67,6 +67,7 @@ async def refund_wallet_balance_on_close(
         "stripe_refund_ids": [],
         "stripe_error": None,
         "skipped_reason": None,
+        "ledger_write_failed": False,
     }
 
     wallet = await db_supabase.get_corporate_wallet_by_company(company_id)
@@ -148,16 +149,41 @@ async def refund_wallet_balance_on_close(
         remaining -= refund_amount
 
     if refunded_total > 0:
-        await apply_adjustment(
-            wallet_id=wallet_id,
-            amount=-refunded_total,
-            notes=(
-                f"Corporate account closed — wallet balance refunded to Stripe "
-                f"customer {stripe_customer_id} ({len(stripe_refund_ids)} refund(s))"
-            ),
-            actor_user_id=actor_user_id or "system",
-            floor=Decimal("0"),
-        )
+        # Corporate + admin portal review, High #3: this write was previously
+        # unwrapped — if it raised after one or more Stripe refunds already
+        # succeeded above, the exception propagated out of this function
+        # entirely, and the refunded_total/stripe_refund_ids computed so far
+        # were lost from the return value. The caller's generic exception
+        # handler then recorded only "unhandled_exception," with no trace of
+        # money that had already left the platform's Stripe balance. On a
+        # terminal (un-reopenable) company that's a silent, unrecoverable
+        # ledger/Stripe divergence. Now the real Stripe outcome is always
+        # returned, with ledger_write_failed flagging the divergence for
+        # finance/ops follow-up instead of losing it to an uncaught raise.
+        try:
+            await apply_adjustment(
+                wallet_id=wallet_id,
+                amount=-refunded_total,
+                notes=(
+                    f"Corporate account closed — wallet balance refunded to Stripe "
+                    f"customer {stripe_customer_id} ({len(stripe_refund_ids)} refund(s))"
+                ),
+                actor_user_id=actor_user_id or "system",
+                floor=Decimal("0"),
+            )
+        except Exception as ledger_exc:
+            logger.error(
+                "Corporate wallet close: %s in Stripe refunds succeeded (ids=%s) but the "
+                "ledger debit failed for company=%s wallet=%s — wallet balance no longer "
+                "matches what Stripe actually refunded; manual reconciliation required: %s",
+                refunded_total.quantize(_CENTS),
+                stripe_refund_ids,
+                company_id,
+                wallet_id,
+                ledger_exc,
+                exc_info=True,
+            )
+            result["ledger_write_failed"] = True
 
     result["refunded_total"] = str(refunded_total.quantize(_CENTS))
     result["unrefundable_amount"] = str((balance - refunded_total).quantize(_CENTS))

@@ -25,7 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from "expo-router/react-navigation";
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore, type User, type Driver } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';

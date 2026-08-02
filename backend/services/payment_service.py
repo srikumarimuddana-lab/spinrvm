@@ -452,6 +452,18 @@ async def settle_corporate(
                 amount=_f(allowance_debit),
                 actor_user_id=membership.get("user_id") or ride.get("rider_id"),
                 notes=f"ride:{ride_id}:allowance",
+                # Corporate + admin portal review, Critical #2: this call
+                # previously passed no floor at all, so the master-wallet
+                # floor check never engaged for the allowance-funded debit
+                # path — only the master-fallback debit three lines below
+                # was floor-protected. The per-member allowance ceiling
+                # (migration 258) bounds one member's spend per period; it
+                # does nothing to protect the shared master wallet balance
+                # across the whole company, so without this floor an
+                # allowance-funded ride could push the master wallet
+                # unboundedly negative. Matches the master-fallback call's
+                # floor below.
+                floor=0.0,
             )
             allowance_applied = True
         except Exception as _cap_err:
@@ -466,7 +478,8 @@ async def settle_corporate(
             _details_attr = getattr(_cap_err, "details", None)
             if isinstance(_details_attr, dict):
                 _detail = str(_details_attr.get("original") or "")
-            if "allowance_cap_exceeded" in f"{_cap_err} {_detail}":
+            _cap_err_text = f"{_cap_err} {_detail}"
+            if "allowance_cap_exceeded" in _cap_err_text:
                 logger.warning(
                     "corporate allowance cap hit under contention for member %s ride %s — "
                     "routing fare to master wallet",
@@ -475,6 +488,26 @@ async def settle_corporate(
                 )
                 master_debit = total
                 allowance_debit = _round(Decimal("0"))
+            elif "wallet_below_floor" in _cap_err_text:
+                # The master wallet itself would go below its floor even for
+                # this allowance-covered ride (Critical #2's new floor check).
+                # Unlike the allowance_cap_exceeded case, rerouting to the
+                # master-fallback debit below would just hit the identical
+                # floor again — there is genuinely no money available for
+                # this ride within policy. Fail the same way the
+                # master-fallback debit's own floor breach already does.
+                logger.error(
+                    "[PAYMENT] company %s master wallet at floor — cannot cover allowance debit for ride %s: %s",
+                    company_id,
+                    ride_id,
+                    _cap_err,
+                )
+                await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+                return PaymentResult(
+                    success=False,
+                    error="Corporate payment failed — please retry.",
+                    status_code=503,
+                )
             else:
                 raise
 

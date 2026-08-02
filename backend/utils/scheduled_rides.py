@@ -34,7 +34,18 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.redis_client import redis_set_nx  # type: ignore[no-redef]
 
+try:
+    from .metrics import inc as _metric_inc
+except ImportError:
+    from utils.metrics import inc as _metric_inc  # type: ignore[no-redef]
+
 logger = logging.getLogger(__name__)
+
+# Candidates-per-tick cap in check_scheduled_rides(). Ordered ascending by
+# scheduled_time, so hitting this cap defers the *latest*-due rows to the next
+# tick rather than causing incorrect dispatch order — but it's still a signal
+# worth watching as scheduled-ride volume grows.
+_SCHEDULED_RIDES_TICK_LIMIT = 100
 
 
 async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict) -> None:
@@ -273,7 +284,7 @@ async def check_scheduled_rides():
                 "is_scheduled": True,
                 "status": "scheduled",
             },
-            limit=100,
+            limit=_SCHEDULED_RIDES_TICK_LIMIT,
             order="scheduled_time",
             columns="id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address",
         )
@@ -281,6 +292,16 @@ async def check_scheduled_rides():
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(f"Failed to fetch scheduled rides: {e} | original={original}", exc_info=True)
         return
+
+    if len(scheduled) >= _SCHEDULED_RIDES_TICK_LIMIT:
+        # Every row this tick will still dispatch in scheduled_time order, but
+        # anything beyond the cap is deferred to the next tick — worth knowing
+        # about before it turns into a real dispatch-latency regression.
+        logger.warning(
+            f"scheduled_rides: tick hit the {_SCHEDULED_RIDES_TICK_LIMIT}-row candidate cap; "
+            "some due/near-due scheduled rides are deferred to the next tick"
+        )
+        _metric_inc("spinr_dispatch_scheduled_candidates_capped_total")
 
     for ride in scheduled:
         scheduled_time_str = ride.get("scheduled_time")

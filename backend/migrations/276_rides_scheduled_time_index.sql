@@ -1,0 +1,26 @@
+-- 276_rides_scheduled_time_index.sql
+-- Index rides.scheduled_time to support the scheduled-ride dispatcher's sort.
+--
+-- Background:
+--   utils/scheduled_rides.py's check_scheduled_rides() reads candidates via
+--   idx_rides_scheduled (is_scheduled, status) — narrow and well-indexed —
+--   then ORDER BY scheduled_time ASC, capped at limit=100 per tick, so the
+--   earliest-due rides dispatch first even if the pending count exceeds the
+--   cap. That ORDER BY had no supporting index: fine while the filtered
+--   candidate set stays small, but as scheduled-ride volume grows (e.g.
+--   corporate recurring bookings) it becomes an unindexed sort on every tick,
+--   every replica, every 60s.
+--
+-- Index choice:
+--   A plain btree on scheduled_time. Not composed with (is_scheduled, status)
+--   because idx_rides_scheduled already narrows the row set efficiently;
+--   Postgres can bitmap-AND the two indexes, or the planner may prefer to
+--   walk this one and filter, either of which is cheap. Partial-indexing on
+--   status='scheduled' was considered but rejected — status changes on every
+--   dispatch, and a predicate index tied to a mutable column needs constant
+--   re-evaluation for the same win a plain index already gets here.
+--
+-- Rollback:
+--   DROP INDEX IF EXISTS idx_rides_scheduled_time;
+
+CREATE INDEX IF NOT EXISTS idx_rides_scheduled_time ON public.rides (scheduled_time);

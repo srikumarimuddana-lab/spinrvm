@@ -17,7 +17,7 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { useBottomSheetGuard } from '../useBottomSheetGuard';
 
 let focusCallback: undefined | (() => void);
-jest.mock('@react-navigation/native', () => ({
+jest.mock('expo-router/react-navigation', () => ({
   useFocusEffect: (cb: () => void) => {
     focusCallback = cb;
   },

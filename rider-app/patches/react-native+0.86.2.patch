@@ -106,7 +106,7 @@ index 5ce30f3..428ffb8 100644
  export type RefreshControlPropsIOS = Readonly<{
    /**
 diff --git a/node_modules/react-native/Libraries/Components/Switch/Switch.js b/node_modules/react-native/Libraries/Components/Switch/Switch.js
-index 8d3c553..ce4ef96 100644
+index d441435..e927210 100644
 --- a/node_modules/react-native/Libraries/Components/Switch/Switch.js
 +++ b/node_modules/react-native/Libraries/Components/Switch/Switch.js
 @@ -16,7 +16,7 @@ import type {ViewProps} from '../View/ViewPropTypes';
@@ -238,7 +238,7 @@ index a668765..3d96b9c 100644
          <DebuggingOverlayNativeComponent
            ref={nativeComponentRef}
 diff --git a/node_modules/react-native/Libraries/Modal/Modal.js b/node_modules/react-native/Libraries/Modal/Modal.js
-index 1fabac7..2beef39 100644
+index 28233e6..d2e2eac 100644
 --- a/node_modules/react-native/Libraries/Modal/Modal.js
 +++ b/node_modules/react-native/Libraries/Modal/Modal.js
 @@ -17,10 +17,107 @@ import NativeEventEmitter from '../EventEmitter/NativeEventEmitter';

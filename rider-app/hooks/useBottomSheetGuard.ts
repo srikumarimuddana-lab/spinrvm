@@ -1,5 +1,5 @@
 import { useCallback, useRef, type RefObject } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from 'expo-router/react-navigation';
 import type BottomSheet from '@gorhom/bottom-sheet';
 
 type LayoutEvent = { nativeEvent: { layout: { height: number } } };

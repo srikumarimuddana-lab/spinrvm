@@ -1183,13 +1183,13 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         background loops; regulatory-adjacent (Saskatchewan Transportation
         Act driver-eligibility — expired documents must suspend the driver).
     - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
-      scoping note** (55 more files, not itemized individually here —
-      notable remaining large ones: `routes/webhooks.py` 75.40%/748 stmts
-      Stripe-adjacent, `routes/promotions.py` 65.85%,
-      `repositories/driver_repo.py` 72.99%, `routes/disputes.py`
-      73.88% — full list reproducible via the same `--cov=.` command
-      above; a future session should re-run it rather than trust this
-      snapshot going stale).
+      scoping note** (~54 more files remaining, not itemized individually
+      here — notable remaining large ones: `routes/webhooks.py`
+      75.40%/748 stmts Stripe-adjacent, `repositories/driver_repo.py`
+      72.99%, `routes/disputes.py` 73.88% — full list reproducible via the
+      same `--cov=.` command above; a future session should re-run it
+      rather than trust this snapshot going stale). `routes/promotions.py`
+      65.85% was also named here and is now closed — see below.
       - `utils/payment_retry.py` — **CLOSED, 72.54% → 99%** (2026-08-02,
         244 stmts, 67→2 missing; measured via
         `pytest tests/test_payment_retry.py tests/test_payment_retry_coverage.py
@@ -1224,6 +1224,31 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         this test harness (same documented pattern as prior Sub-tier B
         files). See
         `docs/change-log/2026-08-02-a1c-payment-retry-coverage.md`.
+      - `routes/promotions.py` — **CLOSED, 65.85% → 93%** (2026-08-02, 328
+        stmts, measured via `pytest tests/test_promotions_coverage.py
+        tests/test_p2_promo_wallet_loyalty.py tests/test_promo_discount_parity.py
+        tests/test_promo_per_user_race.py tests/test_promo_rate_limit.py
+        tests/test_ai_tools_booking.py tests/test_create_ride_post_insert_branches.py
+        tests/test_admin_rides_coverage.py tests/test_admin_rides_read_endpoints_coverage.py
+        tests/test_p3_promo_concurrency.py --cov=routes.promotions
+        --cov-report=term-missing`). Existing test files covered rules 1-4
+        of `_validate_promo_for_user`'s 10-rule engine (expiry, total-usage,
+        per-user limit, min fare) and flat/percentage discount math but
+        nothing on rules 5-10 (private coupon, first-ride-only, new-user-only,
+        inactive-user targeting, min/max ride count, budget cap), the
+        `free_ride` branch, the `ride_id` server-side fare re-fetch branch,
+        the malformed-expiry catch, or most of `list_available_promos` (the
+        `/promo/available` engine — service-area resolution, ineligible-but-
+        shown min-fare marking, per-promo exception isolation, sorting).
+        Added `backend/tests/test_promotions_coverage.py` (41 tests). Also
+        found and documented (not fixed) that this module's `admin_router`
+        (4 CRUD functions) is dead code — never mounted in
+        `backend/server.py` (only `routes/admin/promotions.py`'s router is,
+        for the live `/api/admin/promotions` surface); exercised directly as
+        plain functions for coverage purposes only. Test-only, no
+        application code changed. Full suite re-run after: 8456 passed (was
+        8415), 8 skipped, 1 xfailed, 0 failed. See
+        `docs/change-log/2026-08-02-a1c-promotions-coverage.md`.
     - First file since this scoping pass picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB

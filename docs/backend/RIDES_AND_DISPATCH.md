@@ -225,19 +225,31 @@ Admin manual override (`surge_source='manual'`) is preserved. Sub-areas (airport
 
 ## 6. Scheduled rides (`utils/scheduled_rides.py`)
 
-Loop every 60 s:
+Loop every 60 s (±6 s jitter, so replicas don't all wake on the same tick boundary):
 
 ```
-for ride in (is_scheduled=true, status='scheduled'|'searching'):
+for ride in (is_scheduled=true, status='scheduled'):   # 'scheduled' ONLY — see CR-2 below
   if now within 10 min of scheduled_time and not reminder_sent:
       push reminder; mark reminder_sent=true
   if now >= scheduled_time and not scheduled_dispatched:
-      status = 'searching'; scheduled_dispatched = true
+      atomic claim: UPDATE rides SET status='searching', scheduled_dispatched=true
+                    WHERE id=? AND status='scheduled'   # 0 rows = another replica already won
       await match_driver_to_ride(ride_id)
       push "Your scheduled ride is starting!"
 ```
 
-Idempotent via two flags (`reminder_sent`, `scheduled_dispatched`).
+Idempotent via two flags (`reminder_sent`, `scheduled_dispatched`), plus an atomic
+`status='scheduled'`-filtered claim so only one replica/tick can win the dispatch race.
+
+**CR-2**: the query used to also match `status='searching'`, which meant a
+correctly-parked scheduled ride was invisible to this loop once dispatched by
+another path and never re-checked. Fixed to filter on `status='scheduled'`
+only; regression-tested in `test_check_queries_scheduled_status`. Do not
+reintroduce the wider filter.
+
+If the rider already has another active ride when the scheduled pickup time
+arrives, the claim fails on the `rides_one_active_per_rider` constraint and
+the ride is deferred to a later tick rather than dispatched.
 
 ---
 

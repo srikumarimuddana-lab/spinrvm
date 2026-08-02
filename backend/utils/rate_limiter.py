@@ -162,6 +162,27 @@ def get_phone_based_key(request: Request) -> str:
     return f"ip:{get_real_client_ip(request)}"
 
 
+def get_company_booking_key(request: Request) -> str:
+    """Key company guest-booking rate limiting by company, not raw IP.
+
+    Corporate + admin portal review, gap #41: an IP-keyed limit is
+    defeated by rotating source IPs (cheap via any VPN/proxy pool) — the
+    caller must already be an authenticated, active member of company_id
+    (require_company_member runs before this limit is checked, since it's
+    a route dependency, not the decorator's own concern), so scoping to
+    company_id closes the free-IP-rotation SMS-bomb bypass without
+    needing a second DB round-trip inside the key function itself.
+    company_id is read from the URL path, which every route this limiter
+    is applied to (/company/{company_id}/bookings) always has — the IP
+    fallback below only matters if this limiter is ever reused on a route
+    without that path param.
+    """
+    company_id = request.path_params.get("company_id")
+    if company_id:
+        return f"company_booking:{company_id}"
+    return f"ip:{get_real_client_ip(request)}"
+
+
 # ============================================================================
 # Rate Limit Decorators
 # ============================================================================
@@ -232,8 +253,10 @@ ride_read_limit = default_limiter.limit("120/minute")
 # Corporate guest bookings: each one fires 2-3 customer SMS, so this is an
 # SMS-cost/abuse bound as much as a booking bound. 30/hour comfortably covers
 # a busy showroom desk. (The /company + /api/company double-mount tracks
-# each prefix separately — accepted caveat, see server.py.)
-company_booking_limit = default_limiter.limit("30/hour")
+# each prefix separately — accepted caveat, see server.py.) Keyed by
+# company_id (get_company_booking_key), not IP — see gap #41: IP-only
+# keying let a caller rotate source IPs to bypass the cap entirely.
+company_booking_limit = default_limiter.limit("30/hour", key_func=get_company_booking_key)
 
 # Promo enumeration guard - max 20 per minute
 promo_available_limit = default_limiter.limit("20/minute")

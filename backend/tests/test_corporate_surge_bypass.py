@@ -344,6 +344,11 @@ def _patch_create_ride_deps(*, captured: dict, surge: float = 1.5):
         "routes.rides._deps.db_supabase.get_corporate_wallet_by_company": AsyncMock(
             return_value={"id": _WALLET_ID, "balance": 500.0}
         ),
+        # require_company_bookable() (scheduled-rides gap review, Finding #20)
+        # blocks anything not literally "active" — without this the
+        # company_allowance/work_profile tests 403 before reaching insert,
+        # since the real get_corporate_account_by_id is otherwise unmocked.
+        "routes.rides._deps.db_supabase.get_corporate_account_by_id": AsyncMock(return_value={"status": "active"}),
     }
 
 

@@ -104,6 +104,22 @@ this change's blast radius.
   *status* pre-check that runs before it.
 - No interaction with money movement — this is a pre-dispatch/pre-booking
   gate, not a settlement-path change.
+- **Post-push CI finding (fixed in this same PR, folded into this entry
+  rather than a separate log)**: `backend/tests/test_corporate_surge_bypass.py`
+  failed in CI (`test_corporate_explicit_company_allowance_persists_surge_one`,
+  `assert None == 1.0`) — its shared `_patch_create_ride_deps()` fixture
+  never mocked `get_corporate_account_by_id`. The prior narrower inline
+  check tolerated that (an unmocked/falsy response isn't literally
+  `"suspended"`/`"closed"`, so it passed through); the new broader
+  `require_company_bookable` correctly rejects it (falsy status ≠
+  `"active"`), 403ing before the ride reached `insert_ride` and leaving the
+  test's `captured` dict empty. This is a real gap in the test's fixture,
+  not a behavior bug — fixed by adding
+  `"routes.rides._deps.db_supabase.get_corporate_account_by_id":
+  AsyncMock(return_value={"status": "active"})` to the shared fixture dict
+  (all 16 tests in the file re-verified green locally afterward). Grepped
+  the rest of the backend suite for the same gap via the full CI run itself
+  (7264 collected, only this one test failed) — no other test file hit it.
 
 ## 5. User-experience effect
 
@@ -131,6 +147,7 @@ only gates new bookings.
 | `backend/routes/corporate_company_bookings.py` | `_require_company_active` now delegates to `require_company_bookable` | Remove duplicated logic; gain kill-switch support |
 | `backend/tests/services/test_corporate_policy_service.py` | New tests for `require_company_bookable`: active/suspended/pending_verification/missing-company, kill-switch skip (with `assert_not_awaited` on the DB call), settings-not-provided fetch path | Cover the shared function directly, including the new `pending_verification`-blocking behavior |
 | `backend/tests/test_create_ride_remaining_branches.py` | Fixed 5 tests' mock patch target: `require_company_bookable`'s own local `from .. import db_supabase` reaches the real `backend.db_supabase` singleton, which the tests' whole-module `patch("...\_deps.db_supabase")` replace does not intercept; added `patch("backend.db_supabase.get_corporate_account_by_id", ...)` alongside the existing `_deps`-scoped mock. Also fixed 2 more tests (suspended/closed) that were passing only by accident (an unmocked real DB call happened to return non-active) | Regression fix surfaced by this refactor; also closes a latent test-isolation bug independent of this change |
+| `backend/tests/test_corporate_surge_bypass.py` | Added `get_corporate_account_by_id` mock (`{"status": "active"}`) to the shared `_patch_create_ride_deps()` fixture | CI-caught regression: the fixture never mocked this call; the old narrower check tolerated the resulting falsy status, the new broader one correctly rejects it |
 
 ## 7. Before / after
 

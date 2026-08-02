@@ -108,6 +108,77 @@ def test_geofence_valid_passes(test_client, rider_override):
     assert resp.status_code == 200, resp.text
 
 
+# ── geofence_enforced=False annotation ──────────────────────────────────
+# Corporate + admin portal review, round 2: "geofence policy is
+# configurable ... and silently does nothing" — services/
+# corporate_policy_service.py's evaluate_policy_for_ride permanently
+# defers this rule pending PostGIS, but nothing told an API caller that.
+# No UI control exists to hide (checked — no frontend references
+# allowed_geofence at all), so the fix is response-level transparency.
+
+
+def test_get_policy_flags_geofence_unenforced_when_set(test_client, rider_override):
+    stored = {"id": "p1", "allowed_geofence": {"type": "FeatureCollection", "features": []}}
+    with (
+        _as_admin(),
+        patch(_ROUTE + "get_corporate_policy", AsyncMock(return_value=stored)),
+    ):
+        resp = test_client.get("/company/c1/policy")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["geofence_enforced"] is False
+
+
+def test_get_policy_no_flag_when_geofence_unset(test_client, rider_override):
+    stored = {"id": "p1", "max_fare_per_ride": 80}
+    with (
+        _as_admin(),
+        patch(_ROUTE + "get_corporate_policy", AsyncMock(return_value=stored)),
+    ):
+        resp = test_client.get("/company/c1/policy")
+    assert resp.status_code == 200, resp.text
+    assert "geofence_enforced" not in resp.json()
+
+
+def test_replace_policy_flags_geofence_unenforced(test_client, rider_override):
+    upserted = {
+        "id": "p1",
+        "allowed_geofence": {"type": "FeatureCollection", "features": []},
+    }
+    with (
+        _as_admin(),
+        patch(_ROUTE + "upsert_corporate_policy", AsyncMock(return_value=upserted)),
+        patch(_ROUTE + "log_user_action", AsyncMock()),
+    ):
+        resp = test_client.put(
+            "/company/c1/policy",
+            json={
+                "allowed_payment_source": "allowance_only",
+                "allowed_geofence": {
+                    "type": "FeatureCollection",
+                    "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}}],
+                },
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["geofence_enforced"] is False
+
+
+def test_patch_policy_flags_geofence_unenforced():
+    """Unit-level: doesn't need the app/RBAC scaffolding — directly proves
+    _annotate_geofence_enforcement's contract used by patch_policy."""
+    from routes.corporate_company import _annotate_geofence_enforcement
+
+    with_geofence = {"id": "p1", "allowed_geofence": {"type": "FeatureCollection", "features": []}}
+    without = {"id": "p1", "max_fare_per_ride": 80}
+    empty = {}
+
+    assert _annotate_geofence_enforcement(with_geofence)["geofence_enforced"] is False
+    assert "geofence_enforced" not in _annotate_geofence_enforcement(without)
+    assert _annotate_geofence_enforcement(empty) == {}
+    # Never mutates the input dict in place.
+    assert "geofence_enforced" not in with_geofence
+
+
 # ── list_members status filter ──────────────────────────────────────────
 
 

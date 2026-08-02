@@ -111,6 +111,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company"])
 
 
+def _annotate_geofence_enforcement(policy: dict) -> dict:
+    """Stamp geofence_enforced=False whenever a policy has allowed_geofence
+    set. Corporate + admin portal review, round 2: "geofence policy ...
+    silently does nothing" — services/corporate_policy_service.py's
+    evaluate_policy_for_ride permanently defers this rule pending PostGIS
+    (see its own "DEFERRED" comment), but nothing told an API caller that.
+    Never mutates the row that was actually stored/returned by the DB —
+    only adds this one derived, read-only field to the response dict.
+    """
+    if policy and policy.get("allowed_geofence"):
+        return {**policy, "geofence_enforced": False}
+    return policy
+
+
 def _validate_geofence(geofence: Optional[dict]) -> None:
     """Raise 422 if geofence is not a valid minimal GeoJSON FeatureCollection."""
     if geofence is None:
@@ -660,7 +674,7 @@ async def get_policy(
     screen can display the policy summary ("Max $80/ride, Mon–Fri 9am–7pm").
     Returns an empty dict when no policy has been configured yet.
     """
-    return await get_corporate_policy(company_id) or {}
+    return _annotate_geofence_enforcement(await get_corporate_policy(company_id) or {})
 
 
 @router.put("/policy")
@@ -705,7 +719,7 @@ async def replace_policy(
     except Exception:
         logger.error("Audit log failed for corporate_policy_replaced company=%s", company_id, exc_info=True)
 
-    return result
+    return _annotate_geofence_enforcement(result)
 
 
 @router.patch("/policy")
@@ -721,7 +735,7 @@ async def patch_policy(
     """
     patch = body.model_dump(exclude_none=True)
     if not patch:
-        return await get_corporate_policy(company_id) or {}
+        return _annotate_geofence_enforcement(await get_corporate_policy(company_id) or {})
 
     if "allowed_payment_source" in patch and hasattr(patch["allowed_payment_source"], "value"):
         patch["allowed_payment_source"] = patch["allowed_payment_source"].value
@@ -748,7 +762,7 @@ async def patch_policy(
     except Exception:
         logger.error("Audit log failed for corporate_policy_patched company=%s", company_id, exc_info=True)
 
-    return result
+    return _annotate_geofence_enforcement(result)
 
 
 # ---------- Billing (Plan 6) ----------

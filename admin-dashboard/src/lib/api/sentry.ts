@@ -47,10 +47,21 @@ export interface SentryConfig {
     surfaces: SentrySurfaceConfig[];
 }
 
+/** One surface whose Sentry read failed while others succeeded. */
+export interface SentrySurfaceError {
+    surface: string;
+    project: string;
+    detail: string;
+}
+
 export interface SentryIssuesResponse {
     issues: SentryIssue[];
     count: number;
     surfaces: string[];
+    /** Surfaces that failed to load. Non-empty means the list is incomplete. */
+    errors: SentrySurfaceError[];
+    /** True when at least one surface failed — the view is partial, not empty. */
+    partial: boolean;
     status: string;
     stats_period: string;
     per_project_limit: number;
@@ -85,7 +96,14 @@ export interface SentryIssueDetail extends SentryIssue {
     exceptions: SentryException[];
     event_id: string | null;
     event_timestamp: string | null;
+    /**
+     * Allowlisted event tags only — the backend drops SDK-auto-attached tags
+     * (`url`, `user`, `server_name`, …) that fall outside the PII-scrubbing
+     * contract, so this is never the full Sentry tag set.
+     */
     tags: SentryTag[];
+    /** Set when the issue loaded but its latest event did not. */
+    event_error: string | null;
 }
 
 export interface SentryStatusUpdateResponse {
@@ -93,6 +111,13 @@ export interface SentryStatusUpdateResponse {
     status: string;
     status_details: Record<string, unknown>;
 }
+
+/**
+ * Issues requested per surface. Must stay <= the backend's `_MAX_LIMIT` (100)
+ * in routes/admin/sentry.py; the response echoes it back as
+ * `per_project_limit`, and a full page sets `truncated`.
+ */
+export const SENTRY_PER_SURFACE_LIMIT = 50;
 
 export const getSentryConfig = () => request<SentryConfig>("/api/admin/sentry/config");
 

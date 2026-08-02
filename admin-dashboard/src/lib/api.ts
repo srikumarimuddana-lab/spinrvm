@@ -520,6 +520,7 @@ export {
     getSentryIssues,
     getSentryIssueDetail,
     updateSentryIssueStatus,
+    SENTRY_PER_SURFACE_LIMIT,
 } from "./api/sentry";
 export type {
     SentrySurface,
@@ -527,6 +528,7 @@ export type {
     SentryIssue,
     SentrySurfaceConfig,
     SentryConfig,
+    SentrySurfaceError,
     SentryIssuesResponse,
     SentryStackFrame,
     SentryException,

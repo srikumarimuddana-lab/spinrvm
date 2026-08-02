@@ -200,7 +200,9 @@ admin_router.include_router(disputes_admin_router, dependencies=[Depends(require
 admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])
 # Live Sentry issue viewer (read production errors across surfaces + resolve
 # them). Raw production error data is super_admin-only — same posture as the
-# data-transfer / booking-import surfaces above.
+# data-transfer / booking-import surfaces above. As with stripe_payout_sync,
+# require_super_admin is declared BOTH here and on each handler, so the gate
+# travels with the handler if the router is ever remounted or reused.
 admin_router.include_router(sentry_router, dependencies=[Depends(require_super_admin)])
 
 __all__ = ["admin_router", "admin_auth_router"]

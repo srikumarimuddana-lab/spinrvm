@@ -1,8 +1,16 @@
 name: Security Gates
 
-# Gates G1–G5 from docs/ci-security-gates.md (SAST, Semgrep, dep audit, secrets).
-# Non-blocking for the first 2 weeks — treat as baselining window. After that,
-# flip `continue-on-error` to `false` for each job to enforce.
+# Gates G1–G7 from docs/ci-security-gates.md (SAST, Semgrep, dep audit, secrets,
+# container scan, license check).
+#
+# Status as of 2026-08-02 (CI gate health audit, docs/ci/gate-health-2026-08.md):
+# the original "2-week baselining window" is over and enforcement already
+# happened — 8 of 10 jobs (G1, G2, G3, G4a, G4b, G4c, G6, G7) are
+# `continue-on-error: false` (blocking). Only G5a (gitleaks git-history) and
+# G5b (gitleaks admin bundle) remain `continue-on-error: true`, each for its
+# own dated, documented reason (see the gitleaks job below) — not a blanket
+# window. Do not read this file's age as evidence a job is still advisory;
+# check that job's own `continue-on-error` line.
 #
 # Runs on every PR to main and on a daily schedule for main itself.
 
@@ -502,9 +510,12 @@ jobs:
         run: |
           echo "## Security Gates Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Gates G1–G7 (bandit, eslint-security, semgrep, pip-audit," >> $GITHUB_STEP_SUMMARY
-          echo "yarn-audit, gitleaks, container-scan, license-check) are" >> $GITHUB_STEP_SUMMARY
-          echo "**blocking** (OI-003–OI-006 resolved, pre-production enforcement)." >> $GITHUB_STEP_SUMMARY
+          echo "G1 (bandit), G2 (eslint-security), G3 (semgrep), G4a-c" >> $GITHUB_STEP_SUMMARY
+          echo "(pip-audit/yarn-audit/npm-audit), G6 (container-scan), and G7" >> $GITHUB_STEP_SUMMARY
+          echo "(license-check) are **blocking** (OI-003-OI-006 resolved," >> $GITHUB_STEP_SUMMARY
+          echo "pre-production enforcement). G5a/G5b (gitleaks) remain" >> $GITHUB_STEP_SUMMARY
+          echo "**advisory** pending a clean secrets baseline — see that job's" >> $GITHUB_STEP_SUMMARY
+          echo "own comment for why." >> $GITHUB_STEP_SUMMARY
           echo "Review findings in individual job outputs; file P1 items for" >> $GITHUB_STEP_SUMMARY
           echo "any new HIGH/CRITICAL results in \`OPEN-ITEMS-TRACKER.md\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

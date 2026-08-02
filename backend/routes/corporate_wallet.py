@@ -16,6 +16,7 @@ try:
     from ..db_supabase import (  # type: ignore
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
+        get_rows,
         list_wallet_transactions,
         update_corporate_wallet_config,
     )
@@ -29,6 +30,7 @@ except ImportError:
     from db_supabase import (  # type: ignore
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
+        get_rows,
         list_wallet_transactions,
         update_corporate_wallet_config,
     )
@@ -52,6 +54,47 @@ router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Wallet"]
 # before returning or mutating data.
 
 _MAX_TXN_PAGE = 200
+
+# Corporate + admin portal review: "$100k/minute" finding. /wallet/adjust
+# accepts up to $100,000 per call with no limit on repeated calls by the
+# same admin -- a compromised or malicious admin session could move an
+# unbounded amount in minutes. This is a daily *cumulative* cap per admin,
+# not a second-approver workflow (out of scope for this fix); configurable
+# via app_settings.corporate_wallet_admin_adjust_daily_cap without redeploy,
+# falling back to this default when unset.
+_DEFAULT_ADJUST_DAILY_CAP = Decimal("50000.00")
+
+
+async def _check_daily_adjust_cap(admin_id: str, amount: Decimal) -> None:
+    """Raise 429 if today's (UTC) adjustments by this admin, plus this one,
+    would exceed the configured daily cap. Sums absolute values -- an admin
+    maliciously draining OR inflating a wallet is equally the risk being
+    capped, not just one direction."""
+    settings = await get_app_settings()
+    raw_cap = settings.get("corporate_wallet_admin_adjust_daily_cap")
+    cap = Decimal(str(raw_cap)) if raw_cap not in (None, "") else _DEFAULT_ADJUST_DAILY_CAP
+
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    todays_rows = await get_rows(
+        "audit_logs",
+        filters={
+            "actor_id": admin_id,
+            "action": "corporate_wallet_manual_adjust",
+            "created_at": {"$gte": day_start.isoformat()},
+        },
+        limit=1000,
+    )
+    spent_today = sum((abs(Decimal(str(r["details"]["amount"]))) for r in todays_rows), Decimal("0"))
+
+    if spent_today + abs(amount) > cap:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Daily admin wallet-adjustment cap of ${cap} exceeded "
+                f"(${spent_today} already moved today, this call is ${abs(amount)}). "
+                "Have a second admin process the remainder, or wait until tomorrow (UTC)."
+            ),
+        )
 
 
 @router.get("/{company_id}/wallet")
@@ -184,6 +227,7 @@ async def manual_adjust(
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
+    await _check_daily_adjust_cap(current_admin["id"], body.amount)
     result = await apply_adjustment(
         wallet_id=wallet["id"],
         amount=body.amount,

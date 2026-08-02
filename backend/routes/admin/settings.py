@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 try:
@@ -319,6 +320,14 @@ class SettingsUpdateRequest(BaseModel):
     # to CHANGE it (the gate itself is already super_admin-only to approve,
     # per export_approvals.py's router-level require_super_admin).
     dual_approval_exports_enabled: Optional[bool] = None
+    # Daily cumulative cap on one admin's corporate wallet /adjust calls
+    # (routes/corporate_wallet.py::manual_adjust). That endpoint accepts up
+    # to $100,000 per call with no limit on repeated calls — a compromised
+    # or malicious admin session could move an unbounded amount in minutes.
+    # Corporate + admin portal review, "$100k/minute" finding. Plain numeric
+    # cap, no masking/super-admin gate needed to change it (same posture as
+    # dual_approval_exports_enabled above — a process control, not a secret).
+    corporate_wallet_admin_adjust_daily_cap: Optional[Decimal] = Field(default=None, gt=0, decimal_places=2)
 
     @field_validator("lms_api_base_url")
     @classmethod
@@ -426,7 +435,13 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
     )
 
     # Only persist fields the caller actually set (None = leave unchanged).
-    update_fields = settings.model_dump(exclude_none=True)
+    # Decimal -> float only at this DB write boundary (supabase-py can't
+    # serialize Decimal) -- same pattern as corporate_wallet.py's
+    # WalletConfigPatch. Values are 2-dp clean by Pydantic validation, so
+    # the conversion is exact.
+    update_fields = {
+        k: float(v) if isinstance(v, Decimal) else v for k, v in settings.model_dump(exclude_none=True).items()
+    }
 
     # Mask-roundtrip guard. _mask_credentials returns `v[:8] + "*****"` on
     # GET so the admin UI never sees the plaintext secret. The frontend

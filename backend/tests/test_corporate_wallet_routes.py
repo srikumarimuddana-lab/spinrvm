@@ -197,6 +197,7 @@ def test_manual_adjust_writes_audit_log(test_client, admin_override):
             AsyncMock(return_value={"transaction_id": "t1", "balance_after": "75.00"}),
         ),
         patch("routes.corporate_wallet.log_admin_action", AsyncMock()) as mock_audit,
+        patch("routes.corporate_wallet.get_rows", AsyncMock(return_value=[])),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/wallet/adjust",
@@ -205,3 +206,88 @@ def test_manual_adjust_writes_audit_log(test_client, admin_override):
     assert resp.status_code == 200, resp.text
     mock_audit.assert_awaited_once()
     assert mock_audit.await_args.kwargs["details"]["notes"] == "manual correction"
+
+
+def test_adjust_blocked_when_daily_cap_exceeded(test_client, admin_override):
+    """Corporate + admin portal review, "$100k/minute" finding:
+    /wallet/adjust accepted up to $100,000 per call with no limit on
+    repeated calls by the same admin. A daily cumulative cap now blocks a
+    call that would push the day's total over the configured limit."""
+    prior_rows = [
+        {"details": {"amount": "40000.00"}},
+        {"details": {"amount": "-5000.00"}},  # abs() summed — direction doesn't matter
+    ]
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "100000.00", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_wallet.get_app_settings",
+            AsyncMock(return_value={"corporate_wallet_admin_adjust_daily_cap": 50000.0}),
+        ),
+        patch("routes.corporate_wallet.get_rows", AsyncMock(return_value=prior_rows)),
+        patch("routes.corporate_wallet.apply_adjustment", AsyncMock()) as m_adjust,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/adjust",
+            json={"amount": 6000, "notes": "another top-up"},
+        )
+    # 45000 already moved today + 6000 this call = 51000 > 50000 cap
+    assert resp.status_code == 429, resp.text
+    assert "cap" in resp.json()["detail"].lower()
+    m_adjust.assert_not_awaited()
+
+
+def test_adjust_allowed_under_configured_daily_cap(test_client, admin_override):
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "100000.00", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_wallet.get_app_settings",
+            AsyncMock(return_value={"corporate_wallet_admin_adjust_daily_cap": 50000.0}),
+        ),
+        patch(
+            "routes.corporate_wallet.get_rows",
+            AsyncMock(return_value=[{"details": {"amount": "40000.00"}}]),
+        ),
+        patch(
+            "routes.corporate_wallet.apply_adjustment",
+            AsyncMock(return_value={"transaction_id": "t1", "balance_after": "104000.00"}),
+        ) as m_adjust,
+        patch("routes.corporate_wallet.log_admin_action", AsyncMock()),
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/adjust",
+            json={"amount": 4000, "notes": "within cap"},
+        )
+    # 40000 + 4000 = 44000, under the 50000 cap
+    assert resp.status_code == 200, resp.text
+    m_adjust.assert_awaited_once()
+
+
+def test_adjust_daily_cap_defaults_when_unconfigured(test_client, admin_override):
+    """No app_settings value set -> falls back to the built-in default cap
+    rather than silently allowing an unbounded amount."""
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "1000000.00", "soft_negative_floor": -50}),
+        ),
+        patch("routes.corporate_wallet.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "routes.corporate_wallet.get_rows",
+            AsyncMock(return_value=[{"details": {"amount": "49999.00"}}]),
+        ),
+        patch("routes.corporate_wallet.apply_adjustment", AsyncMock()) as m_adjust,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/adjust",
+            # Max per-call amount (100000) pushed on top of 49999 already moved
+            # today blows past the $50,000 default cap even before this call.
+            json={"amount": 100000, "notes": "large top-up"},
+        )
+    assert resp.status_code == 429, resp.text
+    m_adjust.assert_not_awaited()

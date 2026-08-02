@@ -1180,4 +1180,40 @@ async def get_section_spend_map(section_ids: List[str], month: str) -> Dict[str,
     rows = _rows_from_res(await run_sync(_fn))
     return {r["section_id"]: Decimal(str(r.get("used") or 0)) for r in rows}
 
-    return await run_sync(_ins)
+
+# ============ Corporate KYB Re-verification (staleness reminder) Functions ============
+
+
+async def list_companies_needing_kyb_reverification(*, reviewed_before_iso: str) -> List[Dict[str, Any]]:
+    """Active, KYB-approved companies whose last review predates the given
+    cutoff. Does not filter on kyb_reverify_flagged_at — the background
+    loop applies its own cooldown check in Python over the result,
+    mirroring list_wallets_low_balance_no_autotopup's established pattern
+    (see utils/corporate_low_balance.py) rather than building an $or
+    filter for it.
+    """
+
+    def _fn():
+        return (
+            supabase.table("corporate_accounts")
+            .select("*")
+            .eq("status", "active")
+            .eq("kyb_last_decision", "approved")
+            .lt("kyb_reviewed_at", reviewed_before_iso)
+            .execute()
+        )
+
+    return _rows_from_res(await run_sync(_fn))
+
+
+async def mark_kyb_reverify_flagged(*, company_id: str) -> None:
+    """Replay-safety claim flag only (migration 282) — not the source of
+    truth for staleness, which the admin filter computes live from
+    kyb_reviewed_at."""
+
+    def _fn():
+        supabase.table("corporate_accounts").update(
+            {"kyb_reverify_flagged_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("id", company_id).execute()
+
+    await run_sync(_fn)

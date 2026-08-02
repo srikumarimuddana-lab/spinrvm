@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions. Prior same-day: `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%. Prior same-day: `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -889,13 +889,122 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
           skipped, 1 xfailed, 0 failed` — exactly +66, matching the new
           test count, zero regressions. See
           `docs/change-log/2026-08-02-a1c-subscriptions-coverage.md`.
-      - Rest of the unevenly-covered `routes/drivers/` package: `ride_flow.py`
-        (66.30%), `ride_cancel.py` (51.75%), `ride_reads.py` (58.95%),
-        `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`
-        (38.82%). (Two concurrent same-day sibling sessions are also
-        closing these six files — see their own bullets once merged,
-        branches `claude/a1c-drivers-ride-flow-batch` and
-        `claude/a1c-drivers-payouts-batch`.)
+      - `ride_flow.py`, `ride_cancel.py`, `ride_reads.py` — **CLOSED**
+        (2026-08-02, branch `claude/a1c-drivers-ride-flow-batch`): fresh
+        baseline measured via the full `pytest tests/ -q
+        --cov=routes.drivers.ride_flow --cov=routes.drivers.ride_cancel
+        --cov=routes.drivers.ride_reads` matched the documented numbers
+        exactly — `ride_flow.py` 66.30%→99% (273 stmts, 92→2 missing);
+        `ride_cancel.py` 51.75%→100% (144 stmts, 69→0 missing);
+        `ride_reads.py` 58.95%→98% (190 stmts, 78→3 missing). Added
+        `backend/tests/test_driver_ride_flow_coverage.py` (95 tests), run
+        alongside every pre-existing test file already touching these three
+        modules (`test_drivers_extended.py`, `test_ride_accept_flow.py`,
+        `test_subscription_enforcement.py`, `test_c2_driver_cancel_atomic.py`,
+        `test_active_ride_rider_pii.py`, `test_rides.py`,
+        `test_dispatch_metrics.py`, `test_claim_ride.py`,
+        `test_fee_wallet_atomic.py`, `test_preauth_release_on_cancel.py`,
+        `test_idor_ownership_guards.py`) with no collisions (297 passed).
+        Coverage focus: `accept_ride`'s subscription-guard sub-branches
+        (child-area-inherits-from-parent, expired-sub-row auto-marked
+        expired, plan service-area/vehicle-type allowlist mismatch incl. the
+        parent-area-coverage exception, the DB-error-fails-closed 503), the
+        searching/broadcast claim path (no-pending-offer 403, offer-lookup
+        exception, not-assigned-and-not-searching 400), the claim-lost
+        re-check (same-driver-idempotent-success vs. taken-by-another-409),
+        the batch-dispatch winner/loser resolution (incl. a loser's WS push
+        failing non-fatally), the ride_metrics pickup-leg write
+        (success + non-fatal-failure), guest-booking notifications;
+        `decline_ride`'s 404/409/403 guards, the audit-log and Redis-cooldown
+        non-fatal failure branches, and the early-redispatch decision
+        (no-offers-remain / offers-remain / rematch-check-exception);
+        `arrive_at_pickup`'s 200m geofence rejection and the
+        nav-point-vs-raw-pin nearest-of-either check; `verify_pickup_otp`
+        (previously zero standalone coverage — otp-mismatch 400, guard-none
+        409, success + rider notify); `start_ride`'s production 410 block
+        and ride-not-found 404; `cancel_ride`'s (driver-side) JSON-body vs.
+        query-param reason precedence, the PGRST204 attribution-write
+        fallback, the pre-auth-release success/exception/write-failure
+        branches, and the scheduled-ride `is_scheduled` broadcast flag;
+        `mark_rider_noshow`'s full success path (previously only the
+        409-claim-lost branch had coverage) — wallet debit + driver payout,
+        partial-wallet-collection logging, card-vs-wallet payment-method
+        branching, area-level wait-seconds override, the naive-datetime
+        `driver_arrived_at` normalization, and the extended-fee-columns
+        PGRST204 fallback; `get_active_ride`'s batch-offer fallback (found
+        / not-found / stale-ride-no-longer-searching / lookup-exception),
+        the rider/vehicle-type lookup exception paths, the
+        incentives+quest-hint enrichment (incl. the service-area `or_`
+        clause and vehicle-type filtering) with each lookup's independent
+        non-fatal exception, and the service-area-polygon fetch; and
+        `get_ride_history`'s incentive-claims enrichment,
+        `driver_earnings_snapshot`-present vs. legacy-computed branches, the
+        `fare_breakdown_snapshot` tax fallback, the period=None/"all"/"week"/
+        "month" branches of `history_start_for_period`, and the explicit
+        `status="scheduled"` `history_date_field` branch. Test-only, no
+        application code changed. **Bug found, not fixed (test-only scope,
+        per instructions):** `get_active_ride`'s except-handler at the
+        vehicle-type lookup (and similarly the earlier rider lookup) logs
+        `ride['vehicle_type_id']` via direct dict indexing instead of
+        `ride.get(...)` — harmless in production (a Supabase `rides` row
+        always carries the column, value possibly `None`) but a
+        theoretical second `KeyError` inside the except-handler itself if a
+        ride dict ever legitimately lacked the key entirely; not fixed per
+        the test-only-pass instruction, and not realistically reachable
+        given the DB schema, so not escalated further. Remaining uncovered
+        lines: `ride_flow.py` 537-538 and `ride_reads.py` 347-348 are both
+        the dual-import `except ImportError` fallback for a same-process
+        re-import (`match_driver_to_ride` / `_redact_driver_location_fields`)
+        — structurally unreachable in a single test process, same
+        documented pattern as the `redis_set_nx` fallback in the
+        subscriptions-coverage pass above; `ride_reads.py` line 279 is
+        `history_date_field`'s trailing `return "created_at"` fallback,
+        unreachable because both of its call sites already guard
+        `status_value` to `completed`/`cancelled`/`scheduled` before
+        calling it. See
+        `docs/change-log/2026-08-02-a1c-drivers-ride-flow-batch-coverage.md`.
+      - `payouts.py`, `earnings.py`, `referrals.py` — **CLOSED** (2026-08-02,
+        branch `claude/a1c-drivers-payouts-batch`): `payouts.py` 69.47%→98.44%
+        (321 stmts, 98→5 missing); `earnings.py` 37.25%→98.69% (306 stmts,
+        192→4 missing); `referrals.py` 38.82%→98.82% (170 stmts, 104→2
+        missing). Added `backend/tests/test_payouts_coverage.py` (34 tests),
+        `backend/tests/test_earnings_coverage.py` (36 tests),
+        `backend/tests/test_referrals_coverage.py` (20 tests) — 90 tests
+        total, run alongside every pre-existing test file already touching
+        these three modules (`test_p2_payout_t4a.py`, `test_instant_payout.py`,
+        `test_payout_toctou.py`, `test_drivers_extended.py`,
+        `test_referral_terms.py`, the `test_referral_payout_*.py` family,
+        `test_referral_failed_claims_admin.py`,
+        `test_referral_recredit_failed_claim.py`) with no collisions (287
+        passed). Coverage focus: `payouts.py`'s WITH-Stripe branch of
+        `request_payout` (untested before — the existing pin only exercised
+        the no-Stripe-key "pending" fallback), the reserve-insert
+        conflict/error paths, the terminal-write-failure reversal branches
+        (success, failure→stranded, and the no-Stripe skip-reversal case)
+        for both standard and instant payouts, `_ensure_stripe_account`'s
+        new-account-creation + persist-failure branches, and the previously
+        wholly-untested `save_bank_account`/`delete_bank_account`;
+        `earnings.py`'s previously near-zero-coverage
+        `get_driver_bonuses`/`get_driver_trip_earnings`/
+        `get_driver_weekly_earnings`/`get_driver_monthly_earnings`/
+        `get_driver_earnings_comparison`/`get_driver_earnings_forecast`, plus
+        the service-area-timezone, incentive-claims-lookup-failure, and
+        fare-breakdown-snapshot tax-fallback branches of `get_driver_earnings`;
+        `referrals.py`'s previously wholly-untested `apply_referral_code`
+        (all three code-resolution paths incl. the regex-fallback swallow)
+        and `get_driver_leaderboard` (RPC happy path, RPC-failure→daily-stats
+        fallback, and three independent degrade-to-empty/placeholder
+        branches). Test-only, no application code changed. **Bug found, not
+        fixed (test-only scope, per instructions):** none in this batch —
+        every exception branch exercised behaves as documented (loud
+        logging, clean HTTP status, no silent swallow of a money-moving
+        error). Full suite: baseline before this session's files existed
+        7263 passed, 8 skipped, 1 xfailed; after adding this session's 90
+        tests (run in isolation on this branch, not mixed with concurrent
+        sibling sessions' own untracked test files in the shared working
+        directory): 90/90 passed, and combined with every referral/payout
+        test file above: 287/287 passed, zero regressions. See
+        `docs/change-log/2026-08-02-a1c-drivers-payouts-batch-coverage.md`.
       - `_shared.py`, `status.py`, `profile.py` — **CLOSED** (2026-08-02,
         branch `claude/a1c-drivers-shared-batch`): `_shared.py` 51%→96%
         (228 stmts, 111→8 missing — the 8 remaining lines are

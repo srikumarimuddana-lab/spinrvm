@@ -79,7 +79,7 @@ CREATE OR REPLACE FUNCTION corporate_allowance_apply_delta(
     p_member_id          UUID,
     p_type               TEXT,
     p_amount             NUMERIC(12,2),
-    p_actor_user_id      UUID DEFAULT NULL,
+    p_actor_user_id      TEXT DEFAULT NULL,
     p_notes              TEXT DEFAULT NULL,
     p_floor              NUMERIC(12,2) DEFAULT NULL
 )

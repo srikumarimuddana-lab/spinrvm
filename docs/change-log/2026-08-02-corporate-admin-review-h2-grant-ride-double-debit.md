@@ -170,6 +170,27 @@ rollback performs.
       the "deliberately not changed here" item migration 248 flagged as a
       known follow-up
 
+## 11. Post-merge correction (2026-08-02, same PR, pre-merge CI)
+
+CI's `backend-test` job caught a real regression in this migration before
+merge: `test_corporate_b2b_schema.py::test_actor_user_id_is_text_not_uuid`
+failed because migration 277's `CREATE OR REPLACE FUNCTION
+corporate_allowance_apply_delta(...)` declared `p_actor_user_id UUID
+DEFAULT NULL` — copied from the function's pre-migration-214 signature
+instead of migration 214's widened `TEXT`. Migration 214 exists precisely
+because a UUID-typed `actor_user_id`/`p_actor_user_id` rejects the
+platform's non-UUID bootstrap admin id (`"admin-001"`) with Postgres
+22P02; this migration would have silently reintroduced that exact bug for
+every grant made by that admin account. Fixed by changing the parameter
+back to `p_actor_user_id TEXT DEFAULT NULL` (the only line affected — the
+column itself was never touched by 277, only the RPC parameter). Since
+migration 277 was never applied to any real database (caught pre-merge on
+an open PR), this was corrected in place rather than shipped as a follow-up
+migration. Re-ran `test_corporate_b2b_schema.py` and
+`test_allowance_rpc_sign_contract.py` locally (`/tmp/spinr_venv`) after the
+fix: 6 passed, 2 skipped, confirming both the type regression and the
+underlying grant-delta fix are correct together.
+
 ## What was NOT verified
 
 Not executed against a live/staging Postgres instance — the RPC body was

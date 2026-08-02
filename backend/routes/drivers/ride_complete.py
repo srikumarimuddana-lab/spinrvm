@@ -686,7 +686,15 @@ async def complete_ride(
                 {
                     "period": 2,
                     "distance_km": _period2_km,
-                    "started_at": ride.get("driver_assigned_at") or ride.get("driver_accepted_at"),
+                    # Period 2 starts on assignment, not acceptance (CLAUDE.md:
+                    # the driver is already obligated to the ride once
+                    # assigned) — `rides.assigned_at` is the real column name;
+                    # this previously read a nonexistent "driver_assigned_at"
+                    # key, always missed, and silently fell back to
+                    # driver_accepted_at, misstating the Period 2 start time
+                    # for the regulatory audit trail (distance/billing figures
+                    # were unaffected — only this timestamp).
+                    "started_at": ride.get("assigned_at") or ride.get("driver_accepted_at"),
                     "ended_at": ride.get("ride_started_at"),
                 },
                 {

@@ -308,6 +308,17 @@ class SettingsUpdateRequest(BaseModel):
     # the shared shell/typography/radius restyle. Not a credential, no
     # special masking/super-admin gate needed.
     admin_theme_v2_enabled: Optional[bool] = None
+    # Dual-approval gate for large PII-bearing exports (migration 268,
+    # routes/admin/compliance.py, routes/admin/data_transfer_export.py) —
+    # requires a second super_admin to approve before a large driver/rider
+    # export or a >1,000-row compliance report actually runs. The column
+    # and the enforcement code already existed; this was the only field
+    # missing from this model, so there was no way to turn the gate on
+    # without a direct SQL update. Corporate + admin portal review, High #5.
+    # Not a credential — plain boolean, no masking/super-admin gate needed
+    # to CHANGE it (the gate itself is already super_admin-only to approve,
+    # per export_approvals.py's router-level require_super_admin).
+    dual_approval_exports_enabled: Optional[bool] = None
 
     @field_validator("lms_api_base_url")
     @classmethod

@@ -439,6 +439,97 @@ async def cancel_ride_rider(
     return {"success": True, "cancellation_fee": charged_admin + charged_driver}
 
 
+async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None:
+    """Charge the notice-window fee for a pre-dispatch scheduled-ride
+    cancellation (Finding #01, scheduled-rides gap review), if the flag is
+    on and the cancellation happened inside the window. Rider-only — no
+    driver exists pre-dispatch, so there's no payout branch here, unlike
+    calculate_cancellation_fee's admin/driver split for dispatched rides.
+
+    Mirrors cancel_ride_rider's card/wallet charging pattern. Must never
+    raise past this function — a fee failure must not undo an already-
+    persisted cancellation; the caller wraps this in its own try/except as
+    an extra layer of safety, but this function guards itself too.
+    """
+    ride_id = ride["id"]
+    try:
+        settings = await _deps.get_app_settings()
+        fee = _deps.calculate_scheduled_cancel_notice_fee(ride, settings)
+        if fee <= 0:
+            return
+
+        payment_method = (ride.get("payment_method") or "card").lower()
+        if payment_method == "wallet":
+            rider_wallet = await _deps.db_supabase.find_one("wallets", {"user_id": rider_id})
+            if rider_wallet:
+                await _deps.db_supabase.wallet_apply_delta(
+                    wallet_id=rider_wallet["id"],
+                    user_id=rider_id,
+                    type_="scheduled_cancel_notice_fee",
+                    delta=-fee,
+                    reference_id=ride_id,
+                    description=f"Late-cancellation fee for scheduled ride {ride_id[:8]}",
+                    metadata={"ride_id": ride_id},
+                    floor=Decimal("0"),
+                    clamp_to_floor=True,
+                )
+        elif payment_method == "card":
+            rider_user = await _deps.db_supabase.get_user_by_id(rider_id)
+            stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
+            payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
+            outcome = await _deps.charge_ancillary_fee(
+                ride=ride,
+                rider_id=rider_id,
+                amount=fee,
+                payment_method_id=payment_method_id,
+                stripe_customer_id=stripe_customer_id,
+                fee_type="scheduled_cancel_notice_fee",
+            )
+            if outcome.status == "succeeded":
+                try:
+                    await _deps.db_supabase.insert_one(
+                        "financial_events",
+                        {
+                            "event_type": "stripe_charge",
+                            "user_id": rider_id,
+                            "ride_id": ride_id,
+                            "delta_cents": int(_round(fee * Decimal("100"))),
+                            "ref": outcome.payment_intent_id,
+                            "metadata": {"source": "scheduled_cancel_notice_fee"},
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                except Exception:
+                    logger.error(
+                        "[SCHED-CANCEL] financial_events write failed for notice-window fee "
+                        "ride=%s pi=%s amount=%s — charge succeeded but is unrecorded",
+                        ride_id,
+                        outcome.payment_intent_id,
+                        fee,
+                        exc_info=True,
+                    )
+            elif outcome.status != "unconfigured":
+                logger.error(
+                    "[SCHED-CANCEL] notice-window fee card charge failed ride=%s rider=%s amount=%s "
+                    "status=%s error=%s",
+                    ride_id,
+                    rider_id,
+                    fee,
+                    outcome.status,
+                    outcome.error_message,
+                )
+        # Any other payment_method (e.g. company_allowance) is already
+        # excluded by calculate_scheduled_cancel_notice_fee returning 0.
+    except Exception as _fee_exc:
+        logger.error(
+            "[SCHED-CANCEL] notice-window fee charge failed for ride %s; cancellation already "
+            "persisted and is not affected: %s",
+            ride_id,
+            _fee_exc,
+            exc_info=True,
+        )
+
+
 @router.delete("/scheduled/{ride_id}")
 @cancel_ride_limit
 async def cancel_scheduled_ride(
@@ -515,6 +606,9 @@ async def cancel_scheduled_ride(
         if claimed is not None:
             # Pre-dispatch there is no driver, offer, or card hold to unwind;
             # notify the rider's own devices and any watching admin console.
+            # Notice-window fee (Finding #01): flag-gated, defaulted off; a
+            # failure here must never undo the cancellation above.
+            await _charge_scheduled_cancel_notice_fee(ride, current_user["id"])
             await _deps.manager.send_personal_message(
                 {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"},
                 f"rider_{current_user['id']}",

@@ -125,6 +125,80 @@ def test_driver_cancel_rejects_unassigned_searching_ride():
     upd.assert_not_awaited()
 
 
+def test_driver_cancel_broadcasts_is_scheduled_for_admin_visibility():
+    """Scheduled-rides gap review Finding #12: driver-cancel-after-accept is
+    unconditionally terminal for every ride type (no auto-requeue) -- but a
+    scheduled ride's cancellation must be tagged is_scheduled=True in both
+    the ride_status_changed and ride_cancelled admin broadcasts, so ops can
+    tell it apart from a routine on-demand cancellation."""
+    from backend.routes import drivers as drv
+
+    driver = {"id": "drv-1", "user_id": "user-1"}
+    ride = {
+        "id": "ride-1",
+        "status": "driver_accepted",
+        "rider_id": "rider-1",
+        "driver_id": "drv-1",
+        "is_scheduled": True,
+    }
+
+    with (
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": "ride-1"})),
+        patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()) as bcast_status,
+        patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()) as bcast_admin,
+        patch("backend.routes.drivers._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        result = asyncio.run(
+            drv.cancel_ride(ride_id="ride-1", reason="running late", request=None, current_user={"id": "user-1"})
+        )
+
+    assert result == {"success": True}
+    bcast_status.assert_awaited_once()
+    assert bcast_status.await_args.kwargs["is_scheduled"] is True
+    bcast_admin.assert_awaited_once()
+    admin_payload = bcast_admin.await_args.args[0]
+    assert admin_payload["type"] == "ride_cancelled"
+    assert admin_payload["is_scheduled"] is True
+
+
+def test_driver_cancel_broadcasts_is_scheduled_false_for_on_demand_ride():
+    """The same broadcasts must carry is_scheduled=False (not omitted, not
+    None) for a normal on-demand ride, so the admin-dashboard field is
+    always present and type-safe rather than optional-and-sometimes-missing."""
+    from backend.routes import drivers as drv
+
+    driver = {"id": "drv-1", "user_id": "user-1"}
+    ride = {
+        "id": "ride-1",
+        "status": "driver_accepted",
+        "rider_id": "rider-1",
+        "driver_id": "drv-1",
+        "is_scheduled": False,
+    }
+
+    with (
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": "ride-1"})),
+        patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()) as bcast_status,
+        patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()) as bcast_admin,
+        patch("backend.routes.drivers._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        asyncio.run(drv.cancel_ride(ride_id="ride-1", reason="", request=None, current_user={"id": "user-1"}))
+
+    assert bcast_status.await_args.kwargs["is_scheduled"] is False
+    admin_payload = bcast_admin.await_args.args[0]
+    assert admin_payload["is_scheduled"] is False
+
+
 def test_driver_noshow_returns_409_and_charges_nothing_on_race():
     """No-show claim fails -> 409 before any fee is computed or charged."""
     from fastapi import HTTPException

@@ -31,8 +31,15 @@ except ImportError:
     from socket_manager import manager  # type: ignore
 
 # Same pre-trip set as corporate_suspension_service._PRE_PICKUP_STATUSES /
-# routes/rides/cancellation.py::cancel_ride_rider.
+# routes/rides/cancellation.py::cancel_ride_rider, PLUS `scheduled`
+# (scheduled-rides gap review, Finding #16) — a removed member's already-
+# scheduled ride was previously excluded here, so it kept dispatching a
+# driver and billing the company against a member who should no longer
+# have access. Safe to include: driver_id is always None pre-dispatch (the
+# release branch below is a no-op), and corporate rides carry no pre-auth
+# hold to release pre-dispatch either.
 _PRE_PICKUP_STATUSES = (
+    RideStatus.SCHEDULED,
     RideStatus.SEARCHING,
     RideStatus.DRIVER_ASSIGNED,
     RideStatus.DRIVER_ACCEPTED,

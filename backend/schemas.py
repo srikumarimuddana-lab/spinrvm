@@ -245,6 +245,29 @@ class AppSettings(BaseModel):
     # the un-flagged behavior (fail open) was a bug. Flip to false only to
     # roll back without a redeploy. See routes/rides/booking.py.
     corporate_inactive_company_blocks_booking: bool = True
+    # Kill switch for the scheduled-ride dispatcher loop (utils/scheduled_rides.py).
+    # ACTION_ITEMS.md E5: scheduled dispatch was one of the risky background
+    # loops with no way to pause it short of a redeploy. Defaults to true
+    # (current, always-on behavior). Flip to false to stop the loop from
+    # claiming/dispatching or sending reminders for scheduled rides — already-
+    # scheduled rides stay parked in status='scheduled' and dispatch normally
+    # once this is flipped back on; nothing is lost or cancelled by disabling it.
+    scheduled_dispatch_enabled: bool = True
+    # New driver-facing behavior (scheduled-rides gap review, Finding #06):
+    # a best-effort heads-up push to already-online drivers near an upcoming
+    # scheduled pickup, ~60 minutes out. Unlike scheduled_dispatch_enabled
+    # above (a kill switch for existing always-on behavior), this gates a
+    # genuinely new notification type — ships dark until reviewed for
+    # notification-fatigue impact, then flip on from the admin dashboard.
+    scheduled_ride_driver_nudge_enabled: bool = False
+    # Notice-window cancellation fee for PRE-DISPATCH scheduled rides
+    # (Finding #01). Rider-only — no driver is ever assigned pre-dispatch,
+    # so unlike cancellation_fee_admin/_driver above nothing is disbursed.
+    # New pricing decision — ships dark until reviewed/approved, then flip
+    # on from the admin dashboard; no redeploy needed either way.
+    scheduled_ride_notice_window_fee_enabled: bool = False
+    scheduled_ride_notice_window_minutes: int = 60
+    scheduled_ride_notice_window_fee_amount: DecimalStr = Decimal("3.00")
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no
@@ -542,6 +565,15 @@ class RideRatingRequest(BaseModel):
     )
 
 
+# Scheduled-ride booking window. Single source of truth — the rider app's
+# date-picker constraints and the AI booking assistant's own proposal-time
+# check (backend/ai/tools_booking.py) both import these rather than hardcode
+# a second copy, so the three surfaces can't drift out of sync with each
+# other or with the confirm-time validator below.
+SCHEDULE_MIN_LEAD_MINUTES = 15
+SCHEDULE_MAX_ADVANCE_DAYS = 7
+
+
 class CreateRideRequest(BaseModel):
     vehicle_type_id: str
     pickup_address: str
@@ -624,8 +656,15 @@ class CreateRideRequest(BaseModel):
             # Normalise to UTC-aware for the "in the future" comparison, then
             # strip tz for the DST-gap round-trip check which needs a naive wall time.
             v_utc = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-            if v_utc < datetime.now(timezone.utc) + timedelta(minutes=5):
-                raise ValueError("Scheduled time must be at least 5 minutes in the future")
+            now_utc = datetime.now(timezone.utc)
+            if v_utc < now_utc + timedelta(minutes=SCHEDULE_MIN_LEAD_MINUTES):
+                raise ValueError(f"Scheduled time must be at least {SCHEDULE_MIN_LEAD_MINUTES} minutes in the future")
+            # Server-side ceiling matching the rider app's date-picker maxDate.
+            # Previously enforced client-only, so any other caller — a direct
+            # API request or the AI booking assistant — could schedule
+            # arbitrarily far ahead with nothing to reject it.
+            if v_utc > now_utc + timedelta(days=SCHEDULE_MAX_ADVANCE_DAYS):
+                raise ValueError(f"Scheduled time cannot be more than {SCHEDULE_MAX_ADVANCE_DAYS} days in the future")
 
             naive = v_utc.replace(tzinfo=None)
 
@@ -651,5 +690,26 @@ class CreateRideRequest(BaseModel):
                         f"The time {naive.strftime('%H:%M')} does not exist in "
                         f"{tz_name} on that date (DST spring-forward gap). "
                         "Please choose a time after the clocks change."
+                    )
+
+                # DST fall-back guard: the gap check above only catches a
+                # local time that doesn't exist (spring-forward). The
+                # opposite case — a local time that occurs TWICE (the
+                # repeated hour when clocks fall back) — round-trips fine
+                # under either interpretation, so it isn't caught by that
+                # check at all. Compare the UTC offset under fold=0 (first
+                # occurrence) vs fold=1 (second occurrence): equal offsets
+                # means the time is unambiguous; different offsets means
+                # this exact wall-clock time happens twice on this date, and
+                # naive.replace(tzinfo=tz, fold=0) above would have silently
+                # picked the first occurrence with no way for the rider (or
+                # the regulatory trip-log record) to know which one they meant.
+                fold0_offset = local.utcoffset()
+                fold1_offset = naive.replace(tzinfo=tz, fold=1).utcoffset()
+                if fold0_offset != fold1_offset:
+                    raise ValueError(
+                        f"The time {naive.strftime('%H:%M')} is ambiguous in {tz_name} on that "
+                        "date (DST fall-back — this local time occurs twice). Please choose a "
+                        "different time, or specify scheduled_time with an explicit UTC offset."
                     )
         return value

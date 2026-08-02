@@ -1,18 +1,17 @@
 /**
  * useScheduledRideReminder
  *
- * Schedules a local push notification 15 minutes before a confirmed
+ * Schedules a local push notification 10 minutes before a confirmed
  * scheduled ride. Called from the ride-options / payment-confirm flow
  * immediately after the ride is created.
  *
- * The backend also fires an FCM `scheduled_ride_reminder` at T-15 min as
- * the authoritative reminder. This local notification is a best-effort
- * client-side fallback for cases where FCM delivery is delayed.
- *
- * Usage:
- *   const { scheduleReminder, cancelReminder } = useScheduledRideReminder();
- *   scheduleReminder(rideId, scheduledTime);  // after createRide()
- *   cancelReminder(rideId);                   // after cancelScheduledRide()
+ * The backend also fires an FCM `scheduled_ride_reminder` at T-10 min
+ * (backend/utils/scheduled_rides.py::_send_reminder) as the authoritative
+ * reminder. This local notification is a best-effort client-side fallback
+ * for cases where FCM delivery is delayed. Previously this fired at T-15
+ * while the backend fired at T-10 — riders could see two reminders five
+ * minutes apart, or (worse) treat the earlier local one as the real signal.
+ * Kept in sync with the backend value; if that changes, update both.
  */
 
 import { useCallback } from 'react';
@@ -20,7 +19,8 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const REMINDER_MAP_KEY = '@spinr:scheduled_reminders';
-const REMINDER_LEAD_MS = 15 * 60 * 1000; // 15 minutes
+const REMINDER_LEAD_MINUTES = 10; // keep in sync with backend/utils/scheduled_rides.py's 10-minute reminder window
+const REMINDER_LEAD_MS = REMINDER_LEAD_MINUTES * 60 * 1000;
 
 // Lazy-load expo-notifications so the app still runs in Expo Go / web.
 let Notifications: any = null;
@@ -53,7 +53,7 @@ export function useScheduledRideReminder() {
     const now = Date.now();
 
     if (triggerMs <= now) {
-      // Less than 15 min away — skip local scheduling, FCM will handle it
+      // Less than REMINDER_LEAD_MINUTES away — skip local scheduling, FCM will handle it
       return;
     }
 
@@ -68,7 +68,7 @@ export function useScheduledRideReminder() {
 
       const notifId = await Notifications.scheduleNotificationAsync({
         content: {
-          title: 'Ride in 15 minutes',
+          title: `Ride in ${REMINDER_LEAD_MINUTES} minutes`,
           body: `Your scheduled Spinr ride departs at ${scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}. Your driver is on the way!`,
           data: { type: 'scheduled_ride_reminder', rideId },
           sound: 'default',

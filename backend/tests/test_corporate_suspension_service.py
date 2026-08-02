@@ -99,6 +99,46 @@ async def test_in_progress_ride_not_queried_by_pre_pickup_filter():
 
 @pytest.mark.unit
 @pytest.mark.anyio
+async def test_scheduled_status_is_included_in_the_pre_pickup_filter():
+    """Finding #16: a not-yet-dispatched scheduled ride must be included in
+    the candidate query -- this was the actual gap (previously excluded,
+    so a suspended company's scheduled bookings kept dispatching and
+    billing right up to their pickup time)."""
+    with patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock_get_rows:
+        await svc.cancel_pre_pickup_rides_for_company("c1")
+
+    _, filters = mock_get_rows.await_args.args
+    assert "scheduled" in filters["status"]["$in"]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_cancels_scheduled_ride_with_no_driver_release_needed():
+    """A scheduled ride has driver_id=None pre-dispatch -- the cancel must
+    still succeed and correctly skip the driver-release branch, and the
+    rider must still be notified (no fee, no hold to release either)."""
+    ride = ride_row(status="scheduled", driver_id=None, corporate_account_id="c1", is_scheduled=True)
+
+    with (
+        patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=[ride])),
+        patch.object(svc.db_supabase, "update_one", AsyncMock(return_value={"id": ride["id"]})),
+        patch.object(svc.db_supabase, "set_driver_available", AsyncMock()) as mock_set_avail,
+        patch.object(svc, "record_period_transition", AsyncMock()) as mock_period,
+        patch.object(svc.manager, "send_personal_message", AsyncMock()) as mock_ws,
+        patch.object(svc, "send_push_notification", AsyncMock()) as mock_push,
+    ):
+        cancelled = await svc.cancel_pre_pickup_rides_for_company("c1")
+
+    assert cancelled == 1
+    mock_set_avail.assert_not_awaited()
+    mock_period.assert_not_awaited()
+    mock_ws.assert_awaited_once()
+    assert mock_ws.await_args.args[1] == f"rider_{ride['rider_id']}"
+    mock_push.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
 async def test_one_ride_failure_does_not_block_the_rest():
     ride_ok = ride_row(status="searching", driver_id=None, corporate_account_id="c1")
     ride_bad = ride_row(status="searching", driver_id=None, corporate_account_id="c1")

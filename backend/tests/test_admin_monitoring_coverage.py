@@ -47,6 +47,7 @@ def test_build_monitoring_ride_shapes_full_row():
         "corporate_account_id": "corp-1",
         "driver_current_lat": 5.0,
         "driver_current_lng": 6.0,
+        "is_scheduled": True,
     }
     rider = {"first_name": "Jane", "last_name": "Doe", "phone": "306-555-0100", "profile_image": "url"}
     driver_user = {"first_name": "Bob", "last_name": "Smith", "phone": "306-555-0200"}
@@ -55,6 +56,9 @@ def test_build_monitoring_ride_shapes_full_row():
     assert out["driver_name"] == "Bob Smith"
     assert out["is_corporate"] is True
     assert out["driver_lat"] == 5.0  # ride's own live location wins over driver_row
+    # Finding #12: is_scheduled must survive into the monitoring payload so
+    # ops can tell a scheduled ride's cancellation apart from an on-demand one.
+    assert out["is_scheduled"] is True
 
 
 def test_build_monitoring_ride_handles_missing_rider_and_driver():
@@ -64,6 +68,8 @@ def test_build_monitoring_ride_handles_missing_rider_and_driver():
     assert out["driver_name"] is None
     assert out["is_corporate"] is False
     assert out["created_at"] == "None"
+    # Missing/falsy is_scheduled must coerce to False, not None or KeyError.
+    assert out["is_scheduled"] is False
 
 
 # ---------------------------------------------------------------------------

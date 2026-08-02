@@ -415,17 +415,36 @@ async def test_cancel_booking_cross_company_returns_404():
 
 
 @pytest.mark.anyio
-async def test_cancel_booking_non_guest_booking_returns_404():
-    """A regular (non-guest) ride under the same company id must not be
-    cancellable through the company-portal cancel path."""
+async def test_cancel_booking_self_booked_ride_is_cancellable():
+    """Finding #19: a self-booked (non-guest) employee ride under this
+    company must be cancellable through the company-portal cancel path --
+    it appears in the same booking list the cancel button lives on.
+    Previously this 404'd via a guest_booking check with no reason to
+    exclude the self-booked case."""
     from backend.routes.corporate_company_bookings import cancel_booking
 
     request = MagicMock()
-    ride = {"id": "ride1", "corporate_account_id": _COMPANY_ID, "guest_booking": False}
-    with patch(_CCB + "db_supabase.get_ride", AsyncMock(return_value=ride)):
-        with pytest.raises(HTTPException) as exc_info:
-            await cancel_booking("ride1", request, _MEMBER_CTX)
-    assert exc_info.value.status_code == 404
+    ride = {
+        "id": "ride1",
+        "corporate_account_id": _COMPANY_ID,
+        "guest_booking": False,
+        "corporate_member_id": "member_1",
+        "rider_id": "rider1",
+        "is_scheduled": False,
+    }
+    employee_user = {"id": "rider1", "first_name": "Jamie"}
+    with (
+        patch(_CCB + "db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch(_CCB + "db_supabase.get_user_by_id", AsyncMock(return_value=employee_user)),
+        patch("backend.routes.rides.cancel_ride_rider", AsyncMock(return_value={"success": True})) as cancel_mock,
+        patch("backend.services.guest_notification_service.notify_guest_cancelled", AsyncMock()),
+        patch("backend.utils.background.spawn", side_effect=close_spawned_coro),
+    ):
+        result = await cancel_booking("ride1", request, _MEMBER_CTX)
+
+    assert result == {"success": True}
+    cancel_mock.assert_awaited_once()
+    assert cancel_mock.call_args.kwargs["current_user"] == employee_user
 
 
 @pytest.mark.anyio

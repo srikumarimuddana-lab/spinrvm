@@ -88,6 +88,14 @@ def build_monitoring_ride(
         "distance_km": ride.get("distance_km"),
         "created_at": (created.isoformat() if hasattr(created, "isoformat") else str(created)),
         "is_corporate": bool(ride.get("corporate_account_id")),
+        # Finding #12 (scheduled-rides gap review): once dispatched, a
+        # scheduled ride is indistinguishable from an on-demand one in the
+        # monitoring feed — including when its driver cancels post-accept,
+        # which is unconditionally terminal (no auto-requeue) for every ride
+        # type. A rider who planned around a specific pickup time has less
+        # slack to just re-hail than an on-demand rider does, so ops needs
+        # to be able to tell these apart to prioritize follow-up.
+        "is_scheduled": bool(ride.get("is_scheduled")),
     }
 
 

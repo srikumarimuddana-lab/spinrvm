@@ -38,6 +38,11 @@ except ImportError:
     from ai.tools import ToolSpec, register
 
 try:
+    from ..schemas import SCHEDULE_MAX_ADVANCE_DAYS, SCHEDULE_MIN_LEAD_MINUTES
+except ImportError:
+    from schemas import SCHEDULE_MAX_ADVANCE_DAYS, SCHEDULE_MIN_LEAD_MINUTES  # type: ignore[no-redef]
+
+try:
     from .. import db_supabase
     from ..settings_loader import get_app_settings
     from ..utils.google_places_new import (
@@ -1367,10 +1372,13 @@ async def _reconcile_pickup(
 # confirmation card (AI4): the model can put essentially any <=80-char string
 # in this field, and until now it only failed at Confirm
 # (schemas.CreateRideRequest.validate_scheduled_time), after the rider had
-# already seen it rendered. This mirrors that rule's shape (ISO-8601 +
-# >=5-min lead) here, earlier — the Confirm-time check is unchanged and
-# still the authoritative guard (defense in depth).
-_MIN_SCHEDULE_LEAD_MINUTES = 5
+# already seen it rendered. This mirrors that rule's shape here, earlier —
+# the Confirm-time check is unchanged and still the authoritative guard
+# (defense in depth). Both bounds are imported from backend.schemas rather
+# than a local copy, so this path can't silently drift out of sync with the
+# Confirm-time validator the way it briefly did before this fix (this file
+# used to hardcode its own 5-minute floor while schemas.py used a different
+# one; both now read the same constants).
 
 
 def _validate_scheduled_time(value: str) -> tuple:
@@ -1391,10 +1399,16 @@ def _validate_scheduled_time(value: str) -> tuple:
         )
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    if parsed < datetime.now(timezone.utc) + timedelta(minutes=_MIN_SCHEDULE_LEAD_MINUTES):
+    now = datetime.now(timezone.utc)
+    if parsed < now + timedelta(minutes=SCHEDULE_MIN_LEAD_MINUTES):
         return None, (
             f"'{value}' is not far enough in the future — a scheduled pickup must be at "
-            f"least {_MIN_SCHEDULE_LEAD_MINUTES} minutes from now. Ask the rider for a later time."
+            f"least {SCHEDULE_MIN_LEAD_MINUTES} minutes from now. Ask the rider for a later time."
+        )
+    if parsed > now + timedelta(days=SCHEDULE_MAX_ADVANCE_DAYS):
+        return None, (
+            f"'{value}' is too far in the future — a scheduled pickup can be at most "
+            f"{SCHEDULE_MAX_ADVANCE_DAYS} days from now. Ask the rider for a nearer date."
         )
     return parsed, None
 

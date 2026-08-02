@@ -2,8 +2,9 @@
  * P3-19: Native push-notification flows (FCM/APNs) — rider side
  *
  * Pins useScheduledRideReminder hook:
- *   - scheduleReminder: skips when < 15 min away; schedules otherwise;
- *     cancels old reminder before re-scheduling (idempotent)
+ *   - scheduleReminder: skips when < 10 min away (matching the backend's
+ *     scheduled_ride_reminder lead time); schedules otherwise; cancels old
+ *     reminder before re-scheduling (idempotent)
  *   - cancelReminder: cancels notification and clears storage
  *   - handleScheduledRideReminderFCM: extracts rideId from FCM payload;
  *     returns null for wrong type
@@ -66,7 +67,7 @@ beforeEach(() => {
 });
 
 describe('useScheduledRideReminder — scheduleReminder', () => {
-  it('schedules a notification when the ride is > 15 min away', async () => {
+  it('schedules a notification when the ride is > 10 min away', async () => {
     mockScheduleNotification.mockResolvedValue('notif-id-001');
 
     const { scheduleReminder } = useScheduledRideReminder();
@@ -80,13 +81,28 @@ describe('useScheduledRideReminder — scheduleReminder', () => {
     expect(config.content.data.type).toBe('scheduled_ride_reminder');
   });
 
-  it('skips scheduling when the ride is < 15 min away', async () => {
+  it('skips scheduling when the ride is < 10 min away', async () => {
     const { scheduleReminder } = useScheduledRideReminder();
     const soonTime = new Date(Date.now() + 5 * 60 * 1000); // 5 min away
 
     await scheduleReminder(RIDE_ID, soonTime);
 
     expect(mockScheduleNotification).not.toHaveBeenCalled();
+  });
+
+  it('schedules when the ride is 12 min away — regression guard for the old 15-min lead', async () => {
+    // Previously this lead time was 15 minutes (mismatched against the
+    // backend's 10-minute FCM reminder); a ride 12 minutes away used to be
+    // silently skipped client-side even though the backend reminder hadn't
+    // fired yet either. Now both sides agree on 10 minutes, so 12-out schedules.
+    mockScheduleNotification.mockResolvedValue('notif-id-002');
+
+    const { scheduleReminder } = useScheduledRideReminder();
+    const twelveMinOut = new Date(Date.now() + 12 * 60 * 1000);
+
+    await scheduleReminder(RIDE_ID, twelveMinOut);
+
+    expect(mockScheduleNotification).toHaveBeenCalledTimes(1);
   });
 
   it('cancels the old notification before re-scheduling (idempotent)', async () => {

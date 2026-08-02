@@ -1687,11 +1687,37 @@ class TestScheduledTimeValidation:
         assert "_client_action" not in result
 
     @pytest.mark.anyio
-    async def test_time_inside_five_minute_window_rejected(self):
-        # 2 minutes out — inside the >=5-min lead required by both this
-        # proposal-time check and the Confirm-time validator it mirrors.
+    async def test_time_inside_min_lead_window_rejected(self):
+        # 2 minutes out — inside the minimum lead required by both this
+        # proposal-time check and the Confirm-time validator it mirrors
+        # (schemas.SCHEDULE_MIN_LEAD_MINUTES, imported by this module rather
+        # than hardcoded here — see the scheduled-rides gap review Finding #11).
         too_soon = (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat()
         args = dict(self.ARGS, scheduled_time=too_soon)
+        result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "error" in result
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_time_between_old_and_new_min_lead_rejected(self):
+        # 10 minutes out: accepted under the old 5-minute floor, correctly
+        # rejected now that the shared SCHEDULE_MIN_LEAD_MINUTES floor is 15
+        # (Finding #11 — this path previously hardcoded its own 5-minute
+        # constant, independently of the rider app's 15-minute UI rule).
+        ten_min_out = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        args = dict(self.ARGS, scheduled_time=ten_min_out)
+        result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "error" in result
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_time_beyond_max_advance_window_rejected(self):
+        # Finding #02: previously nothing stopped the AI assistant from
+        # proposing a booking arbitrarily far in the future.
+        too_far = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        args = dict(self.ARGS, scheduled_time=too_far)
         result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
         assert "error" in result

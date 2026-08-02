@@ -192,6 +192,12 @@ The 5 P0 issues represent conditions that would cause immediate security inciden
 
 ### FEAT-002 — No Scheduled Rides
 - **Issue:** Riders cannot book rides in advance. Competitive disadvantage vs. Lyft/Uber.
+- **Status (2026-08-02): shipped, superseded.** Scheduled rides now exist end-to-end
+  (`backend/utils/scheduled_rides.py`, migration `114_rides_scheduled_dispatch_flags.sql`,
+  rider-app `scheduled-rides.tsx`, corporate guest/self-booking support). This entry is
+  historical — do not treat it as a current gap. For the feature's actual current gaps
+  (driver-side reservation, no-show handling, corporate policy re-validation, etc.), see
+  the scheduled-rides gap review in the change log rather than this audit.
 
 ### FEAT-003 — No Ride Receipts
 - **Issue:** No post-trip receipt sent to rider. Required for expense claims, regulatory compliance, and customer satisfaction.

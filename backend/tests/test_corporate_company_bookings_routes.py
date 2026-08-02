@@ -284,16 +284,70 @@ async def test_cancel_booking_wrong_company_is_404():
 
 
 @pytest.mark.anyio
-async def test_cancel_booking_non_guest_ride_is_404():
-    """A ride flagged guest_booking=False on this company must not be
-    cancellable through this endpoint (it isn't a company booking)."""
+async def test_cancel_booking_self_booked_employee_ride_is_cancellable():
+    """Finding #19: a self-booked employee ride (guest_booking=False) must
+    NOT 404 through this endpoint -- it appears in the same company booking
+    list this cancel button lives on, so a company admin must be able to
+    act on it. Previously this exact case 404'd."""
     from backend.routes.corporate_company_bookings import cancel_booking
 
-    ride = {"id": "r1", "corporate_account_id": _COMPANY_ID, "guest_booking": False}
-    with patch(_CCB + "db_supabase.get_ride", AsyncMock(return_value=ride)):
-        with pytest.raises(HTTPException) as exc_info:
-            await cancel_booking("r1", _fake_request(), _MEMBER_CTX)
-    assert exc_info.value.status_code == 404
+    ride = {
+        "id": "r1",
+        "corporate_account_id": _COMPANY_ID,
+        "guest_booking": False,
+        "corporate_member_id": "member_1",
+        "rider_id": "rider_1",
+        "is_scheduled": False,
+    }
+    employee_user = {"id": "rider_1", "phone": "+13065551234"}
+    with (
+        patch(_CCB + "db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch(_CCB + "db_supabase.get_user_by_id", AsyncMock(return_value=employee_user)),
+        patch("backend.routes.rides.cancel_ride_rider", AsyncMock(return_value={"success": True})) as m_cancel,
+        patch("backend.services.guest_notification_service.notify_guest_cancelled", AsyncMock()),
+        patch("backend.utils.background.spawn", side_effect=close_spawned_coro),
+    ):
+        result = await cancel_booking("r1", _fake_request(), _MEMBER_CTX)
+
+    assert result == {"success": True}
+    m_cancel.assert_awaited_once()
+    assert m_cancel.call_args.kwargs["current_user"] == employee_user
+
+
+@pytest.mark.anyio
+async def test_cancel_booking_scheduled_ride_delegates_to_cancel_scheduled_ride():
+    """A not-yet-dispatched scheduled booking (guest or self-booked) isn't
+    in cancel_ride_rider's cancellable-states list at all -- it must go
+    through cancel_scheduled_ride instead, mirroring the rider-app's own
+    DELETE /rides/scheduled/{id} route."""
+    from backend.routes.corporate_company_bookings import cancel_booking
+
+    ride = {
+        "id": "r1",
+        "corporate_account_id": _COMPANY_ID,
+        "guest_booking": True,
+        "corporate_member_id": "member_1",
+        "rider_id": "rider_1",
+        "is_scheduled": True,
+        "status": "scheduled",
+    }
+    guest_user = {"id": "rider_1", "phone": "+13065551234"}
+    with (
+        patch(_CCB + "db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch(_CCB + "db_supabase.get_user_by_id", AsyncMock(return_value=guest_user)),
+        patch(
+            "backend.routes.rides.cancellation.cancel_scheduled_ride",
+            AsyncMock(return_value={"success": True}),
+        ) as m_cancel_scheduled,
+        patch("backend.routes.rides.cancel_ride_rider", AsyncMock()) as m_cancel_generic,
+        patch("backend.services.guest_notification_service.notify_guest_cancelled", AsyncMock()),
+        patch("backend.utils.background.spawn", side_effect=close_spawned_coro),
+    ):
+        result = await cancel_booking("r1", _fake_request(), _MEMBER_CTX)
+
+    assert result == {"success": True}
+    m_cancel_scheduled.assert_awaited_once_with("r1", request=m_cancel_scheduled.call_args.kwargs["request"], current_user=guest_user)
+    m_cancel_generic.assert_not_awaited()
 
 
 @pytest.mark.anyio

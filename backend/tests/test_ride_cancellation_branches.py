@@ -431,6 +431,111 @@ async def test_cancel_scheduled_claim_lost_falls_through_to_live_cancel_path():
     assert result["success"] is True
 
 
+async def test_cancel_scheduled_charges_notice_window_fee_when_enabled():
+    """Finding #01: a pre-dispatch scheduled cancel inside the notice window,
+    with the flag on, must charge the rider's card via charge_ancillary_fee."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.routes.rides.cancellation import cancel_scheduled_ride
+
+    soon = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    scheduled = _ride(status="scheduled", is_scheduled=True, scheduled_time=soon, payment_method="card")
+    req = _starlette_request(path="/rides/scheduled/x")
+
+    charge_mock = AsyncMock(return_value=MagicMock(status="succeeded", payment_intent_id="pi_notice_1"))
+    with (
+        patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
+        patch(
+            "backend.routes.rides.cancellation._deps.get_app_settings",
+            AsyncMock(
+                return_value={
+                    "scheduled_ride_notice_window_fee_enabled": True,
+                    "scheduled_ride_notice_window_minutes": 60,
+                    "scheduled_ride_notice_window_fee_amount": "3.00",
+                }
+            ),
+        ),
+        patch("backend.routes.rides.cancellation._deps.charge_ancillary_fee", charge_mock),
+        patch(
+            "backend.routes.rides.cancellation._deps.db_supabase.get_user_by_id",
+            AsyncMock(return_value={"stripe_customer_id": "cus_notice", "default_payment_method": "pm_notice"}),
+        ),
+    ):
+        mock_supabase.get_rows = AsyncMock(return_value=[scheduled])
+        mock_supabase.update_one = AsyncMock(return_value=scheduled)
+        mock_supabase.insert_one = AsyncMock()
+        mock_manager.send_personal_message = AsyncMock()
+        mock_manager.broadcast_ride_status = AsyncMock()
+
+        result = await cancel_scheduled_ride(ride_id=_RIDE_ID, request=req, current_user=_USER)
+
+    assert result["success"] is True
+    charge_mock.assert_awaited_once()
+    assert charge_mock.await_args.kwargs["amount"] == Decimal("3.00")
+    assert charge_mock.await_args.kwargs["fee_type"] == "scheduled_cancel_notice_fee"
+
+
+async def test_cancel_scheduled_no_fee_charge_attempted_when_flag_disabled():
+    """Default (flag off): the cancel succeeds and charge_ancillary_fee is
+    never called -- confirms the new code path is a true no-op when the
+    feature isn't explicitly enabled."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.routes.rides.cancellation import cancel_scheduled_ride
+
+    soon = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    scheduled = _ride(status="scheduled", is_scheduled=True, scheduled_time=soon, payment_method="card")
+    req = _starlette_request(path="/rides/scheduled/x")
+
+    charge_mock = AsyncMock()
+    with (
+        patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
+        patch("backend.routes.rides.cancellation._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.routes.rides.cancellation._deps.charge_ancillary_fee", charge_mock),
+    ):
+        mock_supabase.get_rows = AsyncMock(return_value=[scheduled])
+        mock_supabase.update_one = AsyncMock(return_value=scheduled)
+        mock_manager.send_personal_message = AsyncMock()
+        mock_manager.broadcast_ride_status = AsyncMock()
+
+        result = await cancel_scheduled_ride(ride_id=_RIDE_ID, request=req, current_user=_USER)
+
+    assert result["success"] is True
+    charge_mock.assert_not_awaited()
+
+
+async def test_cancel_scheduled_fee_charge_failure_does_not_block_cancellation():
+    """A fee-charge exception must never undo an already-persisted
+    cancellation -- the cancel succeeds regardless of the fee outcome."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.routes.rides.cancellation import cancel_scheduled_ride
+
+    soon = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    scheduled = _ride(status="scheduled", is_scheduled=True, scheduled_time=soon, payment_method="card")
+    req = _starlette_request(path="/rides/scheduled/x")
+
+    with (
+        patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
+        patch(
+            "backend.routes.rides.cancellation._deps.get_app_settings",
+            AsyncMock(side_effect=RuntimeError("settings db down")),
+        ),
+    ):
+        mock_supabase.get_rows = AsyncMock(return_value=[scheduled])
+        mock_supabase.update_one = AsyncMock(return_value=scheduled)
+        mock_manager.send_personal_message = AsyncMock()
+        mock_manager.broadcast_ride_status = AsyncMock()
+
+        # Must not raise -- the cancellation itself already succeeded.
+        result = await cancel_scheduled_ride(ride_id=_RIDE_ID, request=req, current_user=_USER)
+
+    assert result["success"] is True
+
+
 async def test_cancel_scheduled_claim_lost_ride_now_terminal_raises_400():
     from backend.routes.rides.cancellation import cancel_scheduled_ride
     from backend.utils.error_handling import SpinrException

@@ -471,6 +471,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         f"Limit: {limit_amount} | "
         f"Retry-After: {retry_after}s"
     )
+    _metric_inc("spinr_rate_limit_violation_total", {"path": request.url.path})
 
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,

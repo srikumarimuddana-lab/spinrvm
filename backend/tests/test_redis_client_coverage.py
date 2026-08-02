@@ -21,7 +21,6 @@ Test-only change — no application code modified.
 
 from __future__ import annotations
 
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -46,49 +45,7 @@ def _fake_redis_env(monkeypatch, url="redis://test-host:6379/0"):
     monkeypatch.setenv("REDIS_URL", url)
 
 
-def _patch_get_redis(monkeypatch, fake_client):
-    """Patch rc._get_redis() directly to return ``fake_client``.
-
-    `_get_redis()`'s own connection-creation logic (``import redis.asyncio as
-    aioredis; aioredis.from_url(...)``) is exercised by its own dedicated
-    tests below using monkeypatch.setitem on sys.modules — patching the
-    string path "redis.asyncio.from_url" via unittest.mock.patch is NOT
-    reliable here: this repo's `redis` package only gains a real `asyncio`
-    submodule attribute once something has actually imported it, and a
-    prior test elsewhere in the suite (test_coverage_boost.py's
-    TestGetRedisDirect) demonstrates that string-path patching can silently
-    bind to a stale reference under full-suite ordering. Every OTHER public
-    function in this module only cares whether `_get_redis()` returns a
-    client or None — not how that client was constructed — so patching the
-    seam directly is both simpler and immune to that fragility.
-    """
-    from backend.utils import redis_client as rc
-
-    monkeypatch.setattr(rc, "_get_redis", AsyncMock(return_value=fake_client))
-
-
 # ── _get_redis() lazy-init branches ─────────────────────────────────────────
-#
-# These exercise the real import-and-connect path, so they use the safe
-# sys.modules-patching pattern already established in test_coverage_boost.py
-# (see its TestGetRedisDirect class) rather than string-path patch(), which
-# is unreliable for this particular module per the note above.
-
-
-def _patch_redis_asyncio_module(monkeypatch, fake_aioredis):
-    """Make `import redis.asyncio as aioredis` resolve to ``fake_aioredis``.
-
-    `import a.b as x` resolves via IMPORT_FROM: it imports `a`, then does
-    `getattr(sys.modules['a'], 'b')` — NOT a direct sys.modules['a.b'] lookup.
-    Both the sys.modules entry and the attribute on the parent `redis`
-    package must be patched together for this to take effect reliably, and
-    monkeypatch (unlike the hand-rolled try/finally in test_coverage_boost.py)
-    correctly restores an attribute that didn't previously exist.
-    """
-    import redis as redis_pkg  # ensures sys.modules["redis"] exists before we patch its attribute
-
-    monkeypatch.setitem(sys.modules, "redis.asyncio", fake_aioredis)
-    monkeypatch.setattr(redis_pkg, "asyncio", fake_aioredis, raising=False)
 
 
 @pytest.mark.anyio
@@ -105,16 +62,13 @@ async def test_get_redis_connects_and_caches_client(monkeypatch):
 
     _fake_redis_env(monkeypatch)
     fake_client = MagicMock()
-    fake_aioredis = MagicMock()
-    fake_aioredis.from_url = MagicMock(return_value=fake_client)
-    _patch_redis_asyncio_module(monkeypatch, fake_aioredis)
-
-    first = await rc._get_redis()
-    second = await rc._get_redis()
+    with patch("redis.asyncio.from_url", return_value=fake_client) as from_url:
+        first = await rc._get_redis()
+        second = await rc._get_redis()
 
     assert first is fake_client
     assert second is fake_client
-    fake_aioredis.from_url.assert_called_once()  # cached — second call must not reconnect
+    from_url.assert_called_once()  # cached — second call must not reconnect
 
 
 @pytest.mark.anyio
@@ -124,13 +78,10 @@ async def test_get_redis_reconnects_when_url_changes(monkeypatch):
     _fake_redis_env(monkeypatch, "redis://host-a:6379/0")
     client_a = MagicMock()
     client_b = MagicMock()
-    fake_aioredis = MagicMock()
-    fake_aioredis.from_url = MagicMock(side_effect=[client_a, client_b])
-    _patch_redis_asyncio_module(monkeypatch, fake_aioredis)
-
-    first = await rc._get_redis()
-    monkeypatch.setenv("REDIS_URL", "redis://host-b:6379/0")
-    second = await rc._get_redis()
+    with patch("redis.asyncio.from_url", side_effect=[client_a, client_b]):
+        first = await rc._get_redis()
+        monkeypatch.setenv("REDIS_URL", "redis://host-b:6379/0")
+        second = await rc._get_redis()
 
     assert first is client_a
     assert second is client_b
@@ -141,11 +92,8 @@ async def test_get_redis_falls_back_to_none_on_connect_failure(monkeypatch):
     from backend.utils import redis_client as rc
 
     _fake_redis_env(monkeypatch)
-    fake_aioredis = MagicMock()
-    fake_aioredis.from_url = MagicMock(side_effect=RuntimeError("connect refused"))
-    _patch_redis_asyncio_module(monkeypatch, fake_aioredis)
-
-    result = await rc._get_redis()
+    with patch("redis.asyncio.from_url", side_effect=RuntimeError("connect refused")):
+        result = await rc._get_redis()
     assert result is None
 
 
@@ -169,8 +117,8 @@ async def test_redis_get_delegates_to_real_client(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.get = AsyncMock(return_value="from-redis")
-    _patch_get_redis(monkeypatch, fake)
-    result = await rc.redis_get("k1")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        result = await rc.redis_get("k1")
     assert result == "from-redis"
     fake.get.assert_awaited_once_with("k1")
 
@@ -185,9 +133,9 @@ async def test_redis_get_raises_when_configured_but_erroring(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.get = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    with pytest.raises(ConnectionError):
-        await rc.redis_get("k1")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        with pytest.raises(ConnectionError):
+            await rc.redis_get("k1")
 
 
 @pytest.mark.anyio
@@ -216,8 +164,8 @@ async def test_redis_mget_delegates_to_real_client(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.mget = AsyncMock(return_value=["1", None, "3"])
-    _patch_get_redis(monkeypatch, fake)
-    result = await rc.redis_mget(["a", "b", "c"])
+    with patch("redis.asyncio.from_url", return_value=fake):
+        result = await rc.redis_mget(["a", "b", "c"])
     assert result == ["1", None, "3"]
     fake.mget.assert_awaited_once_with(["a", "b", "c"])
 
@@ -229,9 +177,9 @@ async def test_redis_mget_raises_when_configured_but_erroring(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.mget = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    with pytest.raises(ConnectionError):
-        await rc.redis_mget(["a"])
+    with patch("redis.asyncio.from_url", return_value=fake):
+        with pytest.raises(ConnectionError):
+            await rc.redis_mget(["a"])
 
 
 # ── redis_set (with/without TTL) ────────────────────────────────────────────
@@ -245,8 +193,8 @@ async def test_redis_set_with_ttl_uses_setex_on_real_client(monkeypatch):
     fake = MagicMock()
     fake.setex = AsyncMock()
     fake.set = AsyncMock()
-    _patch_get_redis(monkeypatch, fake)
-    await rc.redis_set("k1", "v1", ttl=60)
+    with patch("redis.asyncio.from_url", return_value=fake):
+        await rc.redis_set("k1", "v1", ttl=60)
     fake.setex.assert_awaited_once_with("k1", 60, "v1")
     fake.set.assert_not_awaited()
 
@@ -259,8 +207,8 @@ async def test_redis_set_without_ttl_uses_set_on_real_client(monkeypatch):
     fake = MagicMock()
     fake.setex = AsyncMock()
     fake.set = AsyncMock()
-    _patch_get_redis(monkeypatch, fake)
-    await rc.redis_set("k1", "v1")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        await rc.redis_set("k1", "v1")
     fake.set.assert_awaited_once_with("k1", "v1")
     fake.setex.assert_not_awaited()
 
@@ -272,9 +220,9 @@ async def test_redis_set_raises_when_configured_but_erroring(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.set = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    with pytest.raises(ConnectionError):
-        await rc.redis_set("k1", "v1")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        with pytest.raises(ConnectionError):
+            await rc.redis_set("k1", "v1")
 
 
 @pytest.mark.anyio
@@ -312,8 +260,8 @@ async def test_set_nx_delegates_to_real_client(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.set = AsyncMock(return_value=True)
-    _patch_get_redis(monkeypatch, fake)
-    result = await rc.redis_set_nx("lock:job", "replica-1", ttl=30)
+    with patch("redis.asyncio.from_url", return_value=fake):
+        result = await rc.redis_set_nx("lock:job", "replica-1", ttl=30)
     assert result is True
     fake.set.assert_awaited_once_with("lock:job", "replica-1", nx=True, ex=30)
 
@@ -325,8 +273,8 @@ async def test_set_nx_real_client_returns_false_when_not_acquired(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.set = AsyncMock(return_value=None)  # NX miss
-    _patch_get_redis(monkeypatch, fake)
-    result = await rc.redis_set_nx("lock:job", "replica-1", ttl=30)
+    with patch("redis.asyncio.from_url", return_value=fake):
+        result = await rc.redis_set_nx("lock:job", "replica-1", ttl=30)
     assert result is False
 
 
@@ -340,8 +288,8 @@ async def test_set_nx_falls_back_to_local_on_redis_error(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.set = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    result = await rc.redis_set_nx("lock:job", "replica-1", ttl=30)
+    with patch("redis.asyncio.from_url", return_value=fake):
+        result = await rc.redis_set_nx("lock:job", "replica-1", ttl=30)
     assert result is True  # acquired via the local fallback despite the Redis error
 
 
@@ -365,8 +313,8 @@ async def test_incr_delegates_to_real_client(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.incr = AsyncMock(return_value=4)
-    _patch_get_redis(monkeypatch, fake)
-    result = await rc.redis_incr("counter")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        result = await rc.redis_incr("counter")
     assert result == 4
     fake.incr.assert_awaited_once_with("counter")
 
@@ -378,8 +326,8 @@ async def test_incrby_delegates_to_real_client(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.incrby = AsyncMock(return_value=9)
-    _patch_get_redis(monkeypatch, fake)
-    result = await rc.redis_incrby("counter", 5)
+    with patch("redis.asyncio.from_url", return_value=fake):
+        result = await rc.redis_incrby("counter", 5)
     assert result == 9
     fake.incrby.assert_awaited_once_with("counter", 5)
 
@@ -391,9 +339,9 @@ async def test_incrby_raises_when_configured_but_erroring(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.incrby = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    with pytest.raises(ConnectionError):
-        await rc.redis_incrby("counter", 5)
+    with patch("redis.asyncio.from_url", return_value=fake):
+        with pytest.raises(ConnectionError):
+            await rc.redis_incrby("counter", 5)
 
 
 @pytest.mark.anyio
@@ -403,9 +351,9 @@ async def test_incr_raises_when_configured_but_erroring(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.incr = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    with pytest.raises(ConnectionError):
-        await rc.redis_incr("counter")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        with pytest.raises(ConnectionError):
+            await rc.redis_incr("counter")
 
 
 @pytest.mark.anyio
@@ -450,8 +398,8 @@ async def test_expire_delegates_to_real_client(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.expire = AsyncMock()
-    _patch_get_redis(monkeypatch, fake)
-    await rc.redis_expire("k1", 30)
+    with patch("redis.asyncio.from_url", return_value=fake):
+        await rc.redis_expire("k1", 30)
     fake.expire.assert_awaited_once_with("k1", 30)
 
 
@@ -462,9 +410,9 @@ async def test_expire_raises_when_configured_but_erroring(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.expire = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    with pytest.raises(ConnectionError):
-        await rc.redis_expire("k1", 30)
+    with patch("redis.asyncio.from_url", return_value=fake):
+        with pytest.raises(ConnectionError):
+            await rc.redis_expire("k1", 30)
 
 
 @pytest.mark.anyio
@@ -474,8 +422,8 @@ async def test_delete_delegates_to_real_client(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.delete = AsyncMock()
-    _patch_get_redis(monkeypatch, fake)
-    await rc.redis_delete("k1")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        await rc.redis_delete("k1")
     fake.delete.assert_awaited_once_with("k1")
 
 
@@ -486,9 +434,9 @@ async def test_delete_raises_when_configured_but_erroring(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.delete = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    with pytest.raises(ConnectionError):
-        await rc.redis_delete("k1")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        with pytest.raises(ConnectionError):
+            await rc.redis_delete("k1")
 
 
 # ── redis_delete_pattern ─────────────────────────────────────────────────────
@@ -522,8 +470,8 @@ async def test_delete_pattern_delegates_to_real_client_scan(monkeypatch):
 
     fake.scan_iter = _scan_iter
     fake.delete = AsyncMock()
-    _patch_get_redis(monkeypatch, fake)
-    deleted = await rc.redis_delete_pattern("cache:user:*")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        deleted = await rc.redis_delete_pattern("cache:user:*")
 
     assert deleted == 2
     fake.delete.assert_awaited_once_with("cache:user:1", "cache:user:2")
@@ -542,8 +490,8 @@ async def test_delete_pattern_no_matches_skips_delete_call(monkeypatch):
 
     fake.scan_iter = _scan_iter
     fake.delete = AsyncMock()
-    _patch_get_redis(monkeypatch, fake)
-    deleted = await rc.redis_delete_pattern("cache:user:*")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        deleted = await rc.redis_delete_pattern("cache:user:*")
 
     assert deleted == 0
     fake.delete.assert_not_awaited()
@@ -561,9 +509,9 @@ async def test_delete_pattern_raises_when_configured_but_erroring(monkeypatch):
         yield  # pragma: no cover
 
     fake.scan_iter = _scan_iter
-    _patch_get_redis(monkeypatch, fake)
-    with pytest.raises(ConnectionError):
-        await rc.redis_delete_pattern("cache:user:*")
+    with patch("redis.asyncio.from_url", return_value=fake):
+        with pytest.raises(ConnectionError):
+            await rc.redis_delete_pattern("cache:user:*")
 
 
 # ── get_redis_stats ──────────────────────────────────────────────────────────
@@ -605,8 +553,8 @@ async def test_get_redis_stats_real_client_computes_percent(monkeypatch):
         ]
     )
     fake.dbsize = AsyncMock(return_value=42)
-    _patch_get_redis(monkeypatch, fake)
-    stats = await rc.get_redis_stats()
+    with patch("redis.asyncio.from_url", return_value=fake):
+        stats = await rc.get_redis_stats()
 
     assert stats["backend"] == "redis"
     assert stats["connected"] is True
@@ -630,8 +578,8 @@ async def test_get_redis_stats_real_client_zero_maxmemory_gives_none_percent(mon
         ]
     )
     fake.dbsize = AsyncMock(return_value=1)
-    _patch_get_redis(monkeypatch, fake)
-    stats = await rc.get_redis_stats()
+    with patch("redis.asyncio.from_url", return_value=fake):
+        stats = await rc.get_redis_stats()
 
     assert stats["used_memory_percent"] is None
     assert stats["maxmemory_human"] == "unlimited"
@@ -644,8 +592,8 @@ async def test_get_redis_stats_info_failure_returns_error_shape(monkeypatch):
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.info = AsyncMock(side_effect=ConnectionError("redis down"))
-    _patch_get_redis(monkeypatch, fake)
-    stats = await rc.get_redis_stats()
+    with patch("redis.asyncio.from_url", return_value=fake):
+        stats = await rc.get_redis_stats()
 
     assert stats == {"backend": "redis", "connected": False, "error": "redis down"}
 
@@ -695,8 +643,8 @@ async def test_count_keys_by_prefix_real_client_scan(monkeypatch):
             yield k
 
     fake.scan_iter = _scan_iter
-    _patch_get_redis(monkeypatch, fake)
-    counts = await rc.count_keys_by_prefix()
+    with patch("redis.asyncio.from_url", return_value=fake):
+        counts = await rc.count_keys_by_prefix()
 
     assert counts["cache:user:"] == 1
     assert counts["cache:driver:"] == 1
@@ -714,8 +662,8 @@ async def test_count_keys_by_prefix_decodes_bytes_keys(monkeypatch):
         yield b"otp:15550001234"
 
     fake.scan_iter = _scan_iter
-    _patch_get_redis(monkeypatch, fake)
-    counts = await rc.count_keys_by_prefix()
+    with patch("redis.asyncio.from_url", return_value=fake):
+        counts = await rc.count_keys_by_prefix()
 
     assert counts["otp:"] == 1
 
@@ -736,8 +684,8 @@ async def test_count_keys_by_prefix_scan_failure_returns_zeroed_counts(monkeypat
         yield  # pragma: no cover
 
     fake.scan_iter = _scan_iter
-    _patch_get_redis(monkeypatch, fake)
-    counts = await rc.count_keys_by_prefix()
+    with patch("redis.asyncio.from_url", return_value=fake):
+        counts = await rc.count_keys_by_prefix()
 
     assert counts["__other__"] == 0
     assert all(v == 0 for v in counts.values())

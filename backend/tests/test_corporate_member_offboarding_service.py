@@ -68,6 +68,44 @@ async def test_race_ride_left_pre_trip_state_is_skipped():
 
 @pytest.mark.unit
 @pytest.mark.anyio
+async def test_scheduled_status_is_included_in_the_pre_pickup_filter():
+    """Finding #16: an offboarded member's not-yet-dispatched scheduled
+    ride must be included -- previously excluded, so it kept dispatching
+    and billing against a member who should no longer have access."""
+    with patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock_get_rows:
+        await svc.cancel_pre_pickup_rides_for_member("c1", "m1")
+
+    filters = mock_get_rows.await_args.args[1]
+    assert "scheduled" in filters["status"]["$in"]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_cancels_scheduled_ride_with_no_driver_release_needed():
+    ride = ride_row(
+        status="scheduled", driver_id=None, corporate_account_id="c1", corporate_member_id="m1", is_scheduled=True
+    )
+
+    with (
+        patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=[ride])),
+        patch.object(svc.db_supabase, "update_one", AsyncMock(return_value={"id": ride["id"]})),
+        patch.object(svc.db_supabase, "set_driver_available", AsyncMock()) as mock_set_avail,
+        patch.object(svc, "record_period_transition", AsyncMock()) as mock_period,
+        patch.object(svc.manager, "send_personal_message", AsyncMock()) as mock_ws,
+        patch.object(svc, "send_push_notification", AsyncMock()) as mock_push,
+    ):
+        cancelled = await svc.cancel_pre_pickup_rides_for_member("c1", "m1")
+
+    assert cancelled == 1
+    mock_set_avail.assert_not_awaited()
+    mock_period.assert_not_awaited()
+    mock_ws.assert_awaited_once()
+    assert mock_ws.await_args.args[1] == f"rider_{ride['rider_id']}"
+    mock_push.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
 async def test_one_ride_failure_does_not_stop_the_rest():
     ride_ok = ride_row(id="r1", status="searching", driver_id=None, corporate_member_id="m1")
     ride_bad = ride_row(id="r2", status="searching", driver_id=None, corporate_member_id="m1")

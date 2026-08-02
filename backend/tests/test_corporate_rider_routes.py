@@ -405,6 +405,7 @@ def test_submit_request_auto_approved_applies_grant(test_client, rider_override)
         patch(
             "routes.corporate_rider.apply_grant", AsyncMock(return_value={"master_balance_after": "400.00"})
         ) as m_grant,
+        patch("routes.corporate_rider.upsert_member_allowance", AsyncMock(return_value={})) as m_upsert,
     ):
         resp = test_client.post(
             "/rider/work-profile/c1/allowance-requests",
@@ -415,6 +416,9 @@ def test_submit_request_auto_approved_applies_grant(test_client, rider_override)
     m_grant.assert_awaited_once()
     assert m_grant.call_args.kwargs["wallet_id"] == "w1"
     assert m_grant.call_args.kwargs["allowance_id"] == "a1"
+    # Corporate + admin portal review, High #1: the auto-approve counter must
+    # actually advance, not stay a permanent no-op.
+    m_upsert.assert_awaited_once_with(member_id="m1", patch={"auto_approved_this_period": 1})
 
 
 @pytest.mark.anyio
@@ -494,6 +498,7 @@ def test_allowance_request_auto_approves_within_cap(test_client, rider_override)
             "routes.corporate_rider.apply_grant",
             AsyncMock(return_value={"ok": True}),
         ) as apply_grant_mock,
+        patch("routes.corporate_rider.upsert_member_allowance", AsyncMock(return_value={})),
     ):
         resp = test_client.post(
             "/rider/work-profile/c1/allowance-requests",

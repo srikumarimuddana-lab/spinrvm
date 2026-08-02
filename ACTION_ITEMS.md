@@ -1184,12 +1184,46 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         Act driver-eligibility — expired documents must suspend the driver).
     - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
       scoping note** (55 more files, not itemized individually here —
-      notable large ones: `routes/webhooks.py` 75.40%/748 stmts Stripe-
-      adjacent, `routes/promotions.py` 65.85%, `utils/payment_retry.py`
-      72.54%, `repositories/driver_repo.py` 72.99%, `routes/disputes.py`
+      notable remaining large ones: `routes/webhooks.py` 75.40%/748 stmts
+      Stripe-adjacent, `routes/promotions.py` 65.85%,
+      `repositories/driver_repo.py` 72.99%, `routes/disputes.py`
       73.88% — full list reproducible via the same `--cov=.` command
       above; a future session should re-run it rather than trust this
       snapshot going stale).
+      - `utils/payment_retry.py` — **CLOSED, 72.54% → 99%** (2026-08-02,
+        244 stmts, 67→2 missing; measured via
+        `pytest tests/test_payment_retry.py tests/test_payment_retry_coverage.py
+        tests/test_cancellation_fee_card_charge.py
+        tests/test_e4_d10_payment_3ds_quests.py tests/test_guest_auto_settle.py
+        tests/test_replay_safety_payment_loops.py tests/test_stripe_charge.py
+        --cov=utils.payment_retry --cov-report=term-missing`). Picked ahead
+        of Sub-tier C's raw ranking — same "real-world consequence" call as
+        the earlier `reconciliation.py` pick — because a bug here means a
+        rider's failed payment or a driver's stuck payout silently never
+        retries. `tests/test_payment_retry.py` already covered the core
+        double-charge guard (atomic claim race, invoice-skip,
+        `requires_capture` happy/edge paths, unexpected-intent-state
+        release) in detail but had zero coverage of the Meta
+        Purchase-conversion side hook, the invoice-claim staleness helper,
+        the admin-alert/payout-notify error-swallow branches, the
+        24h-age/30-min-processing-window scan skips, the
+        `admin_alerted_payment_exhausted` claim race, the guest-corporate
+        settlement sweep, and the `payment_retry_loop` background loop
+        itself. Added `backend/tests/test_payment_retry_coverage.py` (40
+        tests, kept as a separate file alongside the existing one — same
+        pattern as `test_redis_client_coverage.py`) covering all of the
+        above, run together with every existing payment test file touching
+        this module (106 passed, 0 collisions). Test-only, no application
+        code changed. **No bugs found** — every exception branch behaves as
+        documented (loud `logger.error(..., exc_info=True)`, no silent
+        swallow of a money-moving error; the two `logger.debug`
+        push-notification swallows are best-effort side channels, not the
+        retry-state source of truth). Remaining 2 uncovered lines are the
+        dual-import `ImportError` fallback for
+        `utils.loop_monitor.record_heartbeat`, structurally unreachable in
+        this test harness (same documented pattern as prior Sub-tier B
+        files). See
+        `docs/change-log/2026-08-02-a1c-payment-retry-coverage.md`.
     - First file since this scoping pass picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB

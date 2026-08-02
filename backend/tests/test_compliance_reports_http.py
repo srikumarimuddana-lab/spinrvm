@@ -638,6 +638,38 @@ def test_airport_trips_requires_admin_auth(test_client):
     assert resp.status_code in (401, 403)
 
 
+def test_airport_trips_rider_name_falls_back_when_null_not_none_none(admin_client):
+    """Regression: users.first_name/last_name are real columns that are
+    frequently NULL (not missing keys) — a plain `.get(k, "")` treated a
+    present-but-None value as if the key were absent and never fell back,
+    producing the literal string "None None" in the Rider Name column
+    instead of a usable value."""
+    ride_with_rider = {**_AIRPORT_RIDE, "rider_id": "u1"}
+
+    def get_rows_side(table, filters=None, **kw):
+        if table == "rides":
+            return [ride_with_rider]
+        if table == "drivers":
+            return [_AIRPORT_DRIVER]
+        if table == "users":
+            return [{"id": "u1", "first_name": None, "last_name": None, "phone": "+14375551234"}]
+        if table == "service_areas":
+            return [{"id": "sa1", "name": "Regina"}]
+        return []
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/airport-trips?format=csv")
+
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+    assert "None None" not in body
+    assert "1234" in body  # PIPEDA-safe phone-last-4 fallback, never the full number
+    assert "+14375551234" not in body
+
+
 def test_airport_trips_filters_out_non_airport_rides(admin_client):
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_airport_get_rows_side)),
@@ -651,6 +683,25 @@ def test_airport_trips_filters_out_non_airport_rides(admin_client):
     assert "18.2" in body or "18.20" in body
     assert "Black Toyota Camry — SGI-123" in body  # vehicle registration for the authority's invoice
     assert "456 Elm St" not in body  # non-airport ride excluded
+
+
+def test_airport_trips_has_leading_serial_number_column(admin_client):
+    """A report with no row numbers reads as an unfinished data dump —
+    every Compliance report gets a leading serial-number column, applied
+    once in _render_tabular_report so every report/format picks it up
+    uniformly. CSV headers are the raw fieldnames (csv.DictWriter writes
+    fieldnames verbatim, no title-casing) — "s_no", not "S No"."""
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_airport_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/airport-trips?format=csv")
+    assert resp.status_code == 200
+    lines = resp.content.decode("utf-8-sig").splitlines()
+    header = lines[0].split(",")
+    assert header[0] == "s_no"
+    first_data_row = lines[1].split(",")
+    assert first_data_row[0] == "1"
 
 
 def test_airport_trips_503_on_db_failure(admin_client):

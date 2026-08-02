@@ -275,6 +275,87 @@ def test_update_member_role_change_does_not_trigger_revocation(test_client, ride
     mock_cancel.assert_not_awaited()
 
 
+def test_update_member_role_change_writes_audit_log(test_client, rider_override):
+    """Corporate + admin portal review, gap #38: a role change (privilege
+    escalation/de-escalation) went through the same PATCH endpoint as
+    status changes but was never audit-logged."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active", "role": "member"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "active", "role": "admin"}),
+        ),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.patch("/company/c1/members/m1", json={"role": "admin"})
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_member_role_changed"
+    assert mock_audit.await_args.kwargs["details"]["old_role"] == "member"
+    assert mock_audit.await_args.kwargs["details"]["new_role"] == "admin"
+
+
+def test_update_member_same_role_does_not_write_audit_log(test_client, rider_override):
+    """Re-submitting the current role must not spam the audit trail."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active", "role": "admin"}),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "active", "role": "admin"}),
+        ),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.patch("/company/c1/members/m1", json={"role": "admin"})
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_not_awaited()
+
+
+def test_update_member_policy_override_change_writes_audit_log(test_client, rider_override):
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(
+                return_value={
+                    "id": "m1",
+                    "company_id": "c1",
+                    "status": "active",
+                    "role": "member",
+                    "policy_override": False,
+                }
+            ),
+        ),
+        patch(
+            "routes.corporate_company.update_corporate_member",
+            AsyncMock(return_value={"id": "m1", "status": "active", "policy_override": True}),
+        ),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.patch("/company/c1/members/m1", json={"policy_override": True})
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_member_policy_override_changed"
+    assert mock_audit.await_args.kwargs["details"]["old_policy_override"] is False
+    assert mock_audit.await_args.kwargs["details"]["new_policy_override"] is True
+
+
 def test_add_allowed_domain_lowercases(test_client, rider_override):
     with (
         patch(
@@ -293,6 +374,43 @@ def test_add_allowed_domain_lowercases(test_client, rider_override):
     assert resp.status_code == 200, resp.text
     m_add.assert_awaited_once()
     assert m_add.await_args.kwargs["domain"] == "acme.com"
+
+
+def test_add_allowed_domain_writes_audit_log(test_client, rider_override):
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.add_allowed_domain",
+            AsyncMock(return_value={"company_id": "c1", "domain": "acme.com"}),
+        ),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.post("/company/c1/allowed-domains", json={"domain": "Acme.COM"})
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_allowed_domain_added"
+    # AllowedDomainCreate's field_validator already lowercases before the
+    # route ever sees it.
+    assert mock_audit.await_args.kwargs["resource_id"] == "acme.com"
+
+
+def test_remove_allowed_domain_writes_audit_log(test_client, rider_override):
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch("routes.corporate_company.delete_allowed_domain", AsyncMock()),
+        patch("routes.corporate_company.log_user_action", AsyncMock()) as mock_audit,
+    ):
+        resp = test_client.delete("/company/c1/allowed-domains/Acme.COM")
+    assert resp.status_code == 200, resp.text
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["action"] == "corporate_allowed_domain_removed"
+    assert mock_audit.await_args.kwargs["resource_id"] == "acme.com"
 
 
 # ── Policy CRUD ───────────────────────────────────────────────────────────────

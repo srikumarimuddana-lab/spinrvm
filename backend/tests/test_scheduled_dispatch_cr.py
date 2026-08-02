@@ -234,13 +234,19 @@ class TestScheduledDispatch:
             return []
 
         with (
+            # Isolate the app_settings lookup (Finding #07's kill switch)
+            # from the rides query below — both go through db.get_rows, and
+            # asserting on "the first call" would otherwise be order-
+            # dependent on an unrelated lookup this test isn't about.
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_dispatch_enabled": True})),
             patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
             patch.object(sr.db, "get_rows", AsyncMock(side_effect=_get_rows)),
         ):
             await sr.check_scheduled_rides()
 
-        assert get_rows_calls, "scheduled rides were never queried"
-        _, filters = get_rows_calls[0]
+        rides_calls = [(t, f) for t, f in get_rows_calls if t == "rides"]
+        assert rides_calls, "scheduled rides were never queried"
+        _, filters = rides_calls[0]
         assert filters.get("status") == "scheduled"
         assert filters.get("is_scheduled") is True
 
@@ -440,3 +446,80 @@ class TestSendReminderIdempotency:
         push_mock.assert_awaited_once()
         # But the flag write is retried and this time succeeds.
         update_mock.assert_awaited_once_with("rides", {"id": RIDE_ID}, {"$set": {"reminder_sent": True}})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #07 (ACTION_ITEMS.md E5): scheduled_dispatch_enabled kill switch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestDispatchKillSwitch:
+    async def test_disabled_skips_the_tick_entirely(self):
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_dispatch_enabled": False})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is None
+        # Disabled means no work at all — not even the leader-lock Redis
+        # call, let alone the candidate query.
+        get_rows_mock.assert_not_awaited()
+
+    async def test_disabled_tick_does_not_count_as_a_failure(self):
+        """A kill-switch pause must not trip Finding #13's sustained-failure
+        alert — it's an intentional admin action, not an outage."""
+        from backend.utils import scheduled_rides as sr
+
+        call_count = {"n": 0}
+
+        async def _fake_sleep(_seconds):
+            call_count["n"] += 1
+            if call_count["n"] >= sr._FETCH_FAILURE_ALERT_THRESHOLD + 2:
+                raise StopAsyncIteration
+
+        with (
+            patch.object(sr, "check_scheduled_rides", AsyncMock(return_value=None)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.asyncio, "sleep", _fake_sleep),
+            patch.object(sr, "_record_heartbeat", lambda *_a, **_k: None),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await sr.scheduled_ride_dispatcher_loop()
+
+        metric_inc.assert_not_called()
+
+    async def test_enabled_by_default_proceeds_normally(self):
+        """Default AppSettings (or a settings-lookup failure) must not
+        accidentally disable dispatch — fail open, not closed."""
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={})),  # key absent -> defaults True
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is True
+        get_rows_mock.assert_awaited_once()
+
+    async def test_settings_lookup_failure_fails_open(self):
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(side_effect=RuntimeError("settings db down"))),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is True
+        get_rows_mock.assert_awaited_once()

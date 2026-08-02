@@ -245,6 +245,14 @@ class AppSettings(BaseModel):
     # the un-flagged behavior (fail open) was a bug. Flip to false only to
     # roll back without a redeploy. See routes/rides/booking.py.
     corporate_inactive_company_blocks_booking: bool = True
+    # Kill switch for the scheduled-ride dispatcher loop (utils/scheduled_rides.py).
+    # ACTION_ITEMS.md E5: scheduled dispatch was one of the risky background
+    # loops with no way to pause it short of a redeploy. Defaults to true
+    # (current, always-on behavior). Flip to false to stop the loop from
+    # claiming/dispatching or sending reminders for scheduled rides — already-
+    # scheduled rides stay parked in status='scheduled' and dispatch normally
+    # once this is flipped back on; nothing is lost or cancelled by disabling it.
+    scheduled_dispatch_enabled: bool = True
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no

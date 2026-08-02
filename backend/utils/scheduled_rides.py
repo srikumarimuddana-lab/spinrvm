@@ -40,6 +40,11 @@ try:
 except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore[no-redef]
 
+try:
+    from ..settings_loader import get_app_settings
+except ImportError:
+    from settings_loader import get_app_settings  # type: ignore[no-redef]
+
 logger = logging.getLogger(__name__)
 
 # Candidates-per-tick cap in check_scheduled_rides(). Ordered ascending by
@@ -366,8 +371,22 @@ async def check_scheduled_rides() -> Optional[bool]:
     this tick was skipped because another replica holds the leader lock. The
     caller (scheduled_ride_dispatcher_loop) uses this to track consecutive
     fetch failures across ticks — a skip is neither a success nor a failure,
-    so it must not reset or advance that counter.
+    so it must not reset or advance that counter. A disabled kill switch
+    (ACTION_ITEMS.md E5) also returns None for the same reason: an admin
+    pause is not a failure, and must not count toward the sustained-failure
+    alert in Finding #13.
     """
+    try:
+        settings = await get_app_settings()
+        if not settings.get("scheduled_dispatch_enabled", True):
+            return None
+    except Exception as settings_err:
+        # Never let a settings-lookup hiccup silently disable dispatch —
+        # fail open (proceed as if enabled) and log loudly, mirroring the
+        # rest of this file's "surface loudly, don't let it block dispatch"
+        # convention for non-dispatch-critical failures.
+        logger.warning(f"scheduled_rides: app_settings lookup failed ({settings_err}), proceeding as enabled")
+
     try:
         if not await redis_set_nx("spinr:scheduled_rides:lock", "1", ttl=90):
             return None

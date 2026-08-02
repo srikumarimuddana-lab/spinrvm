@@ -124,6 +124,7 @@ from routes.corporate_company_bookings import router as corporate_company_bookin
 from routes.corporate_company_kyb import router as corporate_company_kyb_router
 from routes.corporate_rider import router as corporate_rider_router
 from routes.corporate_signup import router as corporate_signup_router
+from routes.corporate_subscriptions import router as corporate_subscriptions_router
 from routes.corporate_wallet import router as corporate_wallet_router
 from routes.disputes import api_router as disputes_router
 from routes.drivers import api_router as drivers_router
@@ -317,7 +318,12 @@ v1_api_router.include_router(documents_router)
 v1_api_router.include_router(admin_documents_router)
 v1_api_router.include_router(drivers_router)
 v1_api_router.include_router(admin_router)
-v1_api_router.include_router(corporate_accounts_router, dependencies=[Depends(require_module("corporate_accounts"))])
+# corporate_wallet_router and corporate_subscriptions_router each expose static
+# single-segment paths (/wallet-portfolio, /subscription-plans) under the same
+# /admin/corporate-accounts prefix as corporate_accounts_router's catch-all
+# GET /{account_id}. FastAPI matches by registration order, so both must be
+# included BEFORE corporate_accounts_router or those static paths get swallowed
+# by /{account_id} (a company named e.g. "wallet-portfolio" would 404 instead).
 # Canonical /api/v1 twin for the corporate wallet admin routes
 # (/admin/corporate-accounts/{id}/wallet/...). Also mounted at /api below for
 # backward compat; the admin dashboard now calls the /api/v1 paths.
@@ -325,6 +331,7 @@ v1_api_router.include_router(corporate_wallet_router, dependencies=[Depends(requ
 v1_api_router.include_router(
     corporate_subscriptions_router, dependencies=[Depends(require_module("corporate_accounts"))]
 )
+v1_api_router.include_router(corporate_accounts_router, dependencies=[Depends(require_module("corporate_accounts"))])
 v1_api_router.include_router(users_router)
 v1_api_router.include_router(addresses_router)
 v1_api_router.include_router(payments_router)
@@ -389,12 +396,15 @@ app.include_router(settings_router, prefix="/api/v1")
 # Mount admin routes under /api so the admin dashboard can reach them at /api/admin/...
 app.include_router(admin_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
-app.include_router(
-    corporate_accounts_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))]
-)
+# See the ordering note above v1_api_router's equivalent block: the static
+# single-segment routers must be included before corporate_accounts_router's
+# catch-all GET /{account_id}.
 app.include_router(corporate_wallet_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))])
 app.include_router(
     corporate_subscriptions_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))]
+)
+app.include_router(
+    corporate_accounts_router, prefix="/api", dependencies=[Depends(require_module("corporate_accounts"))]
 )
 # Corporate member/allowance/domain endpoints served at root (`/company/{id}/...`)
 # because the rider app calls /company/{id}/policy and /company/{id}/allowances

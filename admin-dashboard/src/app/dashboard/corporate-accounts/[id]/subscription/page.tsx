@@ -11,7 +11,7 @@ import {
     assignCompanySubscription,
     cancelCompanySubscription,
     getCompanySubscription,
-    getSubscriptionPlans,
+    getCorporateSubscriptionPlans,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -64,7 +64,7 @@ export default function CompanySubscriptionPage() {
         try {
             const [sub, plansResp] = await Promise.all([
                 getCompanySubscription(companyId),
-                getSubscriptionPlans(),
+                getCorporateSubscriptionPlans(),
             ]);
             setData(sub);
             setPlans(plansResp.plans);

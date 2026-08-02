@@ -315,7 +315,7 @@ Test tiers:
 Coverage minimums (per domain):
 - `routes/payments.py`, `services/fare_service.py`, `utils/crypto.py`: ≥ 90%
 - `routes/rides.py`, `services/dispatch_service.py`: ≥ 80%
-- `routes/corporate_*.py`, `services/corporate_*.py`: **target ≥ 80%** (same tier as rides/dispatch — moves real money via `corporate_wallet_apply_delta`). As of 2026-07-28 the module averages ~52% aggregate (new code from the corporate lifecycle audit is 79–90%; pre-existing files like `corporate_accounts.py` at 39% and `corporate_signup.py`/`corporate_rider.py`/`corporate_company_kyb.py` at 32–33% are the gap). Not yet enforced by a `--cov-fail-under` gate on this module specifically — closing it is tracked as its own backlog item, not blocking new corporate PRs in the meantime.
+- `routes/corporate_*.py`, `services/corporate_*.py`: **target ≥ 80%**, now met (same tier as rides/dispatch — moves real money via `corporate_wallet_apply_delta`). As of 2026-08-02 the module averages ~92% aggregate across `routes/corporate_accounts.py` (97%), `routes/corporate_company.py` (88%), `routes/corporate_company_bookings.py` (91%), `routes/corporate_company_kyb.py` (98%), `routes/corporate_rider.py` (97%), `routes/corporate_signup.py` (89%), `routes/corporate_subscriptions.py` (93%), `routes/corporate_wallet.py` (88%), and the `services/corporate_*.py` files (79–100%) — the earlier gap (2026-07-28: ~52% aggregate, `corporate_accounts.py` at 39%, `corporate_signup.py`/`corporate_rider.py`/`corporate_company_kyb.py` at 32–33%) closed as round-2 corporate/admin review work added tests alongside each fix. Not yet enforced by a `--cov-fail-under` gate on this module specifically.
 - Admin routes, utilities: ≥ 70%
 
 What must have a test:

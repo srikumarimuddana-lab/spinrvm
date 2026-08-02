@@ -107,7 +107,7 @@ export {
     walletAdjust,
     getWalletRiskPortfolio,
     getKybReverificationDue,
-    getSubscriptionPlans,
+    getCorporateSubscriptionPlans,
     getCompanySubscription,
     assignCompanySubscription,
     cancelCompanySubscription,

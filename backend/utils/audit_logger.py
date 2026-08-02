@@ -34,9 +34,8 @@ try:
     from .. import db_supabase
     from .log_context import get_request_id
 except ImportError:
-    from log_context import get_request_id
-
     import db_supabase
+    from utils.log_context import get_request_id
 
 
 async def log_user_action(

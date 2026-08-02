@@ -213,6 +213,7 @@ except ImportError:
         update_corporate_account_status,
         update_corporate_member,
         update_corporate_stripe_customer_id,
+        update_corporate_subscription,
         update_corporate_wallet_config,
         upsert_corporate_policy,
         upsert_member_allowance,

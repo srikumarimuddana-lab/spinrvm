@@ -241,7 +241,7 @@ export interface CompanySubscriptionResponse {
     history: CorporateSubscription[];
 }
 
-export const getSubscriptionPlans = () =>
+export const getCorporateSubscriptionPlans = () =>
     request<{ plans: CorporateSubscriptionPlan[] }>("/api/admin/corporate-accounts/subscription-plans");
 
 export const getCompanySubscription = (companyId: string) =>

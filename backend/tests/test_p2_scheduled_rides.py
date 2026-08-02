@@ -288,6 +288,43 @@ class TestCancelScheduledRide:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _frozen_datetime(fixed_utc: datetime):
+    """datetime subclass whose .now() always returns ``fixed_utc``.
+
+    The DST-boundary tests below use fixed calendar dates (real spring-forward
+    Sundays) as fixtures, which is the right way to test DST-gap detection —
+    but Finding #02's max-advance-window check (also in validate_scheduled_time,
+    also relative to datetime.now()) means those fixed dates only pass if
+    "now" is patched to sit within the window of the fixture date, regardless
+    of when the test suite actually runs.
+    """
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_utc.astimezone(tz) if tz else fixed_utc
+
+    return _Frozen
+
+
+def _patch_schemas_now(fixed_utc: datetime):
+    """Freeze datetime.now() as seen by CreateRideRequest.validate_scheduled_time.
+
+    backend/schemas/__init__.py shadows the flat backend/schemas.py module: it
+    exec's the flat file under a private synthetic module name and copies its
+    public names into the package namespace. That means `backend.schemas.datetime`
+    (the package attribute) and the `datetime` name the validator function
+    actually resolves at call time (its own __globals__, i.e. the synthetic
+    module's dict) are two different bindings — patching the former is a
+    no-op for validator behavior. Patch the validator's own __globals__
+    instead, which is correct regardless of that indirection.
+    """
+    from backend.schemas import CreateRideRequest
+
+    target_globals = CreateRideRequest.validate_scheduled_time.__func__.__globals__
+    return patch.dict(target_globals, {"datetime": _frozen_datetime(fixed_utc)})
+
+
 class TestDSTBoundary:
     """E14 — scheduled ride times and DST boundary handling."""
 
@@ -317,7 +354,13 @@ class TestDSTBoundary:
         # 2027-03-14 is the spring-forward Sunday for Eastern time.
         # 02:30 does not exist; clocks skip from 02:00 → 03:00.
         # scheduled_timezone enables the DST-gap guard on the validator.
-        with pytest.raises(ValidationError) as exc_info:
+        # Freeze "now" a few days ahead of the fixture date so it lands
+        # inside the max-advance window regardless of actual run date.
+        frozen_now = datetime(2027, 3, 10, tzinfo=timezone.utc)
+        with (
+            _patch_schemas_now(frozen_now),
+            pytest.raises(ValidationError) as exc_info,
+        ):
             CreateRideRequest(
                 vehicle_type_id="standard",
                 pickup_address="123 Main St",
@@ -339,7 +382,40 @@ class TestDSTBoundary:
         from backend.schemas import CreateRideRequest
 
         # 2027-03-14 04:00 (after spring-forward) is a valid EDT time.
-        ride_req = CreateRideRequest(
+        frozen_now = datetime(2027, 3, 10, tzinfo=timezone.utc)
+        with _patch_schemas_now(frozen_now):
+            ride_req = CreateRideRequest(
+                vehicle_type_id="standard",
+                pickup_address="123 Main St",
+                pickup_lat=52.1,
+                pickup_lng=-106.0,
+                dropoff_address="456 Broadway",
+                dropoff_lat=52.2,
+                dropoff_lng=-106.1,
+                is_scheduled=True,
+                scheduled_timezone="America/Toronto",
+                scheduled_time=datetime(2027, 3, 14, 4, 0),
+            )
+        assert ride_req.scheduled_time is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Max advance-booking window (Finding #02, scheduled-rides gap review)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestMaxAdvanceWindow:
+    """Server-side ceiling matching the rider app's 7-day date-picker maxDate.
+
+    Previously enforced client-only — any other caller (direct API request,
+    AI booking assistant) could schedule arbitrarily far ahead with nothing
+    server-side to reject it.
+    """
+
+    def _make(self, scheduled_time):
+        from backend.schemas import CreateRideRequest
+
+        return CreateRideRequest(
             vehicle_type_id="standard",
             pickup_address="123 Main St",
             pickup_lat=52.1,
@@ -348,7 +424,25 @@ class TestDSTBoundary:
             dropoff_lat=52.2,
             dropoff_lng=-106.1,
             is_scheduled=True,
-            scheduled_timezone="America/Toronto",
-            scheduled_time=datetime(2027, 3, 14, 4, 0),
+            scheduled_time=scheduled_time,
         )
+
+    def test_within_seven_days_accepted(self):
+        ride_req = self._make(datetime.now(timezone.utc) + timedelta(days=6))
         assert ride_req.scheduled_time is not None
+
+    def test_beyond_seven_days_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            self._make(datetime.now(timezone.utc) + timedelta(days=8))
+        assert "7 days" in str(exc_info.value)
+
+    def test_far_future_rejected(self):
+        """The gap this closes: nothing previously stopped a multi-month or
+        multi-year booking from an API caller that skips the mobile client's
+        date picker."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            self._make(datetime.now(timezone.utc) + timedelta(days=400))

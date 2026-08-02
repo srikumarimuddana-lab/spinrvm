@@ -542,6 +542,15 @@ class RideRatingRequest(BaseModel):
     )
 
 
+# Scheduled-ride booking window. Single source of truth — the rider app's
+# date-picker constraints and the AI booking assistant's own proposal-time
+# check (backend/ai/tools_booking.py) both import these rather than hardcode
+# a second copy, so the three surfaces can't drift out of sync with each
+# other or with the confirm-time validator below.
+SCHEDULE_MIN_LEAD_MINUTES = 15
+SCHEDULE_MAX_ADVANCE_DAYS = 7
+
+
 class CreateRideRequest(BaseModel):
     vehicle_type_id: str
     pickup_address: str
@@ -624,8 +633,15 @@ class CreateRideRequest(BaseModel):
             # Normalise to UTC-aware for the "in the future" comparison, then
             # strip tz for the DST-gap round-trip check which needs a naive wall time.
             v_utc = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-            if v_utc < datetime.now(timezone.utc) + timedelta(minutes=5):
-                raise ValueError("Scheduled time must be at least 5 minutes in the future")
+            now_utc = datetime.now(timezone.utc)
+            if v_utc < now_utc + timedelta(minutes=SCHEDULE_MIN_LEAD_MINUTES):
+                raise ValueError(f"Scheduled time must be at least {SCHEDULE_MIN_LEAD_MINUTES} minutes in the future")
+            # Server-side ceiling matching the rider app's date-picker maxDate.
+            # Previously enforced client-only, so any other caller — a direct
+            # API request or the AI booking assistant — could schedule
+            # arbitrarily far ahead with nothing to reject it.
+            if v_utc > now_utc + timedelta(days=SCHEDULE_MAX_ADVANCE_DAYS):
+                raise ValueError(f"Scheduled time cannot be more than {SCHEDULE_MAX_ADVANCE_DAYS} days in the future")
 
             naive = v_utc.replace(tzinfo=None)
 

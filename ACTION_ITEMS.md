@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c (open) — full-repo scoping pass done (Sub-tiers A/B/C), first file (`utils/reconciliation.py`, 16%→90%) closed; AI15 added and closed same-day (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-02 — A1c (Track 2) in progress: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) 61%→69%. Prior same-day: `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -819,19 +819,56 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
         (but well-typed) list. Full suite: `6865 passed, 8 skipped,
         1 xfailed, 0 failed`. See
         `docs/change-log/2026-08-02-a1b-websocket-coverage.md`.
-      - `routes/drivers/subscriptions.py` — 60.52% (575 stmts, 227
-        missing) — Spinr Pass, money-adjacent (NOT the same file as
-        `routes/admin/subscriptions.py`, already closed under Track 1 —
-        this is the driver-facing one).
+      - `routes/drivers/subscriptions.py` — **61% → 69%** (2026-08-02,
+        measured via `pytest tests/ -q -k subscription --cov=routes.drivers.subscriptions`,
+        the same keyword-filtered methodology as the original 60.52%/61%
+        baseline — 575 stmts, 181 missing, down from 227/222). Spinr Pass,
+        money-adjacent (NOT the same file as `routes/admin/subscriptions.py`,
+        already closed under Track 1 — this is the driver-facing one).
+        `test_spinr_pass_subscription.py` already covered the checkout/
+        webhook/verify-session/cancel flow end-to-end, but
+        `_compute_subscription_tax` and `_record_subscription_payment` were
+        only exercised through the no-service-area short-circuit, and the
+        driver-facing resend-invoice endpoint had zero coverage (only its
+        unrelated admin-console sibling was tested). Added
+        `backend/tests/test_driver_subscriptions_tax_ledger_coverage.py`
+        (17 tests) covering the tax-rate math (GST/PST/HST, disabled-config,
+        missing-config defaults), the ledger's duplicate-vs-real-DB-error
+        swallow distinction, and `resend_subscription_invoice`'s 404/502
+        guards plus legacy-vs-tax-columns resend paths. No application code
+        changed, no bugs found. Remaining gap is concentrated in
+        `_send_subscription_invoice_email`'s own rendering body and
+        `check_expiring_subscriptions` (one of the 17 background startup
+        loops — left for its own dedicated pass). See
+        `docs/change-log/2026-08-02-a1c-driver-subscriptions-tax-ledger-coverage.md`.
       - Rest of the unevenly-covered `routes/drivers/` package: `ride_flow.py`
         (66.30%), `ride_cancel.py` (51.75%), `ride_reads.py` (58.95%),
         `payouts.py` (69.47%), `earnings.py` (37.25%), `referrals.py`
         (38.82%), `_shared.py` (51.32%), `status.py` (48.39%),
         `profile.py` (67.65%).
-      - `utils/redis_client.py` — 55.00% (220 stmts, 99 missing) —
-        presence/rate-limit backbone; `utils/redis_client.py` falling back
-        silently to in-process dict (per CLAUDE.md) makes this worth
-        testing both modes.
+      - `utils/redis_client.py` — **done, 100%** (2026-08-02, 220/220 stmts;
+        was 55% full-suite side-effect coverage, all of it via the
+        in-process-fallback path). Presence/rate-limit backbone. Every prior
+        test touched this module only as a side effect of a higher-level
+        caller through the `mock_redis` fixture (in-process dict only) — the
+        real-Redis-connected branch of every public function had zero direct
+        coverage. Added `backend/tests/test_redis_client_coverage.py` (51
+        tests) covering both modes for every function, `_get_redis()`'s
+        URL-change reconnect + connect-failure-falls-back branches, the
+        configured-but-erroring-must-raise-loudly contract (per CLAUDE.md's
+        Redis transparency note) for every primitive except the
+        documented-intentional exception (`redis_set_nx`'s belt-and-braces
+        local-lock fallback), `get_redis_stats`/`count_keys_by_prefix` in
+        both modes, and `_humanize_bytes`'s unit boundaries. No application
+        code changed. **Bug found, not fixed (test-only scope):**
+        `_humanize_bytes` mislabels any petabyte+-scale value as bytes
+        instead of the correct unit — `unit` is only reassigned inside a
+        branch that never fires once `size` starts at T-scale, so the loop
+        silently divides through every remaining unit without ever updating
+        it. Not a live risk today (no realistic Redis holds petabytes; feeds
+        only an admin dashboard gauge), pinned by a test asserting the
+        actual buggy output rather than worked around. See
+        `docs/change-log/2026-08-02-a1c-redis-client-coverage.md`.
     - **Sub-tier B — below 60%, genuinely lower-risk breadth** (utils/services,
       admin-adjacent tooling, third-party integrations):
       `routes/main.py` (**0%**, 52 stmts — worth a quick look at what this

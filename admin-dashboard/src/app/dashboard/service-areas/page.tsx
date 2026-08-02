@@ -1983,8 +1983,8 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h4 className="font-bold text-gray-800">Driver Ride Incentives</h4>
-          <p className="text-sm text-gray-500">Bonuses shown to drivers on the ride offer screen in {areaName}.</p>
+          <h4 className="font-bold text-foreground">Driver Ride Incentives</h4>
+          <p className="text-sm text-muted-foreground">Bonuses shown to drivers on the ride offer screen in {areaName}.</p>
         </div>
         {!showForm && (
           <button onClick={() => setShowForm(true)}
@@ -2046,15 +2046,15 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
               className="bg-amber-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-amber-700 disabled:opacity-50">
               {saving ? 'Creating...' : 'Create Incentive'}
             </button>
-            <button onClick={() => setShowForm(false)} className="text-gray-500 px-4 py-2 rounded-lg text-sm hover:bg-gray-100">Cancel</button>
+            <button onClick={() => setShowForm(false)} className="text-muted-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted">Cancel</button>
           </div>
         </div>
       )}
 
       {loading ? (
-        <div className="text-center py-8 text-gray-400">Loading incentives...</div>
+        <div className="text-center py-8 text-muted-foreground">Loading incentives...</div>
       ) : incentives.length === 0 ? (
-        <div className="text-center py-8 text-gray-400">
+        <div className="text-center py-8 text-muted-foreground">
           <Gift className="h-8 w-8 mx-auto mb-2 opacity-40" />
           <p className="font-medium">No incentives configured</p>
           <p className="text-sm">Add incentives to attract drivers to accept rides in this area.</p>
@@ -2067,28 +2067,28 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
               ? vehicleTypes.find((v: any) => v.id === inc.vehicle_type_id)?.name || 'Specific vehicle'
               : 'All vehicles';
             return (
-              <div key={inc.id} className={`flex items-center gap-4 p-4 rounded-xl border ${inc.is_active ? 'bg-white border-amber-200' : 'bg-gray-50 border-gray-200 opacity-60'}`}>
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${inc.is_active ? 'bg-amber-100' : 'bg-gray-200'}`}>
-                  <Gift className={`h-5 w-5 ${inc.is_active ? 'text-amber-600' : 'text-gray-400'}`} />
+              <div key={inc.id} className={`flex items-center gap-4 p-4 rounded-xl border ${inc.is_active ? 'bg-card border-amber-200' : 'bg-muted border-border opacity-60'}`}>
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${inc.is_active ? 'bg-amber-100' : 'bg-muted'}`}>
+                  <Gift className={`h-5 w-5 ${inc.is_active ? 'text-amber-600' : 'text-muted-foreground'}`} />
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-gray-900">{inc.name}</span>
+                    <span className="font-bold text-foreground">{inc.name}</span>
                     <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-bold rounded-md">${parseFloat(inc.bonus_amount).toFixed(2)}</span>
                     <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs font-semibold rounded-md">{typeInfo?.label || inc.incentive_type}</span>
                   </div>
-                  <p className="text-sm text-gray-500">{vtName}{inc.description ? ` · ${inc.description}` : ''}</p>
+                  <p className="text-sm text-muted-foreground">{vtName}{inc.description ? ` · ${inc.description}` : ''}</p>
                   {inc.max_budget && (
-                    <p className="text-xs text-gray-400 mt-1">Budget: ${parseFloat(inc.budget_used || 0).toFixed(0)} / ${parseFloat(inc.max_budget).toFixed(0)}</p>
+                    <p className="text-xs text-muted-foreground mt-1">Budget: ${parseFloat(inc.budget_used || 0).toFixed(0)} / ${parseFloat(inc.max_budget).toFixed(0)}</p>
                   )}
                 </div>
                 <button onClick={() => handleToggle(inc.id)}
-                  className={`p-2 rounded-lg ${inc.is_active ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-100'}`}
+                  className={`p-2 rounded-lg ${inc.is_active ? 'text-green-600 hover:bg-green-50' : 'text-muted-foreground hover:bg-muted'}`}
                   title={inc.is_active ? 'Deactivate' : 'Activate'}>
                   {inc.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
                 </button>
                 <button onClick={() => handleDelete(inc.id)}
-                  className="p-2 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600" title="Delete">
+                  className="p-2 rounded-lg text-destructive/70 hover:bg-destructive/10 hover:text-destructive" title="Delete">
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>

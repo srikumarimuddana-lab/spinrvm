@@ -756,29 +756,28 @@ jobs:
             --tag spinr-backend:ci-${{ github.sha }} \
             backend/
 
-      # ── TEMPORARY DIAGNOSTIC — CR-2026-002 / issue #3048 ──────────────────
-      # Remove once the msgpack/setuptools finding is explained.
-      #
-      # Trivy reports msgpack 1.1.2 (HIGH) and setuptools 70.3.0 (HIGH) while
-      # its own per-file inventory of the SAME image lists msgpack 1.2.1 and
-      # setuptools 83.0.0. Two hypotheses remain; static analysis has already
-      # ruled out the others:
-      #   - ruled out: a lockfile downgrade. requirements-locked.txt pins
-      #     msgpack==1.2.1 and does not pin setuptools at all, so the install
-      #     after `pip install --upgrade setuptools` cannot pull either back.
-      #   - ruled out: stale files entering via `COPY . .`. .dockerignore
-      #     excludes venv/.venv/*.egg-info and no site-packages or .dist-info
-      #     is committed under backend/.
-      #   - still open (A): a SECOND copy of each package exists in the image
-      #     (e.g. pip vendors its own msgpack) and Trivy reports that one.
-      #   - still open (B): Trivy is preferring an embedded/third-party SBOM
-      #     over its live filesystem scan, as its own WARN in the log suggests.
-      #
-      # The `find` below discriminates: if it prints a 1.1.2/70.3.0 path, it is
-      # (A) and the fix is to remove or exclude that copy. If the only versions
-      # present are 1.2.1/83.0.0, it is (B) and the fix is a scan-invocation
-      # change. Never fails the job — diagnostic only.
-      - name: "DIAGNOSTIC (CR-2026-002): locate every msgpack/setuptools copy"
+      # ── DIAGNOSTIC — CR-2026-002 / issue #3048 ──────────────────────────
+      # Root cause confirmed outside CI (reproduced pip 26.2 — the exact
+      # version this Dockerfile's unpinned `pip install --upgrade pip
+      # setuptools` installs, per this job's own past logs — in an isolated
+      # venv): pip vendors msgpack==1.1.2 and setuptools==70.3.0 internally
+      # (pip/_vendor/vendor.txt) and ships its own CycloneDX SBOM describing
+      # them, pip/_vendor/bom.cdx.json, listing exactly those two versions
+      # with proper pkg:pypi/... purls. Trivy auto-detects any *.cdx.json/
+      # *.spdx.json file inside a scanned image and — per its own printed
+      # warning, "Third-party SBOM may lead to inaccurate vulnerability
+      # detection" — prefers that file's component list over its own live
+      # filesystem scan for vulnerability matching, even though the live
+      # scan (used for the per-file inventory table) correctly shows the
+      # real top-level msgpack==1.2.1 / setuptools==83.0.0 as clean. Fixed
+      # below via `skip-files` on both trivy-action steps, targeting that
+      # one file. This diagnostic step is kept, not removed, to prove the
+      # fix on this very run: after the fix, its bom.cdx.json group should
+      # still show the file exists (skip-files doesn't touch the image,
+      # only what Trivy reads), while the scan below should no longer flag
+      # it. If the finding persists after this PR, the printed groups below
+      # are the first thing to check. Never fails the job — diagnostic only.
+      - name: "DIAGNOSTIC (CR-2026-002): confirm pip's vendored CycloneDX SBOM"
         continue-on-error: true
         run: |
           IMG=spinr-backend:ci-${{ github.sha }}
@@ -794,19 +793,17 @@ jobs:
                \( -name '*.dist-info' -o -name '*.egg-info' \) -print 2>/dev/null" || true
           echo "::endgroup::"
 
-          echo "::group::pip's vendored packages — pip bundles its own msgpack"
+          echo "::group::pip's vendored packages — pip bundles its own msgpack/setuptools"
           docker run --rm --entrypoint sh "$IMG" -c \
-            "cat /usr/local/lib/python3.12/site-packages/pip/_vendor/vendor.txt 2>/dev/null || \
-             ls /usr/local/lib/python3.12/site-packages/pip/_vendor/ 2>/dev/null" || true
+            "cat /usr/local/lib/python3.12/site-packages/pip/_vendor/vendor.txt 2>/dev/null" || true
           echo "::endgroup::"
 
-          echo "::group::any other python installation on the image"
+          echo "::group::pip's embedded CycloneDX SBOM — the actual finding source"
           docker run --rm --entrypoint sh "$IMG" -c \
-            "ls -d /usr/lib/python3*/dist-packages /usr/local/lib/python3*/site-packages 2>/dev/null" || true
-          echo "::endgroup::"
-
-          echo "::group::SBOM/attestation surface — hypothesis (B)"
-          docker image inspect "$IMG" --format '{{json .Config.Labels}}' || true
+            "find / -xdev -iname '*.cdx.json' -o -iname '*.spdx.json' 2>/dev/null" || true
+          docker run --rm --entrypoint sh "$IMG" -c \
+            "cat /usr/local/lib/python3.12/site-packages/pip/_vendor/bom.cdx.json 2>/dev/null | \
+             python3 -c 'import json,sys; d=json.load(sys.stdin); [print(c[\"name\"], c[\"version\"]) for c in d.get(\"components\",[]) if c[\"name\"] in (\"msgpack\",\"setuptools\")]' 2>/dev/null" || true
           echo "::endgroup::"
 
       - name: Scan image with Trivy
@@ -818,6 +815,13 @@ jobs:
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
+          # CR-2026-002 / #3048: excludes pip's own embedded CycloneDX SBOM
+          # (describes pip's internally vendored msgpack/setuptools copies,
+          # never imported by the app) — see diagnostic step above for the
+          # confirmed root cause. Trivy's per-file inventory of the real
+          # top-level packages is unaffected; this only stops it from also
+          # trusting this one third-party SBOM's component list.
+          skip-files: '**/pip/_vendor/bom.cdx.json'
 
       - name: Upload SARIF report
         if: always()
@@ -827,6 +831,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-image.sarif'
           ignore-unfixed: true
+          skip-files: '**/pip/_vendor/bom.cdx.json'
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 

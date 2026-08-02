@@ -19,24 +19,20 @@ FLOOR MANIFEST
 --------------
 Floors below are NOT the 80% target -- they are current-measured-coverage
 floors so the gate ratchets up over time instead of demanding an instant
-jump to 80% everywhere. Two provenances:
+jump to 80% everywhere. Every row as of 2026-08-02 is (measured): a dated,
+real `pytest --cov` run is on record for it, either in ACTION_ITEMS.md /
+docs/change-log/*.md, or in this gate's own first live CI run (PR #3308,
+2026-08-02 -- see the 4 rows citing that run directly). The floor is set a
+few points BELOW the recorded number as a flakiness/mock-variance buffer,
+matching the 2% tolerance pattern already used by coverage-regression-gate.
 
-  (measured)      -- a dated, real `pytest --cov` run is on record in
-                      ACTION_ITEMS.md / docs/change-log/*.md. The floor is
-                      set a few points BELOW that recorded number as a
-                      flakiness/mock-variance buffer, matching the 2%
-                      tolerance pattern already used by coverage-regression-gate.
-  (conservative)  -- no dated measurement is on file for this module as of
-                      2026-08-02 (this gate's introduction). The floor is a
-                      safe, deliberately-low starting point chosen so the
-                      gate does not go red on its own introduction; it is
-                      NOT a claim that this is the module's real coverage.
-                      The next time a PR touches one of these modules,
-                      measure it for real (see docs/change-log/2026-07-28-corporate-*-coverage-80.md
-                      for the pattern: run `pytest --cov=. --cov-report=json`
-                      against the module's own test file, read the real
-                      percent, then replace the floor here with
-                      real_percent - 5, same as every other row).
+If a future corporate_* module is added to this manifest before anyone has
+measured it for real, mark it (conservative) with a deliberately low,
+clearly-labeled starting floor instead of guessing a number -- see
+docs/change-log/2026-07-28-corporate-*-coverage-80.md for the pattern to
+follow once a real measurement exists: run `pytest --cov=. --cov-report=json`
+against the module's own test file, read the real percent, then set the
+floor to real_percent - 5, same as every other row.
 
 Do not lower a floor to make a failing PR pass. If a floor is wrong
 (measured incorrectly, or the module was legitimately refactored down in
@@ -67,18 +63,19 @@ FLOOR_MANIFEST: dict[str, tuple[float, str]] = {
     "services/corporate_membership_service.py": (95.0, "measured 100% (2026-07-28)"),
     "services/corporate_policy_service.py": (90.0, "measured 98% (2026-07-28)"),
     "services/corporate_wallet_service.py": (90.0, "measured 97% (2026-07-28)"),
-    # No dated measurement on file as of this gate's introduction
-    # (2026-08-02) despite each having a dedicated test file
-    # (tests/test_corporate_wallet_routes.py,
-    # tests/test_corporate_member_offboarding_service.py,
-    # tests/test_corporate_suspension_service.py,
-    # tests/test_corporate_wallet_winddown_service.py). Conservative
-    # starting floor -- see module docstring before raising or trusting
-    # this as a real number.
-    "routes/corporate_wallet.py": (50.0, "conservative, unmeasured"),
-    "services/corporate_member_offboarding_service.py": (50.0, "conservative, unmeasured"),
-    "services/corporate_suspension_service.py": (50.0, "conservative, unmeasured"),
-    "services/corporate_wallet_winddown_service.py": (50.0, "conservative, unmeasured"),
+    # These 4 shipped with a conservative 50% placeholder floor when this
+    # gate was introduced (no dated measurement was on file at the time).
+    # Real numbers below come from this gate's own first live CI run
+    # (PR #3308, job https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30764253064/job/91540074972,
+    # 2026-08-02) -- that run executed `pytest tests/ tests/services/ -k
+    # corporate --cov=.` for real and printed every corporate module's
+    # actual coverage, even though the gate itself didn't need to assert
+    # against them that time (that PR touched none of these files). Same
+    # measured-minus-5pts-buffer convention as the rest of this manifest.
+    "routes/corporate_wallet.py": (80.0, "measured 86% (2026-08-02, PR #3308 CI run)"),
+    "services/corporate_member_offboarding_service.py": (75.0, "measured 79% (2026-08-02, PR #3308 CI run)"),
+    "services/corporate_suspension_service.py": (75.0, "measured 79% (2026-08-02, PR #3308 CI run)"),
+    "services/corporate_wallet_winddown_service.py": (85.0, "measured 91% (2026-08-02, PR #3308 CI run)"),
 }
 
 

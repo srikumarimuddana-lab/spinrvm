@@ -770,8 +770,29 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
         signed-URL signing failure). Full suite: `6904 passed, 8 skipped,
         1 xfailed, 0 failed`. See
         `docs/change-log/2026-08-02-a1b-ride-repo-coverage.md`.
-      - `routes/websocket.py` — 50.26% (569 stmts, 283 missing) — WS auth +
-        dispatch fan-out.
+      - `routes/websocket.py` — **done, 80.3%** (569 stmts, 112 missing,
+        up from 50.44%) — WS auth + dispatch fan-out. Nine existing WS test
+        files covered handshake/auth edge cases, per-user rate limiting,
+        live-location durability/revocation guards, health, and fan-out
+        metrics, but none drove the main receive loop end-to-end. Added
+        `tests/test_websocket_coverage.py` (35 tests) via
+        `TestClient.websocket_connect`: message-size guard, malformed JSON,
+        `driver_location`/`location_batch` persistence + rider/admin
+        fan-out (integrity check pass/fail, throttled DB write, breadcrumb
+        buffering with session-revoked skip, ETA cache hit/miss), batch
+        rate-limit and session-revoked-ack paths,
+        `ride_status_update`/`chat_message`/`get_nearby_drivers`/admin
+        snapshot handling, the disconnect/exception cleanup tail, and
+        `heartbeat_task`/`_handle_driver_ws_disconnect` edge branches
+        (stale-pong close, token-version/Firebase-watermark revocation,
+        newer-socket-already-reconnected skip, idle-driver-skips-broadcast,
+        audit-log-failure-still-broadcasts). No application code changed.
+        One pre-existing (not fixed) behavior gap noted: `location_batch`
+        with an empty `points: []` list never sends a `location_batch_ack`
+        — the ack call lives inside a guard that's falsy for an empty
+        (but well-typed) list. Full suite: `6865 passed, 8 skipped,
+        1 xfailed, 0 failed`. See
+        `docs/change-log/2026-08-02-a1b-websocket-coverage.md`.
       - `routes/drivers/subscriptions.py` — 60.52% (575 stmts, 227
         missing) — Spinr Pass, money-adjacent (NOT the same file as
         `routes/admin/subscriptions.py`, already closed under Track 1 —

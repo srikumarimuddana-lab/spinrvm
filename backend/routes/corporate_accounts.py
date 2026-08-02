@@ -248,6 +248,44 @@ async def get_corporate_accounts(
         ) from e
 
 
+@router.get("/kyb-reverification-due")
+async def get_kyb_reverification_due(current_admin: dict = Depends(get_current_admin)):
+    """Companies whose KYB approval predates the configured staleness
+    threshold (corporate + admin portal review round 2, "automated KYB
+    re-verification" — visibility only, never auto-changes status).
+
+    Computes live from kyb_reviewed_at using the exact same threshold
+    resolution the background loop (utils/kyb_reverification.py) uses —
+    shared helper, not a re-derived definition — so this list and what
+    the loop flags can never silently disagree. Registered before the
+    single-segment `/{account_id}` route below so it isn't swallowed by
+    it (same static-before-dynamic ordering as GET "" above).
+    """
+    from db_supabase import list_companies_needing_kyb_reverification
+    from settings_loader import get_app_settings
+    from utils.kyb_reverification import kyb_reverify_cutoff_iso, resolve_kyb_reverify_threshold_months
+
+    settings = await get_app_settings()
+    threshold_months = resolve_kyb_reverify_threshold_months(settings)
+    companies = await list_companies_needing_kyb_reverification(
+        reviewed_before_iso=kyb_reverify_cutoff_iso(threshold_months)
+    )
+    return {
+        "threshold_months": threshold_months,
+        "count": len(companies),
+        "companies": [
+            {
+                "id": c["id"],
+                "name": c.get("name"),
+                "legal_name": c.get("legal_name"),
+                "kyb_reviewed_at": c.get("kyb_reviewed_at"),
+                "kyb_reviewed_by": c.get("kyb_reviewed_by"),
+            }
+            for c in companies
+        ],
+    }
+
+
 _ALLOWED_KYB_CONTENT = {"application/pdf", "image/png", "image/jpeg"}
 
 

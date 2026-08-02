@@ -60,19 +60,30 @@ _DEFAULT_THRESHOLD_MONTHS = 12
 _REFLAG_COOLDOWN = timedelta(days=30)
 
 
+def resolve_kyb_reverify_threshold_months(settings: dict) -> int:
+    """Shared threshold resolution — used by both this loop's tick and the
+    admin-dashboard 'needs re-verification' endpoint, so the two never
+    define staleness differently."""
+    threshold_months = settings.get("corporate_kyb_reverify_after_months")
+    try:
+        return int(threshold_months) if threshold_months else _DEFAULT_THRESHOLD_MONTHS
+    except (TypeError, ValueError):
+        return _DEFAULT_THRESHOLD_MONTHS
+
+
+def kyb_reverify_cutoff_iso(threshold_months: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=threshold_months * 30)).isoformat()
+
+
 async def run_kyb_reverification_tick() -> None:
     settings = await get_app_settings()
     if not settings.get("corporate_kyb_reverification_enabled", True):
         return
 
-    threshold_months = settings.get("corporate_kyb_reverify_after_months")
-    try:
-        threshold_months = int(threshold_months) if threshold_months else _DEFAULT_THRESHOLD_MONTHS
-    except (TypeError, ValueError):
-        threshold_months = _DEFAULT_THRESHOLD_MONTHS
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=threshold_months * 30)
-    companies = await list_companies_needing_kyb_reverification(reviewed_before_iso=cutoff.isoformat())
+    threshold_months = resolve_kyb_reverify_threshold_months(settings)
+    companies = await list_companies_needing_kyb_reverification(
+        reviewed_before_iso=kyb_reverify_cutoff_iso(threshold_months)
+    )
 
     newly_flagged = 0
     for company in companies:

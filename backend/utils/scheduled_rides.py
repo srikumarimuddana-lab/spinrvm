@@ -149,6 +149,87 @@ async def _track_defer_and_maybe_escalate(ride_id: str, rider_id, ride: dict) ->
     await _notify_schedule_delayed(ride_id, rider_id, ride, escalated=True)
 
 
+# Driver heads-up nudge (Finding #06, scheduled-rides gap review). Spinr
+# already knows about this demand ahead of time — an on-demand-only
+# competitor structurally can't do this. Deliberately conservative: a single
+# best-effort push to already-online drivers nearby, not a driver-facing
+# schedule/reservation feature (that's a bigger, separate design — see
+# Finding #04 in the gap review).
+_DRIVER_NUDGE_LEAD_MINUTES = 60
+_DRIVER_NUDGE_RADIUS_KM = 10
+_DRIVER_NUDGE_MAX_RECIPIENTS = 20
+
+
+async def _maybe_nudge_nearby_drivers(ride: dict) -> None:
+    """Best-effort heads-up push to already-online, already-available drivers
+    near an upcoming scheduled pickup, roughly an hour out. Never blocks
+    dispatch or the reminder flow — every failure here is logged and
+    swallowed, and a missing pickup location is a silent no-op rather than
+    an error (older/partial rows may lack it).
+    """
+    ride_id = ride["id"]
+    try:
+        settings = await get_app_settings()
+        if not settings.get("scheduled_ride_driver_nudge_enabled", False):
+            return
+    except Exception as settings_err:
+        # Unlike the dispatcher kill switch, this is a new, non-critical
+        # notification feature — fail CLOSED (skip) on a settings-lookup
+        # hiccup rather than risk an unreviewed feature going live because
+        # the flag couldn't be read.
+        logger.debug(f"scheduled dispatch: driver-nudge settings lookup failed for {ride_id}: {settings_err}")
+        return
+
+    pickup_lat = ride.get("pickup_lat")
+    pickup_lng = ride.get("pickup_lng")
+    if pickup_lat is None or pickup_lng is None:
+        return
+
+    dedupe_key = f"spinr:sched_nudge_sent:{ride_id}"
+    try:
+        # 6h TTL: comfortably past the ~1h nudge window, so a claim can't
+        # accidentally persist past this ride's relevance without also
+        # meaning "already nudged for this ride, don't do it twice."
+        if not await redis_set_nx(dedupe_key, "1", ttl=21600):
+            return
+    except Exception as dedup_err:
+        logger.debug(f"scheduled dispatch: driver-nudge dedup check failed for {ride_id}: {dedup_err}")
+
+    try:
+        from services.dispatch_service import dispatch_geo_bounds
+    except ImportError:
+        from ..services.dispatch_service import dispatch_geo_bounds
+
+    try:
+        candidates = await db.get_rows(
+            "drivers",
+            {
+                "is_online": True,
+                "is_available": True,
+                "$and": dispatch_geo_bounds(float(pickup_lat), float(pickup_lng), _DRIVER_NUDGE_RADIUS_KM),
+            },
+            columns="user_id",
+            limit=_DRIVER_NUDGE_MAX_RECIPIENTS,
+        )
+    except Exception as query_err:
+        logger.warning(f"scheduled dispatch: driver-nudge candidate query failed for {ride_id}: {query_err}")
+        return
+
+    for row in candidates:
+        driver_user_id = row.get("user_id")
+        if not driver_user_id:
+            continue
+        try:
+            await send_push_notification(
+                driver_user_id,
+                "Scheduled ride coming up nearby",
+                "A rider has a pickup scheduled in your area within the hour. Stay online for first chance at it.",
+                data={"type": "scheduled_ride_nudge", "ride_id": ride_id},
+            )
+        except Exception as push_err:
+            logger.debug(f"scheduled dispatch: driver-nudge push failed for {ride_id} -> {driver_user_id}: {push_err}")
+
+
 async def _dispatch_scheduled_ride(ride: dict):
     """Transition a scheduled ride from 'scheduled' to 'searching' and start driver matching.
 
@@ -409,6 +490,7 @@ async def check_scheduled_rides() -> Optional[bool]:
 
     now = datetime.now(timezone.utc)
     ten_min_from_now = now + timedelta(minutes=10)
+    nudge_window_end = now + timedelta(minutes=_DRIVER_NUDGE_LEAD_MINUTES)
 
     try:
         # Get all pending scheduled rides. These sit in status 'scheduled'
@@ -423,7 +505,7 @@ async def check_scheduled_rides() -> Optional[bool]:
             },
             limit=_SCHEDULED_RIDES_TICK_LIMIT,
             order="scheduled_time",
-            columns="id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address",
+            columns="id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address,pickup_lat,pickup_lng",
         )
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
@@ -455,6 +537,12 @@ async def check_scheduled_rides() -> Optional[bool]:
         # Send reminder 10 minutes before (if not already sent)
         if not already_reminded and now <= scheduled_time and scheduled_time <= ten_min_from_now:
             await _send_reminder(ride)
+
+        # Heads-up nudge to nearby online drivers ~60 minutes before pickup.
+        # Best-effort and self-deduped (Redis NX inside the function) — safe
+        # to call every tick within the window.
+        if now <= scheduled_time and scheduled_time <= nudge_window_end:
+            await _maybe_nudge_nearby_drivers(ride)
 
         # Dispatch when it's time (or past time)
         if not already_dispatched and now >= scheduled_time:

@@ -253,6 +253,13 @@ class AppSettings(BaseModel):
     # scheduled rides stay parked in status='scheduled' and dispatch normally
     # once this is flipped back on; nothing is lost or cancelled by disabling it.
     scheduled_dispatch_enabled: bool = True
+    # New driver-facing behavior (scheduled-rides gap review, Finding #06):
+    # a best-effort heads-up push to already-online drivers near an upcoming
+    # scheduled pickup, ~60 minutes out. Unlike scheduled_dispatch_enabled
+    # above (a kill switch for existing always-on behavior), this gates a
+    # genuinely new notification type — ships dark until reviewed for
+    # notification-fatigue impact, then flip on from the admin dashboard.
+    scheduled_ride_driver_nudge_enabled: bool = False
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no

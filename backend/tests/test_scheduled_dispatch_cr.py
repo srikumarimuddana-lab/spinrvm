@@ -557,3 +557,101 @@ class TestDispatchKillSwitch:
 
         assert result is True
         get_rows_mock.assert_awaited_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #06: driver heads-up nudge for upcoming scheduled demand.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _nudge_ride(**extra) -> dict:
+    return {"id": RIDE_ID, "pickup_lat": 52.1, "pickup_lng": -106.6, **extra}
+
+
+@pytest.mark.asyncio
+class TestDriverNudge:
+    async def test_disabled_by_default_sends_nothing(self):
+        """New driver-facing feature ships dark -- must not fire unless
+        explicitly enabled, even with everything else set up to succeed."""
+        from backend.utils import scheduled_rides as sr
+
+        push_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={})),  # key absent -> defaults False
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"user_id": "driver-1"}])),
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            await sr._maybe_nudge_nearby_drivers(_nudge_ride())
+
+        push_mock.assert_not_awaited()
+
+    async def test_enabled_nudges_nearby_online_drivers(self):
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[{"user_id": "driver-1"}, {"user_id": "driver-2"}])
+        push_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            await sr._maybe_nudge_nearby_drivers(_nudge_ride())
+
+        # Queried the drivers table with an online+available+geo-bounded filter.
+        get_rows_mock.assert_awaited_once()
+        table, filters = get_rows_mock.await_args.args[0], get_rows_mock.await_args.args[1]
+        assert table == "drivers"
+        assert filters["is_online"] is True
+        assert filters["is_available"] is True
+        assert "$and" in filters  # dispatch_geo_bounds() output
+        # One push per nearby driver.
+        assert push_mock.await_count == 2
+        recipients = {call.args[0] for call in push_mock.await_args_list}
+        assert recipients == {"driver-1", "driver-2"}
+
+    async def test_dedupe_prevents_a_second_nudge_for_the_same_ride(self):
+        from backend.utils import scheduled_rides as sr
+
+        push_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=False)),  # already claimed by an earlier tick
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"user_id": "driver-1"}])) as get_rows_mock,
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            await sr._maybe_nudge_nearby_drivers(_nudge_ride())
+
+        get_rows_mock.assert_not_awaited()
+        push_mock.assert_not_awaited()
+
+    async def test_missing_pickup_location_is_a_silent_no_op(self):
+        from backend.utils import scheduled_rides as sr
+
+        push_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            await sr._maybe_nudge_nearby_drivers({"id": RIDE_ID, "pickup_lat": None, "pickup_lng": None})
+
+        push_mock.assert_not_awaited()
+
+    async def test_one_recipients_push_failure_does_not_block_the_others(self):
+        from backend.utils import scheduled_rides as sr
+
+        push_mock = AsyncMock(side_effect=[RuntimeError("fcm down"), None])
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(
+                sr.db, "get_rows", AsyncMock(return_value=[{"user_id": "driver-1"}, {"user_id": "driver-2"}])
+            ),
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            # Must not raise even though the first push failed.
+            await sr._maybe_nudge_nearby_drivers(_nudge_ride())
+
+        assert push_mock.await_count == 2

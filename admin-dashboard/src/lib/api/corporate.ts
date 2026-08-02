@@ -192,6 +192,25 @@ export interface WalletRiskPortfolio {
 export const getWalletRiskPortfolio = () =>
     request<WalletRiskPortfolio>("/api/admin/corporate-accounts/wallet-portfolio");
 
+/* ── Corporate KYB re-verification staleness (round 2) — visibility
+   only, never auto-changes a company's status. ── */
+export interface KybReverificationCompany {
+    id: string;
+    name: string | null;
+    legal_name: string | null;
+    kyb_reviewed_at: string | null;
+    kyb_reviewed_by: string | null;
+}
+
+export interface KybReverificationDue {
+    threshold_months: number;
+    count: number;
+    companies: KybReverificationCompany[];
+}
+
+export const getKybReverificationDue = () =>
+    request<KybReverificationDue>("/api/admin/corporate-accounts/kyb-reverification-due");
+
 /* ── Corporate subscription billing (flat SaaS, round 2) ── */
 export type CorporateSubscriptionStatus = "active" | "past_due" | "cancelled";
 

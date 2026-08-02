@@ -8,9 +8,11 @@ import {
     updateCorporateAccount,
     deleteCorporateAccount,
     getWalletRiskPortfolio,
+    getKybReverificationDue,
     CorporateAccount,
     CompanyStatus,
     WalletRiskEntry,
+    KybReverificationCompany,
 } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { Card, CardContent } from "@/components/ui/card";
@@ -52,7 +54,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck, AlertTriangle } from "lucide-react";
+import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck, ShieldAlert, AlertTriangle } from "lucide-react";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -114,6 +116,31 @@ export default function CorporateAccountsPage() {
             })
             .finally(() => {
                 if (!cancelled) setRiskLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    // Corporate + admin portal review, round 2: "automated KYB
+    // re-verification" — visibility only, never auto-changes status.
+    const [kybDue, setKybDue] = useState<KybReverificationCompany[]>([]);
+    const [kybThresholdMonths, setKybThresholdMonths] = useState(12);
+    const [kybLoading, setKybLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+        getKybReverificationDue()
+            .then((res) => {
+                if (cancelled) return;
+                setKybDue(res.companies);
+                setKybThresholdMonths(res.threshold_months);
+            })
+            .catch(() => {
+                if (!cancelled) setKybDue([]);
+            })
+            .finally(() => {
+                if (!cancelled) setKybLoading(false);
             });
         return () => {
             cancelled = true;
@@ -323,6 +350,46 @@ export default function CorporateAccountsPage() {
                             {flaggedWallets.length > 12 && (
                                 <span className="text-xs text-muted-foreground self-center">
                                     +{flaggedWallets.length - 12} more
+                                </span>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* KYB re-verification staleness — corporate + admin portal
+                review, round 2. Visibility only: this never changes a
+                company's status, it's a reminder for an admin to manually
+                re-run the KYB review flow. */}
+            {!kybLoading && kybDue.length > 0 && (
+                <Card className="border-sky-300/50 bg-sky-50/40 dark:bg-sky-950/10">
+                    <CardContent className="p-4">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-sky-800 dark:text-sky-400 mb-2">
+                            <ShieldAlert className="h-4 w-4" />
+                            {kybDue.length} compan{kybDue.length === 1 ? "y" : "ies"} due for KYB re-verification
+                            <span className="font-normal text-muted-foreground">
+                                (approved &gt;{kybThresholdMonths} months ago)
+                            </span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {kybDue.slice(0, 12).map((c) => (
+                                <Link
+                                    key={c.id}
+                                    href={`/dashboard/corporate-accounts/${c.id}`}
+                                    className="flex items-center gap-1.5 rounded-md border border-sky-300/60 bg-background px-2.5 py-1 text-xs hover:border-sky-500 transition"
+                                    title={c.kyb_reviewed_at ? `Last reviewed ${c.kyb_reviewed_at.slice(0, 10)}` : ""}
+                                >
+                                    <span className="font-medium">{c.legal_name || c.name || c.id.slice(0, 8)}</span>
+                                    {c.kyb_reviewed_at && (
+                                        <span className="text-muted-foreground">
+                                            {c.kyb_reviewed_at.slice(0, 10)}
+                                        </span>
+                                    )}
+                                </Link>
+                            ))}
+                            {kybDue.length > 12 && (
+                                <span className="text-xs text-muted-foreground self-center">
+                                    +{kybDue.length - 12} more
                                 </span>
                             )}
                         </div>

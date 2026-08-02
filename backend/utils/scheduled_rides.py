@@ -230,6 +230,95 @@ async def _maybe_nudge_nearby_drivers(ride: dict) -> None:
             logger.debug(f"scheduled dispatch: driver-nudge push failed for {ride_id} -> {driver_user_id}: {push_err}")
 
 
+async def _corporate_policy_still_allows_dispatch(ride: dict) -> bool:
+    """Re-check corporate policy/allowance for a corporate-paid scheduled
+    ride right before dispatch (Finding #17, scheduled-rides gap review).
+
+    Policy/allowance is otherwise only ever checked once, at booking time,
+    against a snapshot that can be days stale by dispatch time (tightened
+    policy, exhausted allowance, a suspended company that the suspension
+    sweep didn't catch in time). Mirrors why card pre-auth was deliberately
+    moved to dispatch time for the same "things change over days" reason.
+
+    Non-corporate rides are unaffected (returns True immediately). Fails
+    OPEN on a lookup/evaluation error — matching
+    evaluate_policy_for_ride's own documented fail-open contract, so a
+    transient policy-service hiccup can't strand every corporate scheduled
+    ride in the fleet.
+    """
+    if (ride.get("payment_method") or "").lower() != "company_allowance":
+        return True
+    corporate_account_id = ride.get("corporate_account_id")
+    if not corporate_account_id:
+        return True
+
+    ride_id = ride["id"]
+    try:
+        from ..services.corporate_policy_service import evaluate_policy_for_ride
+    except ImportError:
+        from services.corporate_policy_service import evaluate_policy_for_ride  # type: ignore
+
+    try:
+        from decimal import Decimal
+
+        grand_total = ride.get("grand_total")
+        if grand_total is None:
+            grand_total = ride.get("total_fare") or 0
+        result = await evaluate_policy_for_ride(
+            corporate_account_id=corporate_account_id,
+            rider_id=ride.get("rider_id"),
+            estimated_fare=Decimal(str(grand_total)),
+            ride_type="standard",
+            pickup_time=datetime.now(timezone.utc),
+        )
+    except Exception as policy_err:
+        logger.error(
+            f"scheduled dispatch: corporate policy re-check failed for {ride_id}, dispatching anyway "
+            f"(fail-open, matching evaluate_policy_for_ride's own contract): {policy_err}",
+            exc_info=True,
+        )
+        return True
+
+    if result.passed:
+        return True
+
+    logger.warning(f"scheduled dispatch: corporate policy re-check blocked ride {ride_id}: {result.failed_rules}")
+    _metric_inc("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+
+    # Notify/escalate once per ride (Redis NX, 24h TTL) — the ride stays in
+    # 'scheduled' and this re-checks every tick, so without a dedupe guard
+    # this would re-notify every ~60s for as long as the policy stays failed.
+    try:
+        if not await redis_set_nx(f"spinr:sched_corp_policy_blocked:{ride_id}", "1", ttl=86400):
+            return False
+    except Exception as dedup_err:
+        logger.debug(f"scheduled dispatch: corp-policy-block dedup check failed for {ride_id}: {dedup_err}")
+
+    rider_id = ride.get("rider_id")
+    if rider_id:
+        try:
+            await send_push_notification(
+                rider_id,
+                "Your scheduled ride is on hold",
+                "Your company's booking policy no longer allows this ride. Contact your company admin for help.",
+                data={"type": "scheduled_ride_policy_blocked", "ride_id": ride_id},
+            )
+        except Exception as push_err:
+            logger.warning(f"scheduled dispatch: policy-blocked push failed for {ride_id}: {push_err}")
+    try:
+        await manager.broadcast_to_admins(
+            {
+                "type": "scheduled_ride_policy_blocked",
+                "ride_id": ride_id,
+                "corporate_account_id": corporate_account_id,
+                "failed_rules": result.failed_rules,
+            }
+        )
+    except Exception as admin_err:
+        logger.warning(f"scheduled dispatch: policy-blocked admin broadcast failed for {ride_id}: {admin_err}")
+    return False
+
+
 async def _dispatch_scheduled_ride(ride: dict):
     """Transition a scheduled ride from 'scheduled' to 'searching' and start driver matching.
 
@@ -243,6 +332,13 @@ async def _dispatch_scheduled_ride(ride: dict):
     ride_id = ride["id"]
     rider_id = ride.get("rider_id")
     try:
+        # Finding #17: gate BEFORE the atomic claim, not after — a corporate
+        # ride that fails re-check must stay in 'scheduled' for a later
+        # retry, not get claimed into 'searching' and then have to be
+        # unwound. A soft skip here, not an exception: the ride is left
+        # exactly as check_scheduled_rides() found it.
+        if not await _corporate_policy_still_allows_dispatch(ride):
+            return
         now_iso = datetime.now(timezone.utc).isoformat()
         # Atomic claim: only the caller that flips scheduled→searching proceeds.
         try:
@@ -505,7 +601,10 @@ async def check_scheduled_rides() -> Optional[bool]:
             },
             limit=_SCHEDULED_RIDES_TICK_LIMIT,
             order="scheduled_time",
-            columns="id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address,pickup_lat,pickup_lng",
+            columns=(
+                "id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address,"
+                "pickup_lat,pickup_lng,payment_method,corporate_account_id,grand_total,total_fare"
+            ),
         )
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None

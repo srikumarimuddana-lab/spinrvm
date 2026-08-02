@@ -655,3 +655,137 @@ class TestDriverNudge:
             await sr._maybe_nudge_nearby_drivers(_nudge_ride())
 
         assert push_mock.await_count == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #17: dispatch-time corporate policy/allowance re-check.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _corp_ride(**extra) -> dict:
+    return {
+        "id": RIDE_ID,
+        "rider_id": RIDER_ID,
+        "payment_method": "company_allowance",
+        "corporate_account_id": "corp-1",
+        "grand_total": "20.00",
+        **extra,
+    }
+
+
+class _FakePolicyResult:
+    def __init__(self, passed: bool, failed_rules=None):
+        self.passed = passed
+        self.failed_rules = failed_rules or []
+
+
+@pytest.mark.asyncio
+class TestCorporatePolicyRecheck:
+    async def test_non_corporate_ride_is_unaffected(self):
+        from backend.utils import scheduled_rides as sr
+
+        eval_mock = AsyncMock()
+        with patch("services.corporate_policy_service.evaluate_policy_for_ride", eval_mock):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_scheduled_row(payment_method="card"))
+
+        assert allowed is True
+        eval_mock.assert_not_awaited()
+
+    async def test_corporate_ride_missing_account_id_is_unaffected(self):
+        from backend.utils import scheduled_rides as sr
+
+        eval_mock = AsyncMock()
+        with patch("services.corporate_policy_service.evaluate_policy_for_ride", eval_mock):
+            allowed = await sr._corporate_policy_still_allows_dispatch(
+                _corp_ride(corporate_account_id=None)
+            )
+
+        assert allowed is True
+        eval_mock.assert_not_awaited()
+
+    async def test_policy_pass_allows_dispatch_with_no_notification(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=True)),
+            ),
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+        push.assert_not_awaited()
+        admin_bcast.assert_not_awaited()
+
+    async def test_policy_failure_blocks_dispatch_and_notifies_once(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=False, failed_rules=["allowed_payment_source"])),
+            ),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is False
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+        push.assert_awaited_once()
+        admin_bcast.assert_awaited_once()
+        admin_payload = admin_bcast.await_args.args[0]
+        assert admin_payload["type"] == "scheduled_ride_policy_blocked"
+        assert admin_payload["failed_rules"] == ["allowed_payment_source"]
+
+    async def test_policy_failure_dedupes_repeat_notifications(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=False, failed_rules=["max_fare_per_ride"])),
+            ),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=False)),  # already notified
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is False
+        push.assert_not_awaited()
+        admin_bcast.assert_not_awaited()
+
+    async def test_evaluation_error_fails_open(self):
+        """A policy-service hiccup must not strand every corporate scheduled
+        ride in the fleet -- matches evaluate_policy_for_ride's own
+        documented fail-open contract."""
+        from backend.utils import scheduled_rides as sr
+
+        with patch(
+            "services.corporate_policy_service.evaluate_policy_for_ride",
+            AsyncMock(side_effect=RuntimeError("policy service down")),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+
+    async def test_dispatch_skips_the_claim_entirely_when_policy_blocks(self):
+        """The gate must run BEFORE the atomic claim -- a blocked ride must
+        stay in 'scheduled' untouched, not get claimed into 'searching' and
+        need to be unwound."""
+        from backend.utils import scheduled_rides as sr
+
+        update_mock = AsyncMock()
+        with (
+            patch.object(sr, "_corporate_policy_still_allows_dispatch", AsyncMock(return_value=False)),
+            patch.object(sr.db, "update_one", update_mock),
+        ):
+            await sr._dispatch_scheduled_ride(_corp_ride())
+
+        update_mock.assert_not_awaited()

@@ -93,6 +93,40 @@ class TestScheduledDispatch:
         assert admin_payload["ride"]["id"] == RIDE_ID
         assert admin_payload["ride"]["status"] == "searching"
 
+    async def test_timeout_still_arms_when_match_driver_to_ride_raises(self):
+        """Finding #15: match_driver_to_ride documents itself as 'never
+        raises', but the ride_search_timeout safety net must still arm even
+        if that contract is ever violated -- the ride is genuinely in
+        'searching' status once the claim above succeeds, regardless of
+        what happens during the immediate match attempt."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+        created_tasks: list = []
+
+        def _fake_create_task(coro):
+            created_tasks.append(coro)
+            coro.close()  # avoid an un-awaited-coroutine warning
+            return None
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(return_value={**ride, "status": "searching"})),
+            patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID})),
+            patch("routes.rides.matching.match_driver_to_ride", AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("routes.rides.matching.ride_search_timeout", AsyncMock()) as timeout_fn,
+            patch.object(sr.manager, "broadcast_ride_status", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()),
+            patch.object(sr, "send_push_notification", AsyncMock()),
+            patch("asyncio.create_task", _fake_create_task),
+        ):
+            # Must not raise, even though match_driver_to_ride did.
+            await sr._dispatch_scheduled_ride(ride)
+
+        # The timeout coroutine was still created (and for the right ride),
+        # despite the matching call above raising.
+        assert created_tasks, "ride_search_timeout was never armed"
+        timeout_fn.assert_called_once_with(RIDE_ID)
+
     async def test_dispatch_aborts_when_claim_lost(self):
         """If another replica already flipped the row, update_one returns None
         and we must NOT run driver matching again."""

@@ -101,3 +101,46 @@ class TestScheduledDispatchPreauth:
         preauth_mock.assert_called_once()
         # only the claim update_one fired; no hold persisted
         assert update_mock.call_count == 1
+
+    async def test_genuine_preauth_exception_does_not_block_dispatch(self):
+        """Finding #15: _preauthorize_ride_card is documented as 'never
+        raises' (declines/failures degrade to an empty _PreauthOutcome), but
+        the surrounding try/except in _dispatch_scheduled_ride must still
+        catch a genuine exception (a real Stripe/network fault escaping that
+        contract) without blocking dispatch -- unlike the documented decline
+        path above, this exercises an actual raise, not a `{}` return."""
+        from contextlib import ExitStack
+
+        from backend.utils.scheduled_rides import _dispatch_scheduled_ride
+
+        S = "backend.utils.scheduled_rides."
+        match_mock = AsyncMock()
+        update_mock = AsyncMock(return_value=_claimed_card_ride())
+        patches = [
+            patch(S + "db.update_one", update_mock),
+            patch(S + "db.get_user_by_id", AsyncMock(return_value={"stripe_customer_id": "cus_sched"})),
+            patch(S + "manager.broadcast_ride_status", AsyncMock()),
+            patch(S + "manager.broadcast_to_admins", AsyncMock()),
+            patch(S + "send_push_notification", AsyncMock()),
+            # A genuine exception escaping the pre-auth call, not the
+            # documented empty-outcome degrade.
+            patch(
+                "backend.routes.rides.booking._preauthorize_ride_card",
+                AsyncMock(side_effect=RuntimeError("stripe api unreachable")),
+            ),
+            patch("backend.routes.rides.matching.match_driver_to_ride", match_mock),
+            patch("backend.routes.rides.matching.ride_search_timeout", AsyncMock()),
+            patch("backend.routes.admin.monitoring.build_monitoring_ride", lambda *a, **k: {}),
+            patch("asyncio.create_task", lambda coro: coro.close()),
+        ]
+
+        with ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            # Must not raise, and must still proceed to matching.
+            await _dispatch_scheduled_ride({"id": "ride_sched_1", "rider_id": "rider_sched_1"})
+
+        match_mock.assert_awaited_once_with("ride_sched_1")
+        # Only the claim update_one fired -- no hold fields persisted from a
+        # call that raised rather than returning fields.
+        assert update_mock.call_count == 1

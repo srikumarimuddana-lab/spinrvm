@@ -286,11 +286,25 @@ async def _dispatch_scheduled_ride(ride: dict):
         except ImportError:
             from ..routes.rides import matching as _rides_matching
 
-        await _rides_matching.match_driver_to_ride(ride_id)
+        # match_driver_to_ride documents itself as "never raises" — recovery
+        # (retry ladder, then the stuck-ride sweeper) is owned internally.
+        # The ride is genuinely in 'searching' status the moment the claim
+        # above succeeded, though, so the timeout safety net below must arm
+        # regardless of whether that no-raise contract holds — a violation
+        # here must not silently fall back to only the 5-minute sweeper.
+        try:
+            await _rides_matching.match_driver_to_ride(ride_id)
+        except Exception as match_err:
+            logger.error(
+                "scheduled dispatch: match_driver_to_ride raised for %s despite its no-raise contract: %s",
+                ride_id,
+                match_err,
+                exc_info=True,
+            )
 
         # Arm the no-drivers-found timeout exactly as the live booking path does,
         # so a scheduled ride that finds no driver auto-cancels instead of
-        # hanging in 'searching' indefinitely.
+        # hanging in 'searching' indefinitely. Armed unconditionally (see above).
         asyncio.create_task(_rides_matching.ride_search_timeout(ride_id))
 
         # Notify rider

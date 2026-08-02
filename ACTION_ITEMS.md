@@ -2507,6 +2507,18 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   backend/Supabase instance or a live corporate membership.
 
 ### C7. AI PR review is off by design (cost) — DECIDED 2026-08-01: stays off
+- **Duplicate of existing CRs — noted 2026-08-02.** This was filed as a new
+  finding without first searching `label:change-request`. It restates
+  [#2503](https://github.com/srikumarimuddana-lab/spinrvm/issues/2503)
+  ("Missing Anthropic credentials secret breaks the `review` CI check on
+  every PR", open since 2026-07-27) and
+  [#2497](https://github.com/srikumarimuddana-lab/spinrvm/issues/2497)
+  (closed, same ground). The decision recorded below — leave the key unset —
+  is the new part and stands; #2503 should be closed against it rather than
+  left open describing an unresolved problem. **Check the open CR list before
+  filing anything here**; several other entries from the same session turned
+  out to be tracked already (#2771 deploy-backend, #2656/#2861 backend-test
+  DSN, #3256 driver-app E2E, #3083 admin Playwright).
 - [x] **Status:** closed — **decision taken: leave `ANTHROPIC_API_KEY` unset.**
   The per-PR API spend is not justified at this repo's volume (~24 merged
   PRs/day). The workflow remains in the repo, scoped and skipping cleanly;

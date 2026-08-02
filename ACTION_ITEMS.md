@@ -745,8 +745,31 @@ _Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c
     - **Sub-tier A — money/ride/dispatch-adjacent, arguably deserves
       Track-1-grade priority despite living in "Track 2"** (recommend
       picking up first):
-      - `repositories/ride_repo.py` — 54.83% (383 stmts, 173 missing) — ride
-        state persistence layer.
+      - `repositories/ride_repo.py` — **done, 84.1%** (was 54.83%, 383
+        stmts, 61 missing). Ride state persistence layer. Had no dedicated
+        test file; only indirect coverage via route-level tests. Added
+        `tests/test_ride_repo_coverage.py` (74 tests): `_safe_route_segments`
+        allowlist-projection branches (malformed/out-of-range/unknown-
+        provider coordinate rejection), route-snapshot signed-URL
+        happy/error paths, `_project_route_detail`'s v1-legacy vs.
+        v2-segmented-geometry branches (completion-point validation,
+        snapshot-URL signing-failure graceful-degrade, revision-mismatch
+        skip), `get_ride`/`insert_ride`/`update_ride` happy paths and
+        unconfigured/DB-failure branches, `claim_ride_payment_processing`'s
+        atomic payment-status race guard (both claimed and
+        already-claimed-by-concurrent-request outcomes), `get_rides_for_user`/
+        `get_rides_for_driver` (status/date-range filters),
+        `get_ride_details_enriched`'s minimal-ride (no rider/driver) and
+        incentive-claims-fetch-failure-degrades-gracefully paths,
+        `create_flag`'s auto-ban-at-3-active-flags threshold for both rider
+        and driver targets, complaint/lost-and-found CRUD, and
+        `get_live_ride_data`/`get_user_status`/`get_flags_for_target`. No
+        application code changed. No bugs found — every DB-touching
+        function either raises via `run_sync`'s `DatabaseError` wrapper or
+        degrades soft exactly as documented (e.g. `_project_route_detail`'s
+        signed-URL signing failure). Full suite: `6904 passed, 8 skipped,
+        1 xfailed, 0 failed`. See
+        `docs/change-log/2026-08-02-a1b-ride-repo-coverage.md`.
       - `routes/websocket.py` — 50.26% (569 stmts, 283 missing) — WS auth +
         dispatch fan-out.
       - `routes/drivers/subscriptions.py` — 60.52% (575 stmts, 227

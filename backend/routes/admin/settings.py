@@ -336,6 +336,12 @@ class SettingsUpdateRequest(BaseModel):
     # subscription billing. Cancelling an existing subscription is never
     # gated behind this flag.
     corporate_subscription_billing_enabled: Optional[bool] = None
+    # Kill switch (default true) + threshold for the KYB re-verification
+    # staleness reminder loop (utils/kyb_reverification.py) — corporate +
+    # admin portal review round 2. Visibility only: flips no company's
+    # status, just a log line + metric an admin can act on manually.
+    corporate_kyb_reverification_enabled: Optional[bool] = None
+    corporate_kyb_reverify_after_months: Optional[int] = Field(default=None, ge=1, le=60)
 
     @field_validator("lms_api_base_url")
     @classmethod

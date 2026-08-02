@@ -132,7 +132,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 - `backend/server.py` — app factory; mounts ~25 routers
 - `backend/core/config.py` — pydantic-settings `Settings`; fails fast in production on weak secrets
-- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 17 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
+- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 18 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
 - `backend/core/middleware.py` — CORS, security headers, rate limiting (SlowAPI + Redis)
 - `backend/db_supabase.py` — ~66 helper functions wrapping `supabase-py` via `run_sync()` (thread-pool with one retry on H2 GOAWAY)
 - `backend/socket_manager.py` — `ConnectionManager` (in-process WS registry); delegates to Redis pub/sub when active

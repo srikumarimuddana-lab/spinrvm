@@ -28,6 +28,22 @@ logger = logging.getLogger(__name__)
 
 DOCUMENT_STORAGE_BUCKET = "driver-documents"
 
+# documents.py's _validate_file_type rejects any declared type not in its
+# own ALLOWED_MIME_TYPES allowlist — "application/octet-stream" is not a
+# member, so passing it always raised and was silently swallowed by this
+# module's own `except Exception: continue`, meaning every document in
+# every bundle replay was skipped. Map the bundle's known-safe extension
+# (already checked against ALLOWED_EXTENSIONS above this lookup) to its
+# real MIME type instead.
+_EXT_TO_MIME_TYPE = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+}
+
 
 async def _upload_bytes(content: bytes, ext: str, content_type: str) -> str:
     """Upload raw bytes under a fresh storage key; returns the signed URL.
@@ -77,14 +93,15 @@ async def replay_documents(
         if ext not in ALLOWED_EXTENSIONS:
             logger.warning("data-transfer import: skipping document with disallowed extension %s", ext)
             continue
+        content_type = _EXT_TO_MIME_TYPE.get(ext, "application/octet-stream")
         try:
-            _validate_file_type(content, "application/octet-stream")
+            _validate_file_type(content, content_type)
         except Exception:
             logger.warning("data-transfer import: skipping document that failed type validation (doc_id=%s)", doc_id)
             continue
 
         try:
-            url = await _upload_bytes(content, ext, "application/octet-stream")
+            url = await _upload_bytes(content, ext, content_type)
         except Exception:
             logger.error("data-transfer import: failed to re-upload document doc_id=%s", doc_id, exc_info=True)
             continue

@@ -50,6 +50,7 @@ function toCSV(statement: BillingStatement): string {
         "source_type",
         "allowance_debit_amount",
         "master_fallback_amount",
+        "tax_amount",
         "policy_check_result",
         "created_at",
     ];
@@ -67,6 +68,7 @@ function toCSV(statement: BillingStatement): string {
                 r.source_type,
                 r.allowance_debit_amount,
                 r.master_fallback_amount,
+                r.tax_amount ?? "",
                 r.policy_check_result ?? "",
                 r.created_at,
             ]
@@ -177,6 +179,20 @@ export default function BillingPage() {
                     label="Master fallback"
                     value={formatCAD(summary?.master_total)}
                     sub="Overflow debits"
+                />
+                {/* Corporate + admin portal review, round 2: "no GST/PST
+                    breakdown on corporate statements" — for input-tax-credit
+                    reconciliation. */}
+                <Metric
+                    label="Tax (GST/PST)"
+                    value={formatCAD(summary?.tax_total)}
+                    sub={
+                        summary?.tax_by_type && Object.keys(summary.tax_by_type).length > 0
+                            ? Object.entries(summary.tax_by_type)
+                                  .map(([label, amount]) => `${label} ${formatCAD(amount)}`)
+                                  .join(" · ")
+                            : "Included in totals above"
+                    }
                 />
             </div>
 

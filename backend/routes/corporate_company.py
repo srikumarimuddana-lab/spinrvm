@@ -789,15 +789,54 @@ def _money_str(v) -> str:
     return str(_d(v))
 
 
+async def _attach_ride_tax(rows: list[dict]) -> list[dict]:
+    """Merge rides.tax_amount / tax_breakdown onto ride_payment_sources rows.
+
+    Corporate + admin portal review, round 2: "no GST/PST breakdown on
+    corporate statements" — tax is already computed and persisted per-ride
+    (migration 46) and already shown on rider receipts
+    (utils/email_receipt.py, utils/receipt_pdf.py); it just never reached
+    the one place a corporate finance manager could self-serve it. Fetches
+    rides by $in on ride_payment_sources.ride_id (== rides.id), per
+    CLAUDE.md's convention for a lookup spanning two tables — never a
+    PostgREST embed.
+    """
+    try:
+        from ..db_supabase import get_rows as _get_rows
+    except ImportError:
+        from db_supabase import get_rows as _get_rows  # type: ignore
+
+    ride_ids = [r["ride_id"] for r in rows if r.get("ride_id")]
+    if not ride_ids:
+        return rows
+    ride_rows = await _get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids))
+    tax_by_ride = {r["id"]: r for r in ride_rows}
+    for r in rows:
+        ride = tax_by_ride.get(r.get("ride_id"), {})
+        r["tax_amount"] = ride.get("tax_amount") or 0
+        r["tax_breakdown"] = ride.get("tax_breakdown") or {}
+    return rows
+
+
 def _aggregate_rows(rows: list[dict]) -> dict:
     allowance_total = _ZERO
     master_total = _ZERO
+    tax_total = _ZERO
+    tax_by_type: dict[str, Decimal] = {}
     by_member: dict[str, dict] = {}
     for r in rows:
         ad = _d(r.get("allowance_debit_amount"))
         md = _d(r.get("master_fallback_amount"))
         allowance_total += ad
         master_total += md
+        tax = _d(r.get("tax_amount"))
+        tax_total += tax
+        breakdown = r.get("tax_breakdown") or {}
+        if isinstance(breakdown, dict):
+            for label, payload in breakdown.items():
+                if not isinstance(payload, dict):
+                    continue
+                tax_by_type[label] = tax_by_type.get(label, _ZERO) + _d(payload.get("amount"))
         mid = r.get("member_id") or "unknown"
         slot = by_member.setdefault(
             mid,
@@ -829,6 +868,8 @@ def _aggregate_rows(rows: list[dict]) -> dict:
         "master_total": _money_str(master_total),
         "total": _money_str(total),
         "avg_fare": _money_str(total / len(rows)) if rows else "0.00",
+        "tax_total": _money_str(tax_total),
+        "tax_by_type": {label: _money_str(amt) for label, amt in tax_by_type.items()},
         "by_member": by_member_out,
     }
 
@@ -868,6 +909,7 @@ async def billing_summary(
             break
         offset += page_size
 
+    all_rows = await _attach_ride_tax(all_rows)
     wallet = await get_corporate_wallet_by_company(company_id) or {}
     return {
         "month": month,
@@ -919,6 +961,8 @@ async def billing_statement(
             break
         offset += page_size
 
+    line_items = await _attach_ride_tax(line_items)
+    all_rows = await _attach_ride_tax(all_rows)
     return {
         "month": month,
         "from": from_iso,

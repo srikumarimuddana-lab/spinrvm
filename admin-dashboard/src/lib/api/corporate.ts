@@ -370,6 +370,11 @@ export interface BillingMemberBreakdown {
     total: number;
 }
 
+// Corporate + admin portal review, round 2: "no GST/PST breakdown on
+// corporate statements" — tax_total / tax_by_type surface what was
+// already computed and stored per-ride, for input-tax-credit reconciliation.
+export type TaxByType = Record<string, number>;
+
 export interface BillingSummary {
     month: string;
     wallet_balance: number;
@@ -379,6 +384,8 @@ export interface BillingSummary {
     master_total: number;
     total: number;
     avg_fare: number;
+    tax_total: number;
+    tax_by_type: TaxByType;
     by_member: BillingMemberBreakdown[];
 }
 
@@ -390,6 +397,8 @@ export interface BillingLineItem {
     master_fallback_amount: number;
     policy_check_result?: string;
     created_at: string;
+    tax_amount?: number;
+    tax_breakdown?: Record<string, { rate: number; amount: number }>;
 }
 
 export interface BillingStatement {
@@ -403,6 +412,8 @@ export interface BillingStatement {
         master_total: number;
         total: number;
         avg_fare: number;
+        tax_total: number;
+        tax_by_type: TaxByType;
         by_member: BillingMemberBreakdown[];
     };
 }

@@ -532,6 +532,19 @@ export const selfServeWalletTopup = (companyId: string, amount: number) =>
         body: JSON.stringify({ amount }),
     });
 
+// Corporate + admin portal review, round 2: downloadable PDF invoice per
+// statement period. Binary response — bypasses companyRequest's JSON-only
+// parsing, same minimal pattern as lib/api/corporate.ts's
+// fetchKybDocumentBlob (no silent-refresh retry on a blob download).
+export async function fetchCompanyStatementPdfBlob(companyId: string, month: string): Promise<Blob> {
+    const token = useCompanyAuthStore.getState().token;
+    const res = await fetch(`/api/company/${companyId}/billing/statements/${encodeURIComponent(month)}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Could not load statement PDF (${res.status})`);
+    return res.blob();
+}
+
 export interface PortalVehicleType {
     id: string;
     name: string;

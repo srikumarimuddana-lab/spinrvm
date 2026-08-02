@@ -8,6 +8,7 @@ import type {
     BillingTransactionsPage,
 } from "@/lib/api";
 import {
+    fetchCompanyStatementPdfBlob,
     getCompanyBillingStatement,
     getCompanyBillingSummary,
     getCompanyBillingTransactions,
@@ -32,7 +33,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
-import { Download, Plus } from "lucide-react";
+import { Download, FileText, Plus } from "lucide-react";
 import { sanitizeCsvCell } from "@/lib/export-csv";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { useToast } from "@/components/ui/use-toast";
@@ -139,6 +140,30 @@ export default function BillingPage() {
         URL.revokeObjectURL(url);
     };
 
+    const [downloadingPdf, setDownloadingPdf] = useState(false);
+
+    const downloadPDF = async () => {
+        if (!id) return;
+        setDownloadingPdf(true);
+        try {
+            const blob = await fetchCompanyStatementPdfBlob(id, month);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `spinr-corporate-statement-${month}.pdf`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            toast({
+                title: "Failed to download invoice",
+                description: e instanceof Error ? e.message : "Could not generate the PDF.",
+                variant: "destructive",
+            });
+        } finally {
+            setDownloadingPdf(false);
+        }
+    };
+
     const byMember = useTableSort(summary?.by_member ?? []);
     const ledger = useTableSort(txns?.transactions ?? []);
 
@@ -202,6 +227,14 @@ export default function BillingPage() {
                         disabled={!statement}
                     >
                         <Download className="mr-1 h-4 w-4" /> CSV
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={downloadPDF}
+                        disabled={downloadingPdf}
+                    >
+                        <FileText className="mr-1 h-4 w-4" /> {downloadingPdf ? "Generating…" : "Invoice PDF"}
                     </Button>
                 </div>
             </header>

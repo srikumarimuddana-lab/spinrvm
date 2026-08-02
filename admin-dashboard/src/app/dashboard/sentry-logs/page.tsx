@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     AlertTriangle,
     Bug,
@@ -40,6 +40,7 @@ import {
     getSentryIssueDetail,
     getSentryIssues,
     updateSentryIssueStatus,
+    SENTRY_PER_SURFACE_LIMIT,
     type SentryConfig,
     type SentryIssue,
     type SentryIssueDetail,
@@ -137,30 +138,33 @@ export default function SentryLogsPage() {
     // Per-issue action in flight (id being resolved/ignored)
     const [actioningId, setActioningId] = useState<string | null>(null);
 
-    // `isStale` lets the caller abandon a response that arrived after its
-    // effect was torn down. Without it, flipping filters quickly can land a
-    // slow earlier response after a fast later one, leaving the list showing
-    // rows that don't match the active filters.
-    const fetchIssues = useCallback(
-        async (isStale?: () => boolean) => {
-            setErrorMsg(null);
-            try {
-                const res = await getSentryIssues({
-                    surface: surface === "all" ? undefined : surface,
-                    status,
-                    statsPeriod: period,
-                    limit: 50,
-                });
-                if (isStale?.()) return;
-                setIssuesResp(res);
-            } catch (err) {
-                if (isStale?.()) return;
-                setIssuesResp(null);
-                setErrorMsg(err instanceof Error ? err.message : "Failed to load Sentry issues");
-            }
-        },
-        [surface, status, period],
-    );
+    // Monotonic token identifying the newest fetch. Every fetch — effect-driven
+    // or a manual Refresh — claims a token and discards its own response if a
+    // later one has since started. A per-effect `cancelled` flag alone was not
+    // enough: it only covers fetches whose effect was torn down, so a Refresh
+    // racing an in-flight filter change could still land out of order and leave
+    // the list showing rows that don't match the active filters.
+    const fetchSeq = useRef(0);
+
+    const fetchIssues = useCallback(async () => {
+        const seq = ++fetchSeq.current;
+        const isStale = () => fetchSeq.current !== seq;
+        setErrorMsg(null);
+        try {
+            const res = await getSentryIssues({
+                surface: surface === "all" ? undefined : surface,
+                status,
+                statsPeriod: period,
+                limit: SENTRY_PER_SURFACE_LIMIT,
+            });
+            if (isStale()) return;
+            setIssuesResp(res);
+        } catch (err) {
+            if (isStale()) return;
+            setIssuesResp(null);
+            setErrorMsg(err instanceof Error ? err.message : "Failed to load Sentry issues");
+        }
+    }, [surface, status, period]);
 
     // Config first, on mount only: an unconfigured deployment shows setup
     // guidance instead of firing a doomed issues query. The issue fetch is
@@ -199,7 +203,7 @@ export default function SentryLogsPage() {
         }
         let cancelled = false;
         (async () => {
-            await fetchIssues(() => cancelled);
+            await fetchIssues();
             if (!cancelled) setLoading(false);
         })();
         return () => {
@@ -338,6 +342,32 @@ export default function SentryLogsPage() {
                 </Card>
             )}
 
+            {/* Partial load. The backend degrades per surface rather than
+                failing the whole request, so the list below can be missing an
+                entire app's errors. On a triage screen that must be stated
+                outright — "no issues" and "we couldn't ask" look identical. */}
+            {issuesResp?.partial && (
+                <Card className="border-yellow-500/50">
+                    <CardContent className="flex flex-col gap-1 pt-6 text-sm">
+                        <span className="flex items-center gap-2 font-medium text-yellow-600 dark:text-yellow-400">
+                            <AlertTriangle className="h-5 w-5" />
+                            Partial results — {issuesResp.errors.length} surface
+                            {issuesResp.errors.length === 1 ? "" : "s"} failed to load
+                        </span>
+                        <ul className="list-disc pl-7 text-muted-foreground">
+                            {issuesResp.errors.map((e) => (
+                                <li key={e.surface}>
+                                    <span className="font-medium">
+                                        {SURFACE_LABEL[e.surface] ?? e.surface}
+                                    </span>{" "}
+                                    (<code className="text-xs">{e.project}</code>): {e.detail}
+                                </li>
+                            ))}
+                        </ul>
+                    </CardContent>
+                </Card>
+            )}
+
             {/* Not-configured setup panel */}
             {config && !config.configured && (
                 <Card className="border-yellow-500/50">
@@ -430,7 +460,10 @@ export default function SentryLogsPage() {
                     </Card>
 
                     {/* Issue list */}
-                    {!errorMsg && issues.length === 0 && (
+                    {/* The all-clear is only claimed when every surface actually
+                        answered; a partial load already shows its own warning
+                        above and must not also read as "nothing to triage". */}
+                    {!errorMsg && issues.length === 0 && !issuesResp?.partial && (
                         <Card>
                             <CardContent className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
                                 <CheckCircle2 className="h-8 w-8 text-emerald-500" />
@@ -612,7 +645,14 @@ export default function SentryLogsPage() {
                             {/* Stacktrace */}
                             <div>
                                 <h3 className="mb-2 text-sm font-semibold">Stacktrace (latest event)</h3>
-                                {detail.exceptions.length === 0 ? (
+                                {detail.event_error ? (
+                                    // The issue loaded but its latest event did not — say which,
+                                    // so an infrastructure failure isn't read as "no stacktrace".
+                                    <p className="flex items-center gap-2 text-sm text-yellow-600 dark:text-yellow-400">
+                                        <AlertTriangle className="h-4 w-4" />
+                                        Could not load the latest event: {detail.event_error}
+                                    </p>
+                                ) : detail.exceptions.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">
                                         No stacktrace on the latest event.
                                     </p>

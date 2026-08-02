@@ -130,6 +130,67 @@ def test_extract_exceptions_ignores_non_exception_entries():
     assert sentry._extract_exceptions(event) == []
 
 
+def test_extract_exceptions_no_context_line_when_frame_has_no_lineno():
+    """Minified JS frames arrive with lineNo=None; a context pair whose lineno
+    is also None must not be matched against them."""
+    event = {
+        "entries": [
+            {
+                "type": "exception",
+                "data": {
+                    "values": [
+                        {
+                            "type": "TypeError",
+                            "stacktrace": {
+                                "frames": [
+                                    {
+                                        "filename": "main.min.js",
+                                        "lineNo": None,
+                                        "context": [[None, "unrelated source"]],
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+    frame = sentry._extract_exceptions(event)[0]["frames"][0]
+    assert frame["lineno"] is None
+    assert frame["context_line"] is None
+
+
+# ---------------------------------------------------------------------------
+# _filter_tags (PIPEDA allowlist)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_tags_drops_everything_not_allowlisted():
+    tags = [
+        {"key": "environment", "value": "production"},
+        {"key": "release", "value": "1.2.3"},
+        {"key": "domain", "value": "dispatch"},
+        {"key": "driver_id", "value": "drv-1"},
+        # None of these are allowlisted — SDK auto-attached, may carry PII.
+        {"key": "url", "value": "https://app/rides?pickup=123+Main+St"},
+        {"key": "user", "value": "rider@example.com"},
+        {"key": "server_name", "value": "fly-yyz-abc"},
+        {"key": "transaction", "value": "/rides/123"},
+        {"key": "user_email", "value": "rider@example.com"},
+        "not-a-dict",
+        {"novalue": 1},
+    ]
+    out = sentry._filter_tags(tags)
+    assert [t["key"] for t in out] == ["environment", "release", "domain", "driver_id"]
+
+
+def test_filter_tags_coerces_value_and_handles_empty():
+    assert sentry._filter_tags(None) == []
+    assert sentry._filter_tags([{"key": "level", "value": None}]) == [{"key": "level", "value": ""}]
+    assert sentry._filter_tags([{"key": "handled", "value": False}]) == [{"key": "handled", "value": "False"}]
+
+
 # ---------------------------------------------------------------------------
 # config helpers
 # ---------------------------------------------------------------------------
@@ -208,14 +269,13 @@ async def test_sentry_request_wraps_httpx_error_as_502():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.anyio
-async def test_get_sentry_config_reports_enabled_surfaces():
+def test_get_sentry_config_reports_enabled_surfaces():
     with (
         patch.object(sentry, "_is_configured", return_value=True),
         patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
         patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
     ):
-        out = await sentry.get_sentry_config(current_admin=ADMIN)
+        out = sentry._sentry_config()
     assert out["configured"] is True
     assert out["org"] == "spinr"
     by_surface = {s["surface"]: s for s in out["surfaces"]}
@@ -230,15 +290,17 @@ async def test_get_sentry_config_reports_enabled_surfaces():
 
 
 async def _call_list_issues(**overrides):
-    """Invoke the endpoint directly with its real defaults filled in.
+    """Call the list implementation with every argument explicit.
 
-    These tests call the route function rather than going through FastAPI, so
-    any parameter left unpassed keeps its ``Query(...)`` object as the value
-    instead of the default that object wraps. A ``Query`` instance is not
-    None and is truthy, so an omitted ``surface`` reached the
-    ``surface is not None`` guard and raised
-    "Surface 'annotation=Union[str, NoneType] ...' is not configured" —
-    a test artifact, not route behavior. Pass the defaults explicitly.
+    Two reasons not to call ``sentry.list_sentry_issues`` itself. Its FastAPI
+    ``Query(...)`` defaults are objects, not the values they wrap, so any
+    argument left unpassed arrives as a truthy non-None ``Query`` instance —
+    an omitted ``surface`` used to reach the ``surface is not None`` guard and
+    raise "Surface 'annotation=Union[str, NoneType] ...' is not configured",
+    a test artifact rather than route behavior. And the route now carries a
+    slowapi ``@limiter.limit`` decorator that demands a real ``Request``.
+    ``_list_issues`` is the plain-argument implementation the route delegates
+    to, so the logic is reachable without faking either.
     """
     kwargs = {
         "surface": None,
@@ -246,17 +308,16 @@ async def _call_list_issues(**overrides):
         "query": None,
         "stats_period": "14d",
         "limit": sentry._DEFAULT_LIMIT,
-        "current_admin": ADMIN,
     }
     kwargs.update(overrides)
-    return await sentry.list_sentry_issues(**kwargs)
+    return await sentry._list_issues(**kwargs)
 
 
 @pytest.mark.anyio
 async def test_list_issues_not_configured_raises_503():
     with patch.object(sentry, "_is_configured", return_value=False):
         with pytest.raises(HTTPException) as ei:
-            await sentry.list_sentry_issues(current_admin=ADMIN)
+            await _call_list_issues()
     assert ei.value.status_code == 503
 
 
@@ -277,6 +338,8 @@ async def test_list_issues_merges_and_sorts_by_last_seen():
     assert out["issues"][0]["id"] == "r1"
     assert set(out["surfaces"]) == {"backend", "rider-app"}
     assert out["truncated"] is False
+    assert out["errors"] == []
+    assert out["partial"] is False
 
 
 @pytest.mark.anyio
@@ -292,24 +355,63 @@ async def test_list_issues_flags_truncated_when_page_full():
 
 
 @pytest.mark.anyio
+async def test_list_issues_degrades_when_one_surface_fails():
+    """One bad project slug must not blank the whole triage view."""
+    good = [{"id": "b1", "last_seen": "2026-01-02T00:00:00Z"}]
+    fetch = AsyncMock(side_effect=[good, HTTPException(status_code=404, detail="Sentry issue or project not found")])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend", "rider-app": "typo-slug"}),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+    ):
+        out = await _call_list_issues()
+    assert out["count"] == 1
+    assert out["issues"][0]["id"] == "b1"
+    assert out["partial"] is True
+    assert out["errors"] == [
+        {"surface": "rider-app", "project": "typo-slug", "detail": "Sentry issue or project not found"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_list_issues_all_surfaces_failing_raises_502():
+    """An all-surfaces failure must never render as a reassuring empty list."""
+    fetch = AsyncMock(side_effect=HTTPException(status_code=502, detail="Sentry API returned HTTP 500"))
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(
+            sentry, "_surface_projects", return_value={"backend": "spinr-backend", "rider-app": "spinr-rider"}
+        ),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+    ):
+        with pytest.raises(HTTPException) as ei:
+            await _call_list_issues()
+    assert ei.value.status_code == 502
+    assert "backend" in ei.value.detail and "rider-app" in ei.value.detail
+
+
+@pytest.mark.anyio
 async def test_list_issues_unknown_surface_raises_400():
     with (
         patch.object(sentry, "_is_configured", return_value=True),
         patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
     ):
         with pytest.raises(HTTPException) as ei:
-            await sentry.list_sentry_issues(surface="driver-app", current_admin=ADMIN)
+            await _call_list_issues(surface="driver-app")
     assert ei.value.status_code == 400
 
 
 @pytest.mark.anyio
-async def test_list_issues_invalid_status_raises_400():
+@pytest.mark.parametrize("bad_status", ["bogus", "muted"])
+async def test_list_issues_invalid_status_raises_400(bad_status):
+    """`muted` is rejected too: the update endpoint cannot set it, so allowing
+    it here would offer a filter the operator can never act on."""
     with (
         patch.object(sentry, "_is_configured", return_value=True),
         patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
     ):
         with pytest.raises(HTTPException) as ei:
-            await sentry.list_sentry_issues(status="bogus", current_admin=ADMIN)
+            await _call_list_issues(status=bad_status)
     assert ei.value.status_code == 400
 
 
@@ -330,7 +432,14 @@ async def test_get_issue_merges_detail_with_stacktrace_and_surface():
     event_payload = {
         "id": "evt-1",
         "dateCreated": "2026-01-02T00:00:00Z",
-        "tags": [{"key": "env", "value": "production"}],
+        "tags": [
+            {"key": "environment", "value": "production"},
+            {"key": "ride_id", "value": "ride-9"},
+            # Auto-attached by the SDKs and outside our beforeSend scrubbing —
+            # must be dropped, not relayed.
+            {"key": "url", "value": "https://app/rides?address=123+Main+St"},
+            {"key": "server_name", "value": "fly-yyz-abc"},
+        ],
         "entries": [
             {
                 "type": "exception",
@@ -345,12 +454,66 @@ async def test_get_issue_merges_detail_with_stacktrace_and_surface():
         patch.object(sentry, "_sentry_request", request_mock),
         patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
     ):
-        out = await sentry.get_sentry_issue("123", current_admin=ADMIN)
+        out = await sentry._get_issue("123")
     assert out["surface"] == "backend"
     assert out["event_id"] == "evt-1"
     assert out["event_timestamp"] == "2026-01-02T00:00:00Z"
-    assert out["tags"] == [{"key": "env", "value": "production"}]
+    assert out["tags"] == [
+        {"key": "environment", "value": "production"},
+        {"key": "ride_id", "value": "ride-9"},
+    ]
     assert len(out["exceptions"]) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("bad_id", ["../../organizations/other/issues/9", "1 OR 1", "", "abc"])
+async def test_get_issue_rejects_non_numeric_id(bad_id):
+    """issue_id is interpolated into the Sentry API path — only digits allowed."""
+    request_mock = AsyncMock()
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_sentry_request", request_mock),
+    ):
+        with pytest.raises(HTTPException) as ei:
+            await sentry._get_issue(bad_id)
+    assert ei.value.status_code == 400
+    request_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_get_issue_outside_configured_projects_raises_404():
+    """The org token can see every project; this viewer only exposes Spinr's."""
+    issue_payload = {"id": "77", "project": {"slug": "some-other-teams-app"}, "metadata": {}}
+    request_mock = AsyncMock(side_effect=[_resp(200, issue_payload), _resp(200, {})])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
+        patch.object(sentry, "_sentry_request", request_mock),
+        patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+    ):
+        with pytest.raises(HTTPException) as ei:
+            await sentry._get_issue("77")
+    assert ei.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_get_issue_survives_missing_latest_event():
+    """Issue metadata still renders when the latest-event read fails."""
+    issue_payload = {"id": "123", "project": {"slug": "spinr-backend"}, "metadata": {}}
+    request_mock = AsyncMock(
+        side_effect=[_resp(200, issue_payload), HTTPException(status_code=404, detail="not found")]
+    )
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
+        patch.object(sentry, "_sentry_request", request_mock),
+        patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+    ):
+        out = await sentry._get_issue("123")
+    assert out["surface"] == "backend"
+    assert out["exceptions"] == []
+    assert out["tags"] == []
+    assert out["event_error"] == "not found"
 
 
 # ---------------------------------------------------------------------------
@@ -361,25 +524,65 @@ async def test_get_issue_merges_detail_with_stacktrace_and_surface():
 @pytest.mark.anyio
 async def test_update_status_rejects_invalid_status():
     with patch.object(sentry, "_is_configured", return_value=True):
-        body = sentry.UpdateIssueStatusRequest(status="deleted")
         with pytest.raises(HTTPException) as ei:
-            await sentry.update_sentry_issue_status("123", body, current_admin=ADMIN)
+            await sentry._update_issue_status("123", "deleted", ADMIN)
     assert ei.value.status_code == 400
 
 
 @pytest.mark.anyio
-async def test_update_status_resolves_issue():
-    request_mock = AsyncMock(return_value=_resp(200, {"status": "resolved", "statusDetails": {}}))
+async def test_update_status_rejects_non_numeric_id():
+    with patch.object(sentry, "_is_configured", return_value=True):
+        with pytest.raises(HTTPException) as ei:
+            await sentry._update_issue_status("../9", "resolved", ADMIN)
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_update_status_refuses_issue_outside_configured_projects():
+    request_mock = AsyncMock(return_value=_resp(200, {"id": "77", "project": {"slug": "other-team"}}))
     with (
         patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
         patch.object(sentry, "_sentry_request", request_mock),
+        patch.object(sentry, "log_admin_action", AsyncMock()) as audit,
         patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
     ):
-        body = sentry.UpdateIssueStatusRequest(status="resolved")
-        out = await sentry.update_sentry_issue_status("123", body, current_admin=ADMIN)
+        with pytest.raises(HTTPException) as ei:
+            await sentry._update_issue_status("77", "resolved", ADMIN)
+    assert ei.value.status_code == 404
+    # Refused before any PUT, and nothing written to the audit log.
+    assert all(call.args[1] != "PUT" for call in request_mock.call_args_list)
+    audit.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_update_status_resolves_issue_and_writes_audit_row():
+    request_mock = AsyncMock(
+        side_effect=[
+            _resp(200, {"id": "123", "project": {"slug": "spinr-backend"}}),
+            _resp(200, {"status": "resolved", "statusDetails": {}}),
+        ]
+    )
+    audit_mock = AsyncMock()
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
+        patch.object(sentry, "_sentry_request", request_mock),
+        patch.object(sentry, "log_admin_action", audit_mock),
+        patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+    ):
+        out = await sentry._update_issue_status("123", "resolved", ADMIN)
     assert out["id"] == "123"
     assert out["status"] == "resolved"
     # Verify it issued a PUT to the org issue endpoint with the new status.
     args, kwargs = request_mock.call_args
     assert args[1] == "PUT"
     assert kwargs["json"] == {"status": "resolved"}
+    # Admin actions are audit-table events, not just app-log lines.
+    audit_mock.assert_awaited_once()
+    a_args, _ = audit_mock.call_args
+    assert a_args[0] is ADMIN
+    assert a_args[1] == "sentry_issue_status_change"
+    assert a_args[2] == "sentry_issue"
+    assert a_args[3] == "123"
+    assert a_args[4] == {"status": "resolved", "surface": "backend", "project": "spinr-backend"}

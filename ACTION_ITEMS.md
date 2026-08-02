@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c (open) — full-repo scoping pass done (Sub-tiers A/B/C), first file (`utils/reconciliation.py`, 16%→90%) closed. Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-01 — A1b closed (Track 1 done); Track 2 spun off as A1c (open) — full-repo scoping pass done (Sub-tiers A/B/C), first file (`utils/reconciliation.py`, 16%→90%) closed; AI15 added and closed same-day (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -2650,6 +2650,28 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   internal jargon; nothing greps the reply stream. A lightweight post-filter
   for snake_case tool names in assistant text would make the secrecy rule
   structural.
+- [x] **AI15. `backend/ai/pii.py` had no card-number or government-ID/SIN
+  scrubbing** — `scrub_pii()` covered phones, emails, GPS coordinates, and
+  postal codes but had zero regex coverage for payment card numbers, and zero
+  coverage (with no documented mitigation, unlike the "names" gap) for
+  government ID/SIN numbers. Both are explicit `CLAUDE.md` PIPEDA ban-list
+  items; either would have reached a third-party LLM provider and
+  `ai_messages` persistence unredacted if a rider pasted one into AI chat or
+  a support ticket. Found by the newly-added `spinr-ai-guardrail-reviewer`
+  agent's first real end-to-end `/ai-check` run, auditing `pii.py` itself.
+  Done (2026-08-01, PR #3133): added a card-number pattern gated on
+  recognized card-network IIN prefixes (Visa, Mastercard, Amex, Discover —
+  same prefix-discriminator principle this file already used for phone
+  numbers) and a grouped 3-3-3 SIN pattern (bare ungrouped 9 digits
+  deliberately not matched — no reliable discriminator, would repeat this
+  file's own documented timestamp-collision regression). Driver's license
+  numbers remain out of scope (no fixed cross-provincial format); mitigated
+  via data-minimization same as names. Also synced
+  `backend/utils/log_guard.py`'s `_SCREEN` cheap pre-filter, without which
+  the new patterns would exist in `pii.py` but never fire on the loguru sink
+  path. Verified with a full `pytest` run post-merge (76/76 passing in
+  `test_ai_pii.py` + `test_log_guard.py`, including 16 new tests). See
+  `docs/change-log/2026-08-01-ai-pii-card-govid-coverage.md`.
 
 - [ ] **D1. PostGIS surge query** — `surge_engine.py` caps at 500 drivers with Python
   point-in-polygon; move the count server-side when driver count approaches the cap.

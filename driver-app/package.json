@@ -119,6 +119,7 @@
     "expo-modules-core": "57.0.8",
     "expo-constants": "57.0.8",
     "@expo/log-box": "57.0.2",
+    "expo-router/@testing-library/jest-dom": "6.9.1",
     "postcss": ">=8.5.18",
     "@expo/cli/ws": "^8.21.0",
     "@supabase/realtime-js/ws": "^8.21.0",

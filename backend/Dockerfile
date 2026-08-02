@@ -61,6 +61,37 @@ RUN mkdir -p /app/logs && chmod 777 /app/logs
 COPY requirements-locked.txt .
 RUN pip install --no-cache-dir --require-hashes -r requirements-locked.txt
 
+# ── Remove pip from the runtime image (CR-2026-002 / #3048) ───────────────────
+# pip ships vendored copies of its own dependencies under pip/_vendor, and its
+# vendor.txt declares `msgpack==1.1.2` and `setuptools==70.3.0` — precisely the
+# two HIGH findings the Trivy image scan has been reporting for weeks
+# (GHSA-6v7p-g79w-8964, CVE-2025-47273). They were repeatedly written off as a
+# tool false positive; a CI diagnostic on 2026-08-02 (job 91442197631) proved
+# otherwise. The application's own packages are already patched and are NOT the
+# source of either finding:
+#     pip list  →  msgpack 1.2.1   setuptools 83.0.0
+#     on disk   →  msgpack-1.2.1.dist-info, setuptools-83.0.0.dist-info  (only)
+# The vulnerable code exists solely inside pip's vendor tree.
+#
+# Nothing at runtime needs pip: CMD is uvicorn and the healthcheck uses urllib.
+# Removing it deletes the vulnerable code instead of suppressing the finding,
+# and drops a package manager from a production image — hardening that stands
+# on its own merits regardless of these two CVEs.
+#
+# The guard matters: the paths below are tied to python3.12 from the pinned
+# base image. If a future base bump moves them, the rm silently no-ops and the
+# CVEs quietly return. Asserting pip is really gone turns that into a loud
+# build failure instead.
+RUN rm -rf /usr/local/lib/python3.12/site-packages/pip \
+           /usr/local/lib/python3.12/site-packages/pip-*.dist-info \
+           /usr/local/lib/python3.12/ensurepip \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
+    && if python -c "import pip" 2>/dev/null; then \
+         echo "ERROR: pip is still importable after removal. The site-packages path has probably moved with the base image — update the paths in this step rather than deleting the check." >&2; \
+         exit 1; \
+       fi \
+    && echo "pip removed from runtime image (CR-2026-002)"
+
 COPY --chown=spinr:spinr . .
 
 ENV PYTHONPATH=/app

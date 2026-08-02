@@ -178,11 +178,17 @@ async def cancel_ride(
                 data={"type": "ride_cancelled", "ride_id": str(ride_id)},
             )
         )
+    # Surfaced to admins so a scheduled ride's driver-cancel (unconditionally
+    # terminal — no auto-requeue, for any ride type) can be told apart from
+    # an on-demand one: the rider planned around this specific pickup and has
+    # less slack to just re-hail (scheduled-rides gap review, Finding #12).
+    _was_scheduled = bool((ride or {}).get("is_scheduled"))
     await _deps.manager.broadcast_ride_status(
         ride_id,
         RideStatus.CANCELLED,
         rider_id=(ride or {}).get("rider_id"),
         reason="driver_cancelled",
+        is_scheduled=_was_scheduled,
     )
     # End the rider's live activity on driver cancellation.
     spawn(send_live_activity_update(ride or {"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
@@ -190,7 +196,12 @@ async def cancel_ride(
     # that switch on event name.
     try:
         await _deps.manager.broadcast_to_admins(
-            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"}
+            {
+                "type": "ride_cancelled",
+                "ride_id": ride_id,
+                "reason": "driver_cancelled",
+                "is_scheduled": _was_scheduled,
+            }
         )
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"driver cancel admin broadcast failed: {_exc}")

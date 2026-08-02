@@ -51,15 +51,21 @@ export interface MonitoringRide {
   distance_km: number | null;
   created_at: string;
   is_corporate: boolean;
+  // Was this ride originally booked as a scheduled (future-dated) ride? A
+  // rider who planned around a specific pickup time has less slack to just
+  // re-hail than an on-demand rider does if it gets cancelled post-dispatch
+  // — surfaced so ops can tell these apart (scheduled-rides gap review,
+  // Finding #12).
+  is_scheduled: boolean;
 }
 
 export type MonitoringWsEvent =
   | { type: "driver_location_update"; driver_id: string; lat: number; lng: number; speed?: number; heading?: number }
-  | { type: "ride_status_changed"; ride_id: string; status: string }
+  | { type: "ride_status_changed"; ride_id: string; status: string; is_scheduled?: boolean }
   | { type: "driver_status_changed"; driver_id: string; is_online: boolean }
   | { type: "ride_requested"; ride: MonitoringRide }
   | { type: "ride_completed"; ride_id: string; fare?: number }
-  | { type: "ride_cancelled"; ride_id: string }
+  | { type: "ride_cancelled"; ride_id: string; is_scheduled?: boolean }
   | { type: "drivers_snapshot"; drivers: MonitoringDriver[] }
   | { type: "rides_snapshot"; rides: MonitoringRide[] };
 

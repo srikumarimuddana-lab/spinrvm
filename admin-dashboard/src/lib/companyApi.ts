@@ -364,12 +364,20 @@ export interface CompanySection {
     status: "active" | "archived";
     member_count?: number;
     created_at?: string;
+    // Corporate + admin portal review, round 2, "department/section
+    // budgets" — visibility only, never blocks a booking.
+    monthly_budget_cap?: number | null;
+    budget_month?: string;
+    budget_spend_used?: string;
 }
 
 export const listCompanySections = (companyId: string) =>
     companyRequest<{ sections: CompanySection[] }>(`/api/company/${companyId}/sections`);
 
-export const createCompanySection = (companyId: string, body: { name: string; description?: string }) =>
+export const createCompanySection = (
+    companyId: string,
+    body: { name: string; description?: string; monthly_budget_cap?: number | null }
+) =>
     companyRequest<CompanySection>(`/api/company/${companyId}/sections`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -378,7 +386,12 @@ export const createCompanySection = (companyId: string, body: { name: string; de
 export const updateCompanySection = (
     companyId: string,
     sectionId: string,
-    body: { name?: string; description?: string; status?: "active" | "archived" }
+    body: {
+        name?: string;
+        description?: string;
+        status?: "active" | "archived";
+        monthly_budget_cap?: number | null;
+    }
 ) =>
     companyRequest<CompanySection>(`/api/company/${companyId}/sections/${sectionId}`, {
         method: "PATCH",

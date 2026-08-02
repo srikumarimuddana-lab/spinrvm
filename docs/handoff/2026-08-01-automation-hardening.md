@@ -726,7 +726,39 @@ CONSTRAINTS:
 
 #### Two follow-on tickets this will generate (do not fix inside Phase 11)
 - **`ActivityView` period-filter empty state** — test asserts `No Rides Found`; component renders ride rows. Either the fixture is stale or there is a real driver-app bug. Someone who owns the period-stats behaviour must decide which, because "fixing" the assertion could bury a user-visible defect.
-- ~~**Swapped Postgres user/database in the backend test DSN**~~ — **WITHDRAWN 2026-08-01. Do not chase this; there is no such bug.** `ci.yml` is internally consistent: the service sets `POSTGRES_USER: postgres` / `POSTGRES_DB: spinr_test`, and the test step's `DATABASE_URL` connects as user `postgres` to database `spinr_test` — user and database are correct in both, not swapped. The `role "spinr_test" does not exist` line came from the Postgres *service container's own* log, which is benign startup/healthcheck noise, not the job's failure. The real failure was #3029, fixed by #3030. This item existed only because I read a service-container log line as the job's root cause without checking `ci.yml` — the same class of error as C8 in `ACTION_ITEMS.md`.
+- **Postgres user/database mismatch in a backend test DSN** — **RE-INSTATED
+  2026-08-02. The 2026-08-01 withdrawal of this item was wrong; the bug is
+  real and already tracked as open CR
+  [#2656](https://github.com/srikumarimuddana-lab/spinrvm/issues/2656).**
+
+  `backend/tests/test_phase_distance_parity.py:32` falls back to:
+
+  ```
+  host=127.0.0.1 dbname=spinr_parity_test user=spinr_test password=spinr_test
+  ```
+
+  `spinr_test` is used as the **user** there, while in `ci.yml` it is the
+  **database** name (user is `postgres`). That fallback is the plausible
+  source of `role "spinr_test" does not exist`. It only applies when none of
+  `SPINR_PG_TEST_DSN` / `DATABASE_URL` / `PG_CONNECTION_STRING` is set — the
+  "Run backend tests" step does set `DATABASE_URL`, so the exact conditions
+  under which it fires still need pinning down. See #2656, and also #2861
+  (Postgres service container role/auth) which covers adjacent ground.
+
+  **What the withdrawal got right and wrong:** `ci.yml` genuinely is
+  internally consistent — that part was correct, and the immediate red on
+  #3037 genuinely was #3029, fixed by #3030. What was wrong was jumping from
+  "`ci.yml` is fine" to "there is no such bug anywhere", and then telling
+  future readers not to look. The string `user=spinr_test` was one `grep`
+  away the whole time.
+
+  **The lesson, since this is the third instance of it in one session:**
+  checking one location does not establish non-existence. The other two were
+  C8 in `ACTION_ITEMS.md` (assumed a CI defect without checking what had
+  landed on `main`) and C6 (concluded "no SBOM" from `Config.Labels` being
+  null, without looking for SBOM *files* inside the image). Same shape each
+  time — a confident negative from a partial search. Search the whole repo,
+  and check the existing open CRs, before writing "there is no such bug".
 
 ---
 

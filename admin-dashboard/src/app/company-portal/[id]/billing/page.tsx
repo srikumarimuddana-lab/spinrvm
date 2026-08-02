@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import type {
     BillingStatement,
@@ -11,10 +11,20 @@ import {
     getCompanyBillingStatement,
     getCompanyBillingSummary,
     getCompanyBillingTransactions,
+    selfServeWalletTopup,
 } from "@/lib/companyApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import {
     Table,
     TableBody,
@@ -22,9 +32,10 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
-import { Download } from "lucide-react";
+import { Download, Plus } from "lucide-react";
 import { sanitizeCsvCell } from "@/lib/export-csv";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
+import { useToast } from "@/components/ui/use-toast";
 
 function monthOptions(): string[] {
     const out: string[] = [];
@@ -81,6 +92,7 @@ function toCSV(statement: BillingStatement): string {
 
 export default function BillingPage() {
     const { id } = useParams<{ id: string }>();
+    const { toast } = useToast();
     const months = monthOptions();
     const [month, setMonth] = useState<string>(months[0]);
     const [summary, setSummary] = useState<BillingSummary | null>(null);
@@ -88,6 +100,9 @@ export default function BillingPage() {
     const [txns, setTxns] = useState<BillingTransactionsPage | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [topupOpen, setTopupOpen] = useState(false);
+    const [topupAmount, setTopupAmount] = useState("");
+    const [toppingUp, setToppingUp] = useState(false);
 
     const load = useCallback(async () => {
         if (!id) return;
@@ -127,6 +142,38 @@ export default function BillingPage() {
     const byMember = useTableSort(summary?.by_member ?? []);
     const ledger = useTableSort(txns?.transactions ?? []);
 
+    async function handleTopup() {
+        if (!id) return;
+        const amount = Number(topupAmount);
+        if (!amount || amount < 100 || amount > 10000) {
+            toast({
+                title: "Invalid amount",
+                description: "Enter an amount between $100 and $10,000.",
+                variant: "destructive",
+            });
+            return;
+        }
+        setToppingUp(true);
+        try {
+            await selfServeWalletTopup(id, amount);
+            toast({
+                title: "Top-up submitted",
+                description: "Charging your card on file. Your balance updates once the payment completes.",
+            });
+            setTopupOpen(false);
+            setTopupAmount("");
+            await load();
+        } catch (e) {
+            toast({
+                title: "Top-up failed",
+                description: e instanceof Error ? e.message : "Could not charge your card on file.",
+                variant: "destructive",
+            });
+        } finally {
+            setToppingUp(false);
+        }
+    }
+
     return (
         <div className="space-y-6">
             <header className="flex flex-wrap items-center justify-between gap-2">
@@ -164,7 +211,15 @@ export default function BillingPage() {
             )}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <Metric label="Wallet balance" value={formatCAD(summary?.wallet_balance)} />
+                <Metric
+                    label="Wallet balance"
+                    value={formatCAD(summary?.wallet_balance)}
+                    action={
+                        <Button size="sm" variant="outline" onClick={() => setTopupOpen(true)}>
+                            <Plus className="mr-1 h-3.5 w-3.5" /> Top up
+                        </Button>
+                    }
+                />
                 <Metric
                     label="Total spend"
                     value={formatCAD(summary?.total)}
@@ -291,6 +346,39 @@ export default function BillingPage() {
                     </Table>
                 </CardContent>
             </Card>
+
+            <Dialog open={topupOpen} onOpenChange={(o) => { if (!o) setTopupOpen(false); }}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Top up wallet</DialogTitle>
+                        <DialogDescription>
+                            Charges your company&apos;s card on file. Between $100 and $10,000 CAD.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">$</span>
+                            <Input
+                                type="number"
+                                min={100}
+                                max={10000}
+                                step={1}
+                                placeholder="e.g. 500"
+                                value={topupAmount}
+                                onChange={(e) => setTopupAmount(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setTopupOpen(false)} disabled={toppingUp}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleTopup} disabled={toppingUp || !topupAmount}>
+                            {toppingUp ? "Charging…" : "Top up"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
@@ -299,15 +387,20 @@ function Metric({
     label,
     value,
     sub,
+    action,
 }: {
     label: string;
     value: string;
     sub?: string;
+    action?: ReactNode;
 }) {
     return (
         <Card>
             <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground">{label}</div>
+                <div className="flex items-start justify-between gap-2">
+                    <div className="text-xs text-muted-foreground">{label}</div>
+                    {action}
+                </div>
                 <div className="text-2xl font-semibold">{value}</div>
                 {sub && <div className="text-xs text-muted-foreground">{sub}</div>}
             </CardContent>

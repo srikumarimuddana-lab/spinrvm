@@ -517,6 +517,21 @@ export const getCompanyBillingTransactions = (companyId: string, skip = 0, limit
         `/api/company/${companyId}/billing/transactions?skip=${skip}&limit=${limit}`
     );
 
+// Corporate + admin portal review, round 2: self-serve wallet funding.
+// Charges the company's default card on file — this slice does not add a
+// "manage payment methods" flow, so there is no client-supplied
+// payment_method_id yet; the backend falls back to the saved default.
+export interface SelfServeTopUpResult {
+    payment_intent_id: string;
+    client_secret: string;
+}
+
+export const selfServeWalletTopup = (companyId: string, amount: number) =>
+    companyRequest<SelfServeTopUpResult>(`/api/company/${companyId}/wallet/topup`, {
+        method: "POST",
+        body: JSON.stringify({ amount }),
+    });
+
 export interface PortalVehicleType {
     id: string;
     name: string;

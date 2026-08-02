@@ -30,7 +30,7 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
 
-jest.mock('@react-navigation/native', () => {
+jest.mock('expo-router/react-navigation', () => {
   const React = require('react');
   return {
     useFocusEffect: (effect: () => void | (() => void)) => {

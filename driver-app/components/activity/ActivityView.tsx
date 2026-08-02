@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from "expo-router/react-navigation";
 import { useDriverStore } from '../../store/driverStore';
 
 const toMoney = (s: string | number | null | undefined): string => {

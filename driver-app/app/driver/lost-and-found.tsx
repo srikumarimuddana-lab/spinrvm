@@ -10,7 +10,7 @@ import {
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from "expo-router/react-navigation";
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';

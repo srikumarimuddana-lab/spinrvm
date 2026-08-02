@@ -574,6 +574,28 @@ async def settle_corporate(
         },
     )
 
+    # Visibility-only section spend tracking (corporate + admin portal
+    # review round 2, business decision: "department/section budgets" —
+    # track and display, never block). Both independent corporate booking
+    # paths in routes/rides/booking.py converge here at settlement, so
+    # this one hook covers both without touching either. Never affects
+    # the settlement that already happened above — a failure here is
+    # logged and swallowed, exactly like the audit-only blocks below.
+    if membership.get("section_id"):
+        try:
+            await db_supabase.record_section_spend(
+                section_id=membership["section_id"],
+                month=datetime.now(timezone.utc).strftime("%Y-%m"),
+                amount=allowance_debit + master_debit,
+            )
+        except Exception:
+            logger.error(
+                "[PAYMENT] Failed to record section spend for ride=%s section=%s",
+                ride_id,
+                membership["section_id"],
+                exc_info=True,
+            )
+
     # Audit-only: a company suspended/closed mid-ride is grandfathered — the
     # ride state machine forbids cancelling after trip start, so billing
     # proceeds normally above. This just makes the fact visible in

@@ -1,4 +1,6 @@
-"""Sign contract for corporate_allowance_apply_delta (migration 248, finding 16).
+"""Sign contract for corporate_allowance_apply_delta (migration 248, finding 16;
+grant semantics corrected in migration 277, corporate + admin portal review
+High #2).
 
 The original bug was invisible to the test suite because every settlement test
 mocked `apply_rollback`, so the RPC's actual delta signs were never exercised.
@@ -9,7 +11,7 @@ database is involved.
 Ground truth being locked in:
 
     type                 master delta   used delta
-    allowance_grant      -amount        -amount
+    allowance_grant       0             -amount     <- pure limit raise (277 fix)
     allowance_reset       0             -used
     allowance_rollback   +amount        +amount
     ride_debit           -amount        +amount     <- the fix
@@ -23,7 +25,9 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-_MIGRATION = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "248_corporate_allowance_ride_debit.sql"
+_MIGRATION = (
+    pathlib.Path(__file__).resolve().parents[1] / "migrations" / "277_corporate_allowance_grant_no_master_debit.sql"
+)
 
 
 def _delta_branches() -> dict[str, tuple[str, str]]:
@@ -79,7 +83,21 @@ def test_rollback_still_means_undo_a_grant():
     settlement path."""
     b = _delta_branches()
     assert b["allowance_rollback"] == ("p_amount", "p_amount")
-    assert b["allowance_grant"] == ("-p_amount", "-p_amount")
+
+
+def test_grant_is_a_pure_limit_raise_no_master_debit():
+    """Corporate + admin portal review, High #2: a grant must not move real
+    money — only ride_debit may debit master. Before migration 277, grant
+    debited master AND ride_debit debited master again for the same
+    grant-funded ride, double-charging the company."""
+    b = _delta_branches()
+    master, used = b["allowance_grant"]
+    assert master == "0", (
+        f"allowance_grant master delta is {master!r} — must be 0. A nonzero master "
+        "delta here double-charges the company once the grant-funded ride later "
+        "debits master again via ride_debit."
+    )
+    assert used == "-p_amount", f"allowance_grant used delta is {used!r} — must be -p_amount"
 
 
 def test_settlement_does_not_call_apply_rollback():

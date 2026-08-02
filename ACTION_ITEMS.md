@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions. Prior same-day: `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%. Prior same-day: `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -898,31 +898,152 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         `ride_cancel.py` 51.75%→100% (144 stmts, 69→0 missing);
         `ride_reads.py` 58.95%→98% (190 stmts, 78→3 missing). Added
         `backend/tests/test_driver_ride_flow_coverage.py` (95 tests), run
-        alongside every pre-existing test file already touching these
-        modules (297 passed, no collisions). Coverage focus: `accept_ride`'s
-        subscription-guard sub-branches, the batch-dispatch winner/loser
-        resolution, the ride_metrics pickup-leg write;
-        `decline_ride`/`arrive_at_pickup`/`verify_pickup_otp`/`start_ride`'s
-        guard clauses and non-fatal-failure branches; `cancel_ride`'s
-        JSON-body reason parsing, PGRST204 fallback, and pre-auth-release
-        branches; `mark_rider_noshow`'s full success path (previously only
-        the 409-claim-lost branch had coverage); `get_active_ride`'s
-        batch-offer fallback and incentives/quest-hint/service-area-polygon
-        enrichment; `get_ride_history`'s incentive-claims and
-        earnings-snapshot branches. Test-only, no application code changed.
-        **Bug found, not fixed (test-only scope):** `get_active_ride`'s
-        rider/vehicle-type-lookup except-handlers format their log message
-        with a direct dict index (`ride['vehicle_type_id']`) instead of
-        `.get(...)`, which would itself `KeyError` if the outer lookup
-        failed because the key was fully absent — not reachable in
-        production (Supabase rows always carry the column) so not escalated
-        further. Full details:
+        alongside every pre-existing test file already touching these three
+        modules (`test_drivers_extended.py`, `test_ride_accept_flow.py`,
+        `test_subscription_enforcement.py`, `test_c2_driver_cancel_atomic.py`,
+        `test_active_ride_rider_pii.py`, `test_rides.py`,
+        `test_dispatch_metrics.py`, `test_claim_ride.py`,
+        `test_fee_wallet_atomic.py`, `test_preauth_release_on_cancel.py`,
+        `test_idor_ownership_guards.py`) with no collisions (297 passed).
+        Coverage focus: `accept_ride`'s subscription-guard sub-branches
+        (child-area-inherits-from-parent, expired-sub-row auto-marked
+        expired, plan service-area/vehicle-type allowlist mismatch incl. the
+        parent-area-coverage exception, the DB-error-fails-closed 503), the
+        searching/broadcast claim path (no-pending-offer 403, offer-lookup
+        exception, not-assigned-and-not-searching 400), the claim-lost
+        re-check (same-driver-idempotent-success vs. taken-by-another-409),
+        the batch-dispatch winner/loser resolution (incl. a loser's WS push
+        failing non-fatally), the ride_metrics pickup-leg write
+        (success + non-fatal-failure), guest-booking notifications;
+        `decline_ride`'s 404/409/403 guards, the audit-log and Redis-cooldown
+        non-fatal failure branches, and the early-redispatch decision
+        (no-offers-remain / offers-remain / rematch-check-exception);
+        `arrive_at_pickup`'s 200m geofence rejection and the
+        nav-point-vs-raw-pin nearest-of-either check; `verify_pickup_otp`
+        (previously zero standalone coverage — otp-mismatch 400, guard-none
+        409, success + rider notify); `start_ride`'s production 410 block
+        and ride-not-found 404; `cancel_ride`'s (driver-side) JSON-body vs.
+        query-param reason precedence, the PGRST204 attribution-write
+        fallback, the pre-auth-release success/exception/write-failure
+        branches, and the scheduled-ride `is_scheduled` broadcast flag;
+        `mark_rider_noshow`'s full success path (previously only the
+        409-claim-lost branch had coverage) — wallet debit + driver payout,
+        partial-wallet-collection logging, card-vs-wallet payment-method
+        branching, area-level wait-seconds override, the naive-datetime
+        `driver_arrived_at` normalization, and the extended-fee-columns
+        PGRST204 fallback; `get_active_ride`'s batch-offer fallback (found
+        / not-found / stale-ride-no-longer-searching / lookup-exception),
+        the rider/vehicle-type lookup exception paths, the
+        incentives+quest-hint enrichment (incl. the service-area `or_`
+        clause and vehicle-type filtering) with each lookup's independent
+        non-fatal exception, and the service-area-polygon fetch; and
+        `get_ride_history`'s incentive-claims enrichment,
+        `driver_earnings_snapshot`-present vs. legacy-computed branches, the
+        `fare_breakdown_snapshot` tax fallback, the period=None/"all"/"week"/
+        "month" branches of `history_start_for_period`, and the explicit
+        `status="scheduled"` `history_date_field` branch. Test-only, no
+        application code changed. **Bug found, not fixed (test-only scope,
+        per instructions):** `get_active_ride`'s except-handler at the
+        vehicle-type lookup (and similarly the earlier rider lookup) logs
+        `ride['vehicle_type_id']` via direct dict indexing instead of
+        `ride.get(...)` — harmless in production (a Supabase `rides` row
+        always carries the column, value possibly `None`) but a
+        theoretical second `KeyError` inside the except-handler itself if a
+        ride dict ever legitimately lacked the key entirely; not fixed per
+        the test-only-pass instruction, and not realistically reachable
+        given the DB schema, so not escalated further. Remaining uncovered
+        lines: `ride_flow.py` 537-538 and `ride_reads.py` 347-348 are both
+        the dual-import `except ImportError` fallback for a same-process
+        re-import (`match_driver_to_ride` / `_redact_driver_location_fields`)
+        — structurally unreachable in a single test process, same
+        documented pattern as the `redis_set_nx` fallback in the
+        subscriptions-coverage pass above; `ride_reads.py` line 279 is
+        `history_date_field`'s trailing `return "created_at"` fallback,
+        unreachable because both of its call sites already guard
+        `status_value` to `completed`/`cancelled`/`scheduled` before
+        calling it. See
         `docs/change-log/2026-08-02-a1c-drivers-ride-flow-batch-coverage.md`.
-      - Remaining `routes/drivers/` files also in progress this same day
-        (see their own bullets/PRs for final numbers once merged):
-        `payouts.py`, `earnings.py`, `referrals.py` on branch
-        `claude/a1c-drivers-payouts-batch`; `_shared.py`, `status.py`,
-        `profile.py` on branch `claude/a1c-drivers-shared-batch`.
+      - `payouts.py`, `earnings.py`, `referrals.py` — **CLOSED** (2026-08-02,
+        branch `claude/a1c-drivers-payouts-batch`): `payouts.py` 69.47%→98.44%
+        (321 stmts, 98→5 missing); `earnings.py` 37.25%→98.69% (306 stmts,
+        192→4 missing); `referrals.py` 38.82%→98.82% (170 stmts, 104→2
+        missing). Added `backend/tests/test_payouts_coverage.py` (34 tests),
+        `backend/tests/test_earnings_coverage.py` (36 tests),
+        `backend/tests/test_referrals_coverage.py` (20 tests) — 90 tests
+        total, run alongside every pre-existing test file already touching
+        these three modules (`test_p2_payout_t4a.py`, `test_instant_payout.py`,
+        `test_payout_toctou.py`, `test_drivers_extended.py`,
+        `test_referral_terms.py`, the `test_referral_payout_*.py` family,
+        `test_referral_failed_claims_admin.py`,
+        `test_referral_recredit_failed_claim.py`) with no collisions (287
+        passed). Coverage focus: `payouts.py`'s WITH-Stripe branch of
+        `request_payout` (untested before — the existing pin only exercised
+        the no-Stripe-key "pending" fallback), the reserve-insert
+        conflict/error paths, the terminal-write-failure reversal branches
+        (success, failure→stranded, and the no-Stripe skip-reversal case)
+        for both standard and instant payouts, `_ensure_stripe_account`'s
+        new-account-creation + persist-failure branches, and the previously
+        wholly-untested `save_bank_account`/`delete_bank_account`;
+        `earnings.py`'s previously near-zero-coverage
+        `get_driver_bonuses`/`get_driver_trip_earnings`/
+        `get_driver_weekly_earnings`/`get_driver_monthly_earnings`/
+        `get_driver_earnings_comparison`/`get_driver_earnings_forecast`, plus
+        the service-area-timezone, incentive-claims-lookup-failure, and
+        fare-breakdown-snapshot tax-fallback branches of `get_driver_earnings`;
+        `referrals.py`'s previously wholly-untested `apply_referral_code`
+        (all three code-resolution paths incl. the regex-fallback swallow)
+        and `get_driver_leaderboard` (RPC happy path, RPC-failure→daily-stats
+        fallback, and three independent degrade-to-empty/placeholder
+        branches). Test-only, no application code changed. **Bug found, not
+        fixed (test-only scope, per instructions):** none in this batch —
+        every exception branch exercised behaves as documented (loud
+        logging, clean HTTP status, no silent swallow of a money-moving
+        error). Full suite: baseline before this session's files existed
+        7263 passed, 8 skipped, 1 xfailed; after adding this session's 90
+        tests (run in isolation on this branch, not mixed with concurrent
+        sibling sessions' own untracked test files in the shared working
+        directory): 90/90 passed, and combined with every referral/payout
+        test file above: 287/287 passed, zero regressions. See
+        `docs/change-log/2026-08-02-a1c-drivers-payouts-batch-coverage.md`.
+      - `_shared.py`, `status.py`, `profile.py` — **CLOSED** (2026-08-02,
+        branch `claude/a1c-drivers-shared-batch`): `_shared.py` 51%→96%
+        (228 stmts, 111→8 missing — the 8 remaining lines are
+        `_require_ride_in_state`, deliberately left for the sibling
+        `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` session since that's
+        where it's actually called from); `status.py` 48%→100% (31 stmts,
+        16→0 missing — the whole gap was the untested `GET
+        /drivers/{driver_id}` endpoint; `update_driver_status`'s
+        online/available invariant was already covered by
+        `test_go_online_availability.py`/`test_p1_driver_offline.py`);
+        `profile.py` 68%→100% (136 stmts, 44→0 missing). Added
+        `backend/tests/test_drivers_shared_status_profile_coverage.py` (59
+        tests) covering the PII-vault RPC functions
+        (`_vault_encrypt`/`_vault_decrypt`, previously 0% direct coverage —
+        every route test mocks around them), the ride-route-snapshot
+        pipeline's storage/upload/write-back tail
+        (`_generate_and_store_ride_snapshot` lines 363–493, previously
+        unreached because every existing test stubs the OSM renderer to
+        return `None`), `_snap_pickup_leg_async`/`_validate_ride_route`
+        (zero prior coverage), `status.py`'s `get_driver` (admin/self/
+        rider-with-active-ride/rider-without-active-ride/404/DB-exception-
+        degrades-to-403 branches — the rider-facing safe projection was
+        also asserted to strip PII fields), and `profile.py`'s
+        `get_driver_config` exception fallback, `update_my_driver`'s
+        auto-create-driver-row and vehicle-change → `needs_review`
+        re-review branches (asserting
+        `record_period_transition(driver_id, 0)` fires per the Period 0-3
+        insurance state machine), `get_demand_heatmap`, and the
+        destination-mode 404 branches. Test-only, no application code
+        changed. **Bug found, not fixed (test-only scope):** the v2
+        route-snapshot reference-write `except` block in
+        `_generate_and_store_ride_snapshot` both logs and re-raises, but
+        its only caller is the function's own outermost catch-all, so the
+        `raise` is dead code (double-logs, never actually propagates) —
+        harmless (no data loss, object already uploaded) but noted rather
+        than silently worked around. Full suite: run together with every
+        other test file already touching these modules — 327 passed, no
+        collisions. See
+        `docs/change-log/2026-08-02-a1c-drivers-shared-batch-coverage.md`.
       - `utils/redis_client.py` — **done, 100%** (2026-08-02, 220/220 stmts;
         was 55% full-suite side-effect coverage, all of it via the
         in-process-fallback path). Presence/rate-limit backbone. Every prior
@@ -2238,11 +2359,13 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
 
-### C6. `docker-image-scan` (Trivy): stale-pinned base image confirmed; msgpack mystery now solved (Trivy false positive)
-- [x] **Status:** done — both findings now fully explained. Base-image
-  staleness was fixed 2026-08-01 (digest refreshed, see update below). The
-  msgpack finding is **resolved: it's a Trivy tool false positive, not a
-  real vulnerable dependency** — see "msgpack mystery: SOLVED" below. The
+### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
+- [x] **Status:** done — but **the "false positive" conclusion recorded here
+  on 2026-08-01 was WRONG, and is corrected below.** Both findings were
+  genuine. Base-image staleness was fixed 2026-08-01 (digest refreshed).
+  The msgpack/setuptools findings were fixed 2026-08-02 by removing pip from
+  the runtime image (#3246) — see "CORRECTION 2026-08-02" below. Trivy was
+  reporting accurately the entire time. The
   actual scan-config remediation (stop Trivy from trusting a stale embedded
   SBOM) is filed as **CR-2026-002**, GitHub issue
   [#3048](https://github.com/srikumarimuddana-lab/spinrvm/issues/3048), and
@@ -2350,8 +2473,55 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   - **msgpack half of C6 is untouched and still open** — genuinely
     requires a real Docker build to investigate, which remains unavailable
     in this environment.
-- **msgpack mystery: SOLVED (2026-08-01), separately from the base-image
-  work above.** Investigated PR #3044's `docker-image-scan` job (run
+- **CORRECTION (2026-08-02): the "false positive" conclusion below is WRONG.**
+  The findings were real. A diagnostic step added to `docker-image-scan`
+  (#3113) and run on `main` at `24b3e49`
+  ([job 91442197631](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/30727439028/job/91442197631))
+  inspected the built image directly and found:
+  - `pip list` → `msgpack 1.2.1`, `setuptools 83.0.0`, `pip 26.2`
+  - on disk → only `msgpack-1.2.1.dist-info` and `setuptools-83.0.0.dist-info`
+  - **`pip/_vendor/vendor.txt` → `msgpack==1.1.2` and `setuptools==70.3.0`**
+  - `docker image inspect … Config.Labels` → `null` (no Docker *attestation*)
+
+  A follow-up diagnostic by another contributor found the missing piece: pip
+  also ships its **own CycloneDX SBOM** at `pip/_vendor/bom.cdx.json`, listing
+  those two versions with proper `pkg:pypi/...` purls. Trivy auto-detects any
+  `*.cdx.json` / `*.spdx.json` inside a scanned image and — exactly as its own
+  `WARN Third-party SBOM may lead to inaccurate vulnerability detection` says —
+  prefers that component list over its live filesystem scan for vulnerability
+  matching, while still using the live scan for the per-file inventory table.
+  That is why the two tables in one Trivy run contradicted each other.
+
+  So both halves are true, and the original either/or framing was the mistake:
+  the versions really are declared inside the image (not invented by Trivy),
+  **and** Trivy reached them by preferring a third-party SBOM over its own scan.
+
+  **Two independent fixes have landed:**
+  1. **#3246** — pip removed from the runtime image after dependency install,
+     with a build-time assertion. This removes `bom.cdx.json` *and* pip's
+     vendored code, and takes a package manager out of a production image.
+     `G6 · Trivy container scan` passed for the first time on that PR.
+  2. **`skip-files: '**/pip/_vendor/bom.cdx.json'`** on all four trivy-action
+     steps (`ci.yml` ×2, `security-gates.yml` ×2), so Trivy ignores that one
+     file rather than trusting it.
+
+  With pip gone, (2) now targets a file that no longer exists — harmless, and
+  worth keeping as a guard in case pip ever returns to the image. **Note the
+  ordering risk:** `skip-files` alone would have been a suppression. Had it
+  landed without (1), pip's vendored code would still be in the image and the
+  scanner would have been configured not to see it.
+
+  **Why the original reasoning failed:** every check in the superseded block
+  below confirms the *application's* msgpack is 1.2.1. None looked for a
+  second copy, and none looked for an SBOM file inside the filesystem — only
+  for a Docker attestation label, which was legitimately `null`. "Our pin is
+  correct, therefore the scanner is wrong" skipped asking where else that
+  version string could come from.
+
+- ~~**msgpack mystery: SOLVED (2026-08-01)**~~ — **SUPERSEDED, see the
+  correction directly above. The conclusion in this block is incorrect and is
+  retained only because the reasoning error is instructive.** Investigated PR
+  #3044's `docker-image-scan` job (run
   `30713789884`, job `91406577991`) and the identical `G6 · Trivy container
   scan` job in `security-gates.yml` (run `30713789883`, job
   `91405783086`) — same PR, same commit, both Trivy invocations agree.
@@ -2487,6 +2657,18 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   backend/Supabase instance or a live corporate membership.
 
 ### C7. AI PR review is off by design (cost) — DECIDED 2026-08-01: stays off
+- **Duplicate of existing CRs — noted 2026-08-02.** This was filed as a new
+  finding without first searching `label:change-request`. It restates
+  [#2503](https://github.com/srikumarimuddana-lab/spinrvm/issues/2503)
+  ("Missing Anthropic credentials secret breaks the `review` CI check on
+  every PR", open since 2026-07-27) and
+  [#2497](https://github.com/srikumarimuddana-lab/spinrvm/issues/2497)
+  (closed, same ground). The decision recorded below — leave the key unset —
+  is the new part and stands; #2503 should be closed against it rather than
+  left open describing an unresolved problem. **Check the open CR list before
+  filing anything here**; several other entries from the same session turned
+  out to be tracked already (#2771 deploy-backend, #2656/#2861 backend-test
+  DSN, #3256 driver-app E2E, #3083 admin Playwright).
 - [x] **Status:** closed — **decision taken: leave `ANTHROPIC_API_KEY` unset.**
   The per-PR API spend is not justified at this repo's volume (~24 merged
   PRs/day). The workflow remains in the repo, scoped and skipping cleanly;
@@ -2727,6 +2909,58 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   one daily sweep, with 4 regression tests proving it (aged-row flagged,
   fresh-row skipped, missing-timestamp over-reported rather than hidden,
   query-failure never raises).
+
+### C11. Metrics aggregation & alerting not yet implemented — SLA/KPI table still unmeasured
+- [ ] **Status:** open — design accepted (ADR-010, PR #3255, merged 2026-08-02);
+  implementation not started. Tracked as **CR-2026-008**, issue
+  [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295).
+- **What's wrong:** `backend/utils/metrics.py` is per-process only (its own
+  docstring says so — no cross-replica aggregation, no exporter sidecar).
+  `CLAUDE.md`'s P95 SLA table (dispatch offer→accept < 2s, fare calc < 300ms,
+  WS fan-out < 100ms) and KPI table (match rate ≥ 85%, payment success ≥ 99%)
+  cannot be computed from it today. Directly blocks item **B6** above
+  (Directions-latency re-tuning), which needs a real p99 that currently has
+  nowhere to accumulate across replicas.
+- **Design exists, not yet built:** ADR-010
+  (`docs/adr/010-metrics-aggregation-and-alerting.md`) recommends a
+  Prometheus-agent-per-Fly-machine pushing to a managed backend (Grafana
+  Cloud), with a concrete <1-day MVP: one dashboard panel + 2 alert rules
+  (dispatch-latency breach, payment-failure-rate breach) wired to the
+  existing `ALERT_WEBHOOK_URL` Slack channel `loop_watchdog` already uses.
+- **Why not done yet:** requires infra/vendor provisioning (a Grafana Cloud
+  account, a real Fly deploy) that no dev session/sandbox environment can do
+  — genuinely needs an operator with Fly + Grafana Cloud access, not just
+  code.
+- **Open decision before implementing:** agent placement — colocate the
+  scrape agent in `backend/Dockerfile`/`fly.toml` (touches the recently
+  hardened, digest-pinned, Trivy-scanned runtime image — see C6/CR-2026-002
+  — and could reopen that scan surface) vs. a standalone Fly app scraping
+  over the private network (avoids touching the hardened image, but needs
+  Fly Machines-API-based per-replica discovery glue since Fly's `.internal`
+  DNS load-balances rather than fanning out to all replicas). Full tradeoff
+  in ADR-010 §1 and issue #3295.
+- **Constraints:** implementation needs real source changes
+  (`Dockerfile`/`fly.toml`, or a new small standalone app) and a new
+  dependency (the agent binary) — **not** purely docs/design past this
+  point. Also needs a new Fly production secret (Grafana Cloud remote-write
+  API key).
+- **Risk if left undone:** none of `CLAUDE.md`'s SLA/KPI numbers are
+  verified; a real dispatch-latency or payment-failure regression during
+  live app testing would only surface via user complaints/support tickets,
+  not an alert.
+- **Risk of implementing:** low overall — doesn't touch ride/dispatch/
+  payment/auth business logic — but see the Dockerfile/Trivy risk above if
+  the colocated-agent option is chosen; otherwise routine additive-deploy
+  risk only.
+- **Effort estimate:** ~4–8 hours active engineering time (half a day to a
+  full day) per ADR-010 §5, plus Grafana Cloud account lead time.
+- **Verification once implemented:** confirm the Grafana dashboard panel
+  populates from real production traffic, confirm the 2 alert rules don't
+  false-fire against normal load, and confirm `docker-image-scan` (Trivy)
+  is still green if the colocated-agent option was chosen.
+- **Files (once implemented):** `backend/fly.toml`, `backend/Dockerfile`
+  (or a new standalone app) + Grafana Cloud config (external, not in this
+  repo).
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

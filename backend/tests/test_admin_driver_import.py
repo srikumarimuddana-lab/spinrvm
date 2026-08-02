@@ -133,6 +133,23 @@ def _post(test_client, path, csv_bytes):
     )
 
 
+def _validate_then_commit(test_client, csv_bytes):
+    """gap #45: commit now requires a validation_token minted by /validate
+    for this exact (batch, CSV bytes, admin) — thread both through."""
+    validate_resp = _post(test_client, "/api/admin/drivers/import/validate", csv_bytes)
+    assert validate_resp.status_code == 200, validate_resp.text
+    report = validate_resp.json()
+    return test_client.post(
+        "/api/admin/drivers/import/commit",
+        files={"drivers_csv": ("drivers.csv", csv_bytes, "text/csv")},
+        data={
+            "service_area_name": "Saskatoon",
+            "batch": report["batch"],
+            "validation_token": report["validation_token"],
+        },
+    )
+
+
 def test_validate_clean_csv(test_client, super_admin_override):
     store = _fresh_store()
     p_sb, p_audit = _patches(store)
@@ -165,7 +182,7 @@ def test_commit_creates_rows(test_client, super_admin_override):
     store = _fresh_store()
     p_sb, p_audit = _patches(store)
     with p_sb, p_audit:
-        resp = _post(test_client, "/api/admin/drivers/import/commit", _csv(GOOD_ROW))
+        resp = _validate_then_commit(test_client, _csv(GOOD_ROW))
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["committed"] is True
@@ -180,12 +197,87 @@ def test_commit_refuses_on_errors(test_client, super_admin_override):
     bad = "OLD-3,Ann Poe,3065550000,ann@example.com,LMN456,Spaceship,2021,Honda,Civic"
     p_sb, p_audit = _patches(store)
     with p_sb, p_audit:
-        resp = _post(test_client, "/api/admin/drivers/import/commit", _csv(bad))
+        resp = _validate_then_commit(test_client, _csv(bad))
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["committed"] is False
     assert body["errors"]
     assert store["drivers"] == []
+
+
+def test_commit_without_validation_token_is_422(test_client, super_admin_override):
+    """gap #45: validation_token is a required Form field now."""
+    store = _fresh_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = _post(test_client, "/api/admin/drivers/import/commit", _csv(GOOD_ROW))
+    assert resp.status_code == 422, resp.text
+
+
+def test_commit_with_wrong_token_is_400(test_client, super_admin_override):
+    """A token minted for different CSV content must not authorise this commit."""
+    store = _fresh_store()
+    other = "OLD-9,Someone Else,3065559999,other@example.com,QRS111,Sedan,2018,Honda,Civic"
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        validate_resp = _post(test_client, "/api/admin/drivers/import/validate", _csv(other))
+        assert validate_resp.status_code == 200, validate_resp.text
+        report = validate_resp.json()
+        resp = test_client.post(
+            "/api/admin/drivers/import/commit",
+            files={"drivers_csv": ("drivers.csv", _csv(GOOD_ROW), "text/csv")},
+            data={
+                "service_area_name": "Saskatoon",
+                "batch": report["batch"],
+                "validation_token": report["validation_token"],
+            },
+        )
+    assert resp.status_code == 400, resp.text
+    assert store["drivers"] == []
+
+
+@pytest.mark.asyncio
+async def test_commit_limiter_blocks_after_configured_rate():
+    """gap #45: commit previously had no rate limit at all. Proves the
+    actual AsyncLimiter/storage mechanics at the same rate
+    driver_import_commit_limit uses (10/hour), against a throwaway
+    limiter/storage pair rather than the shared default_limiter (which
+    tests globally disable via conftest's reset_rate_limiters)."""
+    from limits.aio.storage import MemoryStorage
+    from slowapi.errors import RateLimitExceeded
+    from starlette.requests import Request
+
+    from utils.async_limiter import AsyncLimiter
+    from utils.rate_limiter import get_real_client_ip
+
+    limiter = AsyncLimiter(key_func=get_real_client_ip, storage=MemoryStorage())
+    calls = []
+
+    @limiter.limit("10/hour")
+    async def _fake_commit_endpoint(request: Request):
+        calls.append(request)
+        return "ok"
+
+    def _fake_request():
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/admin/drivers/import/commit",
+            "path_params": {},
+            "headers": [(b"cf-connecting-ip", b"203.0.113.10")],
+            "client": ("203.0.113.10", 12345),
+            "query_string": b"",
+            "app": None,
+        }
+        return Request(scope)
+
+    for _ in range(10):
+        await _fake_commit_endpoint(_fake_request())
+    assert len(calls) == 10
+
+    with pytest.raises(RateLimitExceeded):
+        await _fake_commit_endpoint(_fake_request())
+    assert len(calls) == 10  # the 11th call was blocked, not just uncounted
 
 
 def test_row_limit_enforced(test_client, super_admin_override):

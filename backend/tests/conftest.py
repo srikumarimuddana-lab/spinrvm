@@ -587,7 +587,19 @@ def admin_override():
     from backend.server import app
     from dependencies import get_admin_user
 
-    app.dependency_overrides[get_admin_user] = lambda: {"id": "admin_1", "role": "admin"}
+    # "corporate_accounts" module grant: corporate_accounts_router and
+    # corporate_wallet_router are module-gated (corporate + admin portal
+    # review, Critical #3) — without it every test in this fixture's blast
+    # radius that hits an /admin/corporate-accounts/... or corporate wallet
+    # endpoint would now 403. Kept to just this one module rather than
+    # granting everything, since `role: "admin"` (not super_admin) is
+    # deliberately used elsewhere in this suite to test require_super_admin
+    # denial paths — this fixture must stay non-super-admin.
+    app.dependency_overrides[get_admin_user] = lambda: {
+        "id": "admin_1",
+        "role": "admin",
+        "modules": ["corporate_accounts"],
+    }
     yield
     app.dependency_overrides.pop(get_admin_user, None)
 

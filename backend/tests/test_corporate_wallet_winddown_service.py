@@ -183,3 +183,31 @@ async def test_stripe_error_stops_and_does_not_swallow():
     assert result["refunded_total"] == "0.00"
     assert result["unrefundable_amount"] == "100.00"
     mock_adjust.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_ledger_write_failure_after_successful_refund_is_not_lost():
+    """Corporate + admin portal review, High #3: if the ledger debit raises
+    AFTER Stripe refunds already succeeded, the real Stripe outcome
+    (refunded_total, stripe_refund_ids) must still be returned — not lost to
+    an uncaught exception — and ledger_write_failed must flag the
+    divergence so ops/finance can reconcile it manually."""
+    refund_obj = MagicMock(id="re_1")
+    topups = [_topup("t1", "100.00", "pi_1")]
+
+    with (
+        patch.object(svc.db_supabase, "get_corporate_wallet_by_company", AsyncMock(return_value=_wallet())),
+        patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=topups)),
+        patch.object(svc, "get_app_settings", AsyncMock(return_value=_SETTINGS)),
+        patch.object(svc.stripe.Refund, "create", return_value=refund_obj),
+        patch.object(svc, "apply_adjustment", AsyncMock(side_effect=RuntimeError("db unreachable"))),
+    ):
+        # Must not raise — the whole point of this fix is that a ledger
+        # failure after a successful Stripe refund is reported, not thrown.
+        result = await svc.refund_wallet_balance_on_close(company_id="c1", stripe_customer_id="cus_1")
+
+    assert result["ledger_write_failed"] is True
+    # The Stripe refund genuinely happened — this must not be erased.
+    assert result["refunded_total"] == "100.00"
+    assert result["stripe_refund_ids"] == ["re_1"]

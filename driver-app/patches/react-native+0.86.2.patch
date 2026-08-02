@@ -122,7 +122,7 @@ index 5ce30f3..428ffb8 100644
  export type RefreshControlPropsIOS = Readonly<{
    /**
 diff --git a/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js b/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
-index 4688149..e24c82d 100644
+index c8392ea..d0acdef 100644
 --- a/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
 +++ b/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
 @@ -1643,13 +1643,41 @@ class ScrollView extends React.Component<ScrollViewProps, ScrollViewState> {
@@ -171,7 +171,7 @@ index 4688149..e24c82d 100644
      const contentContainerStyle = [
        horizontal && styles.contentContainerHorizontal,
 diff --git a/node_modules/react-native/Libraries/Components/Switch/Switch.js b/node_modules/react-native/Libraries/Components/Switch/Switch.js
-index 8d3c553..ce4ef96 100644
+index d441435..e927210 100644
 --- a/node_modules/react-native/Libraries/Components/Switch/Switch.js
 +++ b/node_modules/react-native/Libraries/Components/Switch/Switch.js
 @@ -16,7 +16,7 @@ import type {ViewProps} from '../View/ViewPropTypes';
@@ -303,7 +303,7 @@ index a668765..3d96b9c 100644
          <DebuggingOverlayNativeComponent
            ref={nativeComponentRef}
 diff --git a/node_modules/react-native/Libraries/Modal/Modal.js b/node_modules/react-native/Libraries/Modal/Modal.js
-index 1fabac7..d594bca 100644
+index 28233e6..002cde5 100644
 --- a/node_modules/react-native/Libraries/Modal/Modal.js
 +++ b/node_modules/react-native/Libraries/Modal/Modal.js
 @@ -17,10 +17,120 @@ import NativeEventEmitter from '../EventEmitter/NativeEventEmitter';

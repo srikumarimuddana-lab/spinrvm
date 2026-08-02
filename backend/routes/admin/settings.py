@@ -19,11 +19,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 try:
     from ... import db_supabase
+    from ...core.config import settings as _core_settings
     from ...dependencies import get_admin_user
     from ...settings_loader import get_app_settings
     from ...supabase_client import supabase  # noqa: F401
 except ImportError:
     import db_supabase
+    from core.config import settings as _core_settings
     from dependencies import get_admin_user
     from settings_loader import get_app_settings
     from supabase_client import supabase  # noqa: F401
@@ -106,6 +108,19 @@ _CREDENTIAL_FIELDS = frozenset(
 # utils/safety_paging.py's PIPEDA note) to a destination they control, plus
 # backend SSRF via the outbound POST. Changing either half of the pair
 # requires the same privilege as revealing the routing key.
+#
+# Corporate + admin portal review, High #4: the live payment/messaging
+# credentials were the one class of field where WRITE was still only gated
+# by the "settings" module — reveal (read) already required super_admin, but
+# a settings-module admin could silently repoint stripe_secret_key,
+# stripe_webhook_secret, stripe_connect_webhook_secret, or
+# twilio_auth_token to an attacker-controlled Stripe/Twilio account, or swap
+# aws_ses_secret_access_key/resend_api_key to redirect outbound email —
+# with no way for anyone to even read back the current value and notice it
+# changed (that also requires super_admin). This is the same "destination
+# credential a lower-privileged admin could silently repoint" shape as the
+# LMS/Meta/SOS-paging fields above; changing any of these six now requires
+# the same privilege as revealing them.
 _SUPER_ADMIN_ONLY_FIELDS = frozenset(
     {
         "lms_api_base_url",
@@ -115,6 +130,12 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
         "meta_capi_access_token",
         "sos_paging_webhook_url",
         "sos_paging_routing_key",
+        "stripe_secret_key",
+        "stripe_webhook_secret",
+        "stripe_connect_webhook_secret",
+        "twilio_auth_token",
+        "aws_ses_secret_access_key",
+        "resend_api_key",
     }
 )
 
@@ -315,6 +336,28 @@ class SettingsUpdateRequest(BaseModel):
         if v.startswith(("http://localhost", "http://127.0.0.1")):
             return v
         raise ValueError("sos_paging_webhook_url must use https:// (http:// is allowed only for localhost)")
+
+    @field_validator("stripe_secret_key")
+    @classmethod
+    def _stripe_secret_key_matches_environment(cls, v: Optional[str]) -> Optional[str]:
+        """Corporate + admin portal review, High #4: a key with the wrong
+        live/test prefix for the current environment is either a copy-paste
+        mistake (accidentally shipping a test key to production, silently
+        breaking real payment capture) or an attacker downgrading production
+        to an attacker-controlled test key — reject outright rather than
+        silently accepting whatever string is submitted. A masked preview
+        value round-tripped from GET (see the mask-roundtrip guard in
+        admin_update_settings) already starts with the real key's own
+        prefix, so it passes this check unchanged."""
+        if not v:
+            return v
+        if _core_settings.ENV.lower() == "production":
+            if not v.startswith("sk_live_"):
+                raise ValueError("stripe_secret_key must start with sk_live_ in production")
+        else:
+            if not v.startswith("sk_test_"):
+                raise ValueError("stripe_secret_key must start with sk_test_ outside production")
+        return v
 
 
 @router.get("/settings")

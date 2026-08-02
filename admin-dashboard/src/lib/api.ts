@@ -361,6 +361,7 @@ export {
     resendAdminSubscriptionInvoice,
     updateSubscriptionTaxConfig,
     getAuditLogs,
+    getAuditLogTopActors,
     getQuests,
     createQuest,
     updateQuest,

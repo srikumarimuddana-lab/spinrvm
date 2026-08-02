@@ -194,6 +194,8 @@ class TestInsuranceBillingDetailRows:
         assert rows == [
             {
                 "driver_name": "Jane Doe",
+                "license_number": "",
+                "vehicle": "",
                 "trip_date": "2026-07-01 09:00 UTC",
                 "phase": "2 — En route to pickup (primary commercial)",
                 "phase_km": "1.500",

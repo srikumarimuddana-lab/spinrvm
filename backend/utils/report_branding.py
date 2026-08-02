@@ -318,12 +318,56 @@ def new_branded_workbook(title: str, subtitle: "str | list[str]" = ""):
 DEFAULT_TABLE_START_ROW = 6
 
 
+def _finalize_worksheet(ws, fieldnames: list[str], start_row: int, last_data_row: int) -> None:
+    """Shared polish pass applied after any table (flat or grouped) is
+    written: thin borders around the whole table, content-based column
+    widths (a bare openpyxl default column is too narrow for anything but
+    single-word values — long addresses/timestamps rendered truncated),
+    a frozen header row so it stays visible while scrolling, the header
+    row repeated on every printed page, and a company-identity footer
+    line matching the PDF footer (render_branded_pdf_footer) — a report
+    with no borders, no frozen header, and no footer read as a raw data
+    dump rather than a designed document (user feedback on the second
+    design pass, after the collapsible-grouping pass already fixed the
+    Period 2/3 clutter problem)."""
+    from openpyxl.styles import Border, Font, Side
+
+    if last_data_row < start_row:
+        return
+
+    thin = Side(style="thin", color="%02X%02X%02X" % RULE_RGB)
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for row in ws.iter_rows(min_row=start_row, max_row=last_data_row, max_col=len(fieldnames)):
+        for cell in row:
+            cell.border = border
+
+    for col, name in enumerate(fieldnames, start=1):
+        header_len = len(name.replace("_", " ").title())
+        max_len = header_len
+        for row in ws.iter_rows(min_row=start_row + 1, max_row=last_data_row, min_col=col, max_col=col):
+            value = row[0].value
+            if value is not None:
+                max_len = max(max_len, len(str(value)))
+        ws.column_dimensions[ws.cell(row=start_row, column=col).column_letter].width = min(max(max_len + 2, 10), 45)
+
+    # Freeze everything above and including the header row, so it stays
+    # visible while scrolling through a long report.
+    ws.freeze_panes = ws.cell(row=start_row + 1, column=1).coordinate
+    # Repeat the header row on every printed page.
+    ws.print_title_rows = f"{start_row}:{start_row}"
+
+    footer_row = last_data_row + 2
+    footer_cell = ws.cell(row=footer_row, column=1, value=f"{COMPANY_LINE}  |  {COMPANY_CONTACT_LINE}")
+    footer_cell.font = Font(name=BRAND_FONT, size=8, color=MUTED_HEX)
+
+
 def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: int = DEFAULT_TABLE_START_ROW) -> None:
     """Write a header row (light-grey fill, dark bold text — not a full
     brand-red block) at `start_row` followed by one row per dict in `rows`,
     using the same CSV-injection-safe cell sanitization as
     services/data_transfer/tabular_writer.py so a value round-tripped
-    through either export path renders identically in Excel."""
+    through either export path renders identically in Excel. Finished off
+    by _finalize_worksheet (borders, column widths, frozen header, footer)."""
     from openpyxl.styles import Font, PatternFill
 
     header_fill = PatternFill(start_color=HEADER_BG_HEX, end_color=HEADER_BG_HEX, fill_type="solid")
@@ -334,9 +378,13 @@ def write_branded_table(ws, fieldnames: list[str], rows: list[dict], start_row: 
         cell.fill = header_fill
         cell.font = header_font
 
+    last_row = start_row
     for r, row in enumerate(rows, start=start_row + 1):
         for col, name in enumerate(fieldnames, start=1):
             ws.cell(row=r, column=col, value=_sanitize_csv_cell(row.get(name)))
+        last_row = r
+
+    _finalize_worksheet(ws, fieldnames, start_row, last_row)
 
 
 def write_branded_grouped_table(
@@ -349,7 +397,9 @@ def write_branded_grouped_table(
     expand one trip to see its Period 2/Period 3 km without every phase
     row cluttering the sheet by default — xlsx only (openpyxl's native
     row-grouping feature); PDF/CSV/Word have no collapse mechanism and
-    always render every row flat via write_branded_table instead."""
+    always render every row flat via write_branded_table instead. Finished
+    off by _finalize_worksheet (borders, column widths, frozen header,
+    footer) same as the flat table."""
     from openpyxl.styles import Font, PatternFill
 
     header_fill = PatternFill(start_color=HEADER_BG_HEX, end_color=HEADER_BG_HEX, fill_type="solid")
@@ -378,6 +428,8 @@ def write_branded_grouped_table(
             ws.row_dimensions[r].outlineLevel = 1
             ws.row_dimensions[r].hidden = True
             r += 1
+
+    _finalize_worksheet(ws, fieldnames, start_row, r - 1)
 
 
 def new_branded_document(title: str, subtitle: "str | list[str]" = ""):

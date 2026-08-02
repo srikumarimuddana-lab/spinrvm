@@ -281,6 +281,7 @@ def _render_tabular_report(
     pdf_landscape: bool = False,
     pdf_col_widths: list[float] | None = None,
     grouped_xlsx: list[tuple[dict, list[dict]]] | None = None,
+    serial_numbers: bool = True,
 ) -> Response:
     """Shared branded-report rendering for any (fieldnames, rows) tabular
     report — used by most Compliance report endpoints so format handling
@@ -302,7 +303,28 @@ def _render_tabular_report(
     with Excel's native collapsible row grouping (report_branding.
     write_branded_grouped_table) instead of the flat write_branded_table.
     PDF/CSV/Word ignore this entirely and always render `rows` flat — none
-    of those formats has a collapse mechanism."""
+    of those formats has a collapse mechanism.
+
+    serial_numbers: prepends a "S No" column, defaulting on for every
+    report (a plain data dump with no row numbers reads as unfinished —
+    user feedback on the first design pass). For a grouped (trip/phase)
+    report, only the parent "All phases" row gets a number — its child
+    phase rows leave the cell blank — in the xlsx grouped view, since
+    numbering every phase row would look broken once a trip is expanded;
+    the flat CSV/PDF/DOCX fallback for the same report numbers every row
+    sequentially instead, since those formats have no parent/child
+    distinction to preserve."""
+    if serial_numbers:
+        fieldnames = ["s_no", *fieldnames]
+        rows = [{"s_no": i, **row} for i, row in enumerate(rows, start=1)]
+        if grouped_xlsx is not None:
+            grouped_xlsx = [
+                ({"s_no": i, **parent}, [{"s_no": "", **child} for child in children])
+                for i, (parent, children) in enumerate(grouped_xlsx, start=1)
+            ]
+        if pdf_col_widths is not None:
+            pdf_col_widths = [0.6, *pdf_col_widths]
+
     if format == "csv":
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames)
@@ -800,15 +822,30 @@ async def _insurance_billing_detail_rows(
 
     driver_ids = sorted({d["driver_id"] for d in distances if d.get("driver_id")})
     driver_names: dict[str, str] = {}
+    driver_licenses: dict[str, str] = {}
+    driver_vehicles: dict[str, str] = {}
     for i in range(0, len(driver_ids), 200):
         batch = driver_ids[i : i + 200]
         driver_rows = await db_supabase.get_rows(
-            "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
+            "drivers",
+            {"id": {"$in": batch}},
+            columns="id,name,first_name,last_name,license_number,license_plate,vehicle_make,vehicle_model,vehicle_color",
+            limit=len(batch),
         )
+        # license_number is vault-encrypted at rest — same decrypt helper
+        # Driver Roster/T4A use, since either insurer may need it to match
+        # this report's driver against their own on-file roster.
+        driver_rows = [await _decrypt_driver_pii(d) for d in driver_rows]
         for d in driver_rows:
             driver_names[d["id"]] = (
                 d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
             )
+            driver_licenses[d["id"]] = d.get("license_number") or ""
+            vehicle_desc = " ".join(
+                part for part in (d.get("vehicle_color"), d.get("vehicle_make"), d.get("vehicle_model")) if part
+            )
+            plate = d.get("license_plate") or ""
+            driver_vehicles[d["id"]] = f"{vehicle_desc} — {plate}".strip(" —") if vehicle_desc or plate else ""
 
     grand_total_km = Decimal("0")
     rows: list[dict] = []
@@ -822,6 +859,8 @@ async def _insurance_billing_detail_rows(
         grand_total_km += km
         amount = (km * rate_per_km).quantize(Decimal("0.01"))
         driver_name = driver_names.get(d.get("driver_id"), d.get("driver_id") or "")
+        driver_license = driver_licenses.get(d.get("driver_id"), "")
+        driver_vehicle = driver_vehicles.get(d.get("driver_id"), "")
         trip_date = report_branding.format_report_timestamp(d.get("started_at"))
         row = {
             # driver_id/ride_id intentionally excluded from the rendered
@@ -829,6 +868,8 @@ async def _insurance_billing_detail_rows(
             # period-audit report) — driver_name + trip_date already
             # identify the row.
             "driver_name": driver_name,
+            "license_number": driver_license,
+            "vehicle": driver_vehicle,
             "trip_date": trip_date,
             "phase": _PERIOD_LABELS.get(d.get("period"), str(d.get("period"))),
             "phase_km": f"{km:.3f}",
@@ -839,7 +880,14 @@ async def _insurance_billing_detail_rows(
 
         trip_key = d.get("ride_id") or f"_no_ride_id_{len(trip_order)}"
         if trip_key not in trips:
-            trips[trip_key] = {"driver_name": driver_name, "trip_date": trip_date, "km": Decimal("0"), "children": []}
+            trips[trip_key] = {
+                "driver_name": driver_name,
+                "license_number": driver_license,
+                "vehicle": driver_vehicle,
+                "trip_date": trip_date,
+                "km": Decimal("0"),
+                "children": [],
+            }
             trip_order.append(trip_key)
         trip = trips[trip_key]
         trip["km"] += km
@@ -851,6 +899,8 @@ async def _insurance_billing_detail_rows(
         trip_amount = (trip["km"] * rate_per_km).quantize(Decimal("0.01"))
         parent = {
             "driver_name": trip["driver_name"],
+            "license_number": trip["license_number"],
+            "vehicle": trip["vehicle"],
             "trip_date": trip["trip_date"],
             "phase": "All phases",
             "phase_km": f"{trip['km']:.3f}",
@@ -895,7 +945,16 @@ async def _render_insurance_billing_report(
     if gate_response is not None:
         return gate_response
 
-    fieldnames = ["driver_name", "trip_date", "phase", "phase_km", "rate_per_km", "amount"]
+    fieldnames = [
+        "driver_name",
+        "license_number",
+        "vehicle",
+        "trip_date",
+        "phase",
+        "phase_km",
+        "rate_per_km",
+        "amount",
+    ]
     total_amount = (grand_total_km * rate_per_km).quantize(Decimal("0.01"))
     subtitle = [
         f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — {insurer_label} — Periods 2+3 only",
@@ -915,7 +974,7 @@ async def _render_insurance_billing_report(
         subtitle=subtitle,
         format=format,
         pdf_landscape=True,
-        pdf_col_widths=[2.2, 1.8, 2.6, 1.4, 1.4, 1.4],
+        pdf_col_widths=[2.0, 1.6, 2.0, 1.8, 2.6, 1.4, 1.4, 1.4],
         grouped_xlsx=groups,
     )
     return resp
@@ -1032,10 +1091,21 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
     for i in range(0, len(rider_ids), 200):
         batch = rider_ids[i : i + 200]
         rider_rows = await db_supabase.get_rows(
-            "users", {"id": {"$in": batch}}, columns="id,first_name,last_name", limit=len(batch)
+            "users", {"id": {"$in": batch}}, columns="id,first_name,last_name,phone", limit=len(batch)
         )
         for u in rider_rows:
-            rider_names[u["id"]] = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or u["id"]
+            # dict.get(key, default)'s default only fires when the key is
+            # missing — first_name/last_name are real columns that are
+            # frequently NULL (not missing), so a plain `.get(k, "")` here
+            # produced the literal string "None None" instead of falling
+            # back. Use `or ""` so a None value is treated the same as a
+            # missing one, then fall back further to a PIPEDA-safe
+            # phone-last-4 (never the full number) before the raw id.
+            name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip()
+            if not name:
+                phone = u.get("phone") or ""
+                name = f"Rider •{phone[-4:]}" if len(phone) >= 4 else u["id"]
+            rider_names[u["id"]] = name
 
     area_ids = sorted({r["service_area_id"] for r in airport_rides if r.get("service_area_id")})
     area_names: dict[str, str] = {}

@@ -84,3 +84,63 @@ async def test_replay_new_insurance_periods_skips_already_present_period_and_sta
 
     assert count == 1
     assert [p["period"] for p in replay_calls["periods"]] == [2]
+
+
+@pytest.mark.anyio
+async def test_replay_documents_survives_real_file_type_validation(monkeypatch):
+    """Regression: replay_documents previously called
+    _validate_file_type(content, "application/octet-stream") — a MIME type
+    that isn't in documents.py's own ALLOWED_MIME_TYPES allowlist, so the
+    call always raised, was swallowed by the surrounding try/except, and
+    every document in every bundle replay was silently skipped. Unlike the
+    other tests in this file, this one does NOT mock replay_documents
+    itself (previous coverage only ever exercised it as a mock, which is
+    exactly how this bug went unnoticed) — it exercises the real function
+    against a real JPEG magic-byte header so _validate_file_type's
+    signature check has something genuine to check."""
+    inserted = {}
+
+    async def fake_insert_one(table, doc):
+        inserted["table"] = table
+        inserted["doc"] = doc
+        return {"id": doc["id"]}
+
+    monkeypatch.setattr(svc.db_supabase, "insert_one", AsyncMock(side_effect=fake_insert_one))
+    monkeypatch.setattr(svc, "_upload_bytes", AsyncMock(return_value="https://example.com/signed"))
+
+    jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 16  # real JPEG magic bytes
+
+    replayed = await svc.replay_documents(
+        "drv1",
+        [{"id": "d1", "document_type": "license", "side": "front", "_storage_key": "orig/d1.jpg"}],
+        {"d1": jpeg_bytes},
+    )
+
+    assert replayed == 1
+    assert inserted["table"] == "driver_documents"
+    assert inserted["doc"]["document_url"] == "https://example.com/signed"
+
+
+@pytest.mark.anyio
+async def test_replay_documents_derives_real_content_type_not_octet_stream(monkeypatch):
+    """_upload_bytes (and _validate_file_type) must receive the document's
+    real MIME type derived from its extension, never the hardcoded
+    "application/octet-stream" that always failed validation."""
+    monkeypatch.setattr(svc.db_supabase, "insert_one", AsyncMock(return_value={"id": "x"}))
+    captured = {}
+
+    async def fake_upload_bytes(content, ext, content_type):
+        captured["content_type"] = content_type
+        return "https://example.com/signed"
+
+    monkeypatch.setattr(svc, "_upload_bytes", fake_upload_bytes)
+
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+    await svc.replay_documents(
+        "drv1",
+        [{"id": "d1", "document_type": "license", "side": "front", "_storage_key": "orig/d1.png"}],
+        {"d1": png_bytes},
+    )
+
+    assert captured["content_type"] == "image/png"

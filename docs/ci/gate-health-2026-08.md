@@ -21,7 +21,29 @@ stale header comment in `security-gates.yml` that mis-described the
 non-blocking gates, and reopened-then-reclosed
 [#3048](https://github.com/srikumarimuddana-lab/spinrvm/issues/3048) with
 fresh evidence after a commit that landed *during this audit* fixed the
-G6/`docker-image-scan` Trivy false positive it tracked.
+G6/`docker-image-scan` Trivy findings it tracked.
+
+> **Correction (added after original publication):** this doc originally
+> called the #3048/CR-2026-002 msgpack/setuptools findings a "Trivy false
+> positive." That's wrong, per #3048's own later comment thread
+> (2026-08-02T18:48Z, after a diagnostic step landed in #3113 and pip was
+> removed from the runtime image in #3246): the flagged versions **were
+> genuinely present** in the built image, inside `pip`'s own vendored
+> dependency tree (`pip/_vendor/vendor.txt` + `pip/_vendor/bom.cdx.json`,
+> both listing `msgpack==1.1.2`/`setuptools==70.3.0` — exactly what Trivy
+> reported). Trivy reached them via that third-party SBOM instead of its own
+> live filesystem scan, which is what looked like a contradiction, but the
+> versions really were there. `skip-files` alone (what this doc originally
+> described as "the fix") would have been a **suppression** — it hides the
+> file from the scanner without removing the vulnerable vendored code from
+> the image. What actually closed the finding was **#3246** (pip removed
+> entirely from the runtime image, so `bom.cdx.json` and the vendored copies
+> are gone) with `skip-files` kept as a belt-and-braces guard on top.
+> Every "false positive" reference below is left in place for the historical
+> record of what this audit believed at publication time, but should be read
+> with this correction — do not use `skip-files` alone as a template for
+> other noisy scanner findings without first checking whether the flagged
+> version genuinely exists somewhere in the image.
 
 ---
 
@@ -68,7 +90,7 @@ as of 2026-08-02T02:41Z UTC unless noted.
 | deploy-admin | `deploy-admin` | B, main-only | 🟢 green | |
 | mobile-build | `mobile-build` | B, main-only + `[build]` commit-message gate | ⚪ rarely runs | Gated on commit message; not a PR-blocking gate. |
 | security-scan (trufflehog + Trivy fs) | `security-scan` | B | 🟢 green | |
-| docker-image-scan | `docker-image-scan` | B (diagnostic step: A) | 🟢 green (as of commit `00d1d9f5`, 2026-08-02T02:30Z) | Was red on the prior two `main` pushes (`0c58c3dc`, `24b3e49f`) with the exact CR-2026-002 msgpack/setuptools false positive; a fix landed and was confirmed green during this audit — see the CR-2026-002 section below. |
+| docker-image-scan | `docker-image-scan` | B (diagnostic step: A) | 🟢 green (as of commit `00d1d9f5`, 2026-08-02T02:30Z) | Was red on the prior two `main` pushes (`0c58c3dc`, `24b3e49f`) with the CR-2026-002 msgpack/setuptools finding — **real, not a false positive** (see correction at top of this doc); `skip-files` alone was a suppression, actually closed by #3246 removing pip from the runtime image. |
 | Post-deploy smoke test | `smoke-test` | B, main-only | 🟢 green | |
 | notify-failure | `notify-failure` | Slack step: A | n/a | Only runs `if: failure()`. |
 
@@ -89,7 +111,7 @@ as of 2026-08-02T02:41Z UTC unless noted.
 | G4c · npm audit (admin-dashboard) | `npm-audit-admin` | **B** | 🟢 green | |
 | G5a · Gitleaks (git history) | `gitleaks` | **A** (`continue-on-error: true`) | 🟢 green | Deliberately advisory: a real, still-valid leaked Supabase `service_role` key exists in git history pending rotation; flipping to blocking before rotation would be dishonest enforcement, not real enforcement. **Documented, dated, has an owner action** — not a stale baselining artifact. |
 | G5b · Gitleaks (admin bundle) | `bundle-secrets` | **A** (`continue-on-error: true`) | 🟢 green | No dated justification comment in the file (unlike G5a). **Needs documentation** — see DOCUMENT list. |
-| G6 · Trivy container scan | `container-scan` | **B** | 🟢 green (as of `00d1d9f5`) | Same CR-2026-002 fix/timeline as `docker-image-scan` above — both jobs share the `skip-files` fix, landed and confirmed together. |
+| G6 · Trivy container scan | `container-scan` | **B** | 🟢 green (as of `00d1d9f5`) | Same CR-2026-002 finding/timeline as `docker-image-scan` above — real vulnerable code (pip's vendored msgpack/setuptools), closed by #3246 (pip removed from runtime image) with `skip-files` as a belt-and-braces guard, not by `skip-files` alone. |
 | G7 · pip-licenses | `license-check` | **B** | 🟢 green | |
 | Security gates summary | `summary` | n/a (`if: always()`) | 🟢 green | Fixed in this PR: previously claimed "Gates G1–G7 ... are blocking" including gitleaks, contradicting G5a/G5b's literal `continue-on-error: true`. |
 
@@ -231,16 +253,20 @@ when required PR template fields are missing).
 PR #3037 (`G6 · Trivy container scan`, and its `ci.yml` twin
 `docker-image-scan`) had a documented CR (#3048/CR-2026-002) whose fix landed
 and was **verified green during this session** — confirmed on the very next
-`main`-branch commit, not assumed from the CR's own "done" claim. That's the
-audit doing its job: ACTION_ITEMS' C6 entry had already flagged the fix as
-"not verified end-to-end"; this audit is the first verification against a
-real `main` run, and it now closes that loop with primary evidence
-(#3048 was briefly reopened with the stale-run evidence, then re-closed once
-the newer green run was found — see that issue's comment thread for the
-full trace). The other two (`G4b`/`G4c` audits) were already green on `main`
-by the time this audit ran — they were real findings on 2026-08-01 that had
-already been fixed by 2026-08-02, underscoring that a snapshot from one day
-earlier was stale, not that the gates themselves are unreliable.
+`main`-branch commit, not assumed from the CR's own "done" claim. That
+verification step was real and valuable; the *conclusion drawn from it*
+wasn't — this doc, and #3048 itself at the time, wrongly attributed the
+green result to a "false positive" fix (`skip-files` alone). A later
+diagnostic (#3113) and fix (#3246, removing pip from the runtime image)
+established the findings were real vulnerable code, not a scanner artifact —
+see the correction at the top of this doc. The lesson from this session's
+own mistake: confirming a check went green is necessary but not sufficient —
+also confirm *why* it went green before writing up the fix as correct. The
+other two checks that were red on PR #3037 (`G4b`/`G4c` audits) were already
+green on `main` by the time this audit ran — they were real findings on
+2026-08-01 that had already been fixed by 2026-08-02, underscoring that a
+snapshot from one day earlier was stale, not that the gates themselves are
+unreliable.
 
 **Impact if the FIX items are left undone:** `driver-app-e2e` staying red on
 `main` means every future `main` push shows workflow-level `failure` in

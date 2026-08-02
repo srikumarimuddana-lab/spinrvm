@@ -304,6 +304,8 @@ export {
     getSafetyIncidents,
     getSafetyIncident,
     updateSafetyIncident,
+    createSafetyIncident,
+    mergeSafetyIncident,
     getTickets,
     getTicketDetails,
     createTicket,

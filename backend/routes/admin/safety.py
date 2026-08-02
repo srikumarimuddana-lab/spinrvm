@@ -10,6 +10,7 @@ routes/admin/__init__.py wiring at module mount time).
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
@@ -209,6 +210,71 @@ async def admin_get_safety_incident(incident_id: str):
     }
 
 
+# ---------- Create ----------
+
+
+class SafetyIncidentCreate(BaseModel):
+    category: str = Field(..., min_length=1, max_length=64)
+    description: str = Field(..., min_length=1, max_length=4000)
+    role: Literal["rider", "driver", "system"] = "rider"
+    reported_by_user_id: Optional[str] = None
+    ride_id: Optional[str] = None
+    severity: Optional[Literal["sev1", "sev2", "sev3"]] = None
+    reported_at: Optional[str] = None
+
+
+@router.post("/incidents")
+async def admin_create_safety_incident(
+    body: SafetyIncidentCreate,
+    admin: dict = Depends(get_admin_user),
+):
+    """Manually log a safety incident from the admin side (e.g. a phone
+    call or in-person report that never went through the app's own
+    POST /safety/report). Corporate + admin portal review, round 2:
+    "safety incidents can't be created ... from the admin side."
+
+    Same insert shape as routes/safety.py::submit_safety_report — this is
+    the admin-initiated twin of that endpoint, not a separate table or
+    workflow. RLS on safety_incidents already restricts INSERT to the
+    service role (94_safety_incidents.sql: "admins escalate via the
+    backend API, not by writing directly to the table"), which this
+    endpoint already does like every other backend write.
+    """
+
+    incident_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    incident: Dict[str, Any] = {
+        "id": incident_id,
+        "reported_by_user_id": body.reported_by_user_id,
+        "role": body.role,
+        "category": body.category,
+        "description": body.description,
+        "status": "open",
+        "severity": body.severity,
+        "ride_id": body.ride_id,
+        "reported_at": body.reported_at or now,
+        "created_at": now,
+    }
+    try:
+        await db_supabase.insert_one("safety_incidents", incident)
+    except Exception:
+        logger.error("admin safety_incident create failed", exc_info=True)
+        raise HTTPException(status_code=503, detail="Could not create incident.") from None
+
+    try:
+        await log_admin_action(
+            admin,
+            "safety_incident_create",
+            "safety_incidents",
+            incident_id,
+            {"category": body.category, "role": body.role},
+        )
+    except Exception:
+        logger.error("safety_incident create audit log write failed", exc_info=True)
+
+    return {"incident": incident}
+
+
 # ---------- Update ----------
 
 
@@ -279,3 +345,72 @@ async def admin_update_safety_incident(
 
     refreshed_rows = await db_supabase.get_rows("safety_incidents", {"id": incident_id}, limit=1)
     return {"updated": True, "incident": refreshed_rows[0] if refreshed_rows else existing}
+
+
+# ---------- Merge ----------
+
+
+class SafetyIncidentMerge(BaseModel):
+    canonical_incident_id: str = Field(..., min_length=1)
+
+
+@router.post("/incidents/{incident_id}/merge")
+async def admin_merge_safety_incident(
+    incident_id: str,
+    body: SafetyIncidentMerge,
+    admin: dict = Depends(get_admin_user),
+):
+    """Mark `incident_id` as a duplicate of `canonical_incident_id`.
+
+    Corporate + admin portal review, round 2: "safety incidents can't be
+    ... merged from the admin side" — two reports of the same event
+    (rider + driver both SOS the same ride) had no way to be linked.
+
+    Never deletes a row -- safety_incidents is an append-only regulated
+    audit record under the SK Transportation Act (94_safety_incidents.sql's
+    own table comment: "do not purge"). A merge sets status='duplicate' and
+    records merged_into_incident_id (migration 279); the duplicate row
+    stays fully intact and queryable.
+    """
+    if incident_id == body.canonical_incident_id:
+        raise HTTPException(status_code=422, detail="Cannot merge an incident into itself.")
+
+    source_rows = await db_supabase.get_rows("safety_incidents", {"id": incident_id}, limit=1)
+    if not source_rows:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    canonical_rows = await db_supabase.get_rows("safety_incidents", {"id": body.canonical_incident_id}, limit=1)
+    if not canonical_rows:
+        raise HTTPException(status_code=404, detail="Canonical incident not found")
+    canonical = canonical_rows[0]
+
+    # Merging into an incident that is itself already merged elsewhere
+    # would build a chain instead of a flat star -- point at the chain's
+    # actual root so "find every duplicate of X" stays a single-hop query.
+    target_id = canonical.get("merged_into_incident_id") or body.canonical_incident_id
+
+    updates = {
+        "status": "duplicate",
+        "merged_into_incident_id": target_id,
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "resolved_by": admin.get("id"),
+    }
+    try:
+        await db_supabase.update_one("safety_incidents", {"id": incident_id}, updates)
+    except Exception:
+        logger.error("safety_incident merge failed", exc_info=True, extra={"incident_id": incident_id})
+        raise HTTPException(status_code=503, detail="Could not merge incident.") from None
+
+    try:
+        await log_admin_action(
+            admin,
+            "safety_incident_merge",
+            "safety_incidents",
+            incident_id,
+            {"merged_into_incident_id": target_id},
+        )
+    except Exception:
+        logger.error("safety_incident merge audit log write failed", exc_info=True)
+
+    refreshed_rows = await db_supabase.get_rows("safety_incidents", {"id": incident_id}, limit=1)
+    return {"merged": True, "incident": refreshed_rows[0] if refreshed_rows else None}

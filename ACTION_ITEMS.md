@@ -1365,7 +1365,39 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs
         push client), `server.py` (79.20%, 250 stmts — app factory/router
         mounting, see CLAUDE.md's Key Backend Files), `utils/stripe_charge.py`
         (79.74%, 227 stmts — payment-adjacent, closest file in this list
-        to the 80% line).
+        to the 80% line). `apns_client.py` and `server.py` were closed by a
+        concurrent session (see "faqs-apns-server" batch below); this
+        session's scope was `stripe_charge.py` only.
+      - **Batch "stripe-charge" (`utils/stripe_charge.py` from Batch 13
+        above) — CLOSED 2026-08-03.** 79.74% → **99%** (227 stmts, 46→1
+        missing). Measured via `pytest tests/test_stripe_charge.py
+        tests/test_stripe_charge_coverage.py --cov=utils.stripe_charge
+        --cov-report=term-missing` (70 passed); also verified against the
+        wider payment-adjacent test sweep (every file in `backend/tests/`
+        that references `stripe_charge` — 18 files, 484 passed, 0
+        collisions, same 99%). Added `backend/tests/test_stripe_charge_coverage.py`
+        (51 tests, new file, kept separate from the existing
+        `test_stripe_charge.py` which is scoped to `charge_ride()` only) —
+        `charge_ancillary_fee()` had **zero** prior direct coverage (every
+        branch: amount≤0 no-op, unconfigured, missing customer/payment-method,
+        success + fee-scoped idempotency key, requires_action,
+        declined-by-status, CardError, StripeError, unhandled status);
+        `authorize_ride()`/`verify_authorization()`/`capture_ride()` (the
+        booking-time hold / SCA-verify / settlement-capture trio) had large
+        guard-clause and non-happy-path gaps, including
+        `verify_authorization()`'s two security checks (customer-mismatch
+        and amount-too-small rejection) which had no prior test at all;
+        plus the remaining `stripe is None` branches on
+        `_resolve_stripe_secret()`, `cancel_authorization()`, and
+        `charge_ride()`'s own early-return. Test-only, no application code
+        changed. **No bugs found** — every branch, including both
+        `verify_authorization()` security checks and every idempotency-key
+        namespace, behaved exactly as documented. Remaining uncovered line
+        (1) is the dual-import `ImportError` fallback boilerplate —
+        structurally near-impossible to reach in this harness once the
+        module is cached in `sys.modules`, same documented pattern as prior
+        Sub-tier B/C files. Full log:
+        `docs/change-log/2026-08-03-a1c-subtier-c-batch-stripe-charge-coverage.md`.
       - **Excluded as already closed (Sub-tier A/B, or independently
         closed mid-sweep) or Track-1-owned:** every file named in
         Sub-tier A/B above, plus `utils/payment_retry.py` (closed by a

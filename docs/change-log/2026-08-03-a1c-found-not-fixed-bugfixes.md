@@ -909,3 +909,73 @@ logger.info(
 
 - Did not check production data for how many rides, historically, were affected by the pre-fix bug (i.e. already stamped `distance_reconciled_at` despite never having been evaluated) — those rows remain excluded from reconciliation going forward regardless of this code fix; a one-time data remediation (clearing `distance_reconciled_at` for rides that have no corresponding integrity-event/ratio history) would be a separate, out-of-scope follow-up if deemed necessary.
 - No staging/manual repro against a live Supabase instance — verified at the unit level only, via mocked `db_supabase.get_rows`/`update_one`.
+
+---
+
+## Entry 13 — `routes/webhooks.py`: `payment_intent.succeeded` "processing" race — investigated, NOT a bug, approved fix reverted
+
+### 1. Issue / gap identified (as originally flagged)
+
+`payment_intent.succeeded`'s handler treats a ride whose `payment_status` is already `'processing'` as "already settled" — skipping the `financial_events` ledger write, the GST/PST tax receipt, and the tip credit — while still unconditionally force-writing `payment_status: "paid"`. The sibling `_handle_ride_invoice_paid` handler (same file, invoice.paid path) treats the identical `'processing'` status by **raising** (HTTP 500, Stripe retries) instead of settling. The two handlers disagreeing on how to handle the same race condition was flagged as a "found not fixed" money-safety concern during the original A1c Sub-tier C coverage pass.
+
+### 2. Root cause investigation — and reversal
+
+The user approved "match the sibling: raise on 'processing'" as the fix. Before committing it, I applied the change (raise `HTTPException(500, ...)` as soon as `payment_status == "processing"` is observed, mirroring `_handle_ride_invoice_paid`) and ran the full webhook test surface as a blast-radius check per CLAUDE.md's pre-merge gates. That surfaced a **pre-existing regression test that predates this session** — `TestWebhookTimeoutDivergence::test_finalizes_ride_stuck_in_processing` in `backend/tests/test_webhooks_main.py` — whose docstring states explicitly: *"The ride is stuck in payment_status='processing'. The webhook must still finalize it to 'paid' — the handler makes no assumptions about the prior payment_status value."*
+
+Tracing why: `routes/payments.py::confirm_payment` calls `db_supabase.claim_ride_payment_processing(ride_id)` to atomically claim the ride into `payment_status='processing'` **before** it talks to Stripe. If that synchronous call then times out client-side, or the process crashes mid-flight, the ride is left permanently stuck in `'processing'` — and there is **no other recovery path**: `utils/stuck_ride_sweeper.py` (grepped directly) only handles ride *state* (searching/driver_assigned/etc.), never `payment_status`. `payment_intent.succeeded` arriving later (Stripe's own confirmation that the charge did succeed) is the *only* mechanism that unsticks such a ride. This is a load-bearing, intentional design, not an oversight — the sibling comparison in the original finding was a false equivalence: for the invoice.paid path, `'processing'` genuinely means a *different, concurrent* in-app charge (no claim/rescue relationship exists there), whereas for `payment_intent.succeeded`, `'processing'` is very often *this same payment's own* claimed-but-unfinished state, and this webhook is its designed rescue.
+
+Raising here instead — as approved and initially implemented — would have reintroduced a real "ride stuck in payment_status='processing' forever" bug on any client-side `confirm_payment` timeout, silently regressing a working recovery path in favor of "fixing" a difference between two handlers that turned out not to be a bug.
+
+**Decision: the fix was reverted.** `git checkout -- backend/routes/webhooks.py` restored the file to its pre-fix state (verified `git diff` is empty). This is a case of CLAUDE.md Rule 9 working as intended two levels deep: escalate before shipping (done, user approved) — but pre-merge blast-radius verification is what actually caught this, and finding new disqualifying evidence after approval is itself an escalation trigger. Not silently keeping the approved-but-now-known-wrong fix.
+
+### 3. Fix / remediation
+
+**None applied to application code.** The genuine remaining gap — the ledger write and tax receipt are skipped whenever `payment_status` was already `'processing'`, relying on an unverified assumption that a concurrent `settle_card()` call performs them — is real, but is a *separate* question from raise-vs-settle, and fixing it (e.g. by having the webhook itself perform the ledger write/receipt even for an already-'processing'-then-now-succeeded ride) needs its own design pass, not this session's remaining budget. Left as a pinned "found, investigated, not fixed" item.
+
+### 4. Risk & impact on existing functionality
+
+None — no application code changed in the end. Blast-radius verification (this investigation) is itself the deliverable: confirmed via grep that `stuck_ride_sweeper.py` doesn't cover payment-status recovery, and via the pre-existing test's docstring that this webhook's tolerance of `'processing'` is intentional.
+
+### 5. User-experience effect
+
+None (no code change). Avoided a regression that would have made a rider's ride, whose in-app payment confirmation timed out, unpayable via any automatic path — the money would eventually settle in Stripe but the ride/receipt would never reflect it without manual ops intervention.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/routes/webhooks.py` | None — fix applied then reverted via `git checkout` | Pre-existing regression test proved the approved fix was based on a false premise |
+| `backend/tests/test_routes_webhooks_coverage.py` | Module docstring and `TestStripeWebhookProcessingRace` (renamed from `...RiskFoundNotFixed`) rewritten to document the investigation and reversal; test body unchanged (still asserts the original, correct, settle-not-raise behavior) | Keep the pinned-bug test accurate and record the investigation trail |
+
+### 7. Before / after
+
+No production code diff (net zero — applied then reverted). Test-file framing only:
+
+```
+# Before (original coverage pass)
+"FOUND NOT FIXED (money-safety concern)" — assumed the two handlers'
+divergent treatment of 'processing' was a bug in payment_intent.succeeded.
+
+# After (this entry)
+"FOUND, INVESTIGATED, NOT A BUG" — the divergence is intentional:
+payment_intent.succeeded's tolerance of 'processing' is the only recovery
+path for a confirm_payment timeout; _handle_ride_invoice_paid's raise is
+correct for its own, unrelated 'processing' race. Genuine remaining gap
+(skipped ledger/receipt) reframed as its own separate, still-open item.
+```
+
+### 8. Rollback plan
+
+N/A — no code change shipped.
+
+### 9. Verification performed
+
+- [x] Applied the approved fix, then ran the full webhook-adjacent test surface as a blast-radius check: `pytest tests/test_corporate_e2e_wallet.py tests/test_corporate_webhook.py tests/test_money_decimal.py tests/test_orphan_refund.py tests/test_p2_corporate_decimal.py tests/test_p2_promo_wallet_loyalty.py tests/test_process_payment_card.py tests/test_routes_main_coverage.py tests/test_ses_webhook.py tests/test_spinr_pass_subscription.py tests/test_stripe_reconcile.py tests/test_twilio_inbound.py tests/test_wallet.py tests/test_webhook_stripe_v15.py tests/test_webhooks_main.py -q --no-cov` — 1 failure (`TestWebhookTimeoutDivergence::test_finalizes_ride_stuck_in_processing`), which is what triggered this investigation.
+- [x] Reverted via `git checkout -- backend/routes/webhooks.py`; confirmed `git diff` empty.
+- [x] Re-ran `pytest tests/test_routes_webhooks_coverage.py tests/test_webhooks_main.py -q --no-cov` after reverting — 83 passed, 0 failed.
+- [x] Grepped `utils/stuck_ride_sweeper.py` for any payment-status handling — none found, confirming `payment_intent.succeeded` is the only recovery path.
+
+### 10. What was NOT verified
+
+- Did not design or scope a real fix for the genuine remaining gap (ledger/receipt skipped on an already-'processing' ride) — flagged as still-open in the test docstring, not resolved.
+- Did not check production incident history for whether the assumption "a concurrent settle_card() call writes the ledger" has ever actually been violated in practice.

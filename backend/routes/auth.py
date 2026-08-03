@@ -650,7 +650,51 @@ async def send_company_email_otp(request: Request, body: CompanyEmailOtpSendRequ
     # It would only strip the recovery path from a legitimate user whose
     # address someone else mistyped into the lockout.
     await _enforce_otp_send_cap(_synthetic_phone_for_company_email(email))
-    otp_code = generate_otp()
+
+    # Email-provider bypass, mirroring the phone /send-otp dev bypass above:
+    #  - SES or Resend configured  → real random OTP delivered via email.
+    #  - Neither configured + non-production (dev/preview/staging)
+    #                        → fixed code "1234" so testing works without a
+    #                          working email provider.
+    #  - Neither configured + production
+    #                        → refuse; a static-code bypass in production would
+    #                          let anyone log in as any company email.
+    app_settings = None
+    try:
+        app_settings = await get_app_settings()
+    except Exception as e:
+        logger.error(f"Could not read app_settings from DB: {e}", exc_info=True)
+
+    email_provider_configured = bool(
+        app_settings
+        and (
+            (app_settings.get("aws_ses_access_key_id") and app_settings.get("aws_ses_secret_access_key"))
+            or app_settings.get("resend_api_key")
+        )
+    )
+    is_production = settings.ENV.lower() == "production"
+    deliver_via_email = True
+    if email_provider_configured:
+        otp_code = generate_otp()
+    elif not is_production:
+        otp_code = "1234"
+        deliver_via_email = False
+        logger.info(
+            "Email provider not configured — OTP bypass active (code=1234) for %s (ENV=%s)",
+            _email_log_id(email),
+            settings.ENV,
+        )
+    else:
+        logger.error(
+            "Email provider not configured in production — refusing to issue OTP (static-code bypass is disabled in production)"
+        )
+        raise SpinrException(
+            message="Verification is temporarily unavailable, please try again later",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
+
     otp_row = {
         "id": str(uuid.uuid4()),
         "email": email,
@@ -672,24 +716,27 @@ async def send_company_email_otp(request: Request, body: CompanyEmailOtpSendRequ
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
 
-    sent = await send_transactional_email(
-        to=email,
-        subject="Your Spinr for Business verification code",
-        text=f"Your Spinr for Business verification code is {otp_code}. It expires in {OTP_EXPIRY_MINUTES} minutes.",
-        html=(
-            "<p>Your Spinr for Business verification code is "
-            f"<strong>{otp_code}</strong>.</p>"
-            f"<p>It expires in {OTP_EXPIRY_MINUTES} minutes.</p>"
-        ),
-        log_id=_email_log_id(email),
-        email_type="corporate_email_otp",
-    )
-    if not sent:
-        try:
-            await db_supabase.delete_many(_CORPORATE_EMAIL_OTP_TABLE, {"id": otp_row["id"]})
-        except Exception:
-            logger.error("company email auth: failed-code cleanup failed for %s", _email_log_id(email), exc_info=True)
-        raise HTTPException(status_code=502, detail="Could not send verification code")
+    if deliver_via_email:
+        sent = await send_transactional_email(
+            to=email,
+            subject="Your Spinr for Business verification code",
+            text=f"Your Spinr for Business verification code is {otp_code}. It expires in {OTP_EXPIRY_MINUTES} minutes.",
+            html=(
+                "<p>Your Spinr for Business verification code is "
+                f"<strong>{otp_code}</strong>.</p>"
+                f"<p>It expires in {OTP_EXPIRY_MINUTES} minutes.</p>"
+            ),
+            log_id=_email_log_id(email),
+            email_type="corporate_email_otp",
+        )
+        if not sent:
+            try:
+                await db_supabase.delete_many(_CORPORATE_EMAIL_OTP_TABLE, {"id": otp_row["id"]})
+            except Exception:
+                logger.error(
+                    "company email auth: failed-code cleanup failed for %s", _email_log_id(email), exc_info=True
+                )
+            raise HTTPException(status_code=502, detail="Could not send verification code")
 
     return {"success": True, "message": "Verification code sent"}
 

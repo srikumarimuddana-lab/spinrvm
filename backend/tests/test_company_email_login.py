@@ -33,6 +33,10 @@ class TestCompanyEmailOtpSend:
 
         with (
             _SEND_CAP_NOOP,
+            patch(
+                "backend.routes.auth.get_app_settings",
+                AsyncMock(return_value={"resend_api_key": "re_configured"}),
+            ),
             patch("backend.routes.auth.generate_otp", return_value="1234"),
             patch("backend.routes.auth.db_supabase.delete_many", AsyncMock()),
             patch("backend.routes.auth.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
@@ -55,6 +59,61 @@ class TestCompanyEmailOtpSend:
         assert kwargs["to"] == NORMALIZED_EMAIL
         assert "1234" in kwargs["text"]
         assert kwargs["email_type"] == "corporate_email_otp"
+
+    def test_send_company_email_otp_bypasses_unconfigured_provider_in_non_production(self):
+        """Mirrors the phone /send-otp dev bypass: when no email provider is
+        configured and ENV != production, issue the fixed code "1234" instead
+        of a random one, skip the send, and still return success — so the
+        portal login screen can advance to the OTP-entry step without a
+        working SES/Resend configuration in dev/test."""
+        from backend.routes.auth import CompanyEmailOtpSendRequest, send_company_email_otp
+
+        inserted: dict = {}
+
+        async def fake_insert(table: str, row: dict):
+            inserted["table"] = table
+            inserted["row"] = row
+            return row
+
+        with (
+            _SEND_CAP_NOOP,
+            patch("backend.routes.auth.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.auth.db_supabase.delete_many", AsyncMock()),
+            patch("backend.routes.auth.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.auth.send_transactional_email", AsyncMock()) as send_email,
+        ):
+            result = asyncio.run(
+                send_company_email_otp(
+                    _request(),
+                    CompanyEmailOtpSendRequest(email=EMAIL),
+                )
+            )
+
+        assert result == {"success": True, "message": "Verification code sent"}
+        from backend.utils.crypto import verify_otp_hash
+
+        assert verify_otp_hash(inserted["row"]["code_hash"], "1234")
+        send_email.assert_not_awaited()
+
+    def test_send_company_email_otp_refuses_bypass_in_production(self):
+        from backend.routes.auth import CompanyEmailOtpSendRequest, send_company_email_otp
+
+        with (
+            _SEND_CAP_NOOP,
+            patch("backend.routes.auth.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.auth.settings.ENV", "production"),
+            patch("backend.routes.auth.db_supabase.insert_one", AsyncMock()) as insert_one,
+            pytest.raises(Exception) as excinfo,
+        ):
+            asyncio.run(
+                send_company_email_otp(
+                    _request(),
+                    CompanyEmailOtpSendRequest(email=EMAIL),
+                )
+            )
+
+        assert excinfo.value.status_code == 503
+        insert_one.assert_not_called()
 
 
 class TestCompanyEmailOtpVerify:

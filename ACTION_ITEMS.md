@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%. Prior same-day: `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C CLOSED: all 39 files in the 60-80% coverage band covered (fresh snapshot, not the stale 55-file estimate); 5 found-not-fixed bugs from that sweep fixed as a follow-up batch (see Sub-tier C entry for the full list), a 6th investigated and its approved fix reverted after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`). Final full suite: 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%. Prior same-day: `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -1224,6 +1224,59 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         this test harness (same documented pattern as prior Sub-tier B
         files). See
         `docs/change-log/2026-08-02-a1c-payment-retry-coverage.md`.
+    - **Sub-tier C — CLOSED 2026-08-03.** All 39 files in the fresh 60-80%-band
+      snapshot (superseding the stale 55-file estimate above — re-run the
+      `--cov=.` scoping command before trusting a file count/list here again)
+      got dedicated coverage files, including `routes/webhooks.py`,
+      `routes/promotions.py`, `repositories/driver_repo.py`,
+      `routes/disputes.py` named above. Test-only, written without running
+      pytest per this pass's process (mirroring Sub-tier B), then verified in
+      one dedicated pass: 28 blind-authored test bugs found and fixed (wrong
+      assertions against real, correct behavior — e.g. mock-patch targets,
+      `caplog` not reliably capturing DEBUG records in this repo's full-suite
+      logging setup, `spawn()`-fire-and-forget assertions checking
+      `.awaited` instead of `.called`) — no application code involved in that
+      triage pass.
+      - **Found-not-fixed bugs from the sweep — 5 fixed as a follow-up batch**
+        (2026-08-03, each with its own Change Impact & Risk Log entry in
+        `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`,
+        entries 1-13): unescaped PostgREST OR-clause (`claim_ride_atomic`,
+        ride-completion incentive lookup), redis-diagnostics timeout ignoring
+        caller deadline, `favorite_routes.use_favorite_route` returning a
+        stale pre-increment row, dispute-resolution notification wording,
+        `routes/fares.py` NULL `surge_multiplier` crash, two corporate
+        pre-pickup-cancellation services swallowing WS-send failures without
+        counting the ride as cancelled, three dispatch/notification
+        silent-swallow fixes, `corporate_low_balance.py`'s malformed-timestamp
+        rate-limiter bypass, `retention_purge.py`'s asymmetric error handling,
+        `driver_onboarding_reminder_rules.py`'s per-area opt-out being
+        ignored, `core/config.py` missing an `ADMIN_PASSWORD` length guard in
+        production (**deployment risk flagged — verify the live
+        Railway/Fly.io `ADMIN_PASSWORD` is ≥20 chars before this lands, or
+        backend startup will crash**), `location_integrity.py`'s GPS-spoofing
+        mock-flag bypass (`is True` vs truthy), `driver_import_service.py`
+        bulk-import ignoring document approval status, and
+        `distance_reconciliation.py` claiming unevaluated rides. A 6th
+        candidate — `routes/webhooks.py`'s `payment_intent.succeeded`
+        "processing"-status race — was investigated, a fix was approved and
+        applied, then **reverted** after blast-radius testing surfaced a
+        pre-existing regression test (`test_webhooks_main.py`'s
+        `TestWebhookTimeoutDivergence`) proving the two Stripe handlers'
+        differing treatment of `payment_status='processing'` is intentional,
+        not a bug — see Entry 13 for the full investigation. Net application
+        diff there is zero.
+      - **Known pre-existing flake, not fixed, not new**:
+        `tests/test_routes_webhooks_coverage.py::TestTwilioInboundSignatureVerification::test_invalid_signature_returns_403`
+        passes standalone and in every smaller combination tried, but fails
+        intermittently in a full-suite run (cross-file `sys.modules`/module-
+        identity interaction somewhere in the ~9,200-test suite, not yet
+        bisected — this repo's dual-import module-identity quirks, documented
+        elsewhere in this doc and CLAUDE.md, are the likely family of cause).
+        Final full-suite run for this batch deselected it explicitly to get a
+        clean signal on everything else (9235 passed, 8 skipped, 1 xfailed).
+        File a `[CR]` and bisect in a future session rather than re-discover
+        this each time; do not treat its absence from a green CI run as "no
+        Twilio-webhook coverage" — the test passes in isolation.
     - First file since this scoping pass picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB

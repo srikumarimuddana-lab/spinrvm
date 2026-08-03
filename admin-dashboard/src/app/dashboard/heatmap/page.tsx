@@ -16,8 +16,8 @@ import { Loader2, RefreshCw, Users, Car, Building2 } from "lucide-react";
 const HeatMap = dynamic(() => import("@/components/heat-map"), {
     ssr: false,
     loading: () => (
-        <div className="w-full h-[600px] bg-gray-100 animate-pulse rounded-lg flex items-center justify-center">
-            <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        <div className="w-full h-[600px] bg-muted animate-pulse rounded-lg flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
     ),
 });
@@ -325,8 +325,8 @@ export default function HeatMapPage() {
             <Card>
                 <CardContent className="p-0">
                     {loading ? (
-                        <div className="w-full h-[600px] bg-gray-100 animate-pulse flex items-center justify-center">
-                            <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+                        <div className="w-full h-[600px] bg-muted animate-pulse flex items-center justify-center">
+                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                         </div>
                     ) : (
                         <HeatMap

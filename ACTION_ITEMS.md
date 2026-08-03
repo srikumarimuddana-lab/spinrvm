@@ -3515,8 +3515,12 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 - [ ] **D2. Distributed tracing** — request-ID propagation exists (`X-Request-ID`);
   full OpenTelemetry only if multi-replica latency debugging becomes painful.
 - [ ] **D3. Driver destination mode** — biggest driver-retention feature gap vs industry.
-- [ ] **D4. Driver heatmap UI** — `utils/demand_forecast.py` exists server-side; surface
-  it in the driver app.
+- [x] **D4. Driver heatmap UI** — stale, already done. Backend
+  `GET /drivers/demand-heatmap` (`backend/routes/drivers/profile.py` ~L235-260)
+  is gated on the `service_area.show_demand_heatmap` admin setting and returns
+  the heatmap cells. Driver-app already consumes it: `driver-app/app/driver/
+  (tabs)/index.tsx` renders a `react-native-maps` `Heatmap` component fed from
+  this endpoint. No code change needed; correcting the stale item.
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.

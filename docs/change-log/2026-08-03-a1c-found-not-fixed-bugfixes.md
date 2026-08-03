@@ -704,3 +704,68 @@ if len(admin_password) < 20:
 
 - **Production `ADMIN_PASSWORD`'s actual current length** — this is the single most important unverified item in this entire change-log. Confirm before merging (see the risk callout at the top of this entry).
 - Did not check whether any other internal script or CI job constructs `Settings()` with `ENV=production` outside the test suite (e.g. a one-off ops script) that might also be affected — only the pytest suite was grepped.
+
+---
+
+## Entry 10 — `location_integrity.py`: GPS-spoofing mock-flag detection bypass (safety, explicit user approval obtained)
+
+### 1. Issue / gap identified
+
+`utils/location_integrity.py::check_location_integrity`'s mock-location detector used `if mocked is True:` — a strict identity check against the `True` singleton. The value reaches this function via raw dict access from client-supplied JSON (`latest.get("mocked")` / `data.get("mocked")` / `last_pt.get("mocked")`, no Pydantic bool coercion upstream), so a client sending the mock flag as `1` or `"true"` instead of a literal JSON `true` produced `mocked is True == False` for both — the spoofed point silently passed the check instead of being rejected. Since this module's entire purpose is defeating mock-location/GPS-spoofing, this was a real detection bypass, not a style nit.
+
+### 2. Root cause
+
+`is True` identity comparison instead of a truthiness check — a common Python pitfall (`1 == True` is `True`, but `1 is True` is `False`), likely written without considering that the incoming value isn't guaranteed to be a real Python `bool` by the time it reaches this function.
+
+### 3. Fix / remediation
+
+**User was asked explicitly via `AskUserQuestion` before this fix was applied**, given the safety-sensitivity (driver trust-scoring / fraud-detection logic) of the change; the user approved switching to a truthy check. `if mocked is True:` is now `if mocked:`, so any of `1`, `"true"`, `True`, or any other truthy value is caught.
+
+### 4. Risk & impact on existing functionality
+
+- **Blast radius**: `check_location_integrity` has three callers — `routes/drivers/location.py` (batch location-update endpoint), and `routes/websocket.py` (two call sites: live driver-location WS messages). All three already pass the raw, unvalidated `mocked` value straight from client JSON with no coercion, so all three benefit from the fix identically.
+- **Known false-positive tradeoff, accepted**: a plain truthy check also means a client sending the *string* `"false"` or `"0"` (intending "not mocked") would be treated as truthy (non-empty string) and incorrectly flagged as mocked — the opposite direction from the fixed bypass. This is judged acceptable because it fails in the *safe* direction for an anti-spoofing check (a false positive rejects a real point; the pre-fix bug was a false negative that accepted a spoofed one) and no legitimate client in this codebase is known to send the mock flag as a string at all (every caller passes it straight through from a JSON body, where Android SDKs report a real JSON boolean).
+- Grepped every test file touching `check_location_integrity` or its three callers: none asserts on a specific string/falsy `mocked` value, so no test-suite regression from this edge case.
+
+### 5. User-experience effect
+
+- Driver-facing (indirectly, safety-relevant): a driver whose client sends a mock-location flag in a non-boolean shape (`1`/`"true"`) will now correctly have that location point rejected as untrusted, instead of it silently passing through as a legitimate GPS point. This directly strengthens the platform's ability to detect GPS spoofing, which feeds driver trust-scoring and potential fraud enforcement.
+- No rider or corporate-admin-facing effect.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/utils/location_integrity.py` | `check_location_integrity`'s mock-flag check now uses a truthy comparison instead of `is True` identity | Close the found-not-fixed GPS-spoofing-detection bypass, per explicit user approval |
+| `backend/tests/test_location_integrity_coverage.py` | Renamed/updated the two pinned bug tests to assert the spoofed points are now correctly rejected | Reflect the fix |
+
+### 7. Before / after
+
+```python
+# Before
+if mocked is True:
+    logger.warning(...)
+    return False, "mock_location"
+
+# After
+if mocked:
+    logger.warning(...)
+    return False, "mock_location"
+```
+
+### 8. Rollback plan
+
+`git revert` — pure code-path fix, no migration, no data-write-path change (this function only reads the incoming location payload and reports trust/reason, it writes nothing itself beyond what its caller already does with the existing `(trusted, reason)` return value).
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_location_integrity_coverage.py -q` — 25 passed.
+- [x] Blast-radius regression check: `pytest tests/test_location_batch.py tests/test_p3_background_location.py tests/test_period1_accumulation_endpoint.py -q` — 24 passed, 1 pre-existing unrelated xfail, 0 failed.
+- [x] Blast-radius grep performed: confirmed all three callers pass raw client JSON with no coercion, and no test asserts on a specific falsy-string `mocked` value — see section 4.
+- [x] User explicitly approved this specific fix via `AskUserQuestion` before it was applied, given the safety-sensitivity of anti-spoofing logic.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- No staging/manual repro against a real Android/iOS client sending a non-boolean mock flag — verified at the unit level only, with hand-crafted `mocked=1`/`mocked="true"` inputs.
+- Did not audit whether any client-side (rider-app/driver-app) code in this repo ever sends the mock flag as a non-boolean shape in practice — the fix is defensive regardless of current client behavior, but the real-world prevalence of the bypass being actively exploited (vs. theoretical) was not investigated.

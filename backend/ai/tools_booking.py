@@ -105,6 +105,17 @@ def _money(v) -> Decimal:
     return Decimal(str(v)).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
+# ACTION_ITEMS.md AI6: a pasted Google Maps link carries no usable place text
+# — geocoding/text-searching the URL string itself wastes a paid Maps API
+# call and never resolves. The prompt tells the model not to pass one, but
+# this backstops that in case it does anyway.
+_URL_LIKE_RE = re.compile(r"https?://|\bgoo\.gl/|\bmaps\.app\.goo\.gl\b|\bgoogle\.[a-z.]+/maps\b", re.IGNORECASE)
+
+
+def _looks_like_a_url(query: str) -> bool:
+    return bool(_URL_LIKE_RE.search(query))
+
+
 def _looks_like_street_address(query: str) -> bool:
     q = query.lower()
     return any(ch.isdigit() for ch in q) and any(
@@ -652,6 +663,16 @@ async def find_place(
     if error:
         return error
 
+    if _looks_like_a_url(query):
+        return {
+            "candidates": [],
+            "note": (
+                "That looks like a Maps link, not a place name or address — it cannot be searched "
+                "directly. Ask the rider for the address or place name, or call request_map_pin so "
+                "they can drop a pin instead."
+            ),
+        }
+
     # No explicit bias from the model → centre the search on the rider's
     # best-known location so "superstore" means THEIR superstore, not one
     # three provinces away.
@@ -723,6 +744,23 @@ async def find_place(
         )
         result["note"] = f"{result['note']} {imprecise}" if result.get("note") else imprecise
         result["imprecise_address"] = True
+
+    # ACTION_ITEMS.md AI5: the in_service_area filter above (line ~669) is
+    # deliberately skipped for street-address queries -- a rider who typed a
+    # specific numbered address should still see it even if it's just outside
+    # the service boundary, rather than getting a silent "no matches" (a
+    # named-place search has many alternatives to fall back to; a specific
+    # address usually doesn't). But leaving it unmarked meant the rider could
+    # pick it and only find out it's unbookable when propose_ride_booking
+    # later refuses. Surface it here instead so the assistant can tell the
+    # rider up front, before they invest another turn on it.
+    if _looks_like_street_address(query) and not best.get("in_service_area"):
+        out_of_area = (
+            "Warning: this address is outside Spinr's service area — do not propose a quote or "
+            "booking for it. Tell the rider it's outside the coverage area."
+        )
+        result["note"] = f"{result['note']} {out_of_area}" if result.get("note") else out_of_area
+        result["out_of_service_area"] = True
     return result
 
 

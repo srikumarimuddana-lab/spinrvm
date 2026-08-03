@@ -377,6 +377,13 @@ class AppSettings(BaseModel):
     # admin-dashboard routes. Read by the frontend's useFeatureFlag() hook
     # via GET /api/admin/settings; effective within the 60s settings TTL.
     admin_theme_v2_enabled: bool = False
+    # ── Forced-upgrade gate (ACTION_ITEMS.md E3) ──────────────────────────
+    # Minimum app version each client must report via the X-App-Version
+    # header (see core/middleware.py::ForcedUpgradeMiddleware). Empty string
+    # = enforcement off for that app (the safe default — an unset minimum
+    # must never lock out every build). Semver "MAJOR.MINOR.PATCH" only.
+    min_rider_app_version: str = ""
+    min_driver_app_version: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -424,6 +431,10 @@ class SavedAddress(BaseModel):
     lat: float
     lng: float
     icon: str = "location"
+    # B9 enhancement (ACTION_ITEMS.md): captured from the write-time
+    # geocode-verify check when a result was returned; None when
+    # verification failed open (no API key, budget exhausted, no match).
+    place_id: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

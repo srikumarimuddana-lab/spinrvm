@@ -342,6 +342,13 @@ class SettingsUpdateRequest(BaseModel):
     # status, just a log line + metric an admin can act on manually.
     corporate_kyb_reverification_enabled: Optional[bool] = None
     corporate_kyb_reverify_after_months: Optional[int] = Field(default=None, ge=1, le=60)
+    # Forced-upgrade gate (ACTION_ITEMS.md E3) — core/middleware.py's
+    # ForcedUpgradeMiddleware rejects any request whose X-App-Version header
+    # is below this with 426. Empty string (default) = enforcement off for
+    # that app. Semver only — free text here would silently disable the
+    # comparison for every client.
+    min_rider_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
+    min_driver_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
 
     @field_validator("lms_api_base_url")
     @classmethod

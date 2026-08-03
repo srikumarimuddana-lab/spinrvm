@@ -1223,6 +1223,133 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         this test harness (same documented pattern as prior Sub-tier B
         files). See
         `docs/change-log/2026-08-02-a1c-payment-retry-coverage.md`.
+      - **Batch 11 (of the 13-batch Sub-tier C itemization, PR #3335) — CLOSED
+        2026-08-02.** Flagged Sub-tier-A-style urgency because it contains
+        `routes/webhooks.py`, the largest file in the entire Sub-tier C list.
+        - `routes/webhooks.py` — **75.40% → 95%** (748 stmts, 184→40 missing;
+          measured via `pytest tests/test_webhooks_coverage_gap.py
+          tests/test_webhooks_main.py tests/test_corporate_webhook.py
+          tests/test_webhook_stripe_v15.py tests/test_orphan_refund.py
+          tests/test_ses_webhook.py tests/test_twilio_inbound.py
+          --cov=routes.webhooks --cov-report=term-missing`, 157 passed, 0
+          collisions). This file already had extensive pre-existing coverage
+          (`test_webhooks_main.py` alone is 2019 lines) — the gap closed here
+          is everything those files didn't reach: the entire
+          `charge.dispute.created`/`charge.dispute.closed` lifecycle (~120
+          lines, had ZERO coverage anywhere in the repo), the
+          `account.updated` webhook dispatch branch, `charge.refunded`'s full
+          dispatch through the route (the pre-existing orphan-refund tests
+          called `_record_orphan_refund` directly, never exercising the
+          surrounding dispatch), `checkout.session.completed`'s
+          subscription-linking and stale/superseded-cancel branches,
+          `customer.subscription.deleted`'s legacy customer-id fallback
+          lookup, `customer.subscription.updated`'s `past_due`/`active`/
+          no-row branches, `invoice.payment_failed`'s no-row branch,
+          `_extract_invoice_payment_intent`'s successful-retrieve fallback,
+          the "matched allowlist but fell through dispatch" defensive guard,
+          roughly a dozen best-effort push/receipt/WS failure-swallow
+          branches, and several SES/Twilio helper edge cases
+          (`_confirm_sns_subscription`, `_suppress_marketing_email`,
+          `_resolve_user_id_by_phone`). Added `backend/tests/test_webhooks_coverage_gap.py`
+          (56 tests, new file — kept separate from the 2019-line
+          `test_webhooks_main.py` for the same reason
+          `test_payment_retry_coverage.py` was kept separate from
+          `test_payment_retry.py`). Test-only, no application code changed.
+          **No bugs found in `routes/webhooks.py` itself** — Stripe idempotency
+          (`claim_stripe_event`/`mark_stripe_event_processed`) and the
+          "do not silently swallow" convention were both already correctly
+          implemented on every branch touched here; this session explicitly
+          re-checked against the two related fixes from 2026-08-01
+          (`docs/change-log/2026-08-01-c10-stripe-events-reconciliation-sweep.md`,
+          `docs/change-log/2026-08-01-fix-mark-stripe-event-processed-swallow.md`)
+          and found nothing to add or contradict. **A real bug was found and
+          fixed, but in the test suite's own hygiene, not application code:**
+          the full 8500+-test suite exposed a pre-existing `sys.modules`
+          leak (same class as the already-fixed A8) — some other test
+          somewhere in the suite leaves `sys.modules["openai"]`/`["twilio"]`
+          replaced by an incomplete stand-in for the rest of the process,
+          which made 4 of this batch's new tests fail (but only under the
+          full suite, never standalone) with symptoms ranging from
+          `AttributeError: <module 'openai'> does not have the attribute
+          'AsyncOpenAI'` to a real webhook signature-validation check
+          silently degrading to a no-op (200 instead of the expected 403).
+          Root cause of the leak itself was not tracked down (exhaustive
+          grep across the whole backend found no obviously-unscoped
+          `sys.modules` mutation; bisecting ~300 test files was out of scope
+          for a coverage pass) — fixed defensively at the point of impact
+          instead, by forcing a fresh real import of the affected package in
+          each of the 4 affected tests before relying on it. Flagged as a
+          standing gap for a future session to bisect and fix at the source,
+          the same way A8 itself was eventually run to ground. Full
+          writeup: `docs/change-log/2026-08-02-a1c-subtier-c-batch11-coverage.md`.
+          Remaining 40 uncovered
+          lines: 12 are the dual-import `ImportError` fallback at the top of
+          the file (structurally unreachable, same documented pattern as
+          every other Sub-tier B/C file); 28 are the bodies of the two
+          `@default_limiter.limit(...)`-decorated routes (`ses_sns_webhook`,
+          `twilio_inbound_sms`) — confirmed via a from-scratch coverage run
+          that these lines were **already** unmeasurable as covered in the
+          *original* 75.40% baseline despite being exercised by
+          assertion-passing `test_client`-fixture requests in the
+          pre-existing `test_ses_webhook.py`/`test_twilio_inbound.py`; this
+          is a pre-existing coverage-instrumentation blind spot on
+          rate-limiter-decorated routes in this environment, not something
+          introduced or fixable by this pass (business logic is exercised
+          and asserted correct; only the coverage tool's line-attribution is
+          affected). See
+          `docs/change-log/2026-08-02-a1c-subtier-c-batch11-coverage.md`.
+        - `backend/ai/embeddings.py` — **76.79% → 100%** (56 stmts, 13→0
+          missing; measured via `pytest tests/test_ai_embeddings.py
+          tests/test_ai_embeddings_coverage.py --cov=ai.embeddings
+          --cov-report=term-missing`, 18 passed). The pre-existing
+          `test_ai_embeddings.py` covered `embed_texts`'s soft-fail contract
+          thoroughly but always patched `_embed_openai`/`_embed_gemini`
+          wholesale, so the real provider-calling bodies (the actual
+          `AsyncOpenAI`/`google.generativeai` call sites) were never
+          exercised. Added `backend/tests/test_ai_embeddings_coverage.py` (5
+          tests) covering both bodies directly plus reachability through
+          `embed_texts`, and the `asyncio.wait_for` timeout-returns-None
+          path. Test-only, no application code changed, no bugs found.
+        - `backend/core/config.py` — **76.86% → 100%** (121 stmts, 28→0
+          missing; measured via `pytest tests/test_core_config_coverage.py
+          tests/test_p1_auth_hardening.py tests/test_admin_routes_auth.py
+          tests/test_csrf_middleware.py --cov=core.config
+          --cov-report=term-missing`, 81 passed). The `Settings` fail-fast
+          production guard was already substantially covered by
+          `test_p1_auth_hardening.py`'s `TestProductionStartupGuards` (the
+          JWT_SECRET-length, Firebase-app-id, and SUPABASE_REGION branches)
+          — the remaining gap was the placeholder-value checks
+          (`JWT_SECRET == "your-strong-secret-key"`, `ADMIN_PASSWORD in
+          ("admin123", "password", "changeme")`), the missing-`SUPABASE_URL`/
+          `SUPABASE_SERVICE_ROLE_KEY` guards, `_hash_admin_password`, the
+          entire `review_login_map`/`_validate_review_accounts` App
+          Store/Play reviewer-OTP-allowlist parser (had zero test coverage),
+          and the `SECRET_KEY`/`debug` properties. Added
+          `backend/tests/test_core_config_coverage.py` (33 tests). Tests
+          assert the fail-fast behavior actually raises (not just that lines
+          execute) for each production guard, per the task's explicit ask.
+          Test-only, no application code changed, no bugs found. One
+          non-obvious finding surfaced while debugging a flaky `caplog`
+          assertion (not a bug, a test-authoring note worth recording): in
+          this test harness `backend.core.config` and `core.config` resolve
+          to the same already-imported module object (verified via `id()`),
+          and that module's `logger = logging.getLogger(__name__)` was bound
+          under the name `"core.config"` — so `caplog.at_level(...,
+          logger="backend.core.config")` silently captures nothing, while
+          `caplog.at_level(..., logger="core.config")` works. Worth knowing
+          for any future test in this file or a sibling that asserts on this
+          module's log output.
+    - First file since this scoping pass picked up below.
+      - **Note on `routes/webhooks.py` appearing twice below:** this
+        session's Batch 11 (95%, `test_webhooks_coverage_gap.py`, 56 tests)
+        and a separate concurrent session's pass (78%, explicitly marked
+        "not fully closed" below) both landed independently. No file-path
+        collision (different test file names), so both are kept — Batch
+        11's 95% is the higher/more complete result and should be treated
+        as superseding the 78% entry for planning purposes, but the 78%
+        entry's own findings (the SES/Twilio helper-function coverage) are
+        real and additive, not duplicated by Batch 11, so its bullet is
+        kept intact rather than deleted.
       - `routes/promotions.py` — **CLOSED, 65.85% → 93%** (2026-08-02, 328
         stmts, measured via `pytest tests/test_promotions_coverage.py
         tests/test_p2_promo_wallet_loyalty.py tests/test_promo_discount_parity.py
@@ -1376,6 +1503,41 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
           main commits' tests in between, e.g. #3341), 8 skipped, 1
           xfailed, 0 failed. See
           `docs/change-log/2026-08-02-a1c-claim-reaper-preauth-allowance-reset-coverage.md`.
+      - Three more dispatch/insurance-audit-adjacent files:
+        - `utils/period1_distance_finalizer.py` — **CLOSED, 64% → 88%** (73
+          stmts, measured via `pytest
+          tests/test_period1_distance_finalizer_coverage.py
+          tests/test_period1_distance_finalizer.py
+          --cov=utils.period1_distance_finalizer --cov-report=term-missing`).
+          Drains Period-1 (deadhead) distance accumulators into the
+          append-only insurance-period audit table — the active-ride-check
+          exception branch (conservatively doesn't finalize),
+          `db_supabase.supabase is None` early returns, one-driver-
+          exception-doesn't-abort-batch, and the entire
+          `period1_distance_finalizer_loop` wrapper were untested. Added
+          `backend/tests/test_period1_distance_finalizer_coverage.py`
+          (7 tests).
+        - `utils/driver_online.py` — **CLOSED, 70% → 100%** (33 stmts,
+          measured via `pytest tests/test_driver_online_coverage.py
+          --cov=utils.driver_online --cov-report=term-missing`). No
+          dedicated test file existed at all for this pure-function
+          intent+presence composition every dispatch reader routes
+          through. Added `backend/tests/test_driver_online_coverage.py`
+          (21 tests) covering every branch of `_parse_ts`/`intent_online`/
+          `effective_online`/`effective_available`/`filter_effective_online`.
+        - `utils/presence_sweeper.py` — **CLOSED, 73% → 94%** (33 stmts,
+          measured via `pytest tests/test_presence_sweeper_coverage.py
+          tests/test_p3_loop_jitter_metrics.py --cov=utils.presence_sweeper
+          --cov-report=term-missing`). A documented RETIRED no-op (own
+          module docstring: no longer scheduled at startup, kept only for
+          loop-jitter-test symbol stability) — the tick-exception-counts
+          branch and the `CancelledError`-must-propagate branch were
+          untested. Added `backend/tests/test_presence_sweeper_coverage.py`
+          (3 tests).
+        - Test-only across all three files, no application code changed.
+          Full suite re-run after: 8742 passed (was 8711), 8 skipped, 1
+          xfailed, 0 failed. See
+          `docs/change-log/2026-08-02-a1c-period1-finalizer-driver-online-presence-sweeper-coverage.md`.
       - Continuing from the same re-scope list, three more files picked
         from the raw Sub-tier C ranking (rider-facing fare-estimate +
         saved-route surface, plus the AI/MCP surface):

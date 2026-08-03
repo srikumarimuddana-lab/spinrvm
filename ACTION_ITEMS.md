@@ -1836,6 +1836,80 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs
           Full suite re-run after: 8742 passed (was 8711), 8 skipped, 1
           xfailed, 0 failed. See
           `docs/change-log/2026-08-02-a1c-period1-finalizer-driver-online-presence-sweeper-coverage.md`.
+      - **Batch (`ai/providers/__init__.py` from Batch 8 + `driver_onboarding_reminder_rules.py`/
+        `ai/response_cache.py` from Batch 9) — CLOSED 2026-08-03.** Deliberately
+        recombined scope per explicit task instruction — excludes Batch 9's
+        third file (`services/zoho_desk_integration.py`, still open) and
+        Batch 8's other two files (`ai/mcp_server.py`, since independently
+        closed by `claude/a1c-subtier-c-batch-fares-fav-mcp`/PR #3359;
+        `routes/disputes.py`, already closed above at 94%).
+        - `ai/providers/__init__.py` — **73.68% → 89.47%** (38 stmts, 10→4
+          missing; measured via `pytest tests/test_ai_provider_factory.py
+          tests/test_ai_provider_factory_coverage.py --cov=ai.providers
+          --cov-report=term-missing`, 13 passed). The existing test file
+          patches `_get_app_settings_fn` wholesale, so its own lazy-import
+          body never ran; the `int(ai_max_output_tokens)` cast's
+          `except (TypeError, ValueError)` fallback and
+          `_load_adapter_class`'s `except ImportError` fallback (relative
+          import failing, retried as an absolute import) were both
+          untriggered. Added `backend/tests/test_ai_provider_factory_coverage.py`
+          (5 tests): invalid/`None` max-tokens fallback, a direct unpatched
+          call to `_get_app_settings_fn()`, and the adapter-loader's
+          `ImportError` fallback forced via patching `importlib.import_module`
+          (both a unit-level check and an end-to-end `get_adapter()` call
+          through it). Remaining 4 uncovered lines are the two dual-import
+          `ImportError` fallbacks at module-import time (top-of-file `from
+          .base import ...` and inside `_get_app_settings_fn`) —
+          structurally unreachable without breaking `sys.modules` import
+          machinery, same documented pattern as every other Sub-tier B/C
+          file; this repo's `test_dual_import_parity.py` verifies these
+          structurally via AST rather than runtime coverage, which this pass
+          follows rather than works around.
+        - `utils/driver_onboarding_reminder_rules.py` — **74.00% → 100%**
+          (100 stmts, 26→0 missing; measured via `pytest
+          tests/test_driver_onboarding_reminders.py
+          tests/test_driver_onboarding_reminder_rules_coverage.py
+          --cov=utils.driver_onboarding_reminder_rules
+          --cov-report=term-missing`, 76 passed). The only existing test
+          file drives this module *indirectly* through the reminder loop,
+          whose fixture always supplies a valid timezone, dict-shaped
+          `required_documents`, and an empty `docs` list — which
+          short-circuits `missing_required_document_uploads` before
+          `doc_matches_requirement` is ever called. Added
+          `backend/tests/test_driver_onboarding_reminder_rules_coverage.py`
+          (53 tests) calling every pure function directly: `_zone`'s
+          invalid-timezone-with-warning fallback, `parse_remindable_statuses`'s
+          JSON-array (valid and invalid) and non-list-value branches,
+          `_load_list`'s string/JSON branches, `_pretty`,
+          `mandatory_requirements`'s string-item branch and the
+          previously-fully-untested `global_reqs` fallback (when the area
+          has no `required_documents`), `doc_matches_requirement` itself
+          (never called anywhere in the repo's test suite before this), and
+          `missing_required_document_uploads`'s no-requirements/superseded/
+          rejected/pending branches.
+        - `ai/response_cache.py` — **74.29% → 100%** (35 stmts, 9→0 missing;
+          measured via `pytest tests/test_ai_response_cache.py
+          tests/test_ai_response_cache_coverage.py --cov=ai.response_cache
+          --cov-report=term-missing`, 26 passed). The existing test file's
+          orchestrator-wiring tests patch `orch.response_cache.get_cached`/
+          `store_cached` entirely, so `get_cached`/`store_cached`'s own
+          `redis_get`/`redis_set`-wrapping try/except bodies (the "never
+          raises" cache-fault contract) had zero direct coverage anywhere.
+          Added `backend/tests/test_ai_response_cache_coverage.py` (5
+          tests): success, miss, and swallowed-Redis-exception paths for
+          both functions, patching `rc.redis_get`/`rc.redis_set` directly.
+        - Test-only across all three files, no application code changed, no
+          bugs found — every exception branch behaves as documented (a
+          cache read/write fault logs and falls through/returns without
+          raising; the invalid-provider and missing-API-key paths in
+          `get_adapter` still raise `AIConfigError` loudly, never a silent
+          fallback). Per this session's explicit batching instruction, the
+          full backend suite was **not** re-run — only the three new files,
+          standalone and combined with each target module's existing test
+          file (see coverage commands above), all passing with 0 collisions.
+          Full-suite/CI verification across all in-flight A1c batches is
+          deferred to a later consolidated pass. See
+          `docs/change-log/2026-08-03-a1c-subtier-c-batch-providers-onboarding-respcache-coverage.md`.
       - Continuing from the same re-scope list, three more files picked
         from the raw Sub-tier C ranking (rider-facing fare-estimate +
         saved-route surface, plus the AI/MCP surface):

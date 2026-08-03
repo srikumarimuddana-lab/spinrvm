@@ -1,0 +1,393 @@
+"""Super-admin Sentry Issues viewer (read + resolve).
+
+A thin, stateless proxy over the Sentry Web API. The admin dashboard uses it
+to let a super-admin see live issues across every Spinr surface (backend /
+rider-app / driver-app / admin), drill into an issue's latest stacktrace, and
+mark an issue resolved ("close" it). Nothing is stored server-side: every
+request hits Sentry live, and the dashboard's Refresh button simply re-calls
+these endpoints, so the data is always the current Sentry state.
+
+Config lives in ``core/config.py`` (SENTRY_API_TOKEN / SENTRY_ORG_SLUG /
+SENTRY_API_BASE_URL / SENTRY_PROJECT_*). When it's missing the read endpoints
+report ``configured: False`` (via /config) rather than pretending; the
+list/detail/resolve endpoints raise 503 so a misconfiguration surfaces loudly
+instead of silently returning nothing.
+
+Auth: mounted with ``Depends(require_super_admin)`` in routes/admin/__init__.py
+— this whole surface is super-admin only, matching the sensitivity of raw
+production error data.
+
+PIPEDA: issue titles and stacktraces can contain scrubbed-but-still-sensitive
+strings, so this module never logs issue bodies — only issue ids, project
+slugs, counts, and upstream HTTP status codes. (The events themselves were
+already PII-scrubbed by each surface's Sentry SDK before Sentry ever received
+them; this viewer just relays what Sentry holds.)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+try:
+    from ...core.config import settings
+    from ...dependencies import get_admin_user
+except ImportError:
+    from core.config import settings  # type: ignore
+    from dependencies import get_admin_user  # type: ignore
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/sentry", tags=["Sentry"])
+
+# Ordered surface -> Settings attribute holding that surface's Sentry project
+# slug. Order controls the display order of the surface tabs in the dashboard.
+_SURFACE_SETTING = (
+    ("backend", "SENTRY_PROJECT_BACKEND"),
+    ("rider-app", "SENTRY_PROJECT_RIDER"),
+    ("driver-app", "SENTRY_PROJECT_DRIVER"),
+    ("admin", "SENTRY_PROJECT_ADMIN"),
+)
+
+# Statuses the resolve endpoint accepts. "resolved" is the "close" action the
+# dashboard exposes; "ignored" (mute) and "unresolved" (reopen) round out the
+# set the same Sentry endpoint supports, so the frontend can reopen a mistake.
+_ALLOWED_STATUSES = frozenset({"resolved", "ignored", "unresolved"})
+
+# Per-project list cap. Sentry's project-issues endpoint returns one page; we
+# don't paginate here because the viewer is a triage surface, not an archive —
+# the newest `limit` issues per surface is what an operator scans. The cap is
+# surfaced to the client (`truncated` hint) so a full page never reads as
+# "that's everything".
+_MAX_LIMIT = 100
+_DEFAULT_LIMIT = 25
+
+_HTTP_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+
+
+def _surface_projects() -> Dict[str, str]:
+    """{surface: project_slug} for every surface whose project slug is set."""
+    out: Dict[str, str] = {}
+    for surface, attr in _SURFACE_SETTING:
+        slug = getattr(settings, attr, None)
+        if slug:
+            out[surface] = slug
+    return out
+
+
+def _is_configured() -> bool:
+    return bool(settings.SENTRY_API_TOKEN and settings.SENTRY_ORG_SLUG and _surface_projects())
+
+
+def _require_configured() -> None:
+    if not _is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Sentry API is not configured. Set SENTRY_API_TOKEN, "
+                "SENTRY_ORG_SLUG, and at least one SENTRY_PROJECT_* in the "
+                "backend environment."
+            ),
+        )
+
+
+def _base_url() -> str:
+    return (settings.SENTRY_API_BASE_URL or "https://sentry.io").rstrip("/")
+
+
+async def _sentry_request(
+    client: httpx.AsyncClient,
+    method: str,
+    path: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json: Optional[Dict[str, Any]] = None,
+) -> httpx.Response:
+    """Issue one authenticated Sentry API call. Raises HTTPException (never a
+    bare httpx error) so callers get a clean upstream-failure response and the
+    dashboard can retry. Never logs the response body (may hold scrubbed PII)."""
+    url = f"{_base_url()}/api/0{path}"
+    headers = {"Authorization": f"Bearer {settings.SENTRY_API_TOKEN}"}
+    try:
+        resp = await client.request(method, url, params=params, json=json, headers=headers)
+    except httpx.HTTPError as exc:
+        # PII-safe: log the path + exception type only, never issue content.
+        logger.error("[sentry] %s %s failed: %s", method, path, type(exc).__name__, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Sentry API request failed: {type(exc).__name__}") from exc
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Sentry issue or project not found")
+    if resp.status_code in (401, 403):
+        logger.error("[sentry] %s %s -> %s (check token scopes)", method, path, resp.status_code)
+        raise HTTPException(
+            status_code=502,
+            detail="Sentry rejected the API token (needs event:read + event:write). Check SENTRY_API_TOKEN scopes.",
+        )
+    if resp.status_code >= 400:
+        logger.error("[sentry] %s %s -> %s", method, path, resp.status_code)
+        raise HTTPException(status_code=502, detail=f"Sentry API returned HTTP {resp.status_code}")
+    return resp
+
+
+def _shape_issue(raw: Dict[str, Any], surface: str, project_slug: str) -> Dict[str, Any]:
+    """Normalise a Sentry issue object into the dashboard's SentryIssue shape.
+
+    Only the fields the triage view needs — no raw Sentry envelope. `count`
+    comes back from Sentry as a string; coerce so the frontend can sort/sum.
+    """
+    metadata = raw.get("metadata") or {}
+    try:
+        count = int(raw.get("count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    return {
+        "id": str(raw.get("id")) if raw.get("id") is not None else None,
+        "short_id": raw.get("shortId"),
+        "title": raw.get("title"),
+        "culprit": raw.get("culprit"),
+        # `level` is the event severity (fatal/error/warning/info/debug);
+        # `priority` is Sentry's newer high/medium/low triage field (may be
+        # absent on older orgs). The dashboard shows priority when present and
+        # falls back to level.
+        "level": raw.get("level"),
+        "priority": raw.get("priority"),
+        "status": raw.get("status"),
+        "substatus": raw.get("substatus"),
+        "count": count,
+        "user_count": raw.get("userCount"),
+        "first_seen": raw.get("firstSeen"),
+        "last_seen": raw.get("lastSeen"),
+        "permalink": raw.get("permalink"),
+        "type": metadata.get("type"),
+        "value": metadata.get("value"),
+        "surface": surface,
+        "project": project_slug,
+    }
+
+
+def _extract_exceptions(event: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Pull the exception chain + stack frames out of a Sentry event.
+
+    Sentry events carry an ``entries`` list; the ``exception`` entry holds
+    ``data.values`` (one per chained exception), each with a ``stacktrace`` of
+    frames. We flatten to a compact shape the dashboard renders directly.
+    """
+    exceptions: List[Dict[str, Any]] = []
+    for entry in event.get("entries") or []:
+        if entry.get("type") != "exception":
+            continue
+        for exc in (entry.get("data") or {}).get("values") or []:
+            frames_out: List[Dict[str, Any]] = []
+            stacktrace = exc.get("stacktrace") or {}
+            for frame in stacktrace.get("frames") or []:
+                # Sentry gives frame context as a list of [lineno, source] pairs.
+                context = frame.get("context") or []
+                context_line = None
+                for pair in context:
+                    if isinstance(pair, (list, tuple)) and len(pair) == 2 and pair[0] == frame.get("lineNo"):
+                        context_line = pair[1]
+                        break
+                frames_out.append(
+                    {
+                        "filename": frame.get("filename") or frame.get("absPath"),
+                        "function": frame.get("function"),
+                        "module": frame.get("module"),
+                        "lineno": frame.get("lineNo"),
+                        "colno": frame.get("colNo"),
+                        "in_app": frame.get("inApp"),
+                        "context_line": context_line,
+                    }
+                )
+            exceptions.append(
+                {
+                    "type": exc.get("type"),
+                    "value": exc.get("value"),
+                    "module": exc.get("module"),
+                    # Sentry orders frames oldest-first (the crashing frame is
+                    # last). Reverse so the dashboard shows the crash site on top.
+                    "frames": list(reversed(frames_out)),
+                }
+            )
+    return exceptions
+
+
+@router.get("/config")
+async def get_sentry_config(current_admin: dict = Depends(get_admin_user)) -> Dict[str, Any]:
+    """Report whether the Sentry viewer is usable and which surfaces are wired.
+
+    The dashboard calls this first: if ``configured`` is False it renders a
+    setup hint instead of firing the issue queries. Never returns the token.
+    """
+    projects = _surface_projects()
+    return {
+        "configured": _is_configured(),
+        "org": settings.SENTRY_ORG_SLUG,
+        "base_url": _base_url(),
+        "surfaces": [
+            {"surface": surface, "project": projects.get(surface), "enabled": surface in projects}
+            for surface, _ in _SURFACE_SETTING
+        ],
+    }
+
+
+async def _fetch_project_issues(
+    client: httpx.AsyncClient,
+    surface: str,
+    project_slug: str,
+    *,
+    query: str,
+    stats_period: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """List issues for one project (project-scoped endpoint takes the slug
+    directly, avoiding a project-id lookup). Sorted newest-seen first by Sentry."""
+    org = settings.SENTRY_ORG_SLUG
+    resp = await _sentry_request(
+        client,
+        "GET",
+        f"/projects/{org}/{project_slug}/issues/",
+        params={"query": query, "statsPeriod": stats_period, "limit": limit, "sort": "date"},
+    )
+    rows = resp.json()
+    if not isinstance(rows, list):
+        return []
+    return [_shape_issue(r, surface, project_slug) for r in rows]
+
+
+@router.get("/issues")
+async def list_sentry_issues(
+    surface: Optional[str] = Query(None, description="Filter to one surface; omit for all configured surfaces"),
+    status: str = Query("unresolved", description="Sentry issue status filter: unresolved | resolved | ignored"),
+    query: Optional[str] = Query(None, description="Extra Sentry search terms appended to the status filter"),
+    stats_period: str = Query("14d", description="Look-back window (e.g. 24h, 14d, 90d)"),
+    limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Live issues across the configured surfaces, tagged with which app each
+    came from. No caching — every call is a fresh Sentry read, so the
+    dashboard's Refresh is just another call with no stale state to clear."""
+    _require_configured()
+
+    projects = _surface_projects()
+    if surface is not None:
+        if surface not in projects:
+            raise HTTPException(status_code=400, detail=f"Surface '{surface}' is not configured")
+        projects = {surface: projects[surface]}
+
+    status = (status or "unresolved").strip()
+    if status not in {"unresolved", "resolved", "ignored", "muted"}:
+        raise HTTPException(status_code=400, detail="status must be one of: unresolved, resolved, ignored")
+    # Compose the Sentry search: `is:<status>` plus any extra caller terms.
+    full_query = f"is:{status}"
+    if query:
+        full_query = f"{full_query} {query.strip()}"
+
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        results = await asyncio.gather(
+            *(
+                _fetch_project_issues(client, surf, slug, query=full_query, stats_period=stats_period, limit=limit)
+                for surf, slug in projects.items()
+            )
+        )
+
+    issues: List[Dict[str, Any]] = [issue for batch in results for issue in batch]
+    # Merge across projects newest-seen first so the combined view stays useful.
+    issues.sort(key=lambda i: i.get("last_seen") or "", reverse=True)
+    # A project that returned a full page may have more behind it — flag so a
+    # full list never silently reads as "everything".
+    truncated = any(len(batch) >= limit for batch in results)
+
+    return {
+        "issues": issues,
+        "count": len(issues),
+        "surfaces": list(projects.keys()),
+        "status": status,
+        "stats_period": stats_period,
+        "per_project_limit": limit,
+        "truncated": truncated,
+    }
+
+
+@router.get("/issues/{issue_id}")
+async def get_sentry_issue(
+    issue_id: str,
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Full detail for one issue, including the latest event's exception
+    stacktrace, so the operator can diagnose without leaving the dashboard."""
+    _require_configured()
+    org = settings.SENTRY_ORG_SLUG
+
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        # The issue metadata and its latest event are independent reads.
+        issue_resp, event_resp = await asyncio.gather(
+            _sentry_request(client, "GET", f"/organizations/{org}/issues/{issue_id}/"),
+            _sentry_request(client, "GET", f"/organizations/{org}/issues/{issue_id}/events/latest/"),
+        )
+
+    raw_issue = issue_resp.json()
+    event = event_resp.json()
+
+    # Resolve which surface this issue belongs to from its project slug.
+    slug_to_surface = {slug: surf for surf, slug in _surface_projects().items()}
+    project_slug = (raw_issue.get("project") or {}).get("slug") or ""
+    surface = slug_to_surface.get(project_slug, "unknown")
+
+    shaped = _shape_issue(raw_issue, surface, project_slug)
+    shaped["exceptions"] = _extract_exceptions(event)
+    shaped["event_id"] = event.get("id")
+    shaped["event_timestamp"] = event.get("dateCreated") or event.get("dateReceived")
+    # Event-level tags (already PII-scrubbed at capture) help triage: env,
+    # release, domain, etc. Relay them as-is; they contain only ids per our
+    # Sentry tag conventions.
+    shaped["tags"] = event.get("tags") or []
+    return shaped
+
+
+class UpdateIssueStatusRequest(BaseModel):
+    status: str = Field(..., description="resolved (close) | ignored (mute) | unresolved (reopen)")
+
+
+@router.post("/issues/{issue_id}/status")
+async def update_sentry_issue_status(
+    issue_id: str,
+    body: UpdateIssueStatusRequest,
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Change an issue's status. The dashboard's "Close" action sends
+    ``resolved``; reopen/mute reuse the same endpoint. Requires the token to
+    hold event:write."""
+    _require_configured()
+    new_status = (body.status or "").strip()
+    if new_status not in _ALLOWED_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status must be one of: {', '.join(sorted(_ALLOWED_STATUSES))}",
+        )
+
+    org = settings.SENTRY_ORG_SLUG
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        resp = await _sentry_request(
+            client,
+            "PUT",
+            f"/organizations/{org}/issues/{issue_id}/",
+            json={"status": new_status},
+        )
+
+    updated = resp.json() if resp.content else {}
+    # Audit trail: who changed what to what. PII-safe — issue id + status only.
+    logger.info(
+        "[sentry] issue %s -> %s by admin %s",
+        issue_id,
+        new_status,
+        current_admin.get("id"),
+    )
+    return {
+        "id": issue_id,
+        "status": updated.get("status", new_status),
+        "status_details": updated.get("statusDetails") or {},
+    }

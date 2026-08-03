@@ -168,6 +168,97 @@ export const walletAdjust = (
         { method: "POST", body: JSON.stringify(body) }
     );
 
+// Corporate + admin portal review, round 2: "no portfolio-level view of
+// corporate wallet risk."
+export type WalletRiskFlag = "negative_balance" | "at_floor" | "below_autotopup_threshold" | "low_balance_no_autotopup";
+
+export interface WalletRiskEntry {
+    wallet_id: string;
+    company_id: string;
+    company_name: string | null;
+    company_status: string | null;
+    balance: string;
+    soft_negative_floor: string;
+    auto_topup_enabled: boolean;
+    risk_flags: WalletRiskFlag[];
+}
+
+export interface WalletRiskPortfolio {
+    total_wallets: number;
+    flagged_count: number;
+    wallets: WalletRiskEntry[];
+}
+
+export const getWalletRiskPortfolio = () =>
+    request<WalletRiskPortfolio>("/api/admin/corporate-accounts/wallet-portfolio");
+
+/* ── Corporate KYB re-verification staleness (round 2) — visibility
+   only, never auto-changes a company's status. ── */
+export interface KybReverificationCompany {
+    id: string;
+    name: string | null;
+    legal_name: string | null;
+    kyb_reviewed_at: string | null;
+    kyb_reviewed_by: string | null;
+}
+
+export interface KybReverificationDue {
+    threshold_months: number;
+    count: number;
+    companies: KybReverificationCompany[];
+}
+
+export const getKybReverificationDue = () =>
+    request<KybReverificationDue>("/api/admin/corporate-accounts/kyb-reverification-due");
+
+/* ── Corporate subscription billing (flat SaaS, round 2) ── */
+export type CorporateSubscriptionStatus = "active" | "past_due" | "cancelled";
+
+export interface CorporateSubscriptionPlan {
+    id: string;
+    name: string;
+    monthly_price: string;
+    description?: string | null;
+    is_active: boolean;
+}
+
+export interface CorporateSubscription {
+    id: string;
+    company_id: string;
+    plan_id: string | null;
+    plan_name: string;
+    price: string;
+    status: CorporateSubscriptionStatus;
+    current_period_end: string | null;
+    cancel_at_period_end: boolean;
+    started_at: string;
+    cancelled_at: string | null;
+    created_at: string;
+}
+
+export interface CompanySubscriptionResponse {
+    current: CorporateSubscription | null;
+    history: CorporateSubscription[];
+}
+
+export const getCorporateSubscriptionPlans = () =>
+    request<{ plans: CorporateSubscriptionPlan[] }>("/api/admin/corporate-accounts/subscription-plans");
+
+export const getCompanySubscription = (companyId: string) =>
+    request<CompanySubscriptionResponse>(`/api/admin/corporate-accounts/${companyId}/subscription`);
+
+export const assignCompanySubscription = (companyId: string, planId: string) =>
+    request<CorporateSubscription>(`/api/admin/corporate-accounts/${companyId}/subscription`, {
+        method: "POST",
+        body: JSON.stringify({ plan_id: planId }),
+    });
+
+export const cancelCompanySubscription = (companyId: string, atPeriodEnd: boolean = true) =>
+    request<CorporateSubscription>(`/api/admin/corporate-accounts/${companyId}/subscription/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ at_period_end: atPeriodEnd }),
+    });
+
 /* ── Corporate members / allowances (Plan 3) ── */
 export type CorporateMemberRole = "owner" | "admin" | "member";
 export type CorporateMemberStatus = "invited" | "active" | "suspended" | "removed";
@@ -346,6 +437,11 @@ export interface BillingMemberBreakdown {
     total: number;
 }
 
+// Corporate + admin portal review, round 2: "no GST/PST breakdown on
+// corporate statements" — tax_total / tax_by_type surface what was
+// already computed and stored per-ride, for input-tax-credit reconciliation.
+export type TaxByType = Record<string, number>;
+
 export interface BillingSummary {
     month: string;
     wallet_balance: number;
@@ -355,6 +451,8 @@ export interface BillingSummary {
     master_total: number;
     total: number;
     avg_fare: number;
+    tax_total: number;
+    tax_by_type: TaxByType;
     by_member: BillingMemberBreakdown[];
 }
 
@@ -366,6 +464,8 @@ export interface BillingLineItem {
     master_fallback_amount: number;
     policy_check_result?: string;
     created_at: string;
+    tax_amount?: number;
+    tax_breakdown?: Record<string, { rate: number; amount: number }>;
 }
 
 export interface BillingStatement {
@@ -379,6 +479,8 @@ export interface BillingStatement {
         master_total: number;
         total: number;
         avg_fare: number;
+        tax_total: number;
+        tax_by_type: TaxByType;
         by_member: BillingMemberBreakdown[];
     };
 }

@@ -3509,8 +3509,25 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.
-- [ ] **D7. Admin analytics Redis cache** — 5-min cache on cancellation-breakdown
-  (`routes/admin/analytics.py:72`), drops dashboard DB load ~98%.
+- [x] **D7. Admin analytics Redis cache** — done: `GET /admin/analytics/cancellation-reasons`
+  now caches its response for 5 minutes (`_OVERVIEW_CACHE_TTL`, same TTL
+  constant `/overview` already used — reused rather than duplicated), exact
+  same `redis_get`/corrupt-cache-fallthrough/`redis_set`-with-fail-open
+  pattern as the existing `/overview` endpoint (F-50). Cache key includes
+  both `date_range` and `service_area_id` (`analytics:cancellation-reasons:{date_range}:{service_area_id or 'all'}`)
+  so two different service-area filters don't collide on one cached entry.
+  Updated the 3 existing tests in
+  `tests/test_admin_analytics_coverage.py::TestCancellationReasons` to
+  explicitly patch `redis_get`/`redis_set` (matching `TestAnalyticsOverview`'s
+  own established convention) — without this, the module-level in-memory
+  redis fallback (no `REDIS_URL` in the test env) would have let one test's
+  cached result leak into a later test with the same default-params cache
+  key and silently skip exercising its mocked RPC path, the same class of
+  test-pollution bug already tracked as A8. Added 4 new tests mirroring
+  `TestAnalyticsOverview`'s own cache-specific cases (cache hit skips the
+  RPC entirely, corrupt cache falls through, different `service_area_id`
+  values get different cache keys, a `redis_set` failure doesn't turn a
+  200 into a 500). **Verification deferred to the end-of-batch run.**
 - [ ] **D8. Payment-retry admin alert via WS broadcast** — replace per-admin push loop
   (`utils/payment_retry.py:80`) with one `broadcast_to_admins`.
 - [ ] **D9. `compliance_export_events` has no purge job for its claimed 7-year

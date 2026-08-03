@@ -82,10 +82,10 @@ jobs:
           - { dir: rider-app, appId: com.spinr.user, flows: .maestro/rider }
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup EAS
-        uses: expo/expo-github-action@v8
+        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
@@ -117,7 +117,23 @@ jobs:
         run: curl -fL -o app.apk "${{ steps.build.outputs.build_url }}"
 
       - name: Install Maestro CLI
+        env:
+          # Pinned rather than tracking whatever "latest" resolves to at
+          # run time — reduces (does not eliminate) the supply-chain risk
+          # of Maestro's install script silently changing what a bare
+          # `curl | bash` fetches on a future run. Bump deliberately, not
+          # automatically, same spirit as this repo's pinned
+          # requirements-locked.txt for Python deps.
+          MAESTRO_VERSION: "1.39.0"
         run: |
+          # Maestro does not publish a separate checksum/signature for this
+          # installer to verify against — get.maestro.mobile.dev is their
+          # own documented official install method (.maestro/README.md
+          # already uses this exact command for local dev), so
+          # download-then-verify isn't available here the way it would be
+          # for a release artifact with a published SHA256SUMS file.
+          # Version-pinning above is the practical mitigation actually
+          # available; this is an accepted residual risk, not an oversight.
           curl -Ls "https://get.maestro.mobile.dev" | bash
           # The installer puts the binary at $HOME/.maestro/bin — on a
           # GitHub-hosted runner that's /home/runner, not /root; appending
@@ -140,7 +156,7 @@ jobs:
 
       - name: Upload EAS build metadata (debugging aid on failure)
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: eas-build-json-${{ matrix.app.dir }}
           path: ${{ matrix.app.dir }}/eas-build.json

@@ -15,6 +15,13 @@ title = "Spinr Gitleaks Config"
 [extend]
 useDefault = true
 
+# NOT the only gitleaks config in the repo. `admin-dashboard/.gitleaks.toml`
+# covers the ci.yml `deploy-admin` build-output scan, which needs
+# `[[allowlists]]` blocks that cannot be added here: gitleaks rejects a config
+# mixing `[allowlist]` (used below) with `[[allowlists]]`, and 8.18.4 — pinned
+# by G5b — silently ignores `[[allowlists]]` entirely, so converting this file
+# would fail open and disarm every suppression below. See that file's header
+# for the verification. Revisit once G5a/G5b are on a pinned >= 8.19.
 [allowlist]
 description = "Dev testing false-positive suppressions"
 

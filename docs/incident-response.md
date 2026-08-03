@@ -67,6 +67,7 @@ Post-mortem ≤ 72h (blameless)
 
 | Scenario | Runbook |
 |---|---|
+| Who gets paged, when, and rotation policy | `docs/runbooks/on-call.md` |
 | Supabase unavailable | `docs/runbooks/supabase-down.md` |
 | Redis unavailable | `docs/runbooks/redis-down.md` |
 | Stripe reconciliation delta | `docs/runbooks/stripe-reconciliation.md` |

@@ -3626,9 +3626,27 @@ how much they de-risk a public launch._
 - [ ] **E11. a11y checks in CI** — WCAG 2.1 AA is a stated regulatory mandate and
   axe is already in admin-dashboard devDeps, but nothing runs it in CI. Wire
   axe into the Playwright E2E suite for the customer-facing surfaces.
-- [ ] **E12. On-call & escalation policy doc** — PagerDuty is referenced by
-  alerts, but there is no rotation/escalation/severity-matrix document. One page:
-  who is paged, when P0 vs P1, response-time expectations (support SLA says <2h P1).
+- [x] **E12. On-call & escalation policy doc** — done: new
+  `docs/runbooks/on-call.md`. Found while writing it: this repo already had
+  a substantial Severity Ladder + escalation flow + roles table inside
+  `docs/incident-response.md` — the genuinely missing piece was "who" (a
+  rotation roster) and a single page a newly-paged engineer can read
+  standalone, not a from-scratch severity matrix. Explicitly reconciles the
+  **two separate severity vocabularies already in this codebase** that the
+  item's own "P0 vs P1" phrasing conflates: engineering-incident SEV-1..4
+  (`docs/incident-response.md`) vs support-ticket P0..P3
+  (`CLAUDE.md`'s KPI table) — states plainly that a P1 support ticket does
+  not auto-page, only a SEV-1/SEV-2 does, plus a support→engineering
+  escalation path for the case where a ticket turns out to be a live
+  incident. Restates (does not redefine) the existing escalation ladder and
+  response-time targets from `docs/incident-response.md`/
+  `docs/runbooks/sos-incident.md`/`CLAUDE.md`, explicitly marked as
+  secondary to those sources so they can't silently drift apart. **The
+  rotation roster itself is left as an explicit fillable table (cadence,
+  handoff time, PagerDuty schedule link, escalation-policy name), not
+  invented** — no real names/schedule exist in this repo to draw from, and
+  fabricating them would be actively misleading in an ops document. Linked
+  from `docs/incident-response.md`'s Runbook Index. Docs-only, no code.
 
 ## Recently completed (do not redo)
 

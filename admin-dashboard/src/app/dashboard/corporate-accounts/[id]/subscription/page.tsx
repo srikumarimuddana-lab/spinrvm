@@ -167,7 +167,7 @@ export default function CompanySubscriptionPage() {
                             <div className="text-sm text-muted-foreground space-y-1">
                                 <p>Current period ends: {formatDate(current.current_period_end)}</p>
                                 {current.cancel_at_period_end && (
-                                    <p className="text-amber-700">
+                                    <p className="text-amber-700 dark:text-amber-400">
                                         Cancels at period end — access continues until then.
                                     </p>
                                 )}
@@ -181,7 +181,7 @@ export default function CompanySubscriptionPage() {
                                 <Button
                                     variant="outline"
                                     size="sm"
-                                    className="text-red-700 ml-auto"
+                                    className="text-destructive ml-auto"
                                     disabled={cancelling || current.status === "cancelled"}
                                     onClick={handleCancel}
                                 >

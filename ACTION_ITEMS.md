@@ -1235,14 +1235,43 @@ _Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C freshly itemized via a re
         stmts), `services/driver_import_service.py` (70.34%, 381 stmts —
         largest file in this batch), `utils/quest_tracker.py` (70.42%, 71
         stmts).
-      - **Batch 5:** `utils/redis_diag.py` (71.43%, 112 stmts — admin
-        diagnostics), `routes/drivers/ride_complete.py` (71.75%, 400 stmts
-        — trip-completion/fare-settlement-kickoff/earnings-snapshot;
-        natural companion to the already-closed `ride_flow.py`/
-        `ride_cancel.py`/`ride_reads.py` triplet from the same package,
-        money-adjacent, recommend treating at Sub-tier-A urgency despite
-        living in this list), `utils/meta_capi.py` (72.37%, 152 stmts —
-        Meta Conversions API marketing integration).
+      - **Batch 5** — **CLOSED 2026-08-03.** `utils/redis_diag.py` 71.43% →
+        **99%** (112 stmts, 32→1 missing), `routes/drivers/ride_complete.py`
+        71.75% → **96%** (400 stmts, 113→15 missing — trip-completion/fare-
+        settlement-kickoff/earnings-snapshot; natural companion to the
+        already-closed `ride_flow.py`/`ride_cancel.py`/`ride_reads.py`
+        triplet from the same package, treated at Sub-tier-A urgency as
+        recommended), `utils/meta_capi.py` 72.37% → **100%** (152 stmts,
+        42→0 missing — Meta Conversions API marketing integration). Measured
+        via `pytest tests/test_meta_capi_transport_coverage.py
+        tests/test_meta_conversions.py tests/test_redis_diag_coverage.py
+        tests/test_redis_diag.py tests/test_ride_complete_coverage.py
+        tests/test_rides.py tests/test_ride_completion_location.py
+        --cov=utils.meta_capi --cov=utils.redis_diag
+        --cov=routes.drivers.ride_complete --cov-report=term-missing` (205
+        passed). Added `backend/tests/test_meta_capi_transport_coverage.py`
+        (new — HTTP transport error/malformed-response branches),
+        `backend/tests/test_redis_diag_coverage.py` (new — diagnostic-probe
+        error paths), `backend/tests/test_ride_complete_coverage.py` (new,
+        largest file in this batch — every non-fatal side-branch in
+        `complete_ride` — breadcrumb-flush failure, GPS-aggregation
+        fallback, the ride_routes 3-attempt retry loop and its own
+        status-write failure, quest-progress scheduling failure, milestone
+        compression check, first-ride Meta activation — plus
+        `_completion_fix_rejection`'s remaining branches and
+        `_fire_driver_activated`'s both-imports-fail/spawn-raises paths).
+        Test-only, no application code changed. **No bugs found** in
+        `redis_diag.py` or `meta_capi.py`. One coverage-instrumentation note
+        for `ride_complete.py`: `_completion_fix_rejection`'s
+        `invalid_capture_time` branch is unreachable via the public API
+        surface — `CompletionFix.captured_at` is pydantic-typed `datetime`,
+        so a non-parseable string is rejected at model construction before
+        that branch's own `parse_iso_utc(None)` check would ever run;
+        exercised directly with a raw stand-in object instead (same
+        "structurally near-impossible to reach through this harness" class
+        as the dual-import fallback lines already documented elsewhere in
+        this backlog). Full log:
+        `docs/change-log/2026-08-03-a1c-subtier-c-batch-redis-ride-meta-coverage.md`.
       - **Batch 6:** `utils/preauth_capture.py` (72.41%, 87 stmts — Stripe
         pre-authorization capture, payment-adjacent), `utils/presence_sweeper.py`
         (72.73%, 33 stmts — **flag: this module is explicitly documented

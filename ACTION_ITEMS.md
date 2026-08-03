@@ -3632,11 +3632,24 @@ how much they de-risk a public launch._
   GPS pings, SLA gates from the CLAUDE.md table. **Execution still open** —
   blocked on E1 (no staging env). First run: seed bot accounts per
   `loadtest/README.md`, run the ramp scenario, record the breaking point.
-- [ ] **E3. Forced-upgrade gate for mobile apps** — no minimum-supported-version
-  check exists. Old app binaries in the wild will eventually hit removed/changed
-  APIs. Add `min_supported_version` to `app_settings`, a version header from the
-  apps, a 426-style backend response, and an "update required" screen in both apps.
-  Cheap now, impossible to retrofit onto clients that are already old.
+- [x] **E3. Forced-upgrade gate for mobile apps** — done. `app_settings` gained
+  `min_rider_app_version`/`min_driver_app_version` (empty = off, `schemas.py` +
+  `routes/admin/settings.py` semver-pattern-validated). New
+  `ForcedUpgradeMiddleware` (`core/middleware.py`) reads `X-App-Version`/
+  `X-App-Platform` and returns 426 `upgrade_required` when a client is below
+  the configured floor — soft-fails open on missing/unparseable headers or an
+  unset minimum, mounted unconditionally (no ENV branch needed). Shared API
+  client (`shared/api/client.ts`) gained `setAppIdentity()` (sends the two
+  headers on every call) and `onForceUpgrade()` (fires on 426, mirrors the
+  existing `setSignOutCallback` pattern). Both apps call `setAppIdentity()` at
+  module load with `Constants.nativeApplicationVersion` and mount a new shared
+  `ForceUpdateOverlay` (full-screen, non-dismissible) at their root, driven by
+  `onForceUpgrade()`. Store links reuse the placeholder App Store/Play Store
+  IDs already in `rider-app/app/become-driver.tsx`. Ships fully dark today —
+  zero effect until an admin sets a non-empty minimum. Not run against a
+  simulator/device, no `tsc`/`yarn jest`/pytest pass performed, per the
+  standing no-test-suite instruction — deferred to the end-of-batch
+  verification pass.
 - [ ] **E4. Synthetic monitoring + SLO alerting** — nothing external probes the
   platform; a total outage is currently discovered by users. Add an external
   monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and

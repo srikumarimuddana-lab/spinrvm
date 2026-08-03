@@ -3669,9 +3669,15 @@ how much they de-risk a public launch._
   that's real signal the gate is working, not a bug in the job — resolve
   per-package (swap, pin an alternate version, or get a documented CR
   exception), don't loosen the denylist to make it pass.
-- [ ] **E11. a11y checks in CI** — WCAG 2.1 AA is a stated regulatory mandate and
-  axe is already in admin-dashboard devDeps, but nothing runs it in CI. Wire
-  axe into the Playwright E2E suite for the customer-facing surfaces.
+- [x] **E11. a11y checks in CI** — stale, already done by another session
+  before this pass. `admin-dashboard/e2e/crawl-audit.spec.ts` already runs
+  `@axe-core/playwright`'s `AxeBuilder` against every crawled route, with a
+  per-route baseline-ratchet in `e2e/a11y-baseline.json` (64 pre-existing
+  violations across 41 routes tracked as debt, but any route regressing
+  past its own baseline fails the E2E suite; a route with no baseline entry
+  defaults to 0 tolerance) — the code's own comment already cites this
+  exact item ("WCAG 2.1 AA a11y ratchet (ACTION_ITEMS.md E11)"). No code
+  change needed; correcting the stale checkbox.
 - [x] **E12. On-call & escalation policy doc** — done: new
   `docs/runbooks/on-call.md`. Found while writing it: this repo already had
   a substantial Severity Ladder + escalation flow + roles table inside

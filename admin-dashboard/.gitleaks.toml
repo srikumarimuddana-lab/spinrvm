@@ -3,6 +3,30 @@
 # Scope: this file is ONLY used for scanning `.next/` — the compiled Next.js
 # build output — not the source tree. Do not point repo-wide scans at it.
 #
+# WHY THIS IS SEPARATE FROM THE ROOT /.gitleaks.toml — do not "consolidate" the
+# two without re-checking this. The entries below need `[[allowlists]]` blocks
+# (for `condition = "AND"`, which scopes the generic `encryptionKey` pattern to
+# the manifests it may appear in). Two constraints make that unsafe in the root
+# file:
+#
+#   1. gitleaks refuses a config containing both `[allowlist]` and
+#      `[[allowlists]]` ("[allowlist] is deprecated, it cannot be used
+#      alongside [[allowlists]]"). The root file uses `[allowlist]`, so
+#      adding these there means converting its existing suppressions too.
+#   2. gitleaks 8.18.4 — the version pinned by G5b in security-gates.yml —
+#      **silently ignores** `[[allowlists]]`. It loads such a config without
+#      error and applies none of the suppressions. Verified 2026-08-03 against
+#      both binaries: an `sk_test_` key allowlisted via `[[allowlists]]` is
+#      suppressed by 8.27.2 and reported by 8.18.4.
+#
+# So converting the root file would silently disarm every suppression it
+# currently provides to G5b, and to G5a (gitleaks-action@v2, whose bundled
+# version we do not pin) — turning the history scan back into the ~44k-finding
+# noise wall its comments describe. Failing open, with no error.
+#
+# Consolidating is fine once G5a and G5b are both on >= 8.19 with a pinned,
+# verified version. Until then, keep them separate.
+#
 # The gate exists to catch a real secret (a Supabase service_role key, a Stripe
 # secret key, an admin password) reaching a deployed bundle — typically via an
 # `NEXT_PUBLIC_*` var or a hardcoded literal. Every allowlist below suppresses a

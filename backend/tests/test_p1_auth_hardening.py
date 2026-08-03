@@ -76,7 +76,7 @@ class TestProductionStartupGuards:
             "SUPABASE_URL": "https://test.supabase.co",
             "SUPABASE_SERVICE_ROLE_KEY": "test_key",
             "JWT_SECRET": "a" * 32,  # 32 chars — just enough
-            "ADMIN_PASSWORD": "StrongPass123!",
+            "ADMIN_PASSWORD": "StrongPass123!ExtraLong",  # >=20 chars — just enough
             "FIREBASE_DRIVER_APP_ID": "driver-app-id",
             "FIREBASE_RIDER_APP_ID": "rider-app-id",
             "SUPABASE_REGION": "ca-central-1",

@@ -622,3 +622,85 @@ return [...global fallback...]
 ### 10. What was NOT verified
 
 - Did not check production data for how many service areas, if any, currently have a `required_documents` list with every entry marked not-required — the practical prevalence of the previously-silently-overridden config state is unknown.
+
+---
+
+## Entry 9 — `core/config.py`: ADMIN_PASSWORD missing length check (security, explicit user approval obtained)
+
+> **⚠️ DEPLOYMENT RISK — READ BEFORE MERGING.** This change makes backend
+> startup **fail immediately** in production if the currently-deployed
+> `ADMIN_PASSWORD` env var (Railway and/or Fly.io) is shorter than 20
+> characters. **Verify the current production `ADMIN_PASSWORD` value's
+> length in both deploy targets before merging this PR** — if it's short,
+> rotate it to a ≥20-char value first (`python -c 'import secrets; print(secrets.token_urlsafe(24))'`),
+> or this fix will take the API down on next deploy.
+
+### 1. Issue / gap identified
+
+`core/config.py::Settings._guard_production_secrets` validated `ADMIN_PASSWORD` only against 3 hardcoded known-weak literal strings (`"admin123"`, `"password"`, `"changeme"`) — unlike `JWT_SECRET`, which additionally gets a ≥32-char minimum-length check in the same validator. A production deploy with `ADMIN_PASSWORD=x` (or any short-but-not-literally-listed password) passed this guard cleanly. Separately, `core/middleware.py::_validate_production_config` *does* enforce a 20-char minimum on the same field — but that's a different guard, invoked from a different place (`init_middleware`), not the one embedded in `Settings` itself.
+
+### 2. Root cause
+
+The `_guard_production_secrets` validator's weak-literal check and JWT_SECRET's length check were both present, but no equivalent length check was ever added for `ADMIN_PASSWORD` in this specific validator — an omission, not a deliberate design choice (the sibling `middleware.py` guard shows the intended minimum was already decided at 20 chars elsewhere in the codebase).
+
+### 3. Fix / remediation
+
+**User was asked explicitly via `AskUserQuestion` before this fix was applied**, given the security-sensitivity and production-startup-risk of the change; the user approved adding a 20-char minimum matching `middleware.py`. `_guard_production_secrets` now raises `ValueError` if `len(ADMIN_PASSWORD) < 20` in production, with the same error-message style as the existing `JWT_SECRET` check (states the actual length, suggests a `secrets.token_urlsafe` generation command).
+
+### 4. Risk & impact on existing functionality
+
+- **Blast radius: this validator runs on every `Settings()` construction in production mode** (`ENV=="production"`), which is exactly the point of the fix (defense-in-depth vs. `middleware.py`'s separate, skippable guard) — but it also means **this is the highest-risk fix in this entire batch**, because it can turn a previously-successful production startup into a crash if the currently-deployed `ADMIN_PASSWORD` happens to be short.
+- Grepped the full backend test suite for other places constructing a production-mode `Settings()`: found and fixed one pre-existing regression in `tests/test_p1_auth_hardening.py::TestProductionStartupGuards._make_settings` (its baseline `ADMIN_PASSWORD` was `"StrongPass123!"`, 14 chars — would have failed every test built on that fixture). No other production-mode `Settings()` construction sites found in the test suite.
+- Non-production environments (`ENV != "production"`, which is every local/dev/test/staging-if-not-flagged-production run) are completely unaffected — the entire `_guard_production_secrets` validator early-returns before this check for any non-production `ENV`.
+
+### 5. User-experience effect
+
+None directly rider/driver/corporate-admin-facing — this is a backend startup-time guard. Internal-admin-facing risk: **if the actual deployed production `ADMIN_PASSWORD` is currently shorter than 20 characters, this change will prevent the backend from starting on the next deploy** until that env var is rotated to a longer value. See the deployment-risk callout at the top of this entry.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/core/config.py` | `_guard_production_secrets` now raises if `ADMIN_PASSWORD` is under 20 characters in production | Close the found-not-fixed security gap, per explicit user approval |
+| `backend/tests/test_core_config_coverage.py` | Renamed/updated the pinned "found not fixed" test into a positive assertion of the new guard; added boundary tests (19 vs. 20 chars) | Reflect the fix |
+| `backend/tests/test_p1_auth_hardening.py` | Fixed a pre-existing test fixture whose baseline `ADMIN_PASSWORD` ("StrongPass123!", 14 chars) would have failed under the new guard | Regression found during blast-radius verification |
+
+### 7. Before / after
+
+```python
+# Before — only a fixed weak-literal check, no length check
+weak = {
+    "JWT_SECRET": ("your-strong-secret-key",),
+    "ADMIN_PASSWORD": ("admin123", "password", "changeme"),
+}
+# ... (JWT_SECRET length check follows, but nothing equivalent for ADMIN_PASSWORD)
+
+# After — length check added, mirroring the JWT_SECRET pattern
+admin_password = self.ADMIN_PASSWORD or ""
+if len(admin_password) < 20:
+    raise ValueError(
+        f"ADMIN_PASSWORD must be at least 20 characters in production "
+        f"(got {len(admin_password)}). Matches core/middleware.py's "
+        "_validate_production_config check. Generate one with: "
+        "python -c 'import secrets; print(secrets.token_urlsafe(24))'"
+    )
+```
+
+### 8. Rollback plan
+
+- **Not revertible without also checking live data first** in the sense that matters here: this is a startup guard, not a data mutation, so `git revert` alone is safe from a *data* perspective — but if this fix is merged and deployed while the live `ADMIN_PASSWORD` is short, the **correct incident response is to rotate the env var to a ≥20-char value** (not revert the code), since the guard is doing exactly what it's supposed to.
+- If the fix itself needs to be rolled back (e.g. it's blocking a deploy and there's no time to rotate the secret first): `git revert` is safe and instant — it only removes a startup-time validation, touches no persisted data, no migration, no wallet/Stripe state.
+- **Action required before merge**: verify current production `ADMIN_PASSWORD` length on both Railway and Fly.io deploy targets (see CLAUDE.md's Deployment section — both run from `main` in parallel). If short, rotate first.
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_core_config_coverage.py tests/test_p1_auth_hardening.py tests/test_middleware_production_config_guard.py tests/test_admin_routes_auth.py -q` — 72 passed.
+- [x] Blast-radius grep performed: searched the full test suite for other production-mode `Settings()` construction sites; found and fixed one regression (see section 6).
+- [x] User explicitly approved this specific fix via `AskUserQuestion` before it was applied, given the security-sensitivity and deployment risk.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+- [ ] **Production `ADMIN_PASSWORD` length NOT verified against live Railway/Fly env vars** — this session has no access to production secrets. Flagged as a required pre-merge check, not completed.
+
+### 10. What was NOT verified
+
+- **Production `ADMIN_PASSWORD`'s actual current length** — this is the single most important unverified item in this entire change-log. Confirm before merging (see the risk callout at the top of this entry).
+- Did not check whether any other internal script or CI job constructs `Settings()` with `ENV=production` outside the test suite (e.g. a one-off ops script) that might also be affected — only the pytest suite was grepped.

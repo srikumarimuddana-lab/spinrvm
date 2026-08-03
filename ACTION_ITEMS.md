@@ -3245,11 +3245,21 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   before building the card, returning a structured `{"error": ...}` result
   on failure (same shape as the existing out-of-area refusal); the
   Confirm-time validator in `schemas.py` is unchanged (defense in depth).
-- [ ] **AI5. `find_place` offers out-of-service-area street addresses** —
-  the area filter is skipped for street-address-shaped queries
-  (`tools_booking.py:538-539`), so a rider can pick a location the booking
-  step later refuses. Filter (or visibly mark) out-of-area candidates for
-  street queries too.
+- [x] **AI5. `find_place` offers out-of-service-area street addresses** —
+  done: chose **visibly mark** over **filter** — a hard filter risked
+  silently returning zero results for a legitimate numbered address just
+  outside the boundary (unlike a named-place search, a street address
+  usually has no in-area fallback candidate to substitute), so the
+  candidate stays in the result but `find_place` now checks
+  `best.get("in_service_area")` for street-address-shaped queries and, when
+  false, sets `result["out_of_service_area"] = True` plus an explicit note
+  telling the model not to quote/book it and to tell the rider it's outside
+  coverage — same warning-note pattern already used right above it for the
+  imprecise-address case. 3 new tests in `tests/test_ai_tools_booking.py::TestFindPlace`
+  (out-of-area street address marked but not dropped, in-area street
+  address unflagged, named-place search keeps its pre-existing hard
+  filter unchanged). Full `test_ai_tools_booking.py` suite (97 tests)
+  passes.
 - [ ] **AI6. No handling for pasted Google Maps URLs / raw coordinates** —
   bare `lat,lng` is scrubbed to `[COORDS]` before the model sees it
   (`pii.py:33`) with no prompt rule for the token; short links carry no

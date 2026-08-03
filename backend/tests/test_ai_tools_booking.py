@@ -440,6 +440,59 @@ class TestFindPlace:
         assert cand["lat"] == 52.1708
 
     @pytest.mark.anyio
+    async def test_out_of_area_street_address_is_marked_not_dropped(self):
+        # ACTION_ITEMS.md AI5: the in_service_area filter is deliberately
+        # skipped for street-address queries (a specific numbered address
+        # has no fallback candidate the way a named-place search does), but
+        # an out-of-area one must still be visibly flagged -- not silently
+        # returned as if it were bookable.
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(GEOCODE_OK),
+            _patch_area(area=None),
+            _patch_last_ride(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
+        assert ok
+        # still returned, not filtered out
+        assert result["candidates"]
+        assert result["candidates"][0]["in_service_area"] is False
+        assert result["out_of_service_area"] is True
+        assert "outside spinr's service area" in result["note"].lower()
+
+    @pytest.mark.anyio
+    async def test_in_area_street_address_is_not_flagged(self):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(GEOCODE_OK),
+            _patch_area(),
+            _patch_last_ride(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
+        assert ok
+        assert result["candidates"][0]["in_service_area"] is True
+        assert "out_of_service_area" not in result
+
+    @pytest.mark.anyio
+    async def test_out_of_area_named_place_is_still_filtered_out(self):
+        # A non-street query keeps the pre-existing hard filter -- AI5 only
+        # changes behavior for street-address-shaped queries.
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(PLACES_OK),
+            _patch_area(area=None),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "walmart"}, user=RIDER)
+        assert ok
+        assert result["candidates"] == []
+
+    @pytest.mark.anyio
     async def test_biases_search_to_last_ride_pickup_when_no_near_args(self):
         with (
             _patch_settings(),

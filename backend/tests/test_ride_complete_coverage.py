@@ -474,6 +474,15 @@ class TestFireDriverActivated:
     def test_both_import_paths_failing_is_swallowed(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setitem(sys.modules, "backend.services.meta_conversions_service", None)
         monkeypatch.setitem(sys.modules, "services.meta_conversions_service", None)
+        # Whether or not the sys.modules poisoning above actually forces both
+        # import attempts to fail (it's fragile — it depends on neither name
+        # already being cached under a *different* key at collection time),
+        # mock spawn() too so a real send_driver_activated() coroutine can
+        # never leak un-awaited into the GC if the import happens to succeed
+        # anyway. An un-awaited coroutine here previously surfaced as a
+        # PytestUnraisableExceptionWarning attributed to a LATER, unrelated
+        # test — see CLAUDE.md-documented Sub-tier C Batch 5 change log.
+        monkeypatch.setattr(ride_complete, "spawn", _spawn_close)
         # Must not raise.
         ride_complete._fire_driver_activated(_driver(), {"id": _USER_ID}, _ride())
 

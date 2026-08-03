@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C freshly itemized via a re-run coverage scan: 38 files (5635 stmts) in the 60-80% band, batched ≤3 files/subtask, replacing the prior stale "55 files, not itemized" note; `utils/payment_retry.py` (independently closed by a concurrent session to 99% during this scan) reconciled in rather than overwritten. Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs" CLOSED: `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100% (test-only, no bugs found). Prior 2026-08-02: A1c (Track 2) Sub-tier C freshly itemized via a re-run coverage scan: 38 files (5635 stmts) in the 60-80% band, batched ≤3 files/subtask, replacing the prior stale "55 files, not itemized" note; `utils/payment_retry.py` (independently closed by a concurrent session to 99% during this scan) reconciled in rather than overwritten. Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -1279,6 +1279,47 @@ _Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C freshly itemized via a re
         52 stmts — GPS spoofing/integrity checks, safety-adjacent but not
         under the `safety.py`/`insurance_periods.py` umbrella Track 1
         already owns, so kept here).
+      - **Batch "zoho-distrecon-obs" (`services/zoho_desk_integration.py`
+        from Batch 9 above, plus `utils/distance_reconciliation.py` and
+        `services/data_transfer/observability.py` from Batch 10 above) —
+        CLOSED 2026-08-03.** `services/zoho_desk_integration.py` 74.42% →
+        **98%** (129 stmts, 33→2 missing), `utils/distance_reconciliation.py`
+        74.70% → **96%** (83 stmts, 21→3 missing),
+        `services/data_transfer/observability.py` 75.00% → **100%** (20
+        stmts, 6→0 missing). Measured via `pytest tests/test_zoho_desk.py
+        tests/test_zoho_desk_integration_coverage.py
+        tests/test_distance_reconciliation.py
+        tests/test_distance_reconciliation_coverage.py
+        tests/test_data_transfer_observability_coverage.py -o addopts=""
+        --cov=services.zoho_desk_integration --cov=utils.distance_reconciliation
+        --cov=services.data_transfer.observability --cov-report=term-missing`
+        (65 passed, 0 collisions). Added `backend/tests/test_zoho_desk_integration_coverage.py`
+        (21 tests — `create_ticket_for_complaint`/`create_ticket_for_flag`,
+        never exercised at all before this batch despite an existing,
+        misleadingly-named test claiming to cover them; `_link_ticket`'s
+        best-effort `ZohoDeskError`/generic-`Exception` swallow;
+        `close_linked_records`'s already-closed skip branches, empty-id
+        no-op, and per-table exception isolation; `create_support_ticket`'s
+        missing-email re-fetch merge and transcript-append branches),
+        `backend/tests/test_distance_reconciliation_coverage.py` (9 tests —
+        `_pod_id`, `_seconds_until`'s same-day/wrap-to-tomorrow branches,
+        the systematic-bias `logger.error(...)` branch (the whole point of
+        this module per its own docstring), and
+        `distance_reconciliation_loop`'s lock-acquired/lock-held-elsewhere/
+        tick-raises branches), and `backend/tests/test_data_transfer_observability_coverage.py`
+        (8 tests, new file — module had none before — every `record_*`
+        helper plus `capture_failure`'s tagged-event/unimportable-SDK/
+        capture-raises branches). Test-only, no application code changed.
+        **No bugs found** in any of the three files. Remaining uncovered
+        lines in `zoho_desk_integration.py` (2) and `distance_reconciliation.py`
+        (3) are the dual-import `ImportError` fallback boilerplate —
+        structurally near-impossible to reach in this harness once the
+        module is cached in `sys.modules`, same documented pattern as
+        prior Sub-tier B/C files. `utils/location_integrity.py`, the third
+        file originally itemized under Batch 10, was **not** in this
+        batch's scope (a separate concurrent session's assignment per this
+        session's task boundaries) and remains open. Full log:
+        `docs/change-log/2026-08-03-a1c-subtier-c-batch-zoho-distrecon-obs-coverage.md`.
       - **Batch 11:** `routes/webhooks.py` (75.40%, 748 stmts — largest
         file in the whole Sub-tier C list, Stripe-webhook-adjacent;
         recommend Sub-tier-A-style urgency given `CLAUDE.md`'s Stripe-

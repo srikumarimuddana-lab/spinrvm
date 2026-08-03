@@ -2000,6 +2000,45 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "faqs-apns-server" 
           Full suite re-run after: 8742 passed (was 8711), 8 skipped, 1
           xfailed, 0 failed. See
           `docs/change-log/2026-08-02-a1c-period1-finalizer-driver-online-presence-sweeper-coverage.md`.
+      - Two more files (Zoho Desk integration + PIPEDA export purge), scoped
+        as a 3-file batch alongside `period1_distance_finalizer.py` — that
+        third file was dropped mid-task once PR #3354 (above) turned out to
+        already be in flight on it; see the change-log's scope note:
+        - `services/zoho_desk_service.py` — **CLOSED, 65.84% → 100%** (202
+          stmts, measured via `pytest tests/test_zoho_desk.py
+          tests/test_zoho_desk_service_coverage.py
+          --cov=services.zoho_desk_service --cov-report=term-missing`).
+          Most individual Zoho Desk endpoint wrappers (`search_tickets`,
+          `create_ticket`, `get_ticket_threads`, `get_thread`,
+          `add_comment`, `update_ticket`'s success path,
+          `add_tags`/`remove_tags`, `list_agents`, `list_departments`,
+          `get_default_department_id`) had never been called directly by
+          any test — only reached indirectly, success-path-only, via
+          `zoho_desk_integration.py`'s tests mocking `zoho.create_ticket`
+          itself. Also untested: `_token_is_fresh`'s non-string/naive-
+          datetime/unparseable-expiry branches, and `_refresh_access_token`'s
+          / `_request`'s transport-error and malformed-response-body
+          branches. Added `backend/tests/test_zoho_desk_service_coverage.py`
+          (32 tests).
+        - `utils/data_export_purge.py` — **CLOSED, 68.42% → 91%** (57
+          stmts, measured via `pytest tests/test_data_export_purge.py
+          tests/test_data_export_purge_loop_coverage.py
+          --cov=utils.data_export_purge --cov-report=term-missing`). PIPEDA
+          deletion-retention purge (hourly loop, deletes expired DSAR
+          export ZIPs + admin Data Transfer exports from Storage). The
+          `supabase is None` early-out, a row missing `storage_path`/`id`
+          being skipped (never guessed at, never marked deleted), and the
+          entire `data_export_purge_loop` wrapper (both tables ticked per
+          iteration with independent exception guards, heartbeat) were
+          untested. Added `backend/tests/test_data_export_purge_loop_coverage.py`
+          (6 tests). Remaining 5 lines (35-40) are the dual-import
+          `ImportError` fallback boilerplate, not pursued (same convention
+          as every prior Sub-tier B/C session).
+        - Test-only across both files, no application code changed, no bugs
+          found. Full suite re-run after: 8761 passed (fresh session-start
+          baseline on this branch after merging in #3353/#3354), 0 failed.
+          See
+          `docs/change-log/2026-08-03-a1c-subtier-c-p1df-zoho-export-coverage.md`.
       - **Batch (`ai/providers/__init__.py` from Batch 8 + `driver_onboarding_reminder_rules.py`/
         `ai/response_cache.py` from Batch 9) — CLOSED 2026-08-03.** Deliberately
         recombined scope per explicit task instruction — excludes Batch 9's

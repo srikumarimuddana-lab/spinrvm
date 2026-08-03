@@ -253,3 +253,72 @@ min(matched_area.get("surge_multiplier") or 1.0, SURGE_CAP)
 
 - No staging/manual repro of the actual push notification delivery — verified at the unit level only (the string passed to `send_push_notification`).
 - Did not check whether any admin-dashboard surface also displays `resolution`/the old "reviewed" wording independently — only the backend notification-copy call site was in scope for this fix.
+
+---
+
+## Entry 4 — Corporate-cancellation WebSocket-failure undercounting (two sibling services)
+
+### 1. Issue / gap identified
+
+`services/corporate_suspension_service.py::_cancel_one_ride` and `services/corporate_member_offboarding_service.py::_cancel_one_ride` — both used to auto-cancel a company's pre-pickup rides on account suspension / member removal — wrapped the rider push notification and (for guest bookings) the SMS notify in try/except, but NOT the driver/rider `manager.send_personal_message` WebSocket sends. Since the atomic DB claim that flips `status` to `cancelled` (and, for an assigned ride, the driver-availability/insurance-period rollback) runs *before* the WS sends, a WS blip meant: the ride was genuinely cancelled in the DB, but the exception propagated out of `_cancel_one_ride`, was caught only by the *outer* per-ride try/except in the calling loop, and that ride was **not** counted in the returned `cancelled_count` / logged as a generic "failed to cancel" message — even though it had actually succeeded.
+
+### 2. Root cause
+
+The WS sends were added without the same defensive wrapping applied to the notification calls immediately below them in the same function — an inconsistency within each function, not a deliberate design choice (the module docstrings describe "best-effort per ride" as the intended contract).
+
+### 3. Fix / remediation
+
+Both driver-side and rider-side `manager.send_personal_message(...)` calls, in both files, are now wrapped in their own try/except (logged via `logger.error(..., exc_info=True)`, matching the existing push/SMS pattern), so a WS failure no longer masks an already-successful DB cancellation.
+
+### 4. Risk & impact on existing functionality
+
+- **Blast radius: isolated to these two files' internal `_cancel_one_ride` helper.** Grepped every caller of the public entry points (`cancel_pre_pickup_rides_for_company`, `cancel_pre_pickup_rides_for_member`): `routes/corporate_accounts.py` and `routes/corporate_company.py` (the admin suspend/remove-member endpoints) — neither reads anything from `_cancel_one_ride` beyond the aggregate count already returned by the public function, so this fix only makes that count *more accurate*, it doesn't change the public function's signature or contract.
+- This is strictly a "make the count/log more accurate" fix — the DB write (the money/state-relevant part) was already correct before and after; the only prior misbehavior was mis-reporting a successful cancellation as a failure due to an unrelated side-effect glitch.
+- No new failure mode introduced: a genuine DB-write failure still surfaces normally (that code path is unchanged and unaffected by this fix).
+
+### 5. User-experience effect
+
+- Driver/rider: previously, a WS blip during one of these system-initiated cancellations meant the rider might not get their push notification (execution never reached that line) even though their ride was already cancelled. Now the push notification still fires even if the WS send itself failed — a rider is more likely to actually be told their ride was cancelled.
+- Internal admin/ops: the returned cancellation count and the `[CORP-SUSPEND]`/`[CORP-MEMBER-REMOVE]` logs are now accurate — any monitoring/alerting built on these will no longer see false "failed to cancel" signals for rides that were actually cancelled successfully.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/services/corporate_suspension_service.py` | Driver and rider `manager.send_personal_message` calls each wrapped in try/except | Close the found-not-fixed undercounting gap |
+| `backend/services/corporate_member_offboarding_service.py` | Same fix, sibling file | Same reason |
+| `backend/tests/test_corporate_suspension_service_coverage.py` | Renamed/updated the pinned bug test to assert the ride is still counted and the rider still gets their push | Reflect the fix |
+| `backend/tests/test_corporate_member_offboarding_service_coverage.py` | Same, sibling file | Same reason |
+
+### 7. Before / after
+
+```python
+# Before (both files, driver-side WS send — unguarded)
+if driver and driver.get("user_id"):
+    await manager.send_personal_message({...}, f"driver_{driver['user_id']}")
+
+# After
+if driver and driver.get("user_id"):
+    try:
+        await manager.send_personal_message({...}, f"driver_{driver['user_id']}")
+    except Exception as exc:
+        logger.error("[...] driver WS notify failed ride_id=%s: %s", ride_id, exc, exc_info=True)
+```
+
+(Same pattern applied to the rider-side send in both files.)
+
+### 8. Rollback plan
+
+`git revert` — the fix only adds try/except around two already-existing WS calls per file; no migration, no data-write-path change, no feature flag needed given the isolated, additive nature of the change.
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_corporate_suspension_service_coverage.py tests/test_corporate_member_offboarding_service_coverage.py -q` — 11 passed (6 + 5).
+- [x] Blast-radius regression check: `pytest tests/test_corporate_member_offboarding_service.py tests/test_corporate_suspension_service.py tests/test_create_ride_remaining_branches.py -q` — 30 passed, 0 failed.
+- [x] Blast-radius grep performed: see section 4.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- No staging/manual repro against a real Redis-backed `manager.send_personal_message` failure — verified at the unit level only (mocked `RuntimeError` side effect).
+- Did not audit other corporate-lifecycle services (e.g. any sibling cancellation helper not covered by this session's A1c sweep) for the same missing-try/except pattern — only the two files the coverage sweep actually touched were checked.

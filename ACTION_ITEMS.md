@@ -3273,9 +3273,32 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   unchanged); the admin console's quote-card `onClick` now calls the shared
   builder instead of its own prose-only template. See
   `docs/change-log/2026-08-01-ai9-admin-quote-card-coords.md`.
-- [ ] **AI10. No conversation-level concurrency lock server-side** — two
-  clients on one `conversation_id` interleave `append_message` writes and
-  race history snapshots (client is single-flight only).
+- [x] **AI10. No conversation-level concurrency lock server-side** — done:
+  `orchestrator.py::run_chat_turn` is now a thin locking wrapper
+  (`ai:conv_lock:{conversation_id}`, `redis_set_nx`/`redis_delete`, 90s TTL
+  — a generous ceiling for a full multi-iteration tool-calling turn) around
+  the renamed original implementation, `_run_chat_turn` (both
+  `routes/ai.py` and `routes/admin/ai_console.py` still import the public
+  `run_chat_turn` name unchanged). A second turn on the same
+  `conversation_id` while the first is still in flight gets a clean
+  `conversation_busy` error frame instead of silently racing; a brand-new
+  conversation (`conversation_id is None`) has no shared id yet to race on,
+  so it skips the lock entirely — verified by
+  `test_new_conversation_skips_the_lock` asserting `redis_set_nx` is never
+  called on that path. New `TestConversationLock` class in
+  `tests/test_ai_orchestrator.py` (3 tests): a real interleaved-concurrency
+  test using a blocking fake adapter + `asyncio.Event` handshake (not just
+  a unit test of the lock function in isolation) confirms the second
+  concurrent call is rejected while the first completes normally; a
+  sequential-reuse test confirms the lock is released after completion, not
+  left stale; the skip-lock test above. Full existing
+  `test_ai_orchestrator.py`/`test_ai_pii.py`/`test_ai_admin_console.py`/
+  `test_ai_tools_booking.py` suites (196 tests) still pass unchanged. **Not
+  yet verified:** behavior against a real Redis instance under actual
+  network-level concurrency — the concurrency test exercises the in-process
+  fallback store (`REDIS_URL` unset in the test env, per this repo's
+  documented Redis-transparency convention), not the real `SET NX EX`
+  round-trip against Redis itself.
 - [ ] **AI11. Cancel-ride escalation UX** — the assistant correctly refuses
   to cancel rides, but there is no `cancel`/`ride_issue` escalation category
   and no deep link to the ride screen — riders get a support ticket for a

@@ -14,6 +14,7 @@ tool execution are patched). Pins:
   names + usage
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -523,3 +524,102 @@ class TestFaqCacheScoping:
         with patch.object(orch, "response_cache", rc):
             await _run(adapter, settings=self.CACHE_SETTINGS, tool_result=tr)
         rc.store_cached.assert_awaited_once()
+
+
+class _BlockingAdapter:
+    """Like FakeAdapter, but stalls mid-turn until `gate` is set, and flags
+    `started` right before stalling so a test can deterministically wait for
+    the in-flight turn to have progressed past lock acquisition."""
+
+    provider = "fake"
+    model = "fake-model"
+
+    def __init__(self, gate: asyncio.Event, started: asyncio.Event):
+        self.gate = gate
+        self.started = started
+
+    async def stream_turn(self, *, system, messages, tools):
+        yield _text("partial")
+        self.started.set()
+        await self.gate.wait()
+        yield _end()
+
+
+class TestConversationLock:
+    """AI10: two turns on the same conversation_id must not run concurrently
+    -- each turn's LLM call is built from its own load_history() snapshot at
+    turn start, so an overlapping second turn wouldn't see the first's
+    messages yet, and their append_message writes could interleave."""
+
+    @pytest.mark.anyio
+    async def test_second_concurrent_turn_on_same_conversation_is_rejected(self):
+        gate = asyncio.Event()
+        started = asyncio.Event()
+        adapter = _BlockingAdapter(gate, started)
+        patches, mocks = _patches(adapter)
+
+        async def _collect(msg):
+            frames = []
+            async for frame in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message=msg):
+                frames.append(frame)
+            return frames
+
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+        ):
+            first_task = asyncio.create_task(_collect("first"))
+            await started.wait()  # first turn has acquired the lock and is mid-stream
+
+            second_frames = await _collect("second")
+
+            gate.set()
+            first_frames = await first_task
+
+        assert [n for n, _ in second_frames] == ["error"]
+        assert second_frames[0][1]["code"] == "conversation_busy"
+        assert [n for n, _ in first_frames][-1] == "done"
+
+    @pytest.mark.anyio
+    async def test_sequential_turns_on_same_conversation_both_succeed(self):
+        """The lock must be released after a turn completes -- a second,
+        non-overlapping turn on the same conversation_id must not be
+        permanently blocked by a stale lock."""
+        adapter1 = FakeAdapter([[_text("first reply"), _end()]])
+        frames1, _ = await _run(adapter1)
+        assert [n for n, _ in frames1][-1] == "done"
+
+        adapter2 = FakeAdapter([[_text("second reply"), _end()]])
+        frames2, _ = await _run(adapter2)
+        assert [n for n, _ in frames2][-1] == "done"
+
+    @pytest.mark.anyio
+    async def test_new_conversation_skips_the_lock(self):
+        """conversation_id=None (brand-new conversation) has no shared id for
+        another request to race against -- must not even attempt a lock."""
+        adapter = FakeAdapter([[_text("hi"), _end()]])
+        patches, mocks = _patches(adapter, conv={**CONV, "id": "new-conv"})
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patch.object(orch, "redis_set_nx", AsyncMock()) as set_nx,
+        ):
+            frames = []
+            async for frame in orch.run_chat_turn(user=USER, conversation_id=None, user_message="hi"):
+                frames.append(frame)
+        set_nx.assert_not_awaited()
+        assert [n for n, _ in frames][-1] == "done"

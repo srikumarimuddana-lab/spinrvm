@@ -42,11 +42,11 @@ except ImportError:
 try:
     from ..settings_loader import get_app_settings
     from ..utils.metrics import inc as _metric_inc
-    from ..utils.redis_client import redis_expire, redis_incr
+    from ..utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
 except ImportError:
     from settings_loader import get_app_settings
     from utils.metrics import inc as _metric_inc
-    from utils.redis_client import redis_expire, redis_incr
+    from utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,70 @@ async def _over_daily_cap(user_id: str, cap: int) -> bool:
         return False
 
 
+_CONV_LOCK_TTL_SECONDS = 90  # generous ceiling for a full multi-iteration tool-calling turn
+
+
 async def run_chat_turn(
+    *,
+    user: Dict[str, Any],
+    conversation_id: Optional[str],
+    user_message: str,
+    audience: str = "rider",
+    admin_actor_id: Optional[str] = None,
+    client_location: Optional[Dict[str, float]] = None,
+    client_capabilities: Optional[list] = None,
+) -> AsyncIterator[Frame]:
+    """Public entry point — adds a conversation-level lock around _run_chat_turn.
+
+    AI10: two clients (or two tabs/devices) sending turns on the same
+    conversation_id concurrently would otherwise interleave append_message
+    writes and race history snapshots — each turn's LLM call is built from
+    a load_history() read at its own start, so a second turn that starts
+    before the first finishes doesn't see the first's messages yet. A new
+    conversation (conversation_id is None) has no shared id for another
+    request to race against, so it skips the lock entirely.
+    """
+    if not conversation_id:
+        async for frame in _run_chat_turn(
+            user=user,
+            conversation_id=conversation_id,
+            user_message=user_message,
+            audience=audience,
+            admin_actor_id=admin_actor_id,
+            client_location=client_location,
+            client_capabilities=client_capabilities,
+        ):
+            yield frame
+        return
+
+    lock_key = f"ai:conv_lock:{conversation_id}"
+    acquired = await redis_set_nx(lock_key, "1", _CONV_LOCK_TTL_SECONDS)
+    if not acquired:
+        _metric_inc("spinr_ai_chat_turns_total", {"outcome": "conversation_busy"})
+        yield (
+            "error",
+            {
+                "code": "conversation_busy",
+                "message": "This conversation has another reply in progress — please wait a moment and try again.",
+            },
+        )
+        return
+    try:
+        async for frame in _run_chat_turn(
+            user=user,
+            conversation_id=conversation_id,
+            user_message=user_message,
+            audience=audience,
+            admin_actor_id=admin_actor_id,
+            client_location=client_location,
+            client_capabilities=client_capabilities,
+        ):
+            yield frame
+    finally:
+        await redis_delete(lock_key)
+
+
+async def _run_chat_turn(
     *,
     user: Dict[str, Any],
     conversation_id: Optional[str],

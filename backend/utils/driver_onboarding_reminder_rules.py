@@ -170,8 +170,9 @@ def mandatory_requirements(
     global_reqs: list[dict[str, Any]],
 ) -> list[tuple[str | None, str | None, str]]:
     area = areas.get(str(driver.get("service_area_id"))) if driver.get("service_area_id") else None
+    raw_items = _load_list((area or {}).get("required_documents"))
     out: list[tuple[str | None, str | None, str]] = []
-    for item in _load_list((area or {}).get("required_documents")):
+    for item in raw_items:
         if isinstance(item, str):
             out.append((None, item, _pretty(item)))
         elif isinstance(item, dict) and item.get("required", item.get("is_mandatory", True)) is not False:
@@ -179,7 +180,12 @@ def mandatory_requirements(
             req_id = item.get("id")
             label = item.get("label") or item.get("name") or _pretty(key or req_id)
             out.append((str(req_id) if req_id else None, str(key) if key else None, str(label)))
-    if out:
+    if raw_items:
+        # The area explicitly configured a required_documents list — respect
+        # it as-is, even if every entry was marked not-required (an area
+        # operator's deliberate "nothing required here" opt-out), rather
+        # than falling through to the global list. Only an area with NO
+        # required_documents configured at all falls back to global.
         return out
     return [
         (str(row["id"]) if row.get("id") else None, None, str(row.get("name") or "Document"))

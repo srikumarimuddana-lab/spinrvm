@@ -219,6 +219,17 @@ class TestMandatoryRequirements:
     def test_no_area_and_no_global_reqs_returns_empty(self):
         assert mandatory_requirements({"service_area_id": None}, {}, []) == []
 
+    def test_area_opt_out_respected_not_falls_back_to_global(self):
+        """Fixed: when every item in an area's required_documents is
+        explicitly marked not-required, the area's explicit (now-empty)
+        list is respected instead of silently falling through to the
+        global mandatory-document list -- an area operator can now
+        configure "nothing is required here"."""
+        driver = {"service_area_id": "area-1"}
+        areas = {"area-1": {"required_documents": [{"key": "opt_doc", "required": False}]}}
+        global_reqs = [{"id": "g1", "name": "Global Mandatory Doc", "is_mandatory": True}]
+        assert mandatory_requirements(driver, areas, global_reqs) == []
+
 
 class TestDocMatchesRequirement:
     def test_matches_on_requirement_key(self):

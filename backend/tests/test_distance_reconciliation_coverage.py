@@ -127,6 +127,34 @@ def test_tick_no_error_log_when_not_biased(caplog):
 
 
 # ---------------------------------------------------------------------------
+# Claim-eligibility fix: _run_reconciliation_tick's claim step only marks
+# rides that _has_usable_distance() actually evaluated, not every ride
+# merely fetched in the batch.
+# ---------------------------------------------------------------------------
+
+
+def test_ride_with_missing_measured_distance_is_left_unclaimed():
+    """A ride whose measured distance isn't usable yet (e.g. the deferred
+    route finalizer hasn't backfilled it) is left unclaimed
+    (distance_reconciled_at stays None) instead of being stamped alongside
+    rides that were actually evaluated -- it will be re-fetched and
+    evaluated on a future tick once its data lands."""
+    rides = [
+        _ride("evaluated", 1.0, 1.0),  # produces a ratio, legitimately claimed
+        _ride("never_measured", 1.0, None),  # skipped by evaluate_reconciliation
+    ]
+    with (
+        patch.object(dr.db_supabase, "get_rows", AsyncMock(return_value=rides)),
+        patch.object(dr.db_supabase, "update_one", AsyncMock(return_value={"id": "x"})) as update,
+        patch.object(dr, "record_integrity_event", AsyncMock(return_value=True)),
+    ):
+        _run(dr._run_reconciliation_tick())
+
+    claimed_ids = set(update.await_args[0][1]["id"]["$in"])
+    assert claimed_ids == {"evaluated"}
+
+
+# ---------------------------------------------------------------------------
 # distance_reconciliation_loop
 # ---------------------------------------------------------------------------
 

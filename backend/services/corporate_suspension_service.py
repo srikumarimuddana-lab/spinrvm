@@ -107,17 +107,30 @@ async def _cancel_one_ride(ride: Dict[str, Any]) -> bool:
         await record_period_transition(driver_id, 1)
         driver = await db_supabase.get_driver_by_id(driver_id)
         if driver and driver.get("user_id"):
-            await manager.send_personal_message(
-                {"type": "ride_cancelled", "ride_id": ride_id, "reason": _CANCELLATION_REASON},
-                f"driver_{driver['user_id']}",
-            )
+            # Best-effort, like the push/SMS notifies below — the ride is
+            # already durably cancelled in the DB at this point (the claim
+            # above succeeded), so a WS blip here must not propagate up and
+            # make the caller think the cancellation itself failed (which
+            # previously under-counted `cancelled_count` and logged a
+            # misleading "failed to cancel" message for an already-cancelled
+            # ride).
+            try:
+                await manager.send_personal_message(
+                    {"type": "ride_cancelled", "ride_id": ride_id, "reason": _CANCELLATION_REASON},
+                    f"driver_{driver['user_id']}",
+                )
+            except Exception as exc:
+                logger.error("[CORP-SUSPEND] driver WS notify failed ride_id=%s: %s", ride_id, exc, exc_info=True)
 
     rider_id = ride.get("rider_id")
     if rider_id:
-        await manager.send_personal_message(
-            {"type": "ride_cancelled", "ride_id": ride_id, "reason": _CANCELLATION_REASON},
-            f"rider_{rider_id}",
-        )
+        try:
+            await manager.send_personal_message(
+                {"type": "ride_cancelled", "ride_id": ride_id, "reason": _CANCELLATION_REASON},
+                f"rider_{rider_id}",
+            )
+        except Exception as exc:
+            logger.error("[CORP-SUSPEND] rider WS notify failed ride_id=%s: %s", ride_id, exc, exc_info=True)
         try:
             await send_push_notification(
                 rider_id,

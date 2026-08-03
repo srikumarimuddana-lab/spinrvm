@@ -50,7 +50,12 @@ async def check_location_integrity(
 ) -> tuple[bool, Optional[str]]:
     """Return (trusted, reason). If trusted is False, the point should be discarded."""
 
-    if mocked is True:
+    # Truthy check, not `is True` — the mock flag reaches this function via
+    # raw dict access from client-supplied JSON (no Pydantic bool coercion
+    # upstream), so a client sending `1` or `"true"` instead of a literal
+    # JSON boolean must still be caught. `mocked is True` let both of those
+    # sail through, defeating the entire point of this check.
+    if mocked:
         logger.warning("[location_integrity] mock flag detected driver=%s", driver_id)
         return False, "mock_location"
 

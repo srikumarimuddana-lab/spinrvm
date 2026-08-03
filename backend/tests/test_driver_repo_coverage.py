@@ -524,6 +524,59 @@ class TestUpdateAcceptanceRate:
 # ---------------------------------------------------------------------------
 
 
+class TestClaimRideAtomicOrClauseEscaping:
+    """Fixed: `claim_ride_atomic` now routes `driver_id` through
+    `_postgrest_or_value` (repositories/_base.py) like every other or-clause
+    builder in this codebase, per CLAUDE.md's "Query filters" convention --
+    the layer owns escaping, callers pass raw input. Was previously a raw
+    f-string interpolation (found-not-fixed during the A1c Sub-tier C
+    coverage pass); these tests assert the corrected, escaped behavior."""
+
+    async def test_or_clause_escapes_reserved_characters_in_driver_id(self):
+        from backend.repositories import driver_repo
+
+        chain = MagicMock()
+        chain.eq.return_value.in_.return_value.or_.return_value.execute.return_value = _mk_result([{"id": "ride-1"}])
+        sb = MagicMock()
+        sb.table.return_value.update.return_value = chain
+        with (
+            patch.object(driver_repo, "supabase", sb),
+            patch.object(driver_repo, "run_sync", _passthrough_run_sync),
+        ):
+            # A driver_id containing a comma is now double-quoted by
+            # `_postgrest_or_value` so it's treated as part of ONE literal
+            # value, rather than splitting the or-group into a spurious
+            # extra term (the pre-fix behavior).
+            malicious_driver_id = "d1,driver_id.eq.d2"
+            claimed = await driver_repo.claim_ride_atomic("ride-1", malicious_driver_id)
+
+        assert claimed is True
+        called_arg = chain.eq.return_value.in_.return_value.or_.call_args.args[0]
+        assert called_arg == 'driver_id.is.null,driver_id.eq."d1,driver_id.eq.d2"'
+        # The pre-fix (buggy) unescaped shape must NOT be sent.
+        assert called_arg != "driver_id.is.null,driver_id.eq.d1,driver_id.eq.d2"
+
+    async def test_normal_uuid_driver_id_unaffected(self):
+        """Sanity check: for a driver_id with no PostgREST-reserved
+        characters (the normal case -- a UUID from an authenticated JWT)
+        the clause matches what escaping would also produce."""
+        from backend.repositories import driver_repo
+
+        chain = MagicMock()
+        chain.eq.return_value.in_.return_value.or_.return_value.execute.return_value = _mk_result([{"id": "ride-1"}])
+        sb = MagicMock()
+        sb.table.return_value.update.return_value = chain
+        with (
+            patch.object(driver_repo, "supabase", sb),
+            patch.object(driver_repo, "run_sync", _passthrough_run_sync),
+        ):
+            claimed = await driver_repo.claim_ride_atomic("ride-1", "d1-uuid")
+
+        assert claimed is True
+        called_arg = chain.eq.return_value.in_.return_value.or_.call_args.args[0]
+        assert called_arg == "driver_id.is.null,driver_id.eq.d1-uuid"
+
+
 class TestClaimRideAtomic:
     async def test_no_supabase_returns_false(self):
         from backend.repositories import driver_repo

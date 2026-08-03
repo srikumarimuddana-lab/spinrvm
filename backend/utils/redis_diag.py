@@ -57,7 +57,12 @@ async def _pubsub_roundtrip(client: Any, timeout: float) -> Dict[str, Any]:
         await asyncio.wait_for(client.publish(channel, "1"), timeout=timeout)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            msg = await ps.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            # Bound each poll by the time actually remaining (capped at 1s
+            # per iteration), not a fixed 1.0s — a hardcoded per-call timeout
+            # let a single stalled iteration overshoot the caller's requested
+            # `timeout` by up to ~1s.
+            remaining = deadline - time.monotonic()
+            msg = await ps.get_message(ignore_subscribe_messages=True, timeout=min(1.0, max(0.0, remaining)))
             if msg and msg.get("type") == "message":
                 return {"ok": True}
         return {

@@ -79,6 +79,17 @@ def _num(value: Any) -> Optional[float]:
         return None
 
 
+def _has_usable_distance(ride: Dict[str, Any]) -> bool:
+    """True iff `ride` has both a usable quoted and measured distance —
+    the same eligibility check `evaluate_reconciliation` uses to decide
+    whether a ride contributes a ratio. Shared so the tick's claim step
+    (below) only marks rides that were actually evaluated, not every ride
+    it merely fetched."""
+    quoted = _num(ride.get("planned_distance_km")) or _num(ride.get("distance_km"))
+    measured = _num(ride.get("actual_distance_km"))
+    return bool(quoted and measured and quoted > 0 and measured > 0)
+
+
 def evaluate_reconciliation(
     rides: List[Dict[str, Any]],
 ) -> Tuple[List[float], List[Tuple[str, Dict[str, Any]]], Dict[str, Any]]:
@@ -93,10 +104,10 @@ def evaluate_reconciliation(
     divergences: List[Tuple[str, Dict[str, Any]]] = []
     for ride in rides:
         ride_id = str(ride.get("id") or "")
+        if not _has_usable_distance(ride):
+            continue
         quoted = _num(ride.get("planned_distance_km")) or _num(ride.get("distance_km"))
         measured = _num(ride.get("actual_distance_km"))
-        if not quoted or not measured or quoted <= 0 or measured <= 0:
-            continue
         ratio = measured / quoted
         ratios.append(ratio)
         if ratio < RATIO_LOW or ratio > RATIO_HIGH:
@@ -147,8 +158,15 @@ async def _run_reconciliation_tick() -> None:
             aggregate["count"],
         )
 
-    # Claim the batch so the next run skips it (single UPDATE ... WHERE id IN).
-    ids = [str(r.get("id")) for r in rides if r.get("id")]
+    # Claim only the rides that were actually evaluated (contributed a ratio)
+    # so the next run skips them (single UPDATE ... WHERE id IN). A ride
+    # fetched this tick but still missing measured distance data (e.g. the
+    # route finalizer hasn't backfilled it yet) is left unclaimed — it will
+    # be re-fetched and evaluated on a future tick once its data lands,
+    # instead of being silently marked "reconciled" without ever having
+    # actually been checked.
+    ids = [str(r.get("id")) for r in rides if r.get("id") and _has_usable_distance(r)]
+    skipped = len(rides) - len(ids)
     if ids:
         await db_supabase.update_one(
             "rides",
@@ -156,8 +174,11 @@ async def _run_reconciliation_tick() -> None:
             {"distance_reconciled_at": now.isoformat()},
         )
     logger.info(
-        "distance reconciliation tick: %d rides, %d divergences, mean_ratio=%s",
+        "distance reconciliation tick: %d rides, %d claimed, %d skipped (missing distance data), "
+        "%d divergences, mean_ratio=%s",
         len(rides),
+        len(ids),
+        skipped,
         len(divergences),
         aggregate["mean_ratio"],
     )

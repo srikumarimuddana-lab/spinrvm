@@ -212,6 +212,12 @@ class Settings(BaseSettings):
 
         - JWT_SECRET: ≥32 chars (B-P1-2 / CLAUDE.md). HS256 with a short shared
           secret is brute-forceable in seconds on a modern GPU.
+        - ADMIN_PASSWORD: ≥20 chars. Defense-in-depth alongside
+          core/middleware.py's separate `_validate_production_config` check
+          (same 20-char minimum) — this guard runs on every `Settings()`
+          construction, so it still catches a trivially weak password even
+          if the middleware-level check is ever skipped or a script
+          constructs `Settings()` directly.
         - FIREBASE_DRIVER_APP_ID / FIREBASE_RIDER_APP_ID: required so the manual
           audience check (B-P1-1 / DV-10) cannot be silently skipped.
         """
@@ -236,6 +242,15 @@ class Settings(BaseSettings):
                     f"(got {len(jwt_secret)}). HS256 with a short shared secret "
                     "is brute-forceable. Generate one with: "
                     "python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+                )
+
+            admin_password = self.ADMIN_PASSWORD or ""
+            if len(admin_password) < 20:
+                raise ValueError(
+                    f"ADMIN_PASSWORD must be at least 20 characters in production "
+                    f"(got {len(admin_password)}). Matches core/middleware.py's "
+                    "_validate_production_config check. Generate one with: "
+                    "python -c 'import secrets; print(secrets.token_urlsafe(24))'"
                 )
 
             for field in ("FIREBASE_DRIVER_APP_ID", "FIREBASE_RIDER_APP_ID"):

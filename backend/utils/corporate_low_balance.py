@@ -58,7 +58,17 @@ async def run_low_balance_tick() -> None:
             try:
                 last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
             except ValueError:
-                last_dt = None
+                # A malformed timestamp must not bypass the rate limit and
+                # re-send every tick until the DB value is repaired — fail
+                # closed by treating it as "just notified" (full rate-limit
+                # window applies) rather than "never notified".
+                logger.error(
+                    "low-balance: malformed low_balance_notified_at %r for wallet %s — "
+                    "treating as just-notified, not never-notified",
+                    last,
+                    w.get("id"),
+                )
+                last_dt = datetime.now(timezone.utc)
             if last_dt and datetime.now(timezone.utc) - last_dt < _RATE_LIMIT:
                 continue
         try:

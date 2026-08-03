@@ -668,6 +668,58 @@ def test_build_plan_document_resumed_driver_skips_existing_doc(tmp_path: Path, m
     assert fake  # keep reference alive/used
 
 
+def test_active_status_requires_approved_document_status(tmp_path: Path, monkeypatch):
+    """Fixed: a rejected document must NOT be sufficient to mark the driver
+    active/verified -- has_import_documents now checks the document's own
+    status, not just its presence."""
+    _install(monkeypatch)
+    doc_file = tmp_path / "doc.pdf"
+    doc_file.write_bytes(b"data")
+    row = _driver_row(spinr_approved="yes", regulatory_authority_approved="yes")
+    doc_rows = [
+        {"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "doc.pdf", "status": "rejected"}
+    ]
+    plan = svc.build_plan([row], doc_rows, tmp_path, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    driver = plan.drivers_to_insert[0]
+    assert driver["status"] == "needs_review"
+    assert driver["is_verified"] is False
+    assert plan.docs_to_insert[0]["status"] == "rejected"
+
+
+def test_active_status_with_approved_document_status(tmp_path: Path, monkeypatch):
+    """An approved document DOES count toward active/verified status, given
+    the CSV approval flags are also both true."""
+    _install(monkeypatch)
+    doc_file = tmp_path / "doc.pdf"
+    doc_file.write_bytes(b"data")
+    row = _driver_row(spinr_approved="yes", regulatory_authority_approved="yes")
+    doc_rows = [
+        {"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "doc.pdf", "status": "approved"}
+    ]
+    plan = svc.build_plan([row], doc_rows, tmp_path, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    driver = plan.drivers_to_insert[0]
+    assert driver["status"] == "active"
+    assert driver["is_verified"] is True
+
+
+def test_active_status_requires_approved_document_status_pending(tmp_path: Path, monkeypatch):
+    """A pending (not yet reviewed) document also must not count."""
+    _install(monkeypatch)
+    doc_file = tmp_path / "doc.pdf"
+    doc_file.write_bytes(b"data")
+    row = _driver_row(spinr_approved="yes", regulatory_authority_approved="yes")
+    doc_rows = [
+        {"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "doc.pdf", "status": "pending"}
+    ]
+    plan = svc.build_plan([row], doc_rows, tmp_path, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    driver = plan.drivers_to_insert[0]
+    assert driver["status"] == "needs_review"
+    assert driver["is_verified"] is False
+
+
 # ── commit_plan ──────────────────────────────────────────────────────
 
 

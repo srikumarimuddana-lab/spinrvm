@@ -55,7 +55,11 @@ async def test_company_not_found_skips_notify():
     m_mark.assert_not_awaited()
 
 
-async def test_malformed_notified_at_timestamp_still_notifies():
+async def test_malformed_notified_at_timestamp_fails_closed_and_skips_notify():
+    """Fixed: a malformed `low_balance_notified_at` must not bypass the rate
+    limit and re-send every tick until the DB value is repaired. It's now
+    treated as "just notified" (full rate-limit window applies), not "never
+    notified" — the opposite of what this test originally pinned."""
     wallet = {
         "id": "w1",
         "company_id": "c1",
@@ -73,12 +77,13 @@ async def test_malformed_notified_at_timestamp_still_notifies():
             AsyncMock(return_value={"billing_email": "b@acme.test", "name": "Acme", "status": "active"}),
         ),
         patch("utils.corporate_low_balance.send_email", AsyncMock()) as m_send,
-        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()),
+        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()) as m_mark,
     ):
         from utils.corporate_low_balance import run_low_balance_tick
 
         await run_low_balance_tick()
-    m_send.assert_awaited_once()
+    m_send.assert_not_awaited()
+    m_mark.assert_not_awaited()
 
 
 async def test_one_wallet_notify_exception_does_not_abort_batch():

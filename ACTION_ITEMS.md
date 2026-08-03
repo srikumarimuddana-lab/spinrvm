@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs" CLOSED: `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100% (test-only, no bugs found). Prior 2026-08-02: A1c (Track 2) Sub-tier C freshly itemized via a re-run coverage scan: 38 files (5635 stmts) in the 60-80% band, batched ≤3 files/subtask, replacing the prior stale "55 files, not itemized" note; `utils/payment_retry.py` (independently closed by a concurrent session to 99% during this scan) reconciled in rather than overwritten. Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs" CLOSED: `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100% (test-only, no bugs found). Also CLOSED 2026-08-02: Sub-tier C Batch 3 — `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added). Prior 2026-08-02: A1c (Track 2) Sub-tier C freshly itemized via a re-run coverage scan: 38 files (5635 stmts) in the 60-80% band, batched ≤3 files/subtask, replacing the prior stale "55 files, not itemized" note; `utils/payment_retry.py` (independently closed by a concurrent session to 99% during this scan) reconciled in rather than overwritten. Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -1220,17 +1220,45 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs
         `routes/promotions.py` (65.85%, 328 stmts — rider-facing promo
         redemption; NOT the same file as the already-closed
         `routes/admin/promotions.py` CRUD), `utils/data_export_purge.py`
-        (68.42%, 57 stmts — PIPEDA deletion-retention purge, compliance-
-        adjacent).
-      - **Batch 3:** `utils/retention_purge.py` (69.12%, 136 stmts —
-        PIPEDA retention, compliance-adjacent), `utils/orphaned_hold_reconciler.py`
-        (69.23%, 91 stmts — Stripe pre-auth-hold cleanup, payment-
-        adjacent), `utils/driver_online.py` (69.70%, 33 stmts — the new
-        `intent_online`/`effective_online`/`effective_available`
-        composition helper that replaced the retired presence sweeper;
-        small file but dispatch-critical, directly implements CLAUDE.md's
-        `is_available ⇒ is_online` invariant — worth prioritizing despite
-        landing late alphabetically/by-coverage in this list).
+        (68.42%, 57 stmts — PIPEDA deletion-retention purge,
+        compliance-adjacent).
+      - **Batch 3** — **CLOSED 2026-08-02.** `utils/retention_purge.py`
+        69.12% → **98%** (136 stmts, 42→3 missing), `utils/orphaned_hold_reconciler.py`
+        69.23% → **95%** (91 stmts, 28→5 missing), `utils/driver_online.py`
+        69.70% → **100%** (33 stmts, 10→0 missing). Measured via
+        `pytest tests/test_driver_online.py tests/test_retention_purge.py
+        tests/test_retention_purge_coverage.py tests/test_orphaned_hold_reconciler.py
+        tests/test_orphaned_hold_reconciler_coverage.py tests/test_p3_loop_jitter_metrics.py
+        tests/test_estimate_intent_projection.py --cov=utils.retention_purge
+        --cov=utils.orphaned_hold_reconciler --cov=utils.driver_online
+        --cov-report=term-missing --no-cov-on-fail` (120 passed, 0
+        collisions). All three are compliance/dispatch-critical despite
+        their raw Sub-tier C ranking — PIPEDA retention (`retention_purge.py`),
+        Stripe pre-auth-hold cleanup (`orphaned_hold_reconciler.py`), and
+        the `is_available ⇒ is_online` invariant helper
+        (`driver_online.py`) — treated at Sub-tier-A-style urgency per this
+        list's own note under Batch 3 below. Added
+        `backend/tests/test_driver_online.py` (50 tests — every
+        `intent_online`/`_parse_ts`/`effective_online`/`effective_available`/
+        `filter_effective_online` branch, plus an explicit parametrized
+        invariant test asserting `effective_available ⇒ effective_online`
+        across every intent×presence×active-ride combination),
+        `backend/tests/test_retention_purge_coverage.py` (20 tests — every
+        error branch in `_delete_expired_route_snapshot_objects`, the
+        plain-dict rpc-response alt-parsing paths, the trip-route-geometry
+        post-storage refetch's 3 branches, the `skipped_fk` loud-log line,
+        `_pod_id`, and both `_tick` branches), and
+        `backend/tests/test_orphaned_hold_reconciler_coverage.py` (8 tests
+        — `release_open_hold` raising mid-batch, `_pod_id`, and the
+        `orphaned_hold_reconciler_loop`'s stagger sleep / lock-skip /
+        summary-log / error-metric / CancelledError-propagation branches).
+        Test-only, no application code changed. **No bugs found** in the
+        two payment/compliance files; remaining uncovered lines in all
+        three are the dual-import `ImportError` fallback boilerplate
+        (structurally near-impossible to reach in this harness without
+        risky `sys.modules` manipulation — same documented pattern as
+        prior Sub-tier B/C files). Full log:
+        `docs/change-log/2026-08-02-a1c-subtier-c-batch3-coverage.md`.
       - **Batch 4:** `services/guest_notification_service.py` (70.34%, 118
         stmts), `services/driver_import_service.py` (70.34%, 381 stmts —
         largest file in this batch), `utils/quest_tracker.py` (70.42%, 71

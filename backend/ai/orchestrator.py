@@ -24,7 +24,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 try:
     from . import conversations, response_cache
-    from .pii import scrub_pii
+    from .pii import filter_tool_leakage, scrub_pii
     from .prompts import build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
@@ -32,7 +32,7 @@ try:
     from .tools import execute_tool, tool_defs_for
 except ImportError:
     from ai import conversations, response_cache
-    from ai.pii import scrub_pii
+    from ai.pii import filter_tool_leakage, scrub_pii
     from ai.prompts import build_system_prompt
     from ai.providers import get_adapter
     from ai.providers.base import AIConfigError
@@ -390,7 +390,10 @@ async def run_chat_turn(
     # so the rider still sees the real reply; only stored/replayed copies
     # change. keep_trip_pins mirrors the user-side call in case the model
     # echoes a bracketed trip-endpoint pair back.
-    stored_text = scrub_pii(final_text, keep_trip_pins=True)
+    # AI13: also strip snake_case-shaped tool-name/internal-jargon leakage
+    # from the persisted/replayed copy -- same live-stream-unchanged
+    # convention as the PII scrub immediately above.
+    stored_text = filter_tool_leakage(scrub_pii(final_text, keep_trip_pins=True))
 
     assistant_row = await conversations.append_message(
         conversation,

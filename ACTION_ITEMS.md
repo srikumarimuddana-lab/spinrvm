@@ -3307,11 +3307,28 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `precise=False` on the card and let the assistant quote immediately while
   offering the map pin as an optional refinement (the "quote + note" option),
   rather than gating the quote.
-- [ ] **AI13. No output-side leakage filter** — prompt rules (added
-  2026-07-28) are the only defense against the model printing tool names /
-  internal jargon; nothing greps the reply stream. A lightweight post-filter
-  for snake_case tool names in assistant text would make the secrecy rule
-  structural.
+- [x] **AI13. No output-side leakage filter** — done: new
+  `backend/ai/pii.py::filter_tool_leakage` regexes for snake_case-shaped
+  tokens (`\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b`) generally, not just the
+  current tool registry, so the backstop stays structural against a
+  hallucinated or future internal-identifier name too. Wired into
+  `orchestrator.py`'s existing `stored_text = scrub_pii(...)` line
+  (`stored_text = filter_tool_leakage(scrub_pii(...))`), the same call site
+  AI2's PII scrub already uses — **same scope decision as AI2**: this
+  filters the persisted/replayed copy (`ai_messages`, the FAQ
+  cross-user cache) only. The raw text has already streamed to the client
+  live by the time this runs (SSE token-by-token), matching the existing,
+  already-documented convention at that exact call site ("the raw text has
+  already streamed to the client this turn... only stored/replayed copies
+  change") — a true live-stream filter would need per-token buffering,
+  which is an architectural change this item's own "lightweight" framing
+  didn't ask for and wasn't attempted. 6 new unit tests in
+  `tests/test_ai_pii.py::TestFilterToolLeakage` (registered + hypothetical
+  future tool names, normal prose unaffected, multi-leak, idempotent, no
+  cross-contamination with `scrub_pii`'s own uppercase placeholder tokens)
+  plus 1 orchestrator-level regression test
+  (`test_assistant_text_has_tool_leakage_filtered_before_persistence`)
+  pinning the real call site the same way AI2's own regression test does.
 - [x] **AI15. `backend/ai/pii.py` had no card-number or government-ID/SIN
   scrubbing** — `scrub_pii()` covered phones, emails, GPS coordinates, and
   postal codes but had zero regex coverage for payment card numbers, and zero

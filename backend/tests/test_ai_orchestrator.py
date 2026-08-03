@@ -184,6 +184,24 @@ class TestHappyPaths:
         assert "[PHONE]" in assistant_call.args[2]
         assert "306-555-1234" not in assistant_call.args[2]
 
+    @pytest.mark.asyncio
+    async def test_assistant_text_has_tool_leakage_filtered_before_persistence(self):
+        # AI13 regression: a prompt rule alone doesn't stop the model from
+        # printing a tool name; the persisted/replayed copy must have it
+        # filtered, same convention as the AI2 PII scrub above.
+        adapter = FakeAdapter(
+            [[_text("Let me run "), _text("find_place to check that address for you."), _end()]]
+        )
+        frames, mocks = await _run(adapter)
+        # the client still sees the raw text streamed this turn — only the
+        # persisted copy changes.
+        tokens = "".join(p["text"] for n, p in frames if n == "token")
+        assert "find_place" in tokens
+        assistant_call = mocks["append"].await_args_list[1]
+        assert assistant_call.args[1] == "assistant"
+        assert "[internal]" in assistant_call.args[2]
+        assert "find_place" not in assistant_call.args[2]
+
 
 # Rule 6c in the system prompt mentions the block by name, so the test
 # sentinel must be text only the INJECTED block carries.

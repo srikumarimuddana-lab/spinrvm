@@ -489,3 +489,66 @@ except ValueError:
 ### 10. What was NOT verified
 
 - No staging/manual repro of an actual corrupted DB row — verified at the unit level via a hand-crafted malformed string.
+
+---
+
+## Entry 7 — `retention_purge.py`: asymmetric error handling on the daily regulatory PII purge
+
+### 1. Issue / gap identified
+
+`utils/retention_purge.py::run_retention_purge_tick` validates two Postgres RPC responses (`purge_pii_retention` and `purge_trip_route_geometry`) with the identical `isinstance(data, dict)` shape check, but reacted asymmetrically to a malformed response: `purge_pii_retention` logged via `logger.error` and returned `None` (the calling loop saw a normal completion — no exception, no `spinr_bgloop_errors_total` increment), while `purge_trip_route_geometry` logged the same way but then raised `RuntimeError`, which the loop wrapper's `except Exception` catches and alerts on. `purge_pii_retention` is the function driving the **regulatory** purge (7-year DSAR/trip hard-delete, 3-year GPS-trace scrub, 7-year insurance-period audit trail per CLAUDE.md's PIPEDA/Saskatchewan Regulatory sections) — a silent stop there is a compliance risk, not just an availability one.
+
+### 2. Root cause
+
+The two response-shape guards were written with the same check but different failure-handling philosophies (soft-fail vs. hard-fail) for what is effectively the same failure mode (an unexpected RPC envelope shape, e.g. from a Supabase/PostgREST client upgrade) — an inconsistency, not a deliberate design choice; nothing in the module docstring or surrounding code explains why the two should differ.
+
+### 3. Fix / remediation
+
+`purge_pii_retention`'s malformed-response branch now raises `RuntimeError("purge_pii_retention returned an invalid response")` after logging, matching `purge_trip_route_geometry`'s existing behavior. The exception propagates through `_tick()` into `retention_purge_loop`'s `except Exception` handler exactly as the route-geometry half already does — logged via `logger.exception`, `spinr_bgloop_errors_total` incremented, and (since the loop retries every ~24h) the purge attempt again on the next scheduled run.
+
+### 4. Risk & impact on existing functionality
+
+- **Blast radius: isolated.** `run_retention_purge_tick`'s only caller is `_tick()` → `retention_purge_loop`, one of the 17 background loops (spawned from `core/lifespan.py`), tracked by `utils/loop_monitor.py`. No route or other service calls this function directly.
+- For the common case (a well-formed RPC response, which is what happens on every day this has run successfully in production) behavior is byte-identical — this only changes what happens on the previously-silent malformed-response edge case.
+- This is a monitoring/alerting-visibility fix, not a data-write-path change: the RPC call to Postgres itself, and what it deletes/anonymizes, is completely unchanged. The only behavior change is whether a shape mismatch in the *response* now surfaces loudly.
+
+### 5. User-experience effect
+
+None — this is a purely internal, backend-only background-loop change with no rider/driver/corporate-admin-facing surface. Internal-admin/ops-facing: a malformed-response failure of the regulatory purge will now show up in `spinr_bgloop_errors_total` and the loop's exception log, instead of looking like a normal, silent completion.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/utils/retention_purge.py` | `purge_pii_retention`'s malformed-response branch now raises `RuntimeError` after logging, instead of returning `None` | Close the found-not-fixed silent-compliance-purge-stop gap |
+| `backend/tests/test_retention_purge.py` | Renamed/updated the pre-existing test that pinned the old soft-fail behavior to assert the raise instead | Reflect the fix (this test predates this session's coverage sweep) |
+| `backend/tests/test_retention_purge_coverage.py` | Updated the pinned "found not fixed" comparison test and its sibling to assert the now-consistent raising behavior on both halves | Reflect the fix |
+
+### 7. Before / after
+
+```python
+# Before
+if not isinstance(data, dict):
+    logger.error("retention_purge: unexpected rpc response shape: %r", type(data).__name__)
+    return None
+
+# After
+if not isinstance(data, dict):
+    logger.error("retention_purge: unexpected rpc response shape: %r", type(data).__name__)
+    raise RuntimeError("purge_pii_retention returned an invalid response")
+```
+
+### 8. Rollback plan
+
+`git revert` — pure code-path fix, no migration, no change to the underlying Postgres RPC functions or what they delete/anonymize. If this fix somehow caused an undesired alert-noise increase (e.g. a genuinely transient/expected response-shape quirk), reverting restores the prior soft-fail-and-log behavior with no data-level cleanup needed.
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_retention_purge_coverage.py tests/test_retention_purge.py -q` — 34 passed (26 + 8).
+- [x] Blast-radius grep performed: only `core/lifespan.py` (spawns the loop) and `utils/loop_monitor.py` (heartbeat) reference this module outside its own file — see section 4.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- Not run against a real Supabase/Postgres RPC call — verified at the unit level only, against mocked `supabase.rpc(...).execute()` responses.
+- Did not confirm with the compliance/legal owner of the retention policy whether hard-failing (vs. the prior soft-fail) is the definitively correct choice for this specific RPC — the fix follows this same file's own existing precedent (the `purge_trip_route_geometry` half already does this), which is the strongest available signal for "intended" behavior in this codebase, but a compliance sign-off was not separately sought.

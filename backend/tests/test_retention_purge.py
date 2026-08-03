@@ -97,9 +97,15 @@ async def test_run_tick_returns_none_when_supabase_unconfigured():
 
 
 @pytest.mark.asyncio
-async def test_run_tick_returns_none_on_unexpected_response_shape():
+async def test_run_tick_raises_on_unexpected_response_shape():
     """If the rpc response is shaped differently (PostgREST upgrade,
-    schema drift), don't crash the loop — log and continue."""
+    schema drift), the tick now raises instead of silently returning None
+    — fixed 2026-08-03 (see docs/change-log/2026-08-03-a1c-found-not-fixed-
+    bugfixes.md, Entry 7). The daily regulatory PII/DSAR purge must not
+    silently stop running with only a log line and no alarm; the loop
+    wrapper (retention_purge_loop) catches this and increments the
+    bgloop-error metric, matching purge_trip_route_geometry's existing
+    behavior for the identical failure mode."""
     rpc_mock = MagicMock()
     rpc_mock.execute.return_value = MagicMock(data="not a dict")
     supa = MagicMock()
@@ -111,9 +117,8 @@ async def test_run_tick_returns_none_on_unexpected_response_shape():
     ):
         from utils.retention_purge import run_retention_purge_tick
 
-        result = await run_retention_purge_tick()
-
-    assert result is None
+        with pytest.raises(RuntimeError, match="purge_pii_retention returned an invalid response"):
+            await run_retention_purge_tick()
 
 
 @pytest.mark.asyncio

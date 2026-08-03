@@ -174,7 +174,14 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
             "retention_purge: unexpected rpc response shape: %r",
             type(data).__name__,
         )
-        return None
+        # Raise, matching purge_trip_route_geometry's malformed-response
+        # handling below and CLAUDE.md's "do not silently swallow errors"
+        # rule — this is the daily regulatory PII/DSAR purge; a silent
+        # `return None` here previously let it stop running indefinitely
+        # (e.g. after a PostgREST/Supabase client upgrade changed the RPC
+        # envelope shape) with only a single ERROR log line, no alarm, no
+        # metric, and the calling loop seeing a normal completion.
+        raise RuntimeError("purge_pii_retention returned an invalid response")
 
     def _call_trip_route_geometry() -> Any:
         return supabase.rpc("purge_trip_route_geometry", {"p_dry_run": dry_run}).execute()

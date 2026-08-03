@@ -1376,6 +1376,41 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
           main commits' tests in between, e.g. #3341), 8 skipped, 1
           xfailed, 0 failed. See
           `docs/change-log/2026-08-02-a1c-claim-reaper-preauth-allowance-reset-coverage.md`.
+      - Three more dispatch/insurance-audit-adjacent files:
+        - `utils/period1_distance_finalizer.py` — **CLOSED, 64% → 88%** (73
+          stmts, measured via `pytest
+          tests/test_period1_distance_finalizer_coverage.py
+          tests/test_period1_distance_finalizer.py
+          --cov=utils.period1_distance_finalizer --cov-report=term-missing`).
+          Drains Period-1 (deadhead) distance accumulators into the
+          append-only insurance-period audit table — the active-ride-check
+          exception branch (conservatively doesn't finalize),
+          `db_supabase.supabase is None` early returns, one-driver-
+          exception-doesn't-abort-batch, and the entire
+          `period1_distance_finalizer_loop` wrapper were untested. Added
+          `backend/tests/test_period1_distance_finalizer_coverage.py`
+          (7 tests).
+        - `utils/driver_online.py` — **CLOSED, 70% → 100%** (33 stmts,
+          measured via `pytest tests/test_driver_online_coverage.py
+          --cov=utils.driver_online --cov-report=term-missing`). No
+          dedicated test file existed at all for this pure-function
+          intent+presence composition every dispatch reader routes
+          through. Added `backend/tests/test_driver_online_coverage.py`
+          (21 tests) covering every branch of `_parse_ts`/`intent_online`/
+          `effective_online`/`effective_available`/`filter_effective_online`.
+        - `utils/presence_sweeper.py` — **CLOSED, 73% → 94%** (33 stmts,
+          measured via `pytest tests/test_presence_sweeper_coverage.py
+          tests/test_p3_loop_jitter_metrics.py --cov=utils.presence_sweeper
+          --cov-report=term-missing`). A documented RETIRED no-op (own
+          module docstring: no longer scheduled at startup, kept only for
+          loop-jitter-test symbol stability) — the tick-exception-counts
+          branch and the `CancelledError`-must-propagate branch were
+          untested. Added `backend/tests/test_presence_sweeper_coverage.py`
+          (3 tests).
+        - Test-only across all three files, no application code changed.
+          Full suite re-run after: 8742 passed (was 8711), 8 skipped, 1
+          xfailed, 0 failed. See
+          `docs/change-log/2026-08-02-a1c-period1-finalizer-driver-online-presence-sweeper-coverage.md`.
     - Next file since this re-scope picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB

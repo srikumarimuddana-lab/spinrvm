@@ -1265,6 +1265,42 @@ export default function SettingsPage() {
                             </div>
                         </CardContent>
                     </Card>
+                    {/* Corporate + admin portal review, "$100k/minute" finding: the
+                        wallet /adjust endpoint accepted up to $100,000 per call with
+                        no limit on repeated calls by the same admin. A daily
+                        cumulative cap now blocks the total, but had no settings
+                        field — the backend fell back to a $50,000 default with no
+                        way to see or change it short of a direct SQL update. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Corporate Wallet Safeguards</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="corporate_wallet_admin_adjust_daily_cap">
+                                    Daily admin wallet-adjustment cap (CAD, per admin)
+                                </Label>
+                                <p className="text-xs text-muted-foreground">
+                                    Caps how much any one admin can move via manual corporate wallet
+                                    adjustments in a single UTC day, across all companies combined.
+                                    Defaults to $50,000 if left blank.
+                                </p>
+                                <Input
+                                    id="corporate_wallet_admin_adjust_daily_cap"
+                                    type="number" min={1} step={100}
+                                    value={settings.corporate_wallet_admin_adjust_daily_cap ?? ""}
+                                    placeholder="50000"
+                                    onChange={(e) =>
+                                        update(
+                                            "corporate_wallet_admin_adjust_daily_cap",
+                                            e.target.value === "" ? null : parseFloat(e.target.value),
+                                        )
+                                    }
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
                 </TabsContent>
                 </Tabs>
             )}

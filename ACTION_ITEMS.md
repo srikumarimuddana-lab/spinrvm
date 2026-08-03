@@ -3655,9 +3655,18 @@ how much they de-risk a public launch._
   (like the failover runbook) has never been exercised. Restore a Supabase PITR
   snapshot into a scratch project, verify row counts + a sample ride lifecycle,
   record actual RTO in the runbook. A backup is only real after a restore.
-- [ ] **E8. CODEOWNERS + review routing** — no `.github/CODEOWNERS`. Route
-  `backend/routes/payments*`/`services/fare*`/`migrations/` to designated
-  reviewers so money/schema changes can't merge on a drive-by approval.
+- [ ] **E8. CODEOWNERS + review routing** — partially done. Added
+  `.github/CODEOWNERS` routing payments/corporate/wallet/surge, migrations,
+  auth/security-sensitive files, dispatch, and safety paths to distinct
+  owner groups, bottom-up-specific per GitHub's matching rules. **Still
+  blocked**: the owner handles are placeholders
+  (`@spinr-org/TBD-payments-reviewers` etc.) — this session has no real
+  GitHub org/team roster to assign, and GitHub CODEOWNERS entries must
+  resolve to actual org members/teams to have any effect. Also still open:
+  enabling "Require review from Code Owners" in branch protection, which
+  needs GitHub repo-admin access this session doesn't have. File the real
+  team slugs in once eng leadership assigns owners, then flip the branch
+  protection setting.
 - [x] **E9. Blameless postmortem template** — done: new
   `docs/templates/postmortem.md` (mirrors `docs/templates/CHANGE_IMPACT_LOG.md`'s
   style) — summary, timeline, impact, root cause via 5-whys, what went

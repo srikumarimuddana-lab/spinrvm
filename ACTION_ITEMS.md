@@ -3601,9 +3601,28 @@ how much they de-risk a public launch._
   `docs/runbooks/sos-incident.md`'s Post-Incident checklist) now reference
   the shared template for structure while keeping their own path/timing.
   Docs-only change, no code/tests to run.
-- [ ] **E10. License compliance scan** — dependency *vulnerability* audit exists;
-  add license checking (`pip-licenses` + `license-checker` in CI, fail on
-  GPL/AGPL in shipped surfaces). Matters for SOC 2 and any future diligence.
+- [x] **E10. License compliance scan** — done, and found half of this was
+  already stale: `pip-licenses` (Python deps) was **already wired into CI**
+  as `security-gates.yml`'s `G7 · pip-licenses (Python deps)` job (denylist
+  strategy: GPL/AGPL/SSPL/Elastic/Commons Clause/BUSL) — the item's own text
+  implied both halves were missing, only the JS half actually was. New
+  `G7b · license-checker (JS deps)` job added right after G7, mirroring the
+  existing `G4b · yarn audit (JS deps)` matrix job's exact structure
+  (`fail-fast: false` across `[rider-app, driver-app, admin-dashboard,
+  shared]` so one module's failure doesn't mask the others' unknown state —
+  same rationale, same historical incident class this repo already hit once
+  on G4b). Scoped to `--production --excludePrivatePackages` (shipped
+  surfaces only, per the item's own framing — not devDependencies), same
+  denylist family as G7 (`GPL;AGPL;LGPL;SSPL;Elastic;Commons-Clause;BUSL`).
+  **Verification deferred to the end-of-batch run** (this session's
+  token-budget constraint) — the new job's YAML syntax was reviewed by eye
+  against the G4b job it mirrors, but was not dry-run through `act` or an
+  actual GitHub Actions run, and the current dependency trees across the
+  four JS modules were not audited for a real copyleft/proprietary license
+  that would fail the new gate on first run. If it does fail on first run,
+  that's real signal the gate is working, not a bug in the job — resolve
+  per-package (swap, pin an alternate version, or get a documented CR
+  exception), don't loosen the denylist to make it pass.
 - [ ] **E11. a11y checks in CI** — WCAG 2.1 AA is a stated regulatory mandate and
   axe is already in admin-dashboard devDeps, but nothing runs it in CI. Wire
   axe into the Playwright E2E suite for the customer-facing surfaces.

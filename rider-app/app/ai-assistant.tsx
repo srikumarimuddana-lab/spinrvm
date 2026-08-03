@@ -305,18 +305,36 @@ export default function AiAssistantScreen() {
 
   const renderMessage = ({ item }: { item: AiChatMessage }) => {
     if (item.kind === 'support_action' && item.action?.type === 'open_support') {
-      const link = item.action.link === '/lost-and-found' ? '/lost-and-found' : '/support';
+      const isCancelRide = item.action.category === 'cancel_ride';
+      const isLostItem = item.action.link === '/lost-and-found';
+      const label = isCancelRide ? 'Go to your ride' : isLostItem ? 'Open Lost & Found' : 'Contact support';
+      const handlePress = () => {
+        if (isCancelRide) {
+          // Cancelling is self-serve — send the rider to whichever screen
+          // actually owns their current ride (same resolver the header
+          // back-button uses), not a generic support page. Falls back to
+          // the backend's static link if there's no live ride state to
+          // resolve from (e.g. it already ended by the time they tap this).
+          const { currentRide: ride } = useRideStore.getState();
+          const pathname = activeRideRouteFor(ride?.status);
+          if (pathname && ride?.id) {
+            router.push({ pathname, params: { rideId: ride.id } } as never);
+            return;
+          }
+          router.push('/ride-status' as never);
+          return;
+        }
+        router.push((isLostItem ? '/lost-and-found' : '/support') as never);
+      };
       return (
         <TouchableOpacity
           style={styles.actionCard}
-          onPress={() => router.push(link as never)}
+          onPress={handlePress}
           accessibilityRole="button"
-          accessibilityLabel="Contact support"
+          accessibilityLabel={label}
         >
           <Ionicons name="headset-outline" size={18} color={colors.primary} />
-          <Text style={styles.actionCardText}>
-            {item.action.link === '/lost-and-found' ? 'Open Lost & Found' : 'Contact support'}
-          </Text>
+          <Text style={styles.actionCardText}>{label}</Text>
           <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
         </TouchableOpacity>
       );

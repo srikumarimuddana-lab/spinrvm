@@ -3309,10 +3309,40 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   fallback store (`REDIS_URL` unset in the test env, per this repo's
   documented Redis-transparency convention), not the real `SET NX EX`
   round-trip against Redis itself.
-- [ ] **AI11. Cancel-ride escalation UX** — the assistant correctly refuses
-  to cancel rides, but there is no `cancel`/`ride_issue` escalation category
-  and no deep link to the ride screen — riders get a support ticket for a
-  self-serve action.
+- [x] **AI11. Cancel-ride escalation UX** — done: added one new
+  `escalate_to_support` category, `cancel_ride` (not a separate `ride_issue`
+  category too — the item's concretely-described gap was specifically
+  cancellation requests getting a generic ticket instead of a self-serve
+  deep link; a broader `ride_issue` category wasn't scoped by this item and
+  wasn't added to avoid inventing an undefined feature). Backend
+  (`ai/tools_support.py`): `cancel_ride` maps to `/ride-status` in
+  `_CATEGORY_LINKS` and gets its own response message ("You can cancel from
+  your ride screen — tap below to go there.") instead of the default
+  "handoff to human support" phrasing, which was actively misleading for a
+  self-serve action. `ai/prompts.py`'s rider-only cancel-refusal rule now
+  tells the model to use `category="cancel_ride"` for cancel requests
+  specifically. Frontend (`rider-app/app/ai-assistant.tsx`): the
+  `open_support` action card, on a `cancel_ride` category, now resolves the
+  actual ride-owning screen via the same `activeRideRouteFor(status)`
+  resolver the screen's own header back-button already uses (searching/
+  driver_assigned/driver_accepted → `/driver-arriving`, driver_arrived →
+  `/driver-arrived`, in_progress → `/ride-in-progress`), falling back to the
+  backend's static `/ride-status` link only if there's no live ride state to
+  resolve from (e.g. the ride already ended by the time the rider taps it) —
+  reusing the existing resolver instead of hardcoding a second, possibly-
+  inconsistent path. 6 new backend unit tests
+  (`tests/test_ai_tools_support.py::TestEscalation::test_cancel_ride_links_to_ride_status_not_a_ticket_message`
+  plus the existing suite unaffected); full
+  `test_ai_tools_support.py`/`test_ai_orchestrator.py`/`test_ai_pii.py`/
+  `test_ai_tools_booking.py`/`test_ai_admin_console.py` (232 tests) pass.
+  **Not verified:** the `rider-app/app/ai-assistant.tsx` frontend change has
+  no dedicated component test (none existed for this screen before this
+  change either) and was not visually tested in a running app/simulator —
+  reasoned through by reading the existing `activeRideRouteFor` +
+  `useRideStore` usage pattern already in the same file (the header
+  back-button handler), not executed. Flagging per this repo's own
+  "state what was NOT verified" convention, not silently claiming full
+  coverage.
 - [x] **AI12. Admin console endpoint has no rate limiter and a stale
   docstring** — `routes/admin/ai_console.py` claims turns count against the
   daily cap; the orchestrator deliberately exempts them, and the endpoint has

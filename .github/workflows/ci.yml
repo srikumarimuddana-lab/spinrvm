@@ -634,11 +634,11 @@ jobs:
           set -e
           if [ "$RC" -ne 0 ]; then
             echo "::error::gitleaks found secrets in the admin build output."
-            python3 -c "
-import json
-for f in json.load(open('gitleaks-report.json')):
-    print(f\"  {f['RuleID']:24} {f['File']}:{f['StartLine']}  {f['Match'][:100]}\")
-"
+            python3 - <<'PY'
+          import json
+          for f in json.load(open("gitleaks-report.json")):
+              print("  %-24s %s:%s  %s" % (f["RuleID"], f["File"], f["StartLine"], f["Match"][:100]))
+          PY
           fi
           rm -f gitleaks gitleaks-report.json
           exit $RC

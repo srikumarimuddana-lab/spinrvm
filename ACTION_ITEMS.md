@@ -1341,6 +1341,41 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
           Full suite re-run after: 8565 passed (was 8546), 8 skipped, 1
           xfailed, 0 failed. See
           `docs/change-log/2026-08-02-a1c-offer-reaper-corp-low-balance-orphaned-hold-coverage.md`.
+      - Continuing from the same re-scope list, three more background-loop
+        utilities picked ahead of raw ranking (dispatch/payments/corporate):
+        - `utils/driver_claim_reaper.py` — **CLOSED, 65% → 94%** (68
+          stmts, measured via `pytest
+          tests/test_driver_claim_reaper_coverage.py
+          tests/test_driver_claim_reaper.py --cov=utils.driver_claim_reaper
+          --cov-report=term-missing`). Releases drivers orphaned by a
+          crashed dispatch claim — `_reap_tick`'s fetch-exception and
+          release-exception branches and the entire
+          `driver_claim_reaper_loop` wrapper were untested. Added
+          `backend/tests/test_driver_claim_reaper_coverage.py` (7 tests).
+        - `utils/preauth_capture.py` — **CLOSED, 72% → 94%** (87 stmts,
+          measured via `pytest tests/test_preauth_capture_coverage.py
+          tests/test_preauth_capture.py --cov=utils.preauth_capture
+          --cov-report=term-missing`). Captures booking-time card holds
+          after the tip window — the Meta Purchase-conversion hook
+          (fires-on-new-capture / skipped-on-already_paid-replay), the
+          receipt-send-exception swallow, `_capture_tick`'s fetch-exception
+          branch, and the entire `preauth_capture_loop` wrapper were
+          untested. Added `backend/tests/test_preauth_capture_coverage.py`
+          (10 tests).
+        - `utils/allowance_reset.py` — **CLOSED, 68% → 89%** (76 stmts,
+          measured via `pytest tests/test_allowance_reset_coverage.py
+          tests/test_c_allowance_reset_atomic.py
+          tests/test_corporate_allowance_reset.py --cov=utils.allowance_reset
+          --cov-report=term-missing`). Rolls corporate allowance periods
+          forward — the no-wallet-found skip, one-row-exception-doesn't-
+          abort-batch swallow, `_add_one_month`'s day-clamp edge case, and
+          the entire `allowance_reset_loop` wrapper were untested. Added
+          `backend/tests/test_allowance_reset_coverage.py` (7 tests).
+        - Test-only across all three files, no application code changed.
+          Full suite re-run after: 8711 passed (was 8565 plus other merged
+          main commits' tests in between, e.g. #3341), 8 skipped, 1
+          xfailed, 0 failed. See
+          `docs/change-log/2026-08-02-a1c-claim-reaper-preauth-allowance-reset-coverage.md`.
     - Next file since this re-scope picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB

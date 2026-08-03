@@ -120,21 +120,26 @@ jobs:
         env:
           # Pinned rather than tracking whatever "latest" resolves to at
           # run time — reduces (does not eliminate) the supply-chain risk
-          # of Maestro's install script silently changing what a bare
-          # `curl | bash` fetches on a future run. Bump deliberately, not
-          # automatically, same spirit as this repo's pinned
-          # requirements-locked.txt for Python deps.
+          # of Maestro's install script silently changing what this step
+          # fetches on a future run. Bump deliberately, not automatically,
+          # same spirit as this repo's pinned requirements-locked.txt for
+          # Python deps.
           MAESTRO_VERSION: "1.39.0"
         run: |
-          # Maestro does not publish a separate checksum/signature for this
-          # installer to verify against — get.maestro.mobile.dev is their
+          # Download first, inspect, then execute — rather than piping
+          # curl straight into bash — per Semgrep's gha-curl-pipe-shell
+          # finding. Maestro doesn't publish a separate checksum/signature
+          # for this installer to verify the download against (unlike a
+          # release artifact with a SHA256SUMS file), so this doesn't fully
+          # close the supply-chain gap — get.maestro.mobile.dev is their
           # own documented official install method (.maestro/README.md
-          # already uses this exact command for local dev), so
-          # download-then-verify isn't available here the way it would be
-          # for a release artifact with a published SHA256SUMS file.
-          # Version-pinning above is the practical mitigation actually
-          # available; this is an accepted residual risk, not an oversight.
-          curl -Ls "https://get.maestro.mobile.dev" | bash
+          # already uses the equivalent curl | bash for local dev) — but a
+          # separate download step at least means the script that runs is
+          # the one actually fetched (and could be logged/diffed), not an
+          # unseen stream piped directly into a shell.
+          curl -Ls "https://get.maestro.mobile.dev" -o maestro-install.sh
+          bash maestro-install.sh
+          rm -f maestro-install.sh
           # The installer puts the binary at $HOME/.maestro/bin — on a
           # GitHub-hosted runner that's /home/runner, not /root; appending
           # to GITHUB_PATH (rather than trying to set `env.PATH` in a later

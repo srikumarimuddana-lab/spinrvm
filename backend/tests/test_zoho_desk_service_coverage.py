@@ -1,30 +1,30 @@
-"""
-Coverage-focused unit tests for services/zoho_desk_service.py.
+"""Additional coverage for services/zoho_desk_service.py.
 
-A1c Sub-tier C — test-only pass, no application code changed. Written purely
-by reading backend/services/zoho_desk_service.py; not executed against
-pytest in this session (per task instructions), so relies on careful static
-reading of the source rather than a red/green loop.
+Complements tests/test_zoho_desk.py (which covers not-configured/disabled,
+unknown data center, token refresh + persistence, the 401-retry-once
+contract, and a handful of Codex-flagged param-shape regressions) with the
+remaining endpoint wrappers and error branches that weren't previously
+exercised directly:
 
-Targets the previously-uncovered branches:
-  - _require_connected: missing-keys message (not just "disabled")
-  - _token_is_fresh: falsy expiry, non-string expiry, naive-datetime expiry,
-    unparsable-string expiry, and a genuinely buggy non-string/non-datetime
-    expiry (see test_token_is_fresh_int_expiry_raises_attributeerror_bug)
+  - _require_connected: enabled but missing required fields -> 503
+  - _token_is_fresh: every branch (no expiry, non-string expiry, naive
+    datetime, unparseable expiry)
   - _refresh_access_token: transport error, non-JSON response body
-  - _request: transport error, 204 no-content, non-JSON error body,
-    non-JSON success body
-  - list_tickets / search_tickets: every optional filter param
-  - get_default_department_id, create_ticket (all branches), get_ticket_threads,
-    get_thread, add_comment, update_ticket (success path), add_tags,
-    remove_tags, list_agents, list_departments, ticket_count (bad-count branch)
+  - _request: transport error on the actual API call (distinct from the
+    token-refresh transport error already covered), a 204 response, a
+    non-JSON 4xx/5xx error body, a non-JSON 2xx body
+  - search_tickets, get_default_department_id, create_ticket,
+    get_ticket_threads, get_thread, add_comment, update_ticket (success
+    path), add_tags, remove_tags, list_agents, list_departments,
+    ticket_count (the int()-conversion-failure branch)
+  - list_tickets: status / assignee_id / priority / channel filters
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
 
 import services.zoho_desk_service as zoho
@@ -32,21 +32,19 @@ from services.zoho_desk_service import ZohoDeskError
 
 
 class _FakeResponse:
-    def __init__(self, status_code=200, json_data=None, text=""):
+    def __init__(self, status_code=200, json_data=None, text="", json_raises=False):
         self.status_code = status_code
         self._json = json_data
         self.text = text
+        self._json_raises = json_raises
 
     def json(self):
-        if self._json is None:
+        if self._json_raises or self._json is None:
             raise ValueError("no json")
         return self._json
 
 
 class _FakeClient:
-    """Async-context-manager stand-in for httpx.AsyncClient. ``handler`` is a
-    callable (method, url, kwargs) -> _FakeResponse."""
-
     def __init__(self, handler):
         self._handler = handler
 
@@ -63,8 +61,12 @@ class _FakeClient:
         return self._handler(method, url, kwargs)
 
 
-class _ErrorClient:
-    """Stand-in whose every call raises an httpx transport error."""
+class _RaisingClient:
+    """Stands in for httpx.AsyncClient when the transport itself should
+    blow up (connect timeout, DNS failure, etc.)."""
+
+    def __init__(self, exc):
+        self._exc = exc
 
     async def __aenter__(self):
         return self
@@ -73,10 +75,10 @@ class _ErrorClient:
         return False
 
     async def post(self, url, **kwargs):
-        raise httpx.ConnectError("boom")
+        raise self._exc
 
     async def request(self, method, url, **kwargs):
-        raise httpx.ConnectError("boom")
+        raise self._exc
 
 
 def _connected_config(**overrides):
@@ -88,11 +90,21 @@ def _connected_config(**overrides):
         "client_id": "cid",
         "client_secret": "secret",
         "refresh_token": "rtok",
-        "access_token": "AT",
-        "access_token_expires_at": "2999-01-01T00:00:00+00:00",
+        "access_token": "",
+        "access_token_expires_at": None,
     }
     cfg.update(overrides)
     return cfg
+
+
+def _fresh_config(**overrides):
+    """A config whose access token is already fresh, so calls skip the
+    refresh round-trip and go straight to the API request."""
+    return _connected_config(
+        access_token="AT",
+        access_token_expires_at="2999-01-01T00:00:00+00:00",
+        **overrides,
+    )
 
 
 def _patch_db(monkeypatch, row):
@@ -107,172 +119,138 @@ def _patch_http(monkeypatch, handler):
     monkeypatch.setattr(zoho.httpx, "AsyncClient", lambda *a, **k: _FakeClient(handler))
 
 
-def _patch_http_error(monkeypatch):
-    monkeypatch.setattr(zoho.httpx, "AsyncClient", lambda *a, **k: _ErrorClient())
+def _patch_http_raises(monkeypatch, exc):
+    monkeypatch.setattr(zoho.httpx, "AsyncClient", lambda *a, **k: _RaisingClient(exc))
 
 
-# --------------------------------------------------------------------------
-# _require_connected — missing-keys branch (line 96)
-# --------------------------------------------------------------------------
+# --- _require_connected: enabled but missing fields -------------------------
 
 
 @pytest.mark.anyio
-async def test_missing_config_keys_raises_503_with_field_names(monkeypatch):
-    # enabled=True but client_secret blank -> hits the "missing:" message
-    # branch, distinct from the plain "disabled" branch already covered in
-    # test_zoho_desk.py.
-    _patch_db(monkeypatch, _connected_config(client_secret=""))
+async def test_enabled_but_missing_fields_raises_503(monkeypatch):
+    _patch_db(monkeypatch, _connected_config(client_secret="", refresh_token=""))
     with pytest.raises(ZohoDeskError) as ei:
         await zoho.list_tickets()
     assert ei.value.status == 503
     assert "client_secret" in ei.value.message
+    assert "refresh_token" in ei.value.message
 
 
-# --------------------------------------------------------------------------
-# _token_is_fresh branches
-# --------------------------------------------------------------------------
+# --- _token_is_fresh: direct unit tests over every branch -------------------
 
 
-def test_token_is_fresh_false_when_expiry_missing():
-    # token present, no expiry recorded -> line 108
-    cfg = {"access_token": "tok", "access_token_expires_at": None}
-    assert zoho._token_is_fresh(cfg) is False
+def test_token_is_fresh_false_without_token():
+    assert zoho._token_is_fresh({"access_token": "", "access_token_expires_at": "2999-01-01T00:00:00+00:00"}) is False
 
 
-def test_token_is_fresh_true_for_non_string_tzaware_datetime():
-    from datetime import datetime, timedelta, timezone
+def test_token_is_fresh_false_without_expiry():
+    assert zoho._token_is_fresh({"access_token": "AT", "access_token_expires_at": None}) is False
 
+
+def test_token_is_fresh_handles_non_string_expiry():
     future = datetime.now(timezone.utc) + timedelta(hours=1)
-    # access_token_expires_at stored as an actual datetime object (not a
-    # string) -> the `else: exp = expires_at` branch, line 113.
-    cfg = {"access_token": "tok", "access_token_expires_at": future}
-    assert zoho._token_is_fresh(cfg) is True
+    assert zoho._token_is_fresh({"access_token": "AT", "access_token_expires_at": future}) is True
 
 
-def test_token_is_fresh_true_for_naive_iso_string():
-    # No timezone offset in the string -> fromisoformat gives a naive
-    # datetime -> the `exp.tzinfo is None` branch, lines 115-116.
-    cfg = {"access_token": "tok", "access_token_expires_at": "2099-01-01T00:00:00"}
-    assert zoho._token_is_fresh(cfg) is True
+def test_token_is_fresh_treats_naive_datetime_as_utc():
+    # A naive datetime (no tzinfo) in the future must still be treated as
+    # fresh -- the function assumes UTC rather than raising or mis-comparing.
+    future_naive = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)
+    assert zoho._token_is_fresh({"access_token": "AT", "access_token_expires_at": future_naive}) is True
 
 
-def test_token_is_fresh_false_for_unparsable_string():
-    # fromisoformat raises ValueError -> caught -> line 117 `return False`.
-    cfg = {"access_token": "tok", "access_token_expires_at": "not-a-date"}
-    assert zoho._token_is_fresh(cfg) is False
+def test_token_is_fresh_false_on_unparseable_expiry():
+    assert zoho._token_is_fresh({"access_token": "AT", "access_token_expires_at": "not-a-timestamp"}) is False
 
 
-def test_token_is_fresh_int_expiry_raises_attributeerror_bug():
-    """FOUND NOT FIXED (not fixed here, per task instructions):
-
-    services/zoho_desk_service.py `_token_is_fresh`, ~lines 109-117.
-
-    If `access_token_expires_at` is anything other than a `str` or a
-    `datetime` (e.g. an int/epoch value, which is a plausible shape if the
-    config row is ever populated by a different writer than this module),
-    the code takes the `else: exp = expires_at` branch and then evaluates
-    `exp.tzinfo`. An `int` has no `.tzinfo` attribute, so this raises
-    `AttributeError`, which is *not* one of the types caught by
-    `except (ValueError, TypeError)`. The exception propagates uncaught out
-    of `_token_is_fresh` (and in turn `_get_access_token`/`_request`)
-    instead of being treated as "not fresh, go refresh". This test pins the
-    actual (buggy) behavior rather than the presumably-intended one.
-    """
-    cfg = {"access_token": "tok", "access_token_expires_at": 1893456000}
-    with pytest.raises(AttributeError):
-        zoho._token_is_fresh(cfg)
+def test_token_is_fresh_false_when_expired():
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    assert zoho._token_is_fresh({"access_token": "AT", "access_token_expires_at": past}) is False
 
 
-# --------------------------------------------------------------------------
-# _refresh_access_token — transport error + non-JSON body
-# --------------------------------------------------------------------------
+# --- _refresh_access_token: transport + malformed-body branches -------------
 
 
 @pytest.mark.anyio
 async def test_refresh_transport_error_raises_502(monkeypatch):
-    _patch_db(monkeypatch, _connected_config(access_token="", access_token_expires_at=None))
-    _patch_http_error(monkeypatch)
+    _patch_db(monkeypatch, _connected_config())
+    _patch_http_raises(monkeypatch, zoho.httpx.ConnectTimeout("timed out"))
     with pytest.raises(ZohoDeskError) as ei:
         await zoho.list_tickets()
     assert ei.value.status == 502
 
 
 @pytest.mark.anyio
-async def test_refresh_non_json_body_still_raises_502(monkeypatch):
-    # resp.json() raises ValueError -> `data` stays {} -> access_token is
-    # None -> falls into the "refresh failed" branch using resp.text.
-    _patch_db(monkeypatch, _connected_config(access_token="", access_token_expires_at=None))
+async def test_refresh_response_non_json_body_treated_as_failure(monkeypatch):
+    _patch_db(monkeypatch, _connected_config())
 
     def handler(method, url, kwargs):
-        return _FakeResponse(200, json_data=None, text="not json")
+        # 200 status but a body that isn't valid JSON at all -> data stays
+        # {} -> no access_token -> refresh failure path.
+        return _FakeResponse(200, json_raises=True, text="not json")
 
     _patch_http(monkeypatch, handler)
     with pytest.raises(ZohoDeskError) as ei:
         await zoho.list_tickets()
     assert ei.value.status == 502
-    assert ei.value.details == "not json"
 
 
-# --------------------------------------------------------------------------
-# _request — transport error, 204, non-JSON error body, non-JSON success body
-# --------------------------------------------------------------------------
+# --- _request: transport error on the API call itself -----------------------
 
 
 @pytest.mark.anyio
-async def test_request_transport_error_raises_502(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
-    _patch_http_error(monkeypatch)
+async def test_request_transport_error_after_valid_token_raises_502(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
+    _patch_http_raises(monkeypatch, zoho.httpx.ConnectError("unreachable"))
     with pytest.raises(ZohoDeskError) as ei:
-        await zoho.get_ticket("t1")
+        await zoho.get_ticket("123")
     assert ei.value.status == 502
 
 
 @pytest.mark.anyio
 async def test_request_204_returns_none(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+    _patch_db(monkeypatch, _fresh_config())
 
     def handler(method, url, kwargs):
         return _FakeResponse(204)
 
     _patch_http(monkeypatch, handler)
-    out = await zoho.get_ticket("t1")
-    assert out is None
+    result = await zoho.get_thread("t1", "th1")
+    assert result is None
 
 
 @pytest.mark.anyio
-async def test_request_error_body_falls_back_to_text(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_request_error_body_non_json_is_swallowed_into_text(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
 
     def handler(method, url, kwargs):
-        return _FakeResponse(500, json_data=None, text="upstream blew up")
+        return _FakeResponse(500, json_raises=True, text="<html>boom</html>")
 
     _patch_http(monkeypatch, handler)
     with pytest.raises(ZohoDeskError) as ei:
-        await zoho.get_ticket("t1")
+        await zoho.get_ticket("123")
     assert ei.value.status == 502
-    assert ei.value.details == "upstream blew up"
+    assert ei.value.details == "<html>boom</html>"
 
 
 @pytest.mark.anyio
 async def test_request_success_non_json_body_returns_none(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+    _patch_db(monkeypatch, _fresh_config())
 
     def handler(method, url, kwargs):
-        return _FakeResponse(200, json_data=None, text="")
+        return _FakeResponse(200, json_raises=True, text="")
 
     _patch_http(monkeypatch, handler)
-    out = await zoho.get_ticket("t1")
-    assert out is None
+    result = await zoho.get_thread("t1", "th1")
+    assert result is None
 
 
-# --------------------------------------------------------------------------
-# list_tickets — remaining optional filters
-# --------------------------------------------------------------------------
+# --- list_tickets: remaining filter params -----------------------------------
 
 
 @pytest.mark.anyio
-async def test_list_tickets_all_optional_filters(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_list_tickets_all_filters(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
     seen = {}
 
     def handler(method, url, kwargs):
@@ -280,99 +258,105 @@ async def test_list_tickets_all_optional_filters(monkeypatch):
         return _FakeResponse(200, {"data": []})
 
     _patch_http(monkeypatch, handler)
-    await zoho.list_tickets(status="Open", assignee_id="a1", priority="High", channel="Email")
-    p = seen["params"]
-    assert p["status"] == "Open"
-    assert p["assignee"] == "a1"
-    assert p["priority"] == "High"
-    assert p["channel"] == "Email"
+    await zoho.list_tickets(status="Open", assignee_id="agent1", priority="High", channel="Email")
+    assert seen["params"]["status"] == "Open"
+    assert seen["params"]["assignee"] == "agent1"
+    assert seen["params"]["priority"] == "High"
+    assert seen["params"]["channel"] == "Email"
 
 
-# --------------------------------------------------------------------------
-# search_tickets
-# --------------------------------------------------------------------------
+# --- search_tickets -----------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_search_tickets_numeric_query_with_all_filters(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_search_tickets_numeric_query_uses_ticket_number(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
     seen = {}
 
     def handler(method, url, kwargs):
         seen["url"] = url
         seen["params"] = kwargs.get("params") or {}
-        return _FakeResponse(200, {"data": [{"id": "9"}]})
+        return _FakeResponse(200, {"data": [{"id": "1"}]})
 
     _patch_http(monkeypatch, handler)
-    out = await zoho.search_tickets(
-        query="12345",
-        department_id="dep1",
-        status="Open",
-        priority="Low",
-        assignee_id="ag1",
-    )
-    assert out["data"][0]["id"] == "9"
-    p = seen["params"]
-    assert p["ticketNumber"] == "12345"
-    assert "_all" not in p
-    assert p["departmentId"] == "dep1"
-    assert p["status"] == "Open"
-    assert p["priority"] == "Low"
-    assert p["assigneeId"] == "ag1"
-    assert "search" in seen["url"]
+    out = await zoho.search_tickets(query="12345")
+    assert out["data"][0]["id"] == "1"
+    assert "tickets/search" in seen["url"]
+    assert seen["params"]["ticketNumber"] == "12345"
+    assert "_all" not in seen["params"]
 
 
 @pytest.mark.anyio
-async def test_search_tickets_keyword_query_wildcards_and_defaults_empty(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_search_tickets_keyword_query_and_all_filters(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
     seen = {}
 
     def handler(method, url, kwargs):
         seen["params"] = kwargs.get("params") or {}
-        return _FakeResponse(204)  # -> None -> falls back to {"data": []}
+        return _FakeResponse(200, None)  # data=None -> falls back to {"data": []}
 
     _patch_http(monkeypatch, handler)
-    out = await zoho.search_tickets(query="wallet issue")
+    out = await zoho.search_tickets(
+        query="overcharged rider",
+        department_id="dep1",
+        status="Open",
+        priority="High",
+        assignee_id="agent1",
+    )
     assert out == {"data": []}
-    p = seen["params"]
-    assert p["_all"] == "*wallet issue*"
-    assert "ticketNumber" not in p
-    assert "departmentId" not in p
-
-
-# --------------------------------------------------------------------------
-# get_default_department_id
-# --------------------------------------------------------------------------
+    assert seen["params"]["_all"] == "*overcharged rider*"
+    assert seen["params"]["departmentId"] == "dep1"
+    assert seen["params"]["status"] == "Open"
+    assert seen["params"]["priority"] == "High"
+    assert seen["params"]["assigneeId"] == "agent1"
 
 
 @pytest.mark.anyio
-async def test_get_default_department_id_present_and_absent(monkeypatch):
-    db = _patch_db(monkeypatch, {"id": "default", "default_department_id": "  dep9  "})
-    out = await zoho.get_default_department_id()
-    assert out == "dep9"
+async def test_search_tickets_empty_query_omits_all_param(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
+    seen = {}
 
-    db.find_one = AsyncMock(return_value={"id": "default", "default_department_id": ""})
-    out2 = await zoho.get_default_department_id()
-    assert out2 is None
+    def handler(method, url, kwargs):
+        seen["params"] = kwargs.get("params") or {}
+        return _FakeResponse(200, {"data": []})
+
+    _patch_http(monkeypatch, handler)
+    await zoho.search_tickets(query="   ")
+    assert "_all" not in seen["params"]
+    assert "ticketNumber" not in seen["params"]
 
 
-# --------------------------------------------------------------------------
-# create_ticket — no-department error, contact_id path, inline-contact path,
-# extra merge
-# --------------------------------------------------------------------------
+# --- get_default_department_id -----------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_default_department_id_returns_value(monkeypatch):
+    _patch_db(monkeypatch, _connected_config(default_department_id=" dep-9 "))
+    result = await zoho.get_default_department_id()
+    assert result == "dep-9"
+
+
+@pytest.mark.anyio
+async def test_get_default_department_id_none_when_blank(monkeypatch):
+    _patch_db(monkeypatch, _connected_config(default_department_id=""))
+    result = await zoho.get_default_department_id()
+    assert result is None
+
+
+# --- create_ticket -------------------------------------------------------------
 
 
 @pytest.mark.anyio
 async def test_create_ticket_no_department_raises_400(monkeypatch):
-    _patch_db(monkeypatch, {"id": "default", "default_department_id": ""})
+    _patch_db(monkeypatch, _connected_config(default_department_id=""))
     with pytest.raises(ZohoDeskError) as ei:
         await zoho.create_ticket(subject="Help")
     assert ei.value.status == 400
 
 
 @pytest.mark.anyio
-async def test_create_ticket_contact_id_priority_category_extra(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_create_ticket_with_contact_id_uses_department_override(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config(default_department_id="dep-default"))
     seen = {}
 
     def handler(method, url, kwargs):
@@ -381,27 +365,26 @@ async def test_create_ticket_contact_id_priority_category_extra(monkeypatch):
 
     _patch_http(monkeypatch, handler)
     out = await zoho.create_ticket(
-        subject="Card issue",
-        description="details",
-        department_id="dep1",
+        subject="Lost item",
+        description="desc",
+        department_id="dep-explicit",
         priority="High",
-        category="Payment",
-        contact_id="c123",
-        extra={"cf": {"custom": "x"}},
+        category="Lost & Found",
+        contact_id="contact-1",
+        extra={"customField": "x"},
     )
     assert out["id"] == "zt1"
-    body = seen["body"]
-    assert body["departmentId"] == "dep1"
-    assert body["priority"] == "High"
-    assert body["category"] == "Payment"
-    assert body["contactId"] == "c123"
-    assert "contact" not in body
-    assert body["cf"] == {"custom": "x"}
+    assert seen["body"]["departmentId"] == "dep-explicit"
+    assert seen["body"]["contactId"] == "contact-1"
+    assert "contact" not in seen["body"]
+    assert seen["body"]["priority"] == "High"
+    assert seen["body"]["category"] == "Lost & Found"
+    assert seen["body"]["customField"] == "x"
 
 
 @pytest.mark.anyio
-async def test_create_ticket_inline_contact_derives_lastname_from_email(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_create_ticket_inline_contact_synthesises_last_name(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config(default_department_id="dep-default"))
     seen = {}
 
     def handler(method, url, kwargs):
@@ -409,21 +392,15 @@ async def test_create_ticket_inline_contact_derives_lastname_from_email(monkeypa
         return _FakeResponse(200, {"id": "zt2"})
 
     _patch_http(monkeypatch, handler)
-    await zoho.create_ticket(
-        subject="Lost item",
-        department_id="dep1",
-        email="jane.doe@example.ca",
-    )
-    contact = seen["body"]["contact"]
-    assert contact["lastName"] == "jane.doe"
-    assert contact["firstName"] == ""
-    assert contact["email"] == "jane.doe@example.ca"
-    assert contact["phone"] == ""
+    await zoho.create_ticket(subject="Question", email="rider@example.ca")
+    assert seen["body"]["contact"]["email"] == "rider@example.ca"
+    assert seen["body"]["contact"]["lastName"] == "rider"  # from the email local-part
+    assert seen["body"]["subject"] == "Question"
 
 
 @pytest.mark.anyio
-async def test_create_ticket_inline_contact_no_email_defaults_customer(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_create_ticket_blank_subject_defaults(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config(default_department_id="dep-default"))
     seen = {}
 
     def handler(method, url, kwargs):
@@ -431,24 +408,19 @@ async def test_create_ticket_inline_contact_no_email_defaults_customer(monkeypat
         return _FakeResponse(200, {"id": "zt3"})
 
     _patch_http(monkeypatch, handler)
-    await zoho.create_ticket(subject="Anon", department_id="dep1")
-    contact = seen["body"]["contact"]
-    assert contact["lastName"] == "Customer"
-    assert seen["body"]["subject"] == "Anon"
+    await zoho.create_ticket(subject="")
+    assert seen["body"]["subject"] == "(no subject)"
+    assert seen["body"]["contact"]["lastName"] == "Customer"
 
 
-# --------------------------------------------------------------------------
-# get_ticket_threads / get_thread / add_comment / update_ticket / add_tags /
-# remove_tags / list_agents / list_departments
-# --------------------------------------------------------------------------
+# --- get_ticket_threads / get_thread -------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_get_ticket_threads(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_get_ticket_threads_returns_data(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
 
     def handler(method, url, kwargs):
-        assert "/conversations" in url
         return _FakeResponse(200, {"data": [{"id": "th1"}]})
 
     _patch_http(monkeypatch, handler)
@@ -457,11 +429,11 @@ async def test_get_ticket_threads(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_get_ticket_threads_empty_fallback(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_get_ticket_threads_falls_back_to_empty_list(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
 
     def handler(method, url, kwargs):
-        return _FakeResponse(204)
+        return _FakeResponse(200, None)
 
     _patch_http(monkeypatch, handler)
     out = await zoho.get_ticket_threads("t1")
@@ -469,148 +441,135 @@ async def test_get_ticket_threads_empty_fallback(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_get_thread(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_get_thread_returns_full_content(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
 
     def handler(method, url, kwargs):
-        assert "/threads/th1" in url
-        return _FakeResponse(200, {"id": "th1", "plainText": "full body"})
+        assert "/tickets/t1/threads/th1" in url
+        return _FakeResponse(200, {"id": "th1", "content": "full body"})
 
     _patch_http(monkeypatch, handler)
     out = await zoho.get_thread("t1", "th1")
-    assert out["plainText"] == "full body"
+    assert out["content"] == "full body"
+
+
+# --- add_comment ----------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_add_comment(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
-    seen = {}
-
-    def handler(method, url, kwargs):
-        seen["url"] = url
-        seen["body"] = kwargs.get("json")
-        return _FakeResponse(200, {"id": "cm1"})
-
-    _patch_http(monkeypatch, handler)
-    out = await zoho.add_comment("t1", content="internal note", is_public=True)
-    assert out["id"] == "cm1"
-    assert "/comments" in seen["url"]
-    assert seen["body"] == {"content": "internal note", "contentType": "html", "isPublic": True}
-
-
-@pytest.mark.anyio
-async def test_update_ticket_success(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_add_comment_sends_expected_body(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
     seen = {}
 
     def handler(method, url, kwargs):
         seen["method"] = method
-        seen["body"] = kwargs.get("json")
+        seen["url"] = url
+        seen["body"] = kwargs.get("json") or {}
+        return _FakeResponse(200, {"id": "c1"})
+
+    _patch_http(monkeypatch, handler)
+    out = await zoho.add_comment("t1", content="internal note", is_public=True)
+    assert out["id"] == "c1"
+    assert seen["method"] == "POST"
+    assert "/tickets/t1/comments" in seen["url"]
+    assert seen["body"] == {"content": "internal note", "contentType": "html", "isPublic": True}
+
+
+# --- update_ticket: success path ------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_update_ticket_success_filters_to_allowed_fields(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
+    seen = {}
+
+    def handler(method, url, kwargs):
+        seen["method"] = method
+        seen["body"] = kwargs.get("json") or {}
         return _FakeResponse(200, {"id": "t1", "status": "Closed"})
 
     _patch_http(monkeypatch, handler)
-    out = await zoho.update_ticket("t1", {"status": "Closed", "unknown_field": "ignored"})
+    out = await zoho.update_ticket("t1", {"status": "Closed", "unknown_field": "x", "priority": None})
     assert out["status"] == "Closed"
     assert seen["method"] == "PATCH"
+    # unknown_field is dropped; priority=None is dropped (falsy filter).
     assert seen["body"] == {"status": "Closed"}
 
 
+# --- add_tags / remove_tags -----------------------------------------------------
+
+
 @pytest.mark.anyio
-async def test_add_tags(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_add_tags_filters_blank_names(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
     seen = {}
 
     def handler(method, url, kwargs):
         seen["url"] = url
-        seen["body"] = kwargs.get("json")
-        return _FakeResponse(200, {"ok": True})
+        seen["body"] = kwargs.get("json") or {}
+        return _FakeResponse(200, {})
 
     _patch_http(monkeypatch, handler)
-    out = await zoho.add_tags("t1", ["vip", "", "urgent"])
-    assert out == {"ok": True}
-    assert "/associateTag" in seen["url"]
-    assert seen["body"] == {"tags": ["vip", "urgent"]}
+    await zoho.add_tags("t1", ["vip", "", None, "urgent"])
+    assert "associateTag" in seen["url"]
+    assert seen["body"]["tags"] == ["vip", "urgent"]
 
 
 @pytest.mark.anyio
-async def test_remove_tags(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_remove_tags_filters_blank_names(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
     seen = {}
 
     def handler(method, url, kwargs):
         seen["url"] = url
-        seen["body"] = kwargs.get("json")
-        return _FakeResponse(200, {"ok": True})
+        seen["body"] = kwargs.get("json") or {}
+        return _FakeResponse(200, {})
 
     _patch_http(monkeypatch, handler)
-    out = await zoho.remove_tags("t1", ["vip"])
-    assert out == {"ok": True}
-    assert "/disassociateTag" in seen["url"]
-    assert seen["body"] == {"tags": ["vip"]}
+    await zoho.remove_tags("t1", ["stale", ""])
+    assert "disassociateTag" in seen["url"]
+    assert seen["body"]["tags"] == ["stale"]
+
+
+# --- list_agents / list_departments ---------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_list_agents(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_list_agents_clamps_limit_and_returns_data(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
     seen = {}
 
     def handler(method, url, kwargs):
-        seen["params"] = kwargs.get("params")
-        return _FakeResponse(200, {"data": [{"id": "ag1"}]})
+        seen["params"] = kwargs.get("params") or {}
+        return _FakeResponse(200, {"data": [{"id": "a1"}]})
 
     _patch_http(monkeypatch, handler)
-    out = await zoho.list_agents(limit=500)
-    assert out["data"][0]["id"] == "ag1"
-    assert seen["params"]["limit"] == 200  # clamped to the endpoint max
+    out = await zoho.list_agents(limit=999)
+    assert out["data"][0]["id"] == "a1"
+    assert seen["params"]["limit"] == 200  # clamped to the endpoint's max
 
 
 @pytest.mark.anyio
-async def test_list_agents_empty_fallback(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
-
-    def handler(method, url, kwargs):
-        return _FakeResponse(204)
-
-    _patch_http(monkeypatch, handler)
-    out = await zoho.list_agents()
-    assert out == {"data": []}
-
-
-@pytest.mark.anyio
-async def test_list_departments(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_list_departments_filters_enabled_only(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
     seen = {}
 
     def handler(method, url, kwargs):
-        seen["params"] = kwargs.get("params")
-        return _FakeResponse(200, {"data": [{"id": "d1"}]})
-
-    _patch_http(monkeypatch, handler)
-    out = await zoho.list_departments()
-    assert out["data"][0]["id"] == "d1"
-    assert seen["params"] == {"isEnabled": "true"}
-
-
-@pytest.mark.anyio
-async def test_list_departments_empty_fallback(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
-
-    def handler(method, url, kwargs):
-        return _FakeResponse(204)
+        seen["params"] = kwargs.get("params") or {}
+        return _FakeResponse(200, None)
 
     _patch_http(monkeypatch, handler)
     out = await zoho.list_departments()
     assert out == {"data": []}
+    assert seen["params"]["isEnabled"] == "true"
 
 
-# --------------------------------------------------------------------------
-# ticket_count — non-numeric count falls back to 0
-# --------------------------------------------------------------------------
+# --- ticket_count: the int()-conversion failure branch -------------------------
 
 
 @pytest.mark.anyio
-async def test_ticket_count_non_numeric_returns_zero(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_ticket_count_returns_zero_on_unparseable_count(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
 
     def handler(method, url, kwargs):
         return _FakeResponse(200, {"count": "not-a-number"})
@@ -621,11 +580,11 @@ async def test_ticket_count_non_numeric_returns_zero(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_ticket_count_missing_count_key_returns_zero(monkeypatch):
-    _patch_db(monkeypatch, _connected_config())
+async def test_ticket_count_returns_zero_on_missing_count(monkeypatch):
+    _patch_db(monkeypatch, _fresh_config())
 
     def handler(method, url, kwargs):
-        return _FakeResponse(204)  # -> None -> (data or {}) -> {} -> .get("count", 0) -> 0
+        return _FakeResponse(200, None)
 
     _patch_http(monkeypatch, handler)
     out = await zoho.ticket_count()

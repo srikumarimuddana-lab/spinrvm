@@ -310,6 +310,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import allowance reset loop: {e}", exc_info=True)
 
+    # Corporate KYB re-verification staleness reminder — flags (log + metric,
+    # never auto-status-change) active companies whose KYB approval predates
+    # the configured threshold. Corporate + admin portal review round 2.
+    try:
+        from utils.kyb_reverification import kyb_reverification_loop
+
+        _spawn("kyb_reverification (24h)", kyb_reverification_loop)
+    except Exception as e:
+        logger.error(f"Failed to import KYB re-verification loop: {e}", exc_info=True)
+
     # Versioned actual-route finalizer — claims one pending route every 15s,
     # retaining observed GPS gaps and never touching fare settlement.
     try:

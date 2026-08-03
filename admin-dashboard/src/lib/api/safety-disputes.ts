@@ -89,6 +89,9 @@ export interface SafetyIncident {
     resolved_at: string | null;
     resolved_by: string | null;
     resolution_notes: string | null;
+    // Migration 279 — set when this incident was merged into another
+    // (status becomes "duplicate"); null otherwise.
+    merged_into_incident_id: string | null;
     reported_at: string;
     created_at: string;
     updated_at: string;
@@ -164,6 +167,28 @@ export const updateSafetyIncident = (
     request<{ updated: boolean; incident: SafetyIncident }>(
         `/api/admin/safety/incidents/${id}`,
         { method: "PATCH", body: JSON.stringify(body) },
+    );
+
+// Corporate + admin portal review, round 2: "safety incidents can't be
+// created or merged from the admin side."
+export const createSafetyIncident = (body: {
+    category: string;
+    description: string;
+    role?: SafetyRole;
+    reported_by_user_id?: string;
+    ride_id?: string;
+    severity?: SafetySeverity;
+    reported_at?: string;
+}) =>
+    request<{ incident: SafetyIncident }>("/api/admin/safety/incidents", {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
+
+export const mergeSafetyIncident = (id: string, canonicalIncidentId: string) =>
+    request<{ merged: boolean; incident: SafetyIncident }>(
+        `/api/admin/safety/incidents/${id}/merge`,
+        { method: "POST", body: JSON.stringify({ canonical_incident_id: canonicalIncidentId }) },
     );
 
 

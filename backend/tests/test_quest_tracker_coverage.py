@@ -1,373 +1,300 @@
-"""Coverage tests for backend/utils/quest_tracker.py.
+"""Coverage-closing tests for backend/utils/quest_tracker.py.
 
-A1c Sub-tier C — test-only change, no application code modified. Goal is to
-push branch/line coverage on this module from ~70% toward 100% by exercising
-the paths the existing `TestQuestTrackerOnRideComplete` class in
-`test_quests.py` doesn't reach: the DB-exception guard, expired-quest
-handling, the earnings_target branch, the per-progress-row exception guard,
-and every branch of `_ride_local_completion_hour` (missing timestamp,
-unparseable timestamp, naive datetime, area-timezone lookup success/
-failure/invalid-tz fallback).
-
-Mocking style follows `backend/tests/test_quests.py::TestQuestTrackerOnRideComplete`
-(patch `utils.quest_tracker.db`, `@pytest.mark.anyio` for async tests), but
-uses a lighter-weight ad-hoc mock (not the routes-oriented `make_mock_db()`
-helper) since this module talks to `quest_progress`, `quests`, and
-`service_areas` directly via `db.get_rows` / `db.find_one` / `db.update_one`.
-
-NOTE ("found not fixed"): `_ride_local_completion_hour` treats a naive
-`datetime` object (not a string) passed as `ride_completed_at` /
-`completed_at` / `updated_at` as already UTC (quest_tracker.py:46-47,
-mirroring the same "assume UTC" convention as
-`utils/datetime_utils.parse_iso_utc`). That's intentional and matches the
-documented convention, not a bug. No behavioral bug was found while writing
-these tests; see individual test docstrings for the exact branch each one
-pins.
+Companion to TestQuestTrackerOnRideComplete in test_quests.py (which covers
+the ride_count-increments-and-completes happy path and the peak_rides local-
+timezone math). This file closes the remaining branches: db errors on the
+progress fetch, an inactive/missing quest, an expired quest, the
+earnings_target quest type, the service_areas timezone lookup (both success
+and its swallowed-exception fallback), an invalid area timezone falling back
+to America/Regina, a naive (no-tzinfo) completed_at, no usable completion
+timestamp at all, and the per-progress exception guard that lets one bad
+quest row not abort the rest of the batch.
 """
 
-import os
-import sys
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.quest_tracker import _ride_local_completion_hour, update_quest_progress_on_ride_complete
 
 _FUTURE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 _PAST = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+_NOW = datetime.now(timezone.utc).isoformat()
 
-BASE_QUEST = {
+RIDE_COUNT_QUEST = {
     "id": "quest_1",
     "title": "Complete 10 Rides",
     "type": "ride_count",
     "target_value": 10.0,
-    "reward_amount": 25.0,
-    "start_date": _PAST,
-    "end_date": _FUTURE,
     "is_active": True,
-}
-
-BASE_PROGRESS = {
-    "id": "progress_1",
-    "quest_id": "quest_1",
-    "driver_id": "driver_123",
-    "current_value": 5,
-    "status": "active",
+    "end_date": _FUTURE,
 }
 
 
-def make_db(*, quests=None, areas=None, get_rows_result=None, get_rows_side_effect=None):
-    """Lightweight db double for utils.quest_tracker.
-
-    - `quests`: dict of quest_id -> quest doc, used to answer
-      `db.find_one("quests", {"id": ...})`.
-    - `areas`: dict of area_id -> area doc, used to answer
-      `db.find_one("service_areas", {"id": ...})`.
-    - `get_rows_result` / `get_rows_side_effect`: wired straight to
-      `db.get_rows` (quest_progress fetch).
-    """
-    quests = quests or {}
-    areas = areas or {}
+def _mock_db(**overrides):
+    """A minimal stand-in for db_supabase exposing exactly the flat functions
+    quest_tracker.py calls: get_rows, find_one, update_one. Unlike test_quests'
+    make_mock_db (a bare MagicMock with no service_areas sub-mock — awaiting
+    an unconfigured attribute there raises), find_one here is a single
+    AsyncMock so a peak_rides test can freely pass a service_area_id."""
     mock = MagicMock()
-
-    async def _find_one(table, filters=None, **kwargs):
-        if table == "quests":
-            return quests.get((filters or {}).get("id"))
-        if table == "service_areas":
-            return areas.get((filters or {}).get("id"))
-        return None
-
-    mock.find_one = AsyncMock(side_effect=_find_one)
-    mock.update_one = AsyncMock(return_value={"id": "progress_1"})
-    if get_rows_side_effect is not None:
-        mock.get_rows = AsyncMock(side_effect=get_rows_side_effect)
-    else:
-        mock.get_rows = AsyncMock(return_value=get_rows_result if get_rows_result is not None else [])
+    mock.get_rows = overrides.get("get_rows", AsyncMock(return_value=[]))
+    mock.find_one = overrides.get("find_one", AsyncMock(return_value=None))
+    mock.update_one = overrides.get("update_one", AsyncMock(return_value=None))
     return mock
 
 
-class TestGetRowsFailureGuard:
-    """Lines 76-77: a failing quest_progress fetch must not raise — it logs
-    and returns, leaving the ride-completion caller unaffected."""
-
-    @pytest.mark.anyio
-    async def test_get_rows_exception_is_swallowed(self):
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
-
-        mock_db = make_db(get_rows_side_effect=RuntimeError("db down"))
-
-        with patch("utils.quest_tracker.db", mock_db):
-            # Must not raise.
-            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
-
-        mock_db.update_one.assert_not_awaited()
+def _progress(**overrides):
+    row = {
+        "id": "progress_1",
+        "quest_id": "quest_1",
+        "driver_id": "driver_123",
+        "current_value": 5,
+        "status": "active",
+    }
+    row.update(overrides)
+    return row
 
 
-class TestQuestLookupSkip:
-    """Line 86: a progress row whose quest is missing or inactive is skipped
-    (no crash, no update) rather than treated as an error."""
+# ── progress fetch failure ───────────────────────────────────────────────
 
-    @pytest.mark.anyio
-    async def test_missing_quest_is_skipped(self):
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
 
-        mock_db = make_db(quests={}, get_rows_result=[dict(BASE_PROGRESS)])
+@pytest.mark.anyio
+async def test_progress_fetch_error_is_logged_and_swallowed(monkeypatch, caplog):
+    import logging
 
-        with patch("utils.quest_tracker.db", mock_db):
-            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+    mock_db = _mock_db(get_rows=AsyncMock(side_effect=RuntimeError("db down")))
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
 
-        mock_db.update_one.assert_not_awaited()
+    with caplog.at_level(logging.ERROR):
+        await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
 
-    @pytest.mark.anyio
-    async def test_inactive_quest_is_skipped(self):
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
+    assert "Failed to fetch quest progress" in caplog.text
+    mock_db.update_one.assert_not_awaited()
 
-        inactive_quest = {**BASE_QUEST, "is_active": False}
-        mock_db = make_db(
-            quests={"quest_1": inactive_quest},
-            get_rows_result=[dict(BASE_PROGRESS)],
+
+# ── quest not found / inactive ───────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_quest_not_found_is_skipped(monkeypatch):
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[_progress()]),
+        find_one=AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+
+    await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+    mock_db.update_one.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_inactive_quest_is_skipped(monkeypatch):
+    inactive_quest = {**RIDE_COUNT_QUEST, "is_active": False}
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[_progress()]),
+        find_one=AsyncMock(return_value=inactive_quest),
+    )
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+
+    await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+    mock_db.update_one.assert_not_awaited()
+
+
+# ── expired quest ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_expired_quest_marks_progress_expired(monkeypatch):
+    expired_quest = {**RIDE_COUNT_QUEST, "end_date": _PAST}
+    captured = {}
+
+    async def _update_one(table, filters, update, **kwargs):
+        captured["table"] = table
+        captured["filters"] = filters
+        captured["update"] = update
+
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[_progress()]),
+        find_one=AsyncMock(return_value=expired_quest),
+        update_one=_update_one,
+    )
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+
+    await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+    assert captured["table"] == "quest_progress"
+    assert captured["filters"] == {"id": "progress_1"}
+    assert captured["update"]["$set"]["status"] == "expired"
+
+
+# ── earnings_target quest type ────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_earnings_target_quest_adds_ride_earnings(monkeypatch):
+    earnings_quest = {**RIDE_COUNT_QUEST, "id": "quest_e", "type": "earnings_target", "target_value": 100.0}
+    progress = _progress(quest_id="quest_e", current_value=40)
+    captured = {}
+
+    async def _update_one(table, filters, update, **kwargs):
+        captured["update"] = update
+
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[progress]),
+        find_one=AsyncMock(return_value=earnings_quest),
+        update_one=_update_one,
+    )
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+
+    await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1", "driver_earnings": 15})
+
+    assert captured["update"]["$set"]["current_value"] == 55
+    assert "status" not in captured["update"]["$set"]  # short of the 100 target
+
+
+@pytest.mark.anyio
+async def test_earnings_target_missing_earnings_defaults_to_zero(monkeypatch):
+    earnings_quest = {**RIDE_COUNT_QUEST, "id": "quest_e", "type": "earnings_target", "target_value": 100.0}
+    progress = _progress(quest_id="quest_e", current_value=40)
+    captured = {}
+
+    async def _update_one(table, filters, update, **kwargs):
+        captured["update"] = update
+
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[progress]),
+        find_one=AsyncMock(return_value=earnings_quest),
+        update_one=_update_one,
+    )
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+
+    await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})  # no driver_earnings key
+
+    assert captured["update"]["$set"]["current_value"] == 40
+
+
+# ── per-progress exception guard ─────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_one_bad_progress_row_does_not_abort_the_batch(monkeypatch, caplog):
+    """A quest row missing the required "type"/"target_value" keys raises a
+    KeyError inside the loop body; the per-progress try/except must log it
+    and continue to the next row rather than losing the whole batch."""
+    import logging
+
+    broken_quest = {"id": "quest_broken", "is_active": True, "end_date": _FUTURE}  # no "type"/"target_value"
+    good_progress = _progress(id="progress_2", quest_id="quest_1", current_value=9)
+    bad_progress = _progress(id="progress_1", quest_id="quest_broken")
+
+    calls = {"n": 0}
+
+    async def _find_one(table, filters):
+        calls["n"] += 1
+        qid = filters.get("id")
+        if qid == "quest_broken":
+            return broken_quest
+        return RIDE_COUNT_QUEST
+
+    captured = {}
+
+    async def _update_one(table, filters, update, **kwargs):
+        captured["update"] = update
+
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[bad_progress, good_progress]),
+        find_one=_find_one,
+        update_one=_update_one,
+    )
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+
+    with caplog.at_level(logging.ERROR):
+        await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+    assert "Failed to update quest quest_broken" in caplog.text
+    # The second (good) row still got processed despite the first raising.
+    assert captured["update"]["$set"]["current_value"] == 10
+    assert captured["update"]["$set"]["status"] == "completed"
+
+
+# ── _ride_local_completion_hour branches ─────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_no_completion_timestamp_returns_none(monkeypatch):
+    mock_db = _mock_db()
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+    assert await _ride_local_completion_hour({"id": "ride_1"}) is None
+
+
+@pytest.mark.anyio
+async def test_unparseable_completion_timestamp_returns_none(monkeypatch):
+    mock_db = _mock_db()
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+    result = await _ride_local_completion_hour({"ride_completed_at": "not-a-timestamp"})
+    assert result is None
+
+
+@pytest.mark.anyio
+async def test_naive_completion_timestamp_is_assumed_utc(monkeypatch):
+    """A datetime object with no tzinfo (as opposed to an ISO string) must be
+    treated as UTC rather than raising when astimezone() is called."""
+    mock_db = _mock_db()
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+    naive_dt = datetime(2026, 6, 21, 23, 30, 0)  # no tzinfo
+    hour = await _ride_local_completion_hour({"ride_completed_at": naive_dt, "service_area_id": None})
+    assert hour == 17  # 23:30 UTC -> 17:30 America/Regina (UTC-6, no DST)
+
+
+@pytest.mark.anyio
+async def test_service_area_timezone_lookup_success(monkeypatch):
+    """A service area with its own timezone overrides the America/Regina
+    default — Winnipeg (America/Winnipeg, UTC-5) is one hour ahead of Regina."""
+    mock_db = _mock_db(find_one=AsyncMock(return_value={"id": "area_1", "timezone": "America/Winnipeg"}))
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+    hour = await _ride_local_completion_hour(
+        {"ride_completed_at": "2026-06-21T23:30:00+00:00", "service_area_id": "area_1"}
+    )
+    assert hour == 18  # 23:30 UTC -> 18:30 America/Winnipeg
+    mock_db.find_one.assert_awaited_once_with("service_areas", {"id": "area_1"})
+
+
+@pytest.mark.anyio
+async def test_service_area_lookup_exception_falls_back_to_default_tz(monkeypatch, caplog):
+    import logging
+
+    mock_db = _mock_db(find_one=AsyncMock(side_effect=RuntimeError("db down")))
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+    with caplog.at_level(logging.WARNING):
+        hour = await _ride_local_completion_hour(
+            {"ride_completed_at": "2026-06-21T23:30:00+00:00", "service_area_id": "area_1"}
         )
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
-
-        mock_db.update_one.assert_not_awaited()
+    assert hour == 17  # falls back to America/Regina
+    assert "could not resolve timezone" in caplog.text
 
 
-class TestExpiredQuest:
-    """Lines 91-96: an active progress row against an already-expired quest
-    is flipped to status=expired instead of having its value advanced."""
-
-    @pytest.mark.anyio
-    async def test_expired_quest_marks_progress_expired(self):
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
-
-        expired_quest = {**BASE_QUEST, "end_date": _PAST}
-        mock_db = make_db(
-            quests={"quest_1": expired_quest},
-            get_rows_result=[dict(BASE_PROGRESS)],
-        )
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
-
-        mock_db.update_one.assert_awaited_once()
-        table, filters, update = mock_db.update_one.await_args.args[:3]
-        assert table == "quest_progress"
-        assert filters == {"id": "progress_1"}
-        assert update["$set"]["status"] == "expired"
-        assert "updated_at" in update["$set"]
-        # Expired branch must not also try to bump current_value.
-        assert "current_value" not in update["$set"]
+@pytest.mark.anyio
+async def test_service_area_with_no_timezone_field_uses_default(monkeypatch):
+    """Area row found but has no "timezone" key -> stays on America/Regina."""
+    mock_db = _mock_db(find_one=AsyncMock(return_value={"id": "area_1"}))
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+    hour = await _ride_local_completion_hour(
+        {"ride_completed_at": "2026-06-21T23:30:00+00:00", "service_area_id": "area_1"}
+    )
+    assert hour == 17
 
 
-class TestEarningsTargetQuest:
-    """Lines 104-105: earnings_target quests advance by the ride's
-    driver_earnings, not by a flat +1 like ride_count."""
-
-    @pytest.mark.anyio
-    async def test_earnings_target_increments_by_ride_earnings(self):
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
-
-        earnings_quest = {**BASE_QUEST, "id": "quest_e", "type": "earnings_target", "target_value": 100.0}
-        progress = {**BASE_PROGRESS, "quest_id": "quest_e", "current_value": 40}
-        mock_db = make_db(
-            quests={"quest_e": earnings_quest},
-            get_rows_result=[progress],
-        )
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1", "driver_earnings": 15.5})
-
-        mock_db.update_one.assert_awaited_once()
-        update = mock_db.update_one.await_args.args[2]
-        assert update["$set"]["current_value"] == 55.5
-        assert update["$set"].get("status") != "completed"
-
-    @pytest.mark.anyio
-    async def test_earnings_target_missing_earnings_treated_as_zero(self):
-        """ride.get("driver_earnings", 0) or 0 — a missing/None/0 earnings
-        field must not advance the quest nor raise."""
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
-
-        earnings_quest = {**BASE_QUEST, "id": "quest_e", "type": "earnings_target", "target_value": 100.0}
-        progress = {**BASE_PROGRESS, "quest_id": "quest_e", "current_value": 40}
-        mock_db = make_db(
-            quests={"quest_e": earnings_quest},
-            get_rows_result=[progress],
-        )
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
-
-        update = mock_db.update_one.await_args.args[2]
-        assert update["$set"]["current_value"] == 40
-
-
-class TestPerProgressRowExceptionGuard:
-    """Lines 131-132: an exception while processing one progress row must be
-    caught and logged so a single malformed/erroring row can't abort quest
-    progress updates for the driver's other active quests."""
-
-    @pytest.mark.anyio
-    async def test_one_bad_row_does_not_block_the_next(self):
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
-
-        good_quest = {**BASE_QUEST, "id": "quest_good"}
-        bad_progress = {**BASE_PROGRESS, "id": "progress_bad", "quest_id": "quest_bad"}
-        good_progress = {**BASE_PROGRESS, "id": "progress_good", "quest_id": "quest_good"}
-
-        mock_db = make_db(get_rows_result=[bad_progress, good_progress])
-
-        async def _find_one(table, filters=None, **kwargs):
-            if table == "quests":
-                qid = (filters or {}).get("id")
-                if qid == "quest_bad":
-                    raise RuntimeError("quests table unavailable")
-                return good_quest if qid == "quest_good" else None
-            return None
-
-        mock_db.find_one = AsyncMock(side_effect=_find_one)
-
-        with patch("utils.quest_tracker.db", mock_db):
-            # Must not raise despite the first row's quest lookup blowing up.
-            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
-
-        # Only the second (good) row reaches the update call.
-        mock_db.update_one.assert_awaited_once()
-        filters = mock_db.update_one.await_args.args[1]
-        assert filters == {"id": "progress_good"}
-
-
-class TestRideLocalCompletionHour:
-    """Direct coverage of utils.quest_tracker._ride_local_completion_hour —
-    every early-return and fallback branch, exercised through the
-    peak_rides code path in update_quest_progress_on_ride_complete since
-    that's the only caller."""
-
-    @staticmethod
-    def _peak(ride, area=None):
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
-
-        peak_quest = {**BASE_QUEST, "id": "quest_peak", "type": "peak_rides", "target_value": 5.0}
-        progress = {**BASE_PROGRESS, "id": "progress_peak", "quest_id": "quest_peak", "current_value": 2}
-        mock_db = make_db(
-            quests={"quest_peak": peak_quest},
-            areas=area or {},
-            get_rows_result=[progress],
-        )
-        return update_quest_progress_on_ride_complete, mock_db
-
-    @pytest.mark.anyio
-    async def test_no_completion_timestamp_present_does_not_advance(self):
-        """Line 41: none of ride_completed_at/completed_at/updated_at set ->
-        _ride_local_completion_hour returns None -> quest value untouched."""
-        fn, mock_db = self._peak({"id": "ride_1"})
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await fn("driver_123", {"id": "ride_1"})
-
-        update = mock_db.update_one.await_args.args[2]
-        assert update["$set"]["current_value"] == 2
-
-    @pytest.mark.anyio
-    async def test_unparseable_timestamp_string_does_not_advance(self):
-        """Line 45: parse_iso_utc returns None for a garbage string ->
-        early-return None, same as no timestamp at all."""
-        fn, mock_db = self._peak({"id": "ride_1", "ride_completed_at": "not-a-real-timestamp"})
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await fn("driver_123", {"id": "ride_1", "ride_completed_at": "not-a-real-timestamp"})
-
-        update = mock_db.update_one.await_args.args[2]
-        assert update["$set"]["current_value"] == 2
-
-    @pytest.mark.anyio
-    async def test_naive_datetime_object_is_assumed_utc(self):
-        """Lines 46-47: a non-string datetime with tzinfo=None (e.g. a raw
-        Supabase timestamp column deserialized without a tz) is tagged UTC
-        rather than raising, then converted to local time as usual.
-        2026-06-21T23:30:00 UTC -> 17:30 America/Regina (evening peak)."""
-        naive_dt = datetime(2026, 6, 21, 23, 30, 0)  # no tzinfo
-        assert naive_dt.tzinfo is None
-        ride = {"id": "ride_1", "ride_completed_at": naive_dt, "service_area_id": None}
-        fn, mock_db = self._peak(ride)
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await fn("driver_123", ride)
-
-        update = mock_db.update_one.await_args.args[2]
-        assert update["$set"]["current_value"] == 3  # advanced -> local peak hour
-
-    @pytest.mark.anyio
-    async def test_service_area_timezone_is_used_when_resolvable(self):
-        """Lines 52-55: an area with a resolvable timezone overrides the
-        America/Regina default. 2026-06-21T23:30:00+00:00 is 16:30 in
-        America/Vancouver (UTC-7 in June, DST) -- off-peak there -- versus
-        17:30 (peak) in the default America/Regina, so this pins that the
-        area's timezone genuinely changes the outcome."""
-        ride = {
-            "id": "ride_1",
-            "ride_completed_at": "2026-06-21T23:30:00+00:00",
-            "service_area_id": "area_van",
-        }
-        fn, mock_db = self._peak(ride, area={"area_van": {"id": "area_van", "timezone": "America/Vancouver"}})
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await fn("driver_123", ride)
-
-        update = mock_db.update_one.await_args.args[2]
-        assert update["$set"]["current_value"] == 2  # 16:30 local -> not in 17-20 window
-
-    @pytest.mark.anyio
-    async def test_area_lookup_exception_falls_back_to_default_timezone(self):
-        """Lines 56-57: db.find_one("service_areas", ...) raising must be
-        caught and logged, falling back to America/Regina rather than
-        propagating and aborting the whole quest update."""
-        from utils.quest_tracker import update_quest_progress_on_ride_complete
-
-        ride = {
-            "id": "ride_1",
-            "ride_completed_at": "2026-06-21T23:30:00+00:00",
-            "service_area_id": "area_broken",
-        }
-        peak_quest = {**BASE_QUEST, "id": "quest_peak", "type": "peak_rides", "target_value": 5.0}
-        progress = {**BASE_PROGRESS, "id": "progress_peak", "quest_id": "quest_peak", "current_value": 2}
-        mock_db = make_db(quests={"quest_peak": peak_quest}, get_rows_result=[progress])
-
-        async def _find_one(table, filters=None, **kwargs):
-            if table == "quests":
-                return peak_quest
-            if table == "service_areas":
-                raise RuntimeError("service_areas lookup failed")
-            return None
-
-        mock_db.find_one = AsyncMock(side_effect=_find_one)
-
-        with patch("utils.quest_tracker.db", mock_db):
-            # Must not raise despite the area lookup blowing up.
-            await update_quest_progress_on_ride_complete("driver_123", ride)
-
-        update = mock_db.update_one.await_args.args[2]
-        # Falls back to America/Regina -> 17:30 local -> evening peak -> advances.
-        assert update["$set"]["current_value"] == 3
-
-    @pytest.mark.anyio
-    async def test_invalid_area_timezone_falls_back_to_default(self):
-        """Lines 60-61: a resolved but bogus timezone string raises inside
-        ZoneInfo(...)/astimezone -- caught and retried against the default
-        America/Regina timezone instead of propagating."""
-        ride = {
-            "id": "ride_1",
-            "ride_completed_at": "2026-06-21T23:30:00+00:00",
-            "service_area_id": "area_bogus",
-        }
-        fn, mock_db = self._peak(ride, area={"area_bogus": {"id": "area_bogus", "timezone": "Not/ARealZone"}})
-
-        with patch("utils.quest_tracker.db", mock_db):
-            await fn("driver_123", ride)
-
-        update = mock_db.update_one.await_args.args[2]
-        # Falls back to America/Regina -> 17:30 local -> evening peak -> advances.
-        assert update["$set"]["current_value"] == 3
+@pytest.mark.anyio
+async def test_invalid_area_timezone_falls_back_to_default(monkeypatch):
+    """A garbage timezone string from the DB must not blow up the whole ride-
+    completion flow — ZoneInfo() raising is caught and Regina is used."""
+    mock_db = _mock_db(find_one=AsyncMock(return_value={"id": "area_1", "timezone": "Not/A_Real_Zone"}))
+    monkeypatch.setattr("utils.quest_tracker.db", mock_db)
+    hour = await _ride_local_completion_hour(
+        {"ride_completed_at": "2026-06-21T23:30:00+00:00", "service_area_id": "area_1"}
+    )
+    assert hour == 17

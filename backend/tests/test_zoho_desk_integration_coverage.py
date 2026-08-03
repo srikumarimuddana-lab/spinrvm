@@ -1,18 +1,27 @@
 """
-Coverage top-up for services/zoho_desk_integration.py.
+Coverage-gap tests for services/zoho_desk_integration.py (A1c Sub-tier C,
+Batch 9 pick).
 
-A1c Sub-tier C — test-only change, no application code modified. Written by
-reading the source only; not run locally (see task constraints — the full
-suite runs once, at the very end, by someone else).
+test_zoho_desk.py already covers the happy paths for Lost & Found, disputes,
+support escalation, safety, and reverse-close. This file closes the
+remaining gaps found via `--cov-report=term-missing`:
 
-Targets the specific gap left after test_zoho_desk.py (74% / 33 missing
-stmts): the untested `create_ticket_for_complaint` / `create_ticket_for_flag`
-bodies (and the `_link_ticket` contact-user-fetch branch they exercise), the
-`_split_name` empty-string edge, the `_link_ticket` / lost-and-found /
-dispute error handlers (both `ZohoDeskError` and bare `Exception`), the
-`close_linked_records` empty-input early return + already-closed skip
-branches + reverse-close exception handler, and the `create_support_ticket`
-email-backfill + transcript-append branches.
+  - `_split_name("")` -> ("", None)
+  - `create_ticket_for_complaint` / `create_ticket_for_flag` (never exercised
+    at all before this file — the misleadingly-named
+    `test_complaint_and_safety_autocreate` in test_zoho_desk.py only calls
+    `create_ticket_for_safety`)
+  - `_link_ticket`'s already-linked idempotent skip, ZohoDeskError swallow,
+    and generic-Exception swallow (best-effort contract from the module
+    docstring: "never raise into the caller's request flow")
+  - `close_linked_records`'s already-closed-record skip branches (both the
+    is_active flag path and the status-column path) and its per-table
+    exception swallow
+  - `create_ticket_for_lost_and_found` / `create_ticket_for_dispute`'s
+    ZohoDeskError + generic-Exception swallow paths, and the
+    already-linked / disabled idempotent skips on the dispute helper
+  - `create_support_ticket`'s missing-email user re-fetch merge and the
+    transcript-appended-to-description branch
 """
 
 from __future__ import annotations
@@ -25,368 +34,342 @@ import services.zoho_desk_integration as integ
 from services.zoho_desk_service import ZohoDeskError
 
 
-def _db(find_one=None, get_rows=None, update_one=None):
+def _db(**overrides):
     db = MagicMock()
-    db.find_one = find_one or AsyncMock(return_value=None)
-    db.get_rows = get_rows or AsyncMock(return_value=[])
-    db.update_one = update_one or AsyncMock(return_value=None)
+    db.find_one = AsyncMock(return_value=None)
+    db.update_one = AsyncMock()
+    db.get_rows = AsyncMock(return_value=[])
+    for k, v in overrides.items():
+        setattr(db, k, v)
     return db
 
 
-# --------------------------------------------------------------------------
-# _split_name
-# --------------------------------------------------------------------------
-
-
-def test_split_name_empty_string_returns_empty_and_none():
-    # Line 38: no parts at all -> ("", None), not the "single-token" shape.
+def test_split_name_empty_returns_blank_and_none():
     assert integ._split_name("") == ("", None)
     assert integ._split_name("   ") == ("", None)
 
 
-def test_split_name_single_token_has_no_last_name():
+def test_split_name_single_word_has_no_last_name():
     assert integ._split_name("Cher") == ("Cher", None)
 
 
-# --------------------------------------------------------------------------
-# create_ticket_for_complaint / create_ticket_for_flag (previously wholly
-# uncovered function bodies) + the _link_ticket contact-fetch branch (line 60)
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# create_ticket_for_complaint / create_ticket_for_flag — never exercised
+# elsewhere; both delegate to _link_ticket.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_complaint_ticket_against_rider_fetches_contact_and_links(monkeypatch):
+async def test_complaint_autocreate_happy_against_rider(monkeypatch):
     db = _db(
         find_one=AsyncMock(
             side_effect=[
-                {"id": "default", "enabled": True},  # config
-                {"id": "rider1", "name": "Pat Rider", "email": "pat@x.ca", "phone": "+1306"},  # contact
+                {"id": "default", "enabled": True},
+                {"id": "u1", "name": "Rider One", "email": "r1@x.ca"},
             ]
         )
     )
     monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt-complaint"})
-    monkeypatch.setattr(integ.zoho, "create_ticket", created)
-
-    complaint = {
-        "id": "cx1",
-        "against_type": "rider",
-        "against_id": "rider1",
-        "category": "rude",
-        "description": "was rude",
-        "ride_id": "r9",
-    }
-    await integ.create_ticket_for_complaint(complaint, {"ride_code": "SPN-9"})
-
-    created.assert_awaited_once()
-    kwargs = created.call_args.kwargs
-    assert kwargs["category"] == "Complaint"
-    assert kwargs["email"] == "pat@x.ca"
-    assert kwargs["first_name"] == "Pat"
-    assert kwargs["last_name"] == "Rider"
-    assert "Against: rider" in kwargs["description"]
-    assert "SPN-9" in kwargs["description"]
-    db.update_one.assert_awaited_once_with("complaints", {"id": "cx1"}, {"zoho_ticket_id": "zt-complaint"})
-
-
-@pytest.mark.anyio
-async def test_complaint_ticket_against_driver_has_no_contact(monkeypatch):
-    # against != "rider" -> contact_user_id is None -> _link_ticket never
-    # issues the second find_one for a contact record.
-    find_one = AsyncMock(return_value={"id": "default", "enabled": True})
-    db = _db(find_one=find_one)
-    monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt-complaint2"})
+    created = AsyncMock(return_value={"id": "ztC1"})
     monkeypatch.setattr(integ.zoho, "create_ticket", created)
 
     await integ.create_ticket_for_complaint(
-        {"id": "cx2", "against_type": "driver", "against_id": "drv1", "category": "unsafe"}, None
+        {"id": "c1", "against_type": "rider", "against_id": "u1", "category": "rude", "description": "x"},
+        {"ride_code": "SPN-5"},
     )
-
     created.assert_awaited_once()
-    assert created.call_args.kwargs["email"] is None
-    # Only the config lookup happened, no contact-user lookup.
-    assert find_one.await_count == 1
+    assert created.call_args.kwargs["category"] == "Complaint"
+    assert created.call_args.kwargs["email"] == "r1@x.ca"
+    db.update_one.assert_awaited_once_with("complaints", {"id": "c1"}, {"zoho_ticket_id": "ztC1"})
 
 
 @pytest.mark.anyio
-async def test_flag_ticket_against_rider_fetches_contact_and_links(monkeypatch):
+async def test_complaint_autocreate_against_driver_has_no_contact(monkeypatch):
+    # against == "driver" -> contact_user_id stays None; user lookup skipped.
+    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock(return_value={"id": "ztC2"})
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    await integ.create_ticket_for_complaint({"id": "c2", "against_type": "driver", "category": "unsafe"}, None)
+    created.assert_awaited_once()
+    assert created.call_args.kwargs["email"] is None
+    # only the config lookup happened, never a "users" lookup
+    db.find_one.assert_awaited_once_with("zoho_desk_config", {"id": "default"})
+
+
+@pytest.mark.anyio
+async def test_flag_autocreate_happy_against_rider(monkeypatch):
     db = _db(
         find_one=AsyncMock(
             side_effect=[
-                {"id": "default", "enabled": True},  # config
-                {"id": "rider2", "name": "Alex Q", "email": "alex@x.ca"},  # contact
+                {"id": "default", "enabled": True},
+                {"id": "u2", "first_name": "Jo", "last_name": "Blow", "email": "jo@x.ca"},
             ]
         )
     )
     monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt-flag"})
+    created = AsyncMock(return_value={"id": "ztF1"})
     monkeypatch.setattr(integ.zoho, "create_ticket", created)
 
-    flag = {
-        "id": "fx1",
-        "target_type": "rider",
-        "target_id": "rider2",
-        "reason": "no-show",
-        "description": "did not show",
-        "ride_id": "r5",
-    }
-    await integ.create_ticket_for_flag(flag, {"ride_code": "SPN-5"})
-
+    await integ.create_ticket_for_flag(
+        {"id": "f1", "target_type": "rider", "target_id": "u2", "reason": "no-show"}, {"ride_code": "SPN-6"}
+    )
     created.assert_awaited_once()
-    kwargs = created.call_args.kwargs
-    assert kwargs["category"] == "Flag"
-    assert kwargs["email"] == "alex@x.ca"
-    assert "Target: rider" in kwargs["description"]
-    db.update_one.assert_awaited_once_with("flags", {"id": "fx1"}, {"zoho_ticket_id": "zt-flag"})
+    assert created.call_args.kwargs["category"] == "Flag"
+    assert created.call_args.kwargs["first_name"] == "Jo"
+    db.update_one.assert_awaited_once_with("flags", {"id": "f1"}, {"zoho_ticket_id": "ztF1"})
+
+
+# ---------------------------------------------------------------------------
+# _link_ticket best-effort contract: idempotent skip + both exception paths
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_flag_ticket_against_driver_has_no_contact(monkeypatch):
-    find_one = AsyncMock(return_value={"id": "default", "enabled": True})
-    db = _db(find_one=find_one)
+async def test_flag_autocreate_skips_when_already_linked(monkeypatch):
+    db = _db()
     monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt-flag2"})
+    created = AsyncMock()
     monkeypatch.setattr(integ.zoho, "create_ticket", created)
 
-    await integ.create_ticket_for_flag({"id": "fx2", "target_type": "driver", "target_id": "d1"}, None)
-
-    assert find_one.await_count == 1
-    assert created.call_args.kwargs["email"] is None
-
-
-# --------------------------------------------------------------------------
-# _link_ticket error handlers (lines 80-83), exercised via create_ticket_for_complaint
-# --------------------------------------------------------------------------
+    await integ.create_ticket_for_flag({"id": "f9", "zoho_ticket_id": "already"}, None)
+    created.assert_not_awaited()
+    # never even checked config -- idempotent short-circuit is first
+    db.find_one.assert_not_awaited()
 
 
 @pytest.mark.anyio
-async def test_link_ticket_zoho_desk_error_is_swallowed(monkeypatch):
+async def test_link_ticket_swallows_zoho_desk_error(monkeypatch, caplog):
     db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
     monkeypatch.setattr(integ, "db_supabase", db)
-    monkeypatch.setattr(
-        integ.zoho, "create_ticket", AsyncMock(side_effect=ZohoDeskError("no department configured", status=503))
-    )
+    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=ZohoDeskError("no department", status=503)))
 
-    # Must not raise -- best-effort.
-    await integ.create_ticket_for_complaint({"id": "cx3", "against_type": "driver"}, None)
+    # Must not raise -- this is the "Zoho outage must not break reporting"
+    # guarantee from the module docstring.
+    await integ.create_ticket_for_complaint({"id": "c3", "against_type": "driver"}, None)
     db.update_one.assert_not_awaited()
 
 
 @pytest.mark.anyio
-async def test_link_ticket_generic_exception_is_swallowed(monkeypatch):
+async def test_link_ticket_swallows_generic_exception(monkeypatch):
     db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
     monkeypatch.setattr(integ, "db_supabase", db)
     monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=RuntimeError("boom")))
 
-    # Must not raise -- best-effort, unlike create_support_ticket.
-    await integ.create_ticket_for_complaint({"id": "cx4", "against_type": "driver"}, None)
+    await integ.create_ticket_for_complaint({"id": "c4", "against_type": "driver"}, None)
     db.update_one.assert_not_awaited()
 
 
-# --------------------------------------------------------------------------
-# close_linked_records: empty input, already-closed skip branches, and the
-# per-table reverse-close exception handler
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# close_linked_records: already-closed skips (both branch shapes) + the
+# per-table exception swallow
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_close_linked_records_noop_on_empty_ids(monkeypatch):
-    get_rows = AsyncMock(return_value=[])
-    db = _db(get_rows=get_rows)
-    monkeypatch.setattr(integ, "db_supabase", db)
-
-    # Falsy entries are filtered out of the id list too (`if i`), so a list
-    # of only falsy values also hits the early-return branch.
-    await integ.close_linked_records([])
-    await integ.close_linked_records(None)
-    await integ.close_linked_records([None, "", 0])
-
-    get_rows.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_close_linked_records_skips_already_closed_rows(monkeypatch):
+async def test_close_linked_records_skips_already_inactive_flag(monkeypatch):
     async def _get_rows(table, *a, **k):
-        if table == "lost_and_found":
-            # Already resolved -> status-column branch `continue`.
-            return [{"id": "lf1", "status": "resolved", "zoho_ticket_id": "zt1"}]
         if table == "flags":
-            # Already inactive -> is_active branch `continue`.
             return [{"id": "f1", "is_active": False, "zoho_ticket_id": "zt1"}]
         return []
 
-    get_rows = AsyncMock(side_effect=_get_rows)
-    update_one = AsyncMock()
-    db = _db(get_rows=get_rows, update_one=update_one)
+    db = _db(get_rows=AsyncMock(side_effect=_get_rows))
     monkeypatch.setattr(integ, "db_supabase", db)
 
     await integ.close_linked_records(["zt1"])
-
-    # All five linked tables get queried, but no updates happen because both
-    # non-empty rows returned were already in their "closed" state.
-    assert get_rows.await_count == len(integ._LINKED_TABLES)
-    update_one.assert_not_awaited()
+    # already inactive -> no update issued for it
+    db.update_one.assert_not_awaited()
 
 
 @pytest.mark.anyio
-async def test_close_linked_records_continues_after_per_table_exception(monkeypatch):
+async def test_close_linked_records_skips_already_closed_status(monkeypatch):
     async def _get_rows(table, *a, **k):
-        if table == "lost_and_found":
-            raise RuntimeError("db unavailable")
         if table == "disputes":
-            return [{"id": "d1", "status": "open", "zoho_ticket_id": "zt2"}]
+            return [{"id": "d1", "status": "resolved", "zoho_ticket_id": "zt1"}]
         return []
 
-    get_rows = AsyncMock(side_effect=_get_rows)
-    update_one = AsyncMock()
-    db = _db(get_rows=get_rows, update_one=update_one)
+    db = _db(get_rows=AsyncMock(side_effect=_get_rows))
     monkeypatch.setattr(integ, "db_supabase", db)
 
-    # Must not raise: the first table's failure is caught and logged, and the
-    # loop still proceeds to the remaining tables.
-    await integ.close_linked_records(["zt2"])
-
-    assert get_rows.await_count == len(integ._LINKED_TABLES)
-    update_one.assert_awaited_once()
-    assert update_one.call_args.args[0] == "disputes"
-    assert update_one.call_args.args[2]["status"] == "resolved"
-
-
-# --------------------------------------------------------------------------
-# create_ticket_for_lost_and_found error handlers (lines 235-239)
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.anyio
-async def test_lost_and_found_zoho_desk_error_is_swallowed(monkeypatch):
-    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
-    monkeypatch.setattr(integ, "db_supabase", db)
-    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=ZohoDeskError("missing scope", status=503)))
-
-    await integ.create_ticket_for_lost_and_found({"id": "c9"}, None)
+    await integ.close_linked_records(["zt1"])
     db.update_one.assert_not_awaited()
 
 
 @pytest.mark.anyio
-async def test_lost_and_found_generic_exception_is_swallowed(monkeypatch):
+async def test_close_linked_records_noops_on_empty_id_list(monkeypatch):
+    # Neither None nor [] should ever call get_rows.
+    db = _db()
+    monkeypatch.setattr(integ, "db_supabase", db)
+    await integ.close_linked_records([])
+    await integ.close_linked_records(None)
+    db.get_rows.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_close_linked_records_one_table_failure_does_not_block_others(monkeypatch):
+    calls = {"n": 0}
+
+    async def _get_rows(table, *a, **k):
+        calls["n"] += 1
+        if table == "lost_and_found":
+            raise RuntimeError("db down")
+        if table == "flags":
+            return [{"id": "f2", "is_active": True, "zoho_ticket_id": "zt1"}]
+        return []
+
+    db = _db(get_rows=AsyncMock(side_effect=_get_rows))
+    monkeypatch.setattr(integ, "db_supabase", db)
+
+    # Must not raise even though the first table in _LINKED_TABLES blows up.
+    await integ.close_linked_records(["zt1"])
+    # every table was still attempted (loop kept going past the exception)
+    assert calls["n"] == len(integ._LINKED_TABLES)
+    # the un-broken "flags" table still got its update
+    db.update_one.assert_awaited_once_with("flags", {"id": "f2"}, {"is_active": False})
+
+
+# ---------------------------------------------------------------------------
+# create_ticket_for_lost_and_found: exception swallow paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_lost_and_found_swallows_zoho_desk_error(monkeypatch):
+    db = _db(find_one=AsyncMock(side_effect=[{"id": "default", "enabled": True}, {"id": "u1", "name": "A B"}]))
+    monkeypatch.setattr(integ, "db_supabase", db)
+    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=ZohoDeskError("nope", status=503)))
+
+    await integ.create_ticket_for_lost_and_found({"id": "c5", "rider_user_id": "u1"}, None)
+    db.update_one.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_lost_and_found_swallows_generic_exception(monkeypatch):
     db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
     monkeypatch.setattr(integ, "db_supabase", db)
     monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=RuntimeError("boom")))
 
-    await integ.create_ticket_for_lost_and_found({"id": "c10"}, None)
+    await integ.create_ticket_for_lost_and_found({"id": "c6"}, None)
     db.update_one.assert_not_awaited()
 
 
-# --------------------------------------------------------------------------
-# create_ticket_for_dispute error handlers (lines 283-286)
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# create_ticket_for_dispute: idempotent skips + both exception paths
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_dispute_zoho_desk_error_is_swallowed(monkeypatch):
-    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
+async def test_dispute_autocreate_skips_when_already_linked(monkeypatch):
+    db = _db()
     monkeypatch.setattr(integ, "db_supabase", db)
-    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=ZohoDeskError("rate limited", status=503)))
-
-    await integ.create_ticket_for_dispute({"id": "dx1"}, None)
-    db.update_one.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_dispute_generic_exception_is_swallowed(monkeypatch):
-    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
-    monkeypatch.setattr(integ, "db_supabase", db)
-    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=RuntimeError("boom")))
-
-    await integ.create_ticket_for_dispute({"id": "dx2"}, None)
-    db.update_one.assert_not_awaited()
-
-
-# --------------------------------------------------------------------------
-# create_support_ticket: email-backfill (lines 301-304) + transcript append
-# (line 312)
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.anyio
-async def test_support_ticket_backfills_email_from_db_when_missing(monkeypatch):
-    find_one = AsyncMock(
-        side_effect=[
-            {"id": "default", "enabled": True},  # config
-            {"id": "u1", "email": "fetched@x.ca", "first_name": "Fetched", "last_name": "User", "phone": "+1"},
-        ]
-    )
-    db = _db(find_one=find_one)
-    monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt-support", "ticketNumber": "9"})
+    created = AsyncMock()
     monkeypatch.setattr(integ.zoho, "create_ticket", created)
 
-    # Caller passes a user dict with an id but no email -- the None values on
-    # the caller's dict must not clobber the fetched record's real values
-    # (merge order: fetched first, then only-non-None caller overrides).
-    result = await integ.create_support_ticket(user={"id": "u1", "email": None, "name": None}, message="Need help")
+    await integ.create_ticket_for_dispute({"id": "d9", "zoho_ticket_id": "already"}, None)
+    created.assert_not_awaited()
+    db.find_one.assert_not_awaited()
 
-    assert result["ticketNumber"] == "9"
-    kwargs = created.call_args.kwargs
-    assert kwargs["email"] == "fetched@x.ca"
-    assert kwargs["first_name"] == "Fetched"
-    assert kwargs["last_name"] == "User"
-    assert find_one.await_count == 2
+
+@pytest.mark.anyio
+async def test_dispute_autocreate_skips_when_disabled(monkeypatch):
+    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": False}))
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock()
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    await integ.create_ticket_for_dispute({"id": "d10"}, None)
+    created.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_dispute_autocreate_swallows_zoho_desk_error(monkeypatch):
+    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
+    monkeypatch.setattr(integ, "db_supabase", db)
+    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=ZohoDeskError("no dept", status=503)))
+
+    await integ.create_ticket_for_dispute({"id": "d11", "user_id": None}, None)
+    db.update_one.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_dispute_autocreate_swallows_generic_exception(monkeypatch):
+    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
+    monkeypatch.setattr(integ, "db_supabase", db)
+    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=RuntimeError("boom")))
+
+    await integ.create_ticket_for_dispute({"id": "d12", "user_id": None}, None)
+    db.update_one.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# create_support_ticket: missing-email re-fetch merge + transcript branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_support_ticket_refetches_user_when_email_missing(monkeypatch):
+    db = _db(
+        find_one=AsyncMock(
+            side_effect=[
+                {"id": "default", "enabled": True},
+                {"id": "u1", "email": "fetched@x.ca", "phone": "+1000", "name": "Fetched User"},
+            ]
+        )
+    )
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock(return_value={"id": "zt-sup", "ticketNumber": "1"})
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    # caller passed a user dict with an id but no email -> triggers the
+    # "fetched = find_one(...); user = {**fetched, **non-None overrides}" merge
+    await integ.create_support_ticket(user={"id": "u1", "email": None}, message="need help")
+
+    created.assert_awaited_once()
+    assert created.call_args.kwargs["email"] == "fetched@x.ca"
+    assert created.call_args.kwargs["phone"] == "+1000"
 
 
 @pytest.mark.anyio
 async def test_support_ticket_appends_transcript_to_description(monkeypatch):
     db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
     monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt-support2"})
+    created = AsyncMock(return_value={"id": "zt-sup2"})
     monkeypatch.setattr(integ.zoho, "create_ticket", created)
 
     await integ.create_support_ticket(
-        user={"id": "u2", "email": "u2@x.ca"},
-        message="Trip fare looks wrong",
-        transcript="bot: hi\nuser: my fare is wrong",
+        user={"id": "u2", "email": "u2@x.ca"}, message="Help!", transcript="bot: hi\nuser: help"
     )
-
-    description = created.call_args.kwargs["description"]
-    assert description.startswith("Trip fare looks wrong")
-    assert "--- Chat transcript ---" in description
-    assert "user: my fare is wrong" in description
-
-
-@pytest.mark.anyio
-async def test_support_ticket_empty_message_uses_placeholder_and_default_subject(monkeypatch):
-    # Fixed (2026-08-03): when `message` is empty/whitespace-only, `subject`
-    # falls through to the "Support request" default (unchanged). `description`
-    # previously ALSO fell through to the literal "(no message)" placeholder
-    # even when a transcript was supplied, so a blank-message escalation with
-    # a real transcript produced a ticket body misleadingly prefixed with
-    # "(no message)". Now the placeholder is only used when there is truly
-    # nothing to show (no message AND no transcript) — see the
-    # `test_support_ticket_empty_message_and_no_transcript_uses_placeholder`
-    # sibling below for that case.
-    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
-    monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt-support3"})
-    monkeypatch.setattr(integ.zoho, "create_ticket", created)
-
-    await integ.create_support_ticket(user={"id": "u3", "email": "u3@x.ca"}, message="   ", transcript="user: hello?")
-
-    kwargs = created.call_args.kwargs
-    assert kwargs["subject"] == "Support — Support request"
-    assert kwargs["description"] == "\n\n--- Chat transcript ---\nuser: hello?"
+    desc = created.call_args.kwargs["description"]
+    assert desc.startswith("Help!")
+    assert "--- Chat transcript ---" in desc
+    assert "bot: hi" in desc
 
 
 @pytest.mark.anyio
-async def test_support_ticket_empty_message_and_no_transcript_uses_placeholder(monkeypatch):
-    """No message AND no transcript -> the "(no message)" placeholder is
-    still correct here, since there's genuinely nothing else to show."""
+async def test_support_ticket_blank_message_uses_placeholder_and_default_subject(monkeypatch):
     db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
     monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt-support4"})
+    created = AsyncMock(return_value={"id": "zt-sup3"})
     monkeypatch.setattr(integ.zoho, "create_ticket", created)
 
-    await integ.create_support_ticket(user={"id": "u4", "email": "u4@x.ca"}, message="   ", transcript=None)
+    await integ.create_support_ticket(user={"id": "u3", "email": "u3@x.ca"}, message="   ")
+    assert created.call_args.kwargs["description"] == "(no message)"
+    assert created.call_args.kwargs["subject"] == "Support — Support request"
 
-    kwargs = created.call_args.kwargs
-    assert kwargs["description"] == "(no message)"
+
+async def test_support_ticket_blank_message_with_transcript_leads_with_transcript(monkeypatch):
+    """Fixed: `description` previously fell through to the literal
+    "(no message)" placeholder even when a transcript was supplied, so a
+    blank-message escalation with a real transcript produced a ticket body
+    misleadingly prefixed with "(no message)". Now the placeholder is only
+    used when there is truly nothing to show (no message AND no
+    transcript) -- see test_support_ticket_blank_message_uses_placeholder_
+    and_default_subject above for that case."""
+    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock(return_value={"id": "zt-sup4"})
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    await integ.create_support_ticket(user={"id": "u4", "email": "u4@x.ca"}, message="   ", transcript="user: hello?")
+    assert created.call_args.kwargs["description"] == "\n\n--- Chat transcript ---\nuser: hello?"

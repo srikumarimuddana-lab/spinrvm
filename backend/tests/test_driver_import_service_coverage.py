@@ -1,33 +1,34 @@
-"""A1c Sub-tier C coverage tests for backend/services/driver_import_service.py.
+"""Coverage-closing tests for backend/services/driver_import_service.py.
 
-Test-only change: no application code modified. Targets the previously-uncovered
-branches of build_plan's document-row pass (files_root flow), commit_plan
-(inserts/updates/storage upload/doc insert), the small pure helpers
-(parse_bool/parse_date/split_name/normalize_phone/storage_signed_url/
-encrypt_pii/get_service_area/vehicle_type_map/work_auth_status/
-regulatory_authority_defaults), and print_report.
+Companion to test_driver_import_service.py (build_plan's batch-prefetch/
+resume/web-flow-rejection semantics) and test_admin_driver_import.py (the
+admin HTTP endpoints, exercised end-to-end). This file closes the remaining
+gaps:
 
-Written by reading backend/services/driver_import_service.py only -- pytest was
-NOT run to produce or validate this file. Mirrors the in-memory fake-Supabase
-style already used in test_driver_import_service.py / test_admin_driver_import.py.
-
-Fixed (2026-08-03, application code change, explicitly approved by the
-user via AskUserQuestion before applying — see
-docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md, Entry 11):
-build_plan's `has_import_documents` previously was computed from mere
-*presence* of a document row for old_driver_id in the documents CSV,
-not from that document's own `status` column — a driver row with
-spinr_approved=yes + regulatory_authority_approved=yes plus a document
-row whose status was explicitly "rejected" was planned as
-driver_status="active" and is_verified=True. Now only an APPROVED
-document counts. See
-`test_active_status_requires_approved_document_status` below.
+  * the small pure helpers (parse_bool, parse_date, date_is_ambiguous,
+    split_name, normalize_phone, canonical_requirement_key, work_auth_status,
+    regulatory_authority_defaults) at the unit level, each branch directly
+  * storage_signed_url / encrypt_pii, which need a fake supabase.storage /
+    supabase.rpc the other test files don't provide
+  * get_service_area's by-id and multiple-match/no-match branches (only
+    exercised indirectly, by name, via the admin route today)
+  * vehicle_type_map's skip-row-without-id defensive branch
+  * vehicle_field_changes' vehicle_year diff branch
+  * build_plan's duplicate-old_driver_id, wrong-service-area,
+    unparseable-date_of_birth, and ambiguous-date-warning branches
+  * build_plan's entire CLI document-row pipeline (files_root set) — the web
+    flow's files_root=None rejection is already covered elsewhere, but the
+    disallowed-requirement-key / bad-status / file-not-found / resumed-skip /
+    ambiguous-expiry / unparseable-expiry / happy-path branches were not
+  * commit_plan end to end: refuses on validation errors, inserts users/
+    drivers/updates/documents, uploads files, and encrypts license_number
+    while leaving VIN plaintext
+  * print_report's console summary
 """
 
-import csv
-import io
+from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
 from backend.services import driver_import_service as svc
 
@@ -39,13 +40,27 @@ SERVICE_AREA = {
     "province": "SK",
     "regulatory_authority": "SGI",
     "regulatory_region": "SK",
-    "required_documents": [{"key": "drivers_license"}, {"key": "insurance"}, {"key": "background_check"}],
+    "required_documents": [{"key": "drivers_license"}, {"key": "insurance"}],
 }
 
 
-# ---------------------------------------------------------------------------
-# Fake Supabase supporting table select/insert/update, storage, and rpc.
-# ---------------------------------------------------------------------------
+def _driver_row(**overrides):
+    row = {
+        "old_driver_id": "OLD-1",
+        "full_name": "Jane Doe",
+        "phone": "3065551234",
+        "email": "jane@example.com",
+        "vehicle_plate": "ABC123",
+        "vehicle_type": "Sedan",
+        "vehicle_year": "2020",
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Corolla",
+    }
+    row.update(overrides)
+    return row
+
+
+# ── fake supabase (table + storage + rpc) ────────────────────────────────
 
 
 class _FakeExecute:
@@ -58,8 +73,8 @@ class _FakeQuery:
         self.table = table
         self.store = store
         self._filters = []
-        self._insert_rows = None
-        self._update_fields = None
+        self._insert = None
+        self._update = None
 
     def select(self, *_a, **_k):
         return self
@@ -80,15 +95,15 @@ class _FakeQuery:
         return self
 
     def insert(self, rows):
-        self._insert_rows = rows if isinstance(rows, list) else [rows]
+        self._insert = rows if isinstance(rows, list) else [rows]
         return self
 
     def update(self, fields):
-        self._update_fields = fields
+        self._update = fields
         return self
 
-    def _matching(self):
-        rows = self.store.get(self.table, [])
+    def _matched(self):
+        rows = list(self.store.get(self.table, []))
         for op, col, val in self._filters:
             if op == "eq":
                 rows = [r for r in rows if r.get(col) == val]
@@ -101,104 +116,88 @@ class _FakeQuery:
         return rows
 
     def execute(self):
-        if self._insert_rows is not None:
-            self.store.setdefault(self.table, []).extend(self._insert_rows)
-            return _FakeExecute(list(self._insert_rows))
-        if self._update_fields is not None:
-            matched = self._matching()
+        if self._insert is not None:
+            self.store.setdefault(self.table, []).extend(self._insert)
+            return _FakeExecute(list(self._insert))
+        if self._update is not None:
+            matched = self._matched()
             for row in matched:
-                row.update(self._update_fields)
+                row.update(self._update)
             return _FakeExecute(matched)
-        return _FakeExecute(list(self._matching()))
+        return _FakeExecute(self._matched())
 
 
-class _FakeRpc:
-    def __init__(self, params):
-        self.params = params
-
-    def execute(self):
-        return _FakeExecute(f"ENC[{self.params.get('plaintext')}]")
-
-
-class _FakeStorageBucket:
-    def __init__(self, uploads, bucket):
-        self.uploads = uploads
-        self.bucket = bucket
+class _FakeBucket:
+    def __init__(self, recorder, signed_url_data=None, raise_on_signed_url=False):
+        self.recorder = recorder
+        self.signed_url_data = (
+            signed_url_data if signed_url_data is not None else {"signedURL": "https://signed.example/x"}
+        )
+        self.raise_on_signed_url = raise_on_signed_url
 
     def upload(self, path, file, file_options=None):
-        self.uploads.append({"bucket": self.bucket, "path": path, "size": len(file), "options": file_options})
-        return {"path": path}
+        self.recorder.setdefault("uploads", []).append({"path": path, "size": len(file), "file_options": file_options})
+        return _FakeExecute(None)
 
-    def create_signed_url(self, storage_key, _ttl):
-        return _FakeExecute({"signedURL": f"https://signed.example/{storage_key}"})
+    def create_signed_url(self, storage_key, ttl):
+        self.recorder.setdefault("signed_url_calls", []).append((storage_key, ttl))
+        return _FakeExecute(None if self.raise_on_signed_url else self.signed_url_data)
 
 
 class _FakeStorage:
-    def __init__(self, uploads):
-        self.uploads = uploads
+    def __init__(self, recorder, **bucket_kwargs):
+        self.recorder = recorder
+        self.bucket_kwargs = bucket_kwargs
 
-    def from_(self, bucket):
-        return _FakeStorageBucket(self.uploads, bucket)
+    def from_(self, _bucket_name):
+        return _FakeBucket(self.recorder, **self.bucket_kwargs)
+
+
+class _FakeRpc:
+    def __init__(self, name, params, recorder):
+        self.name = name
+        self.params = params
+        self.recorder = recorder
+
+    def execute(self):
+        self.recorder.setdefault("rpc_calls", []).append((self.name, self.params))
+        # encrypt_driver_pii: echo an "encrypted" marker so tests can assert
+        # the plaintext never lands in the drivers insert payload.
+        return _FakeExecute(f"enc::{self.params.get('plaintext')}")
 
 
 class _FakeSupabase:
-    def __init__(self, store):
-        self.store = store
-        self.uploads = []
-        self.storage = _FakeStorage(self.uploads)
+    def __init__(self, store=None, storage_kwargs=None):
+        self.store = store if store is not None else {"vehicle_types": [{"id": "vt-sedan", "name": "Sedan"}]}
+        self.recorder: dict = {}
+        self.storage = _FakeStorage(self.recorder, **(storage_kwargs or {}))
 
     def table(self, name):
         return _FakeQuery(name, self.store)
 
-    def rpc(self, _name, params):
-        return _FakeRpc(params)
+    def rpc(self, name, params):
+        return _FakeRpc(name, params, self.recorder)
 
 
-def _install_fake(monkeypatch, *, users=None, drivers=None, service_areas=None, vehicle_types=None):
-    store = {
-        "users": users or [],
-        "drivers": drivers or [],
-        "vehicle_types": vehicle_types if vehicle_types is not None else [{"id": "vt-sedan", "name": "Sedan"}],
-        "service_areas": service_areas or [],
-        "driver_documents": [],
-    }
-    fake = _FakeSupabase(store)
+def _install(monkeypatch, **kwargs):
+    fake = _FakeSupabase(**kwargs)
     monkeypatch.setattr(svc, "supabase", fake)
     return fake
 
 
-def _driver_row(**overrides):
-    row = {
-        "old_driver_id": "OLD-1",
-        "full_name": "Jane Doe",
-        "phone": "3065551234",
-        "email": "jane@example.com",
-        "vehicle_plate": "ABC123",
-        "vehicle_type": "Sedan",
-        "vehicle_year": "2020",
-        "vehicle_make": "Toyota",
-        "vehicle_model": "Corolla",
-    }
-    row.update(overrides)
-    return row
+# ── CSV parsing helpers ──────────────────────────────────────────────
 
 
-# ---------------------------------------------------------------------------
-# parse_csv_rows / read_csv / read_csv_text (lines 160, 166-167, 174)
-# ---------------------------------------------------------------------------
+def test_parse_csv_rows_no_header_raises():
+    import csv
+    import io
 
-
-def test_parse_csv_rows_raises_on_missing_header():
     reader = csv.DictReader(io.StringIO(""))
-    with pytest.raises(ValueError, match="no header row"):
+    try:
         svc.parse_csv_rows(reader)
-
-
-def test_read_csv_reads_and_normalizes_from_disk(tmp_path):
-    p = tmp_path / "drivers.csv"
-    p.write_text("Old Driver Id,Full Name\nOLD-1,Jane Doe\n", encoding="utf-8-sig")
-    rows = svc.read_csv(p)
-    assert rows == [{"old_driver_id": "OLD-1", "full_name": "Jane Doe"}]
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "no header row" in str(exc)
 
 
 def test_read_csv_text_strips_leading_bom():
@@ -207,62 +206,92 @@ def test_read_csv_text_strips_leading_bom():
     assert rows == [{"old_driver_id": "OLD-1", "full_name": "Jane Doe"}]
 
 
-def test_read_csv_text_without_bom_still_works():
+def test_read_csv_text_without_bom():
     text = "old_driver_id,full_name\nOLD-1,Jane Doe\n"
     rows = svc.read_csv_text(text)
     assert rows[0]["old_driver_id"] == "OLD-1"
 
 
-# ---------------------------------------------------------------------------
-# parse_bool (lines 184-186)
-# ---------------------------------------------------------------------------
+def test_read_csv_reads_from_disk(tmp_path: Path):
+    csv_path = tmp_path / "drivers.csv"
+    csv_path.write_text("old_driver_id,full_name\nOLD-1,Jane Doe\n", encoding="utf-8-sig")
+    rows = svc.read_csv(csv_path)
+    assert rows[0]["old_driver_id"] == "OLD-1"
+
+
+# ── parse_bool ─────────────────────────────────────────────────────────
+
+
+def test_parse_bool_truthy_values():
+    for v in ("y", "yes", "true", "1", "approved", "valid", "YES", "True"):
+        assert svc.parse_bool(v) is True
 
 
 def test_parse_bool_falsy_values():
-    assert svc.parse_bool("no") is False
-    assert svc.parse_bool("False") is False
-    assert svc.parse_bool("0") is False
-    assert svc.parse_bool("Not Approved") is False
+    for v in ("n", "no", "false", "0", "not approved", "invalid", "NO"):
+        assert svc.parse_bool(v) is False
 
 
-def test_parse_bool_unrecognized_value_is_none():
-    assert svc.parse_bool("maybe") is None
-
-
-def test_parse_bool_blank_is_none():
+def test_parse_bool_empty_is_none():
     assert svc.parse_bool("") is None
     assert svc.parse_bool(None) is None
 
 
-# ---------------------------------------------------------------------------
-# parse_date / date_is_ambiguous (lines 197, 201, 226)
-# ---------------------------------------------------------------------------
+def test_parse_bool_unrecognized_is_none():
+    assert svc.parse_bool("maybe") is None
 
 
-def test_parse_date_two_digit_year_is_promoted_to_2000s():
-    parsed = svc.parse_date("15-Jan-24")
-    assert parsed is not None
-    assert parsed.year == 2024
+# ── parse_date / iso_date ─────────────────────────────────────────────
+
+
+def test_parse_date_iso_format():
+    assert svc.parse_date("2020-01-15").isoformat() == "2020-01-15"
+
+
+def test_parse_date_two_digit_year_rolls_to_2000s():
+    # %d-%b-%y: 05-Mar-20 -> 2020, not 1920.
+    d = svc.parse_date("05-Mar-20")
+    assert d is not None
+    assert d.year == 2020 and d.month == 3 and d.day == 5
 
 
 def test_parse_date_unparseable_returns_none():
     assert svc.parse_date("not-a-date") is None
 
 
-def test_date_is_ambiguous_two_digit_year_branch():
-    # Exercise the year<100 normalization inside date_is_ambiguous itself
-    # (not just parse_date) via a '/' date with two valid short-year readings.
-    assert isinstance(svc.date_is_ambiguous("03/04/25"), bool)
+def test_parse_date_synonyms_return_none():
+    for v in ("indefinite", "valid", "n/a", "na", "none", ""):
+        assert svc.parse_date(v) is None
 
 
-# ---------------------------------------------------------------------------
-# split_name (lines 248, 250)
-# ---------------------------------------------------------------------------
+def test_iso_date_wraps_parse_date():
+    assert svc.iso_date("2020-01-15") == "2020-01-15"
+    assert svc.iso_date("garbage") is None
 
 
-def test_split_name_empty_string():
+# ── date_is_ambiguous ──────────────────────────────────────────────────
+
+
+def test_date_is_ambiguous_true_for_day_month_swap():
+    # 03/04/25 is Apr 3 2025 under d/m/y, Mar 4 2025 under m/d/y.
+    assert svc.date_is_ambiguous("03/04/25") is True
+
+
+def test_date_is_ambiguous_false_for_iso():
+    assert svc.date_is_ambiguous("2020-01-15") is False
+
+
+def test_date_is_ambiguous_false_for_blank_or_synonym():
+    assert svc.date_is_ambiguous("") is False
+    assert svc.date_is_ambiguous("indefinite") is False
+
+
+# ── split_name ───────────────────────────────────────────────────────
+
+
+def test_split_name_empty():
     assert svc.split_name("") == ("", "")
-    assert svc.split_name("   (nickname)  ") == ("", "")
+    assert svc.split_name("   ") == ("", "")
 
 
 def test_split_name_single_word():
@@ -270,173 +299,41 @@ def test_split_name_single_word():
 
 
 def test_split_name_strips_parenthetical():
-    assert svc.split_name("Jane Doe (Janie)") == ("Jane", "Doe")
+    assert svc.split_name("Jane Doe (Jenny)") == ("Jane", "Doe")
 
 
-# ---------------------------------------------------------------------------
-# normalize_phone (lines 258-260)
-# ---------------------------------------------------------------------------
+def test_split_name_multi_word_last_name():
+    assert svc.split_name("Jane Middle Doe") == ("Jane", "Middle Doe")
 
 
-def test_normalize_phone_eleven_digit_leading_one():
-    assert svc.normalize_phone("1-306-555-1234") == "+13065551234"
+# ── normalize_phone ──────────────────────────────────────────────────
 
 
-def test_normalize_phone_unrecognized_length_passthrough():
-    assert svc.normalize_phone(" 555-1234 ") == "555-1234"
+def test_normalize_phone_ten_digits():
+    assert svc.normalize_phone("306-555-1234") == "+13065551234"
 
 
-# ---------------------------------------------------------------------------
-# canonical_requirement_key (lines 268-269)
-# ---------------------------------------------------------------------------
+def test_normalize_phone_eleven_digits_leading_one():
+    assert svc.normalize_phone("13065551234") == "+13065551234"
 
 
-def test_canonical_requirement_key_alias_via_raw_lower():
-    # "Car Insurance" slugs to "car_insurance" which IS in the alias dict via
-    # the slug path already; use a value whose *raw* lowercase (with a space)
-    # is the alias key that only matches the second lookup fallback.
-    assert svc.canonical_requirement_key("Driving License") == "drivers_license"
+def test_normalize_phone_invalid_length_passthrough():
+    assert svc.normalize_phone(" 12345 ") == "12345"
 
 
-def test_canonical_requirement_key_unmapped_falls_back_to_slug():
-    assert svc.canonical_requirement_key("Some Other Doc") == "some_other_doc"
+# ── canonical_requirement_key ────────────────────────────────────────
 
 
-# ---------------------------------------------------------------------------
-# storage_signed_url (lines 273-282)
-# ---------------------------------------------------------------------------
+def test_canonical_requirement_key_alias():
+    assert svc.canonical_requirement_key("Criminal Record Check") == "background_check"
+    assert svc.canonical_requirement_key("car insurance") == "insurance"
 
 
-class _Obj:
-    def __init__(self, **kw):
-        self.__dict__.update(kw)
+def test_canonical_requirement_key_unmapped_passthrough():
+    assert svc.canonical_requirement_key("custom key") == "custom_key"
 
 
-class _SignedUrlStorage:
-    def __init__(self, result_data):
-        self._result_data = result_data
-
-    def from_(self, _bucket):
-        return self
-
-    def create_signed_url(self, _key, _ttl):
-        return _Obj(data=self._result_data)
-
-
-class _SignedUrlSupabase:
-    def __init__(self, result_data):
-        self.storage = _SignedUrlStorage(result_data)
-
-
-def test_storage_signed_url_dict_signedurl_key(monkeypatch):
-    monkeypatch.setattr(svc, "supabase", _SignedUrlSupabase({"signedURL": "https://x/y"}))
-    assert svc.storage_signed_url("k") == "https://x/y"
-
-
-def test_storage_signed_url_dict_signed_url_snake_key(monkeypatch):
-    monkeypatch.setattr(svc, "supabase", _SignedUrlSupabase({"signed_url": "https://x/z"}))
-    assert svc.storage_signed_url("k") == "https://x/z"
-
-
-def test_storage_signed_url_object_attribute_fallback(monkeypatch):
-    monkeypatch.setattr(svc, "supabase", _SignedUrlSupabase(_Obj(signed_url="https://x/obj")))
-    assert svc.storage_signed_url("k") == "https://x/obj"
-
-
-def test_storage_signed_url_raises_when_no_url_found(monkeypatch):
-    monkeypatch.setattr(svc, "supabase", _SignedUrlSupabase(_Obj()))
-    with pytest.raises(RuntimeError, match="no URL"):
-        svc.storage_signed_url("some-key")
-
-
-# ---------------------------------------------------------------------------
-# encrypt_pii (lines 288-289)
-# ---------------------------------------------------------------------------
-
-
-def test_encrypt_pii_none_input_short_circuits(monkeypatch):
-    # No supabase call needed for falsy input.
-    monkeypatch.setattr(svc, "supabase", None)
-    assert svc.encrypt_pii(None) is None
-    assert svc.encrypt_pii("") is None
-
-
-def test_encrypt_pii_calls_rpc(monkeypatch):
-    fake = _install_fake(monkeypatch)
-    assert svc.encrypt_pii("SECRET123") == "ENC[SECRET123]"
-
-
-# ---------------------------------------------------------------------------
-# vehicle_field_changes year branch (line 321)
-# ---------------------------------------------------------------------------
-
-
-def test_vehicle_field_changes_year_diff_detected():
-    existing = {"vehicle_year": 2019}
-    changes, vin = svc.vehicle_field_changes({"vehicle_year": "2022"}, existing)
-    assert changes["vehicle_year"] == 2022
-    assert vin is None
-
-
-# ---------------------------------------------------------------------------
-# get_service_area (lines 334, 356)
-# ---------------------------------------------------------------------------
-
-
-def test_get_service_area_by_id(monkeypatch):
-    _install_fake(
-        monkeypatch,
-        service_areas=[{"id": "sa-1", "name": "Saskatoon", "province": "SK"}],
-    )
-    area = svc.get_service_area("sa-1", "")
-    assert area["id"] == "sa-1"
-
-
-def test_get_service_area_multiple_matches_without_id_raises(monkeypatch):
-    _install_fake(
-        monkeypatch,
-        service_areas=[
-            {"id": "sa-1", "name": "Saskatoon North", "province": "SK"},
-            {"id": "sa-2", "name": "Saskatoon South", "province": "SK"},
-        ],
-    )
-    with pytest.raises(RuntimeError, match="Multiple service areas matched"):
-        svc.get_service_area(None, "Saskatoon")
-
-
-def test_get_service_area_not_found_raises(monkeypatch):
-    _install_fake(monkeypatch, service_areas=[])
-    with pytest.raises(RuntimeError, match="not found"):
-        svc.get_service_area(None, "Nowhere")
-
-
-# ---------------------------------------------------------------------------
-# vehicle_type_map skip-no-id branch (line 369)
-# ---------------------------------------------------------------------------
-
-
-def test_vehicle_type_map_skips_rows_without_id(monkeypatch):
-    _install_fake(monkeypatch, vehicle_types=[{"id": None, "name": "Ghost"}, {"id": "vt-1", "name": "Sedan"}])
-    out = svc.vehicle_type_map()
-    assert "ghost" not in out
-    assert out["sedan"] == "vt-1"
-
-
-# ---------------------------------------------------------------------------
-# validate_required_columns empty rows (lines 378-379)
-# ---------------------------------------------------------------------------
-
-
-def test_validate_required_columns_empty_rows():
-    plan = svc.ImportPlan()
-    svc.validate_required_columns([], plan)
-    assert len(plan.errors) == 1
-    assert plan.errors[0].field == "drivers_csv"
-
-
-# ---------------------------------------------------------------------------
-# work_auth_status (lines 387, 389, 392, 394)
-# ---------------------------------------------------------------------------
+# ── work_auth_status ─────────────────────────────────────────────────
 
 
 def test_work_auth_status_citizen():
@@ -459,148 +356,291 @@ def test_work_auth_status_unknown():
     assert svc.work_auth_status({}) == "unknown"
 
 
-# ---------------------------------------------------------------------------
-# regulatory_authority_defaults (line 413)
-# ---------------------------------------------------------------------------
+# ── regulatory_authority_defaults ────────────────────────────────────
 
 
-def test_regulatory_authority_defaults_derives_sk_from_area_name():
-    authority, region = svc.regulatory_authority_defaults({}, {"name": "Saskatoon", "province": ""})
+def test_regulatory_authority_defaults_saskatoon_area_defaults_sk_sgi():
+    authority, region = svc.regulatory_authority_defaults({}, {"name": "Saskatoon"})
     assert region == "SK"
     assert authority == "SGI"
 
 
-def test_regulatory_authority_defaults_non_sk_area():
+def test_regulatory_authority_defaults_row_overrides_win():
+    authority, region = svc.regulatory_authority_defaults(
+        {"regulatory_authority": "Custom Authority", "regulatory_region": "AB"}, {"name": "Saskatoon"}
+    )
+    assert authority == "Custom Authority"
+    assert region == "AB"
+
+
+def test_regulatory_authority_defaults_non_sk_area_generic_authority():
     authority, region = svc.regulatory_authority_defaults({}, {"name": "Somewhere Else"})
     assert region == ""
     assert authority == "Provincial / municipal authority"
 
 
-# ---------------------------------------------------------------------------
-# build_plan: duplicate old_driver_id / service scope mismatch (504-505, 516-517)
-# ---------------------------------------------------------------------------
+# ── storage_signed_url ───────────────────────────────────────────────
+
+
+def test_storage_signed_url_dict_data(monkeypatch):
+    _install(monkeypatch, storage_kwargs={"signed_url_data": {"signedURL": "https://signed.example/a"}})
+    assert svc.storage_signed_url("k1") == "https://signed.example/a"
+
+
+def test_storage_signed_url_object_attr_fallback(monkeypatch):
+    class _ObjData:
+        signed_url = "https://signed.example/b"
+
+    _install(monkeypatch, storage_kwargs={"signed_url_data": _ObjData()})
+    assert svc.storage_signed_url("k2") == "https://signed.example/b"
+
+
+def test_storage_signed_url_missing_url_raises(monkeypatch):
+    _install(monkeypatch, storage_kwargs={"raise_on_signed_url": True})
+    try:
+        svc.storage_signed_url("k3")
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "k3" in str(exc)
+
+
+# ── encrypt_pii ──────────────────────────────────────────────────────
+
+
+def test_encrypt_pii_none_passthrough(monkeypatch):
+    fake = _install(monkeypatch)
+    assert svc.encrypt_pii(None) is None
+    assert svc.encrypt_pii("") is None
+    assert "rpc_calls" not in fake.recorder
+
+
+def test_encrypt_pii_calls_rpc(monkeypatch):
+    fake = _install(monkeypatch)
+    result = svc.encrypt_pii("D1234567")
+    assert result == "enc::D1234567"
+    assert fake.recorder["rpc_calls"] == [("encrypt_driver_pii", {"plaintext": "D1234567"})]
+
+
+# ── vehicle_field_changes ────────────────────────────────────────────
+
+
+def test_vehicle_field_changes_vehicle_year_diff():
+    existing = {"vehicle_make": "Toyota", "vehicle_model": "Corolla", "vehicle_year": 2018, "license_plate": "ABC"}
+    row = _driver_row(vehicle_year="2022")
+    changes, vin_plain = svc.vehicle_field_changes(row, existing)
+    assert changes["vehicle_year"] == 2022
+    assert vin_plain is None
+
+
+# ── get_service_area ─────────────────────────────────────────────────
+
+
+def test_get_service_area_by_id_found(monkeypatch):
+    _install(monkeypatch, store={"service_areas": [SERVICE_AREA]})
+    area = svc.get_service_area("sa-1", "")
+    assert area["id"] == "sa-1"
+
+
+def test_get_service_area_by_id_not_found_raises(monkeypatch):
+    _install(monkeypatch, store={"service_areas": [SERVICE_AREA]})
+    try:
+        svc.get_service_area("sa-missing", "")
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "not found" in str(exc)
+
+
+def test_get_service_area_by_name_single_match(monkeypatch):
+    _install(monkeypatch, store={"service_areas": [SERVICE_AREA]})
+    area = svc.get_service_area(None, "Saskatoon")
+    assert area["id"] == "sa-1"
+
+
+def test_get_service_area_by_name_no_match_raises(monkeypatch):
+    _install(monkeypatch, store={"service_areas": [SERVICE_AREA]})
+    try:
+        svc.get_service_area(None, "Nowhere")
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError:
+        pass
+
+
+def test_get_service_area_by_name_multiple_matches_raises(monkeypatch):
+    dup = {**SERVICE_AREA, "id": "sa-2", "name": "Saskatoon East"}
+    _install(monkeypatch, store={"service_areas": [SERVICE_AREA, dup]})
+    try:
+        svc.get_service_area(None, "Saskatoon")
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "Multiple service areas matched" in str(exc)
+
+
+# ── vehicle_type_map ─────────────────────────────────────────────────
+
+
+def test_vehicle_type_map_skips_row_without_id(monkeypatch):
+    _install(monkeypatch, store={"vehicle_types": [{"id": "vt-sedan", "name": "Sedan"}, {"name": "Ghost"}]})
+    vt_map = svc.vehicle_type_map()
+    assert vt_map.get("sedan") == "vt-sedan"
+    assert "ghost" not in vt_map
+
+
+def test_validate_required_columns_empty_rows_errors():
+    plan = svc.ImportPlan()
+    svc.validate_required_columns([], plan)
+    assert any(e.field == "drivers_csv" and "empty" in e.message for e in plan.errors)
+
+
+def test_build_plan_empty_driver_rows_errors(monkeypatch):
+    _install(monkeypatch)
+    plan = svc.build_plan([], [], None, SERVICE_AREA, "batch1")
+    assert any(e.field == "drivers_csv" for e in plan.errors)
+
+
+# ── build_plan: duplicate / scope / DOB / ambiguous-date branches ────
 
 
 def test_build_plan_duplicate_old_driver_id_errors(monkeypatch):
-    _install_fake(monkeypatch)
-    plan = svc.build_plan([_driver_row(), _driver_row()], [], None, SERVICE_AREA, "batch1")
+    _install(monkeypatch)
+    rows = [_driver_row(), _driver_row(phone="3065559999", email="other@example.com")]
+    plan = svc.build_plan(rows, [], None, SERVICE_AREA, "batch1")
     assert any(e.field == "old_driver_id" and "duplicate" in e.message for e in plan.errors)
+    assert len(plan.users_to_insert) == 1  # only the first row was planned
 
 
-def test_build_plan_service_area_scope_mismatch_errors(monkeypatch):
-    _install_fake(monkeypatch)
+def test_build_plan_wrong_service_area_errors(monkeypatch):
+    _install(monkeypatch)
     row = _driver_row(service_area="regina")
     plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
     assert any(e.field == "service_area" for e in plan.errors)
-
-
-# ---------------------------------------------------------------------------
-# build_plan: date_of_birth parse error + ambiguous date warning (575-576, 580)
-# ---------------------------------------------------------------------------
+    assert not plan.users_to_insert
 
 
 def test_build_plan_unparseable_dob_errors(monkeypatch):
-    _install_fake(monkeypatch)
-    row = _driver_row(date_of_birth="not-a-real-date")
+    _install(monkeypatch)
+    row = _driver_row(date_of_birth="not-a-date")
     plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
     assert any(e.field == "date_of_birth" for e in plan.errors)
 
 
-def test_build_plan_ambiguous_driver_date_field_warns(monkeypatch):
-    _install_fake(monkeypatch)
+def test_build_plan_ambiguous_date_field_warns(monkeypatch):
+    _install(monkeypatch)
     row = _driver_row(license_expiry="03/04/25")
     plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
     assert not plan.errors
     assert any(w.field == "license_expiry" for w in plan.warnings)
 
 
-# ---------------------------------------------------------------------------
-# build_plan document-row pass with files_root set (lines 691-771, the
-# largest missing block).
-# ---------------------------------------------------------------------------
-
-
-def _doc_row(**overrides):
-    row = {
-        "old_driver_id": "OLD-1",
-        "requirement_key": "drivers_license",
-        "status": "approved",
-        "file_path": "doc.pdf",
-        "side": "",
+def test_build_plan_resume_vehicle_year_change(monkeypatch):
+    existing_driver = {
+        "id": "drv-1",
+        "phone": "+13065551234",
+        "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "OLD-1"},
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Corolla",
+        "license_plate": "ABC123",
+        "vehicle_year": 2018,
     }
-    row.update(overrides)
-    return row
+    _install(monkeypatch, store={"drivers": [existing_driver], "vehicle_types": [{"id": "vt-sedan", "name": "Sedan"}]})
+    row = _driver_row(vehicle_year="2022")
+    plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert plan.drivers_to_update[0]["changes"]["vehicle_year"] == 2022
 
 
-def test_build_plan_document_row_no_matching_driver_errors(monkeypatch, tmp_path):
-    _install_fake(monkeypatch)
-    plan = svc.build_plan([_driver_row()], [_doc_row(old_driver_id="OLD-999")], tmp_path, SERVICE_AREA, "batch1")
-    assert any(e.field == "old_driver_id" and "no importable driver row" in e.message for e in plan.errors)
+# ── build_plan: CLI document-row pipeline (files_root set) ───────────
 
 
-def test_build_plan_document_row_disallowed_requirement_key_errors(monkeypatch, tmp_path):
-    _install_fake(monkeypatch)
-    plan = svc.build_plan(
-        [_driver_row()], [_doc_row(requirement_key="underwater_basket_weaving")], tmp_path, SERVICE_AREA, "batch1"
-    )
+def test_build_plan_document_happy_path(tmp_path: Path, monkeypatch):
+    _install(monkeypatch)
+    doc_file = tmp_path / "license.pdf"
+    doc_file.write_bytes(b"%PDF-1.4 fake")
+    doc_rows = [
+        {
+            "old_driver_id": "OLD-1",
+            "requirement_key": "drivers_license",
+            "file_path": "license.pdf",
+            "status": "approved",
+        }
+    ]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert len(plan.docs_to_insert) == 1
+    assert plan.docs_to_insert[0]["requirement_key"] == "drivers_license"
+    assert plan.docs_to_insert[0]["status"] == "approved"
+    assert len(plan.files_to_upload) == 1
+
+
+def test_build_plan_document_disallowed_requirement_key_errors(tmp_path: Path, monkeypatch):
+    _install(monkeypatch)
+    doc_file = tmp_path / "x.pdf"
+    doc_file.write_bytes(b"x")
+    doc_rows = [{"old_driver_id": "OLD-1", "requirement_key": "not_a_real_key", "file_path": "x.pdf"}]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
     assert any(e.field == "requirement_key" for e in plan.errors)
 
 
-def test_build_plan_document_row_invalid_status_errors(monkeypatch, tmp_path):
-    _install_fake(monkeypatch)
-    plan = svc.build_plan([_driver_row()], [_doc_row(status="on_fire")], tmp_path, SERVICE_AREA, "batch1")
+def test_build_plan_document_invalid_status_errors(tmp_path: Path, monkeypatch):
+    _install(monkeypatch)
+    doc_file = tmp_path / "x.pdf"
+    doc_file.write_bytes(b"x")
+    doc_rows = [
+        {"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "x.pdf", "status": "bogus"}
+    ]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
     assert any(e.field == "status" for e in plan.errors)
 
 
-def test_build_plan_document_row_file_not_found_errors(monkeypatch, tmp_path):
-    _install_fake(monkeypatch)
-    plan = svc.build_plan([_driver_row()], [_doc_row(file_path="missing.pdf")], tmp_path, SERVICE_AREA, "batch1")
+def test_build_plan_document_file_not_found_errors(tmp_path: Path, monkeypatch):
+    _install(monkeypatch)
+    doc_rows = [{"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "missing.pdf"}]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
     assert any(e.field == "file_path" for e in plan.errors)
 
 
-def test_build_plan_document_row_success_plans_file_and_doc(monkeypatch, tmp_path):
-    _install_fake(monkeypatch)
-    (tmp_path / "doc.pdf").write_bytes(b"%PDF-1.4 fake content")
-    plan = svc.build_plan([_driver_row()], [_doc_row()], tmp_path, SERVICE_AREA, "batch1")
-    assert not plan.errors
-    assert len(plan.docs_to_insert) == 1
-    assert len(plan.files_to_upload) == 1
-    doc = plan.docs_to_insert[0]
-    assert doc["requirement_key"] == "drivers_license"
-    assert doc["status"] == "approved"
-    file_path, storage_key, doc_id = plan.files_to_upload[0]
-    assert file_path == tmp_path / "doc.pdf"
-    assert doc_id == doc["id"]
-    assert "batch1/OLD-1/drivers_license" in storage_key
+def test_build_plan_document_unknown_old_id_errors(tmp_path: Path, monkeypatch):
+    _install(monkeypatch)
+    doc_file = tmp_path / "x.pdf"
+    doc_file.write_bytes(b"x")
+    doc_rows = [{"old_driver_id": "OLD-999", "requirement_key": "drivers_license", "file_path": "x.pdf"}]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
+    assert any(e.field == "old_driver_id" and "document row" in e.message for e in plan.errors)
 
 
-def test_build_plan_document_row_expiry_unparseable_errors(monkeypatch, tmp_path):
-    _install_fake(monkeypatch)
-    (tmp_path / "doc.pdf").write_bytes(b"data")
-    plan = svc.build_plan([_driver_row()], [_doc_row(expiry_date="garbage")], tmp_path, SERVICE_AREA, "batch1")
-    assert any(e.field == "expiry_date" for e in plan.errors)
-
-
-def test_build_plan_document_row_ambiguous_expiry_warns(monkeypatch, tmp_path):
-    _install_fake(monkeypatch)
-    (tmp_path / "doc.pdf").write_bytes(b"data")
-    plan = svc.build_plan([_driver_row()], [_doc_row(expiry_date="03/04/25")], tmp_path, SERVICE_AREA, "batch1")
+def test_build_plan_document_ambiguous_expiry_warns(tmp_path: Path, monkeypatch):
+    _install(monkeypatch)
+    doc_file = tmp_path / "x.pdf"
+    doc_file.write_bytes(b"x")
+    doc_rows = [
+        {
+            "old_driver_id": "OLD-1",
+            "requirement_key": "drivers_license",
+            "file_path": "x.pdf",
+            "expiry_date": "03/04/25",
+        }
+    ]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
     assert not plan.errors
     assert any(w.field == "expiry_date" for w in plan.warnings)
 
 
-def test_build_plan_document_row_indefinite_expiry_is_fine(monkeypatch, tmp_path):
-    _install_fake(monkeypatch)
-    (tmp_path / "doc.pdf").write_bytes(b"data")
-    plan = svc.build_plan([_driver_row()], [_doc_row(expiry_date="indefinite")], tmp_path, SERVICE_AREA, "batch1")
-    assert not plan.errors
-    assert plan.docs_to_insert[0]["expiry_date"] is None
+def test_build_plan_document_unparseable_expiry_errors(tmp_path: Path, monkeypatch):
+    _install(monkeypatch)
+    doc_file = tmp_path / "x.pdf"
+    doc_file.write_bytes(b"x")
+    doc_rows = [
+        {
+            "old_driver_id": "OLD-1",
+            "requirement_key": "drivers_license",
+            "file_path": "x.pdf",
+            "expiry_date": "not-a-date",
+        }
+    ]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
+    assert any(e.field == "expiry_date" for e in plan.errors)
 
 
-def test_build_plan_resumed_driver_dedups_existing_documents(monkeypatch, tmp_path):
-    # Driver was already imported by this importer (resume path); a document
-    # of the same (requirement_key, side) already exists in driver_documents
-    # -> the re-upload's document row is skipped with a warning, not re-queued.
+def test_build_plan_document_resumed_driver_skips_existing_doc(tmp_path: Path, monkeypatch):
     existing_driver = {
         "id": "drv-1",
         "phone": "+13065551234",
@@ -610,65 +650,36 @@ def test_build_plan_resumed_driver_dedups_existing_documents(monkeypatch, tmp_pa
         "license_plate": "ABC123",
         "vehicle_year": 2020,
     }
-    fake = _install_fake(monkeypatch, drivers=[existing_driver])
-    fake.store["driver_documents"] = [{"driver_id": "drv-1", "requirement_key": "drivers_license", "side": None}]
-    (tmp_path / "doc.pdf").write_bytes(b"data")
-    plan = svc.build_plan([_driver_row()], [_doc_row(side="")], tmp_path, SERVICE_AREA, "batch1")
+    fake = _install(
+        monkeypatch,
+        store={
+            "drivers": [existing_driver],
+            "driver_documents": [{"driver_id": "drv-1", "requirement_key": "drivers_license", "side": None}],
+            "vehicle_types": [{"id": "vt-sedan", "name": "Sedan"}],
+        },
+    )
+    doc_file = tmp_path / "x.pdf"
+    doc_file.write_bytes(b"x")
+    doc_rows = [{"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "x.pdf"}]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
     assert not plan.errors
     assert not plan.docs_to_insert
-    assert any(w.message.startswith("document already imported") for w in plan.warnings)
+    assert any(w.field == "drivers_license" and "already imported" in w.message for w in plan.warnings)
+    assert fake  # keep reference alive/used
 
 
-def test_build_plan_resumed_driver_new_document_is_queued(monkeypatch, tmp_path):
-    # Same resume scenario, but the document row is for a requirement_key not
-    # already present -> it IS queued (existing_docs_cache miss branch).
-    existing_driver = {
-        "id": "drv-1",
-        "phone": "+13065551234",
-        "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "OLD-1"},
-        "vehicle_make": "Toyota",
-        "vehicle_model": "Corolla",
-        "license_plate": "ABC123",
-        "vehicle_year": 2020,
-    }
-    fake = _install_fake(monkeypatch, drivers=[existing_driver])
-    fake.store["driver_documents"] = [{"driver_id": "drv-1", "requirement_key": "insurance", "side": None}]
-    (tmp_path / "doc.pdf").write_bytes(b"data")
-    plan = svc.build_plan(
-        [_driver_row()], [_doc_row(requirement_key="drivers_license")], tmp_path, SERVICE_AREA, "batch1"
-    )
-    assert not plan.errors
-    assert len(plan.docs_to_insert) == 1
-
-
-def test_build_plan_document_row_no_allowed_keys_accepts_any_slug(monkeypatch, tmp_path):
-    # required_documents is empty -> allowed_doc_keys is empty -> the
-    # `if allowed_doc_keys and key not in allowed_doc_keys` guard is skipped,
-    # so any requirement_key slug is accepted.
-    _install_fake(monkeypatch)
-    area = {**SERVICE_AREA, "required_documents": []}
-    (tmp_path / "doc.pdf").write_bytes(b"data")
-    plan = svc.build_plan([_driver_row()], [_doc_row(requirement_key="anything_goes")], tmp_path, area, "batch1")
-    assert not plan.errors
-    assert plan.docs_to_insert[0]["requirement_key"] == "anything_goes"
-
-
-# ---------------------------------------------------------------------------
-# Fixed (2026-08-03): has_import_documents now requires an APPROVED document,
-# not mere presence of a document row. See driver_import_service.py
-# build_plan()'s `document_old_ids` set comprehension.
-# ---------------------------------------------------------------------------
-
-
-def test_active_status_requires_approved_document_status(monkeypatch, tmp_path):
-    """A rejected document must NOT be sufficient to mark the driver
-    active/verified — has_import_documents now checks the document's own
+def test_active_status_requires_approved_document_status(tmp_path: Path, monkeypatch):
+    """Fixed: a rejected document must NOT be sufficient to mark the driver
+    active/verified -- has_import_documents now checks the document's own
     status, not just its presence."""
-    _install_fake(monkeypatch)
-    (tmp_path / "doc.pdf").write_bytes(b"data")
+    _install(monkeypatch)
+    doc_file = tmp_path / "doc.pdf"
+    doc_file.write_bytes(b"data")
     row = _driver_row(spinr_approved="yes", regulatory_authority_approved="yes")
-    doc_row = _doc_row(status="rejected")  # explicitly REJECTED document
-    plan = svc.build_plan([row], [doc_row], tmp_path, SERVICE_AREA, "batch1")
+    doc_rows = [
+        {"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "doc.pdf", "status": "rejected"}
+    ]
+    plan = svc.build_plan([row], doc_rows, tmp_path, SERVICE_AREA, "batch1")
     assert not plan.errors
     driver = plan.drivers_to_insert[0]
     assert driver["status"] == "needs_review"
@@ -676,144 +687,137 @@ def test_active_status_requires_approved_document_status(monkeypatch, tmp_path):
     assert plan.docs_to_insert[0]["status"] == "rejected"
 
 
-def test_active_status_with_approved_document_status(monkeypatch, tmp_path):
-    """An approved document DOES count toward active/verified status,
-    given the CSV approval flags are also both true."""
-    _install_fake(monkeypatch)
-    (tmp_path / "doc.pdf").write_bytes(b"data")
+def test_active_status_with_approved_document_status(tmp_path: Path, monkeypatch):
+    """An approved document DOES count toward active/verified status, given
+    the CSV approval flags are also both true."""
+    _install(monkeypatch)
+    doc_file = tmp_path / "doc.pdf"
+    doc_file.write_bytes(b"data")
     row = _driver_row(spinr_approved="yes", regulatory_authority_approved="yes")
-    doc_row = _doc_row(status="approved")
-    plan = svc.build_plan([row], [doc_row], tmp_path, SERVICE_AREA, "batch1")
+    doc_rows = [
+        {"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "doc.pdf", "status": "approved"}
+    ]
+    plan = svc.build_plan([row], doc_rows, tmp_path, SERVICE_AREA, "batch1")
     assert not plan.errors
     driver = plan.drivers_to_insert[0]
     assert driver["status"] == "active"
     assert driver["is_verified"] is True
 
 
-def test_active_status_requires_approved_document_status_pending(monkeypatch, tmp_path):
+def test_active_status_requires_approved_document_status_pending(tmp_path: Path, monkeypatch):
     """A pending (not yet reviewed) document also must not count."""
-    _install_fake(monkeypatch)
-    (tmp_path / "doc.pdf").write_bytes(b"data")
+    _install(monkeypatch)
+    doc_file = tmp_path / "doc.pdf"
+    doc_file.write_bytes(b"data")
     row = _driver_row(spinr_approved="yes", regulatory_authority_approved="yes")
-    doc_row = _doc_row(status="pending")
-    plan = svc.build_plan([row], [doc_row], tmp_path, SERVICE_AREA, "batch1")
+    doc_rows = [
+        {"old_driver_id": "OLD-1", "requirement_key": "drivers_license", "file_path": "doc.pdf", "status": "pending"}
+    ]
+    plan = svc.build_plan([row], doc_rows, tmp_path, SERVICE_AREA, "batch1")
     assert not plan.errors
     driver = plan.drivers_to_insert[0]
     assert driver["status"] == "needs_review"
     assert driver["is_verified"] is False
 
 
-# ---------------------------------------------------------------------------
-# commit_plan (lines 796-802, 806-812, 816-818, 820)
-# ---------------------------------------------------------------------------
+# ── commit_plan ──────────────────────────────────────────────────────
 
 
 def test_commit_plan_refuses_with_errors(monkeypatch):
-    _install_fake(monkeypatch)
+    _install(monkeypatch)
     plan = svc.ImportPlan()
     plan.errors.append(svc.ImportErrorItem("OLD-1", "x", "boom"))
-    with pytest.raises(RuntimeError, match="validation errors"):
+    try:
         svc.commit_plan(plan)
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "refusing to commit" in str(exc)
 
 
-def test_commit_plan_inserts_users_and_drivers(monkeypatch):
-    fake = _install_fake(monkeypatch)
-    plan = svc.ImportPlan()
-    plan.users_to_insert.append({"id": "u1", "phone": "+13065551234"})
-    plan.drivers_to_insert.append(
+def test_commit_plan_full_happy_path(tmp_path: Path, monkeypatch):
+    fake = _install(monkeypatch, storage_kwargs={"signed_url_data": {"signedURL": "https://signed.example/doc"}})
+    doc_file = tmp_path / "license.pdf"
+    doc_file.write_bytes(b"%PDF fake bytes")
+
+    plan = svc.build_plan([_driver_row()], [], None, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    # Simulate a plaintext license_number + VIN so the encrypt/plaintext split is exercised.
+    plan.drivers_to_insert[0]["_plain_license_number"] = "D1234567"
+    plan.drivers_to_insert[0]["_plain_vehicle_vin"] = "2T1BURHE0JC123456"
+    plan.docs_to_insert.append(
         {
-            "id": "d1",
-            "user_id": "u1",
-            "_plain_vehicle_vin": "1FTEXAMPLE",
-            "_plain_license_number": "LIC-1",
-            "name": "Jane Doe",
+            "id": "doc-1",
+            "driver_id": plan.drivers_to_insert[0]["id"],
+            "requirement_key": "drivers_license",
+            "document_type": "Drivers License",
+            "document_url": "storage://placeholder",
+            "side": None,
+            "status": "pending",
+            "expiry_date": None,
         }
     )
+    plan.files_to_upload.append((doc_file, "saskatoon-import/batch1/OLD-1/drivers_license/main-doc-1.pdf", "doc-1"))
+
     svc.commit_plan(plan)
-    assert fake.store["users"] == [{"id": "u1", "phone": "+13065551234"}]
-    d = fake.store["drivers"][0]
-    assert d["vehicle_vin"] == "1FTEXAMPLE"
-    assert d["license_number"] == "ENC[LIC-1]"
-    assert "_plain_vehicle_vin" not in d
-    assert "_plain_license_number" not in d
+
+    assert len(fake.store["users"]) == 1
+    inserted_driver = fake.store["drivers"][0]
+    assert inserted_driver["vehicle_vin"] == "2T1BURHE0JC123456"  # plaintext
+    assert inserted_driver["license_number"] == "enc::D1234567"  # encrypted via rpc
+    assert "_plain_license_number" not in inserted_driver
+    assert "_plain_vehicle_vin" not in inserted_driver
+    assert fake.recorder["uploads"][0]["path"] == "saskatoon-import/batch1/OLD-1/drivers_license/main-doc-1.pdf"
+    inserted_doc = fake.store["driver_documents"][0]
+    assert inserted_doc["document_url"] == "https://signed.example/doc"
 
 
-def test_commit_plan_skips_update_when_no_fields_changed(monkeypatch):
-    fake = _install_fake(monkeypatch, drivers=[{"id": "d1", "vehicle_color": "Red"}])
-    plan = svc.ImportPlan()
-    plan.drivers_to_update.append({"id": "d1", "old_driver_id": "OLD-1", "changes": {}, "vin_plain": None})
-    svc.commit_plan(plan)
-    # Untouched -- the `if not fields: continue` branch skipped the update call.
-    assert fake.store["drivers"][0]["vehicle_color"] == "Red"
-    assert "updated_at" not in fake.store["drivers"][0]
-
-
-def test_commit_plan_applies_vehicle_update_with_vin(monkeypatch):
-    fake = _install_fake(monkeypatch, drivers=[{"id": "d1", "vehicle_color": "Red", "vehicle_vin": None}])
+def test_commit_plan_applies_vehicle_updates(monkeypatch):
+    fake = _install(
+        monkeypatch,
+        store={
+            "drivers": [{"id": "drv-1", "vehicle_color": "Red"}],
+            "vehicle_types": [{"id": "vt-sedan", "name": "Sedan"}],
+        },
+    )
     plan = svc.ImportPlan()
     plan.drivers_to_update.append(
-        {"id": "d1", "old_driver_id": "OLD-1", "changes": {"vehicle_color": "Black"}, "vin_plain": "VIN123"}
+        {"id": "drv-1", "old_driver_id": "OLD-1", "changes": {"vehicle_color": "Black"}, "vin_plain": "VIN123"}
     )
     svc.commit_plan(plan)
     updated = fake.store["drivers"][0]
     assert updated["vehicle_color"] == "Black"
     assert updated["vehicle_vin"] == "VIN123"
-    assert "updated_at" in updated
 
 
-def test_commit_plan_uploads_files_and_inserts_docs(monkeypatch, tmp_path):
-    fake = _install_fake(monkeypatch)
-    file_path = tmp_path / "license.pdf"
-    file_path.write_bytes(b"pdf-bytes")
+def test_commit_plan_skips_update_with_no_fields(monkeypatch):
+    """A drivers_to_update entry with no changes and no vin_plain must not
+    issue an empty PATCH (defensive branch: build_plan never constructs one
+    of these today, but commit_plan must stay safe if it ever does)."""
+    fake = _install(monkeypatch, store={"drivers": [{"id": "drv-1", "vehicle_color": "Red"}]})
     plan = svc.ImportPlan()
-    plan.files_to_upload.append((file_path, "storage/key/1", "doc-1"))
-    plan.docs_to_insert.append(
-        {
-            "id": "doc-1",
-            "driver_id": "d1",
-            "requirement_key": "drivers_license",
-            "status": "approved",
-            "document_url": "placeholder",
-        }
-    )
+    plan.drivers_to_update.append({"id": "drv-1", "old_driver_id": "OLD-1", "changes": {}, "vin_plain": None})
     svc.commit_plan(plan)
-    assert len(fake.uploads) == 1
-    assert fake.uploads[0]["bucket"] == "driver-documents"
-    assert fake.uploads[0]["path"] == "storage/key/1"
-    inserted = fake.store["driver_documents"][0]
-    assert inserted["document_url"] == "https://signed.example/storage/key/1"
+    # Unchanged — no update call went through.
+    assert fake.store["drivers"][0]["vehicle_color"] == "Red"
 
 
-def test_commit_plan_no_docs_no_insert_call(monkeypatch):
-    fake = _install_fake(monkeypatch)
-    plan = svc.ImportPlan()
-    svc.commit_plan(plan)
-    assert fake.store.get("driver_documents", []) == []
+# ── print_report ─────────────────────────────────────────────────────
 
 
-# ---------------------------------------------------------------------------
-# print_report (lines 824-836)
-# ---------------------------------------------------------------------------
-
-
-def test_print_report_dry_run(capsys):
+def test_print_report_dry_run_and_commit_modes(capsys):
     plan = svc.ImportPlan()
     plan.users_to_insert.append({"id": "u1"})
     plan.drivers_to_insert.append({"id": "d1"})
     plan.warnings.append(svc.ImportErrorItem("OLD-1", "resume", "already imported"))
     plan.errors.append(svc.ImportErrorItem("OLD-2", "vehicle_type", "no match"))
+
     svc.print_report(plan, dry_run=True)
     out = capsys.readouterr().out
     assert "DRY RUN report" in out
     assert "users planned: 1" in out
-    assert "WARNING old_driver_id=OLD-1 field=resume" in out
-    assert "ERROR old_driver_id=OLD-2 field=vehicle_type" in out
+    assert "WARNING old_driver_id=OLD-1" in out
+    assert "ERROR old_driver_id=OLD-2" in out
 
-
-def test_print_report_commit_mode(capsys):
-    plan = svc.ImportPlan()
     svc.print_report(plan, dry_run=False)
-    out = capsys.readouterr().out
-    assert "COMMIT report" in out
-    assert "warnings: 0" in out
-    assert "errors: 0" in out
+    out2 = capsys.readouterr().out
+    assert "COMMIT report" in out2

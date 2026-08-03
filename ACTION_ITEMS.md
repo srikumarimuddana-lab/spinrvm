@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C Batch 3 CLOSED: `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added). Sub-tier C itemized into 13 batches (reconciled locally from PR #3335, still open/draft). Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/payment_retry.py` CLOSED 72.54%→99%. Prior: `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs" CLOSED: `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100% (test-only, no bugs found). Also CLOSED 2026-08-02: Sub-tier C Batch 3 — `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added). Prior 2026-08-02: A1c (Track 2) Sub-tier C freshly itemized via a re-run coverage scan: 38 files (5635 stmts) in the 60-80% band, batched ≤3 files/subtask, replacing the prior stale "55 files, not itemized" note; `utils/payment_retry.py` (independently closed by a concurrent session to 99% during this scan) reconciled in rather than overwritten. Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -1185,35 +1185,32 @@ _Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C Batch 3 CLOSED: `utils/re
     - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
       scoping note** — **itemized 2026-08-02** (fresh re-scan; the prior
       "55 files, not itemized" note was correctly flagged as going stale
-      and is superseded by this list; see PR #3335, still open/draft as of
-      this writing — this entry was reconciled locally ahead of that PR
-      merging, per its own note that the list will keep drifting).
-      Methodology: same full-suite `pytest tests/ -q --cov=. --cov-report=json
-      --cov-report=term-missing --no-cov-on-fail` command as the original
-      2026-08-01 pass (8374 passed, 8 skipped, 1 xfailed, 318 files with
-      statements, 86.32% aggregate — aggregate has risen from 78.5% because
-      Sub-tier A/B are now closed). Every file below is non-test,
-      non-migration, sits strictly in the 60–80% band, and is **not**
-      already closed under Sub-tier A or B above and **not** already owned
-      by A1b/Track 1 (all of `routes/admin/*`, anything with "corporate" in
-      its domain — including `utils/allowance_reset.py`, which reads as a
-      generic background loop by filename but is entirely
-      corporate-employee-allowance logic — and safety/auth-adjacent files).
-      Two Track-1-owned files happen to also sit in the 60-80% band and are
-      excluded here as out-of-scope, not because they're fine:
-      `routes/admin/drivers.py` (73.44%, already tracked under A1b item 4,
-      deprioritized there) and `routes/admin/sgi_forms.py` (70.27%,
-      untouched). **This scan found 38 files, 5635 statements** — a 39th
-      file, `utils/payment_retry.py`, was independently closed by a
-      concurrent session between this scan running and this edit landing
-      (see its own entry immediately below, kept intact rather than folded
-      away); it is excluded from the itemized batches below because it's no
-      longer in the 60-80% band. Batched ≤3 files/subtask per CLAUDE.md's
-      working-style convention — pick a batch, verify its numbers with a
-      targeted `--cov=<module>` run before writing tests (per this
-      backlog's established pattern, a keyword-filtered baseline can be
-      stale), and update this list when a batch closes rather than leaving
-      it to rot:
+      and is superseded by this list). Methodology: same full-suite
+      `pytest tests/ -q --cov=. --cov-report=json --cov-report=term-missing
+      --no-cov-on-fail` command as the original 2026-08-01 pass (8374
+      passed, 8 skipped, 1 xfailed, 318 files with statements, 86.32%
+      aggregate — aggregate has risen from 78.5% because Sub-tier A/B are
+      now closed). Every file below is non-test, non-migration, sits
+      strictly in the 60–80% band, and is **not** already closed under
+      Sub-tier A or B above and **not** already owned by A1b/Track 1 (all
+      of `routes/admin/*`, anything with "corporate" in its domain —
+      including `utils/allowance_reset.py`, which reads as a generic
+      background loop by filename but is entirely corporate-employee-
+      allowance logic — and safety/auth-adjacent files). Two Track-1-owned
+      files happen to also sit in the 60-80% band and are excluded here as
+      out-of-scope, not because they're fine: `routes/admin/drivers.py`
+      (73.44%, already tracked under A1b item 4, deprioritized there) and
+      `routes/admin/sgi_forms.py` (70.27%, untouched). **This scan found
+      38 files, 5635 statements** — a 39th file, `utils/payment_retry.py`,
+      was independently closed by a concurrent session between this scan
+      running and this edit landing (see its own entry immediately below,
+      kept intact rather than folded away); it is excluded from the
+      itemized batches below because it's no longer in the 60-80% band.
+      Batched ≤3 files/subtask per CLAUDE.md's working-style convention —
+      pick a batch, verify its numbers with a targeted `--cov=<module>`
+      run before writing tests (per this backlog's established pattern, a
+      keyword-filtered baseline can be stale), and update this list when a
+      batch closes rather than leaving it to rot:
       - **Batch 1:** `utils/offer_expiry_reaper.py` (60.61%, 66 stmts),
         `utils/period1_distance_finalizer.py` (64.38%, 73 stmts),
         `utils/driver_claim_reaper.py` (64.71%, 68 stmts) — all three are
@@ -1266,14 +1263,43 @@ _Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C Batch 3 CLOSED: `utils/re
         stmts), `services/driver_import_service.py` (70.34%, 381 stmts —
         largest file in this batch), `utils/quest_tracker.py` (70.42%, 71
         stmts).
-      - **Batch 5:** `utils/redis_diag.py` (71.43%, 112 stmts — admin
-        diagnostics), `routes/drivers/ride_complete.py` (71.75%, 400 stmts
-        — trip-completion/fare-settlement-kickoff/earnings-snapshot;
-        natural companion to the already-closed `ride_flow.py`/
-        `ride_cancel.py`/`ride_reads.py` triplet from the same package,
-        money-adjacent, recommend treating at Sub-tier-A urgency despite
-        living in this list), `utils/meta_capi.py` (72.37%, 152 stmts —
-        Meta Conversions API marketing integration).
+      - **Batch 5** — **CLOSED 2026-08-03.** `utils/redis_diag.py` 71.43% →
+        **99%** (112 stmts, 32→1 missing), `routes/drivers/ride_complete.py`
+        71.75% → **96%** (400 stmts, 113→15 missing — trip-completion/fare-
+        settlement-kickoff/earnings-snapshot; natural companion to the
+        already-closed `ride_flow.py`/`ride_cancel.py`/`ride_reads.py`
+        triplet from the same package, treated at Sub-tier-A urgency as
+        recommended), `utils/meta_capi.py` 72.37% → **100%** (152 stmts,
+        42→0 missing — Meta Conversions API marketing integration). Measured
+        via `pytest tests/test_meta_capi_transport_coverage.py
+        tests/test_meta_conversions.py tests/test_redis_diag_coverage.py
+        tests/test_redis_diag.py tests/test_ride_complete_coverage.py
+        tests/test_rides.py tests/test_ride_completion_location.py
+        --cov=utils.meta_capi --cov=utils.redis_diag
+        --cov=routes.drivers.ride_complete --cov-report=term-missing` (205
+        passed). Added `backend/tests/test_meta_capi_transport_coverage.py`
+        (new — HTTP transport error/malformed-response branches),
+        `backend/tests/test_redis_diag_coverage.py` (new — diagnostic-probe
+        error paths), `backend/tests/test_ride_complete_coverage.py` (new,
+        largest file in this batch — every non-fatal side-branch in
+        `complete_ride` — breadcrumb-flush failure, GPS-aggregation
+        fallback, the ride_routes 3-attempt retry loop and its own
+        status-write failure, quest-progress scheduling failure, milestone
+        compression check, first-ride Meta activation — plus
+        `_completion_fix_rejection`'s remaining branches and
+        `_fire_driver_activated`'s both-imports-fail/spawn-raises paths).
+        Test-only, no application code changed. **No bugs found** in
+        `redis_diag.py` or `meta_capi.py`. One coverage-instrumentation note
+        for `ride_complete.py`: `_completion_fix_rejection`'s
+        `invalid_capture_time` branch is unreachable via the public API
+        surface — `CompletionFix.captured_at` is pydantic-typed `datetime`,
+        so a non-parseable string is rejected at model construction before
+        that branch's own `parse_iso_utc(None)` check would ever run;
+        exercised directly with a raw stand-in object instead (same
+        "structurally near-impossible to reach through this harness" class
+        as the dual-import fallback lines already documented elsewhere in
+        this backlog). Full log:
+        `docs/change-log/2026-08-03-a1c-subtier-c-batch-redis-ride-meta-coverage.md`.
       - **Batch 6:** `utils/preauth_capture.py` (72.41%, 87 stmts — Stripe
         pre-authorization capture, payment-adjacent), `utils/presence_sweeper.py`
         (72.73%, 33 stmts — **flag: this module is explicitly documented
@@ -1310,6 +1336,47 @@ _Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C Batch 3 CLOSED: `utils/re
         52 stmts — GPS spoofing/integrity checks, safety-adjacent but not
         under the `safety.py`/`insurance_periods.py` umbrella Track 1
         already owns, so kept here).
+      - **Batch "zoho-distrecon-obs" (`services/zoho_desk_integration.py`
+        from Batch 9 above, plus `utils/distance_reconciliation.py` and
+        `services/data_transfer/observability.py` from Batch 10 above) —
+        CLOSED 2026-08-03.** `services/zoho_desk_integration.py` 74.42% →
+        **98%** (129 stmts, 33→2 missing), `utils/distance_reconciliation.py`
+        74.70% → **96%** (83 stmts, 21→3 missing),
+        `services/data_transfer/observability.py` 75.00% → **100%** (20
+        stmts, 6→0 missing). Measured via `pytest tests/test_zoho_desk.py
+        tests/test_zoho_desk_integration_coverage.py
+        tests/test_distance_reconciliation.py
+        tests/test_distance_reconciliation_coverage.py
+        tests/test_data_transfer_observability_coverage.py -o addopts=""
+        --cov=services.zoho_desk_integration --cov=utils.distance_reconciliation
+        --cov=services.data_transfer.observability --cov-report=term-missing`
+        (65 passed, 0 collisions). Added `backend/tests/test_zoho_desk_integration_coverage.py`
+        (21 tests — `create_ticket_for_complaint`/`create_ticket_for_flag`,
+        never exercised at all before this batch despite an existing,
+        misleadingly-named test claiming to cover them; `_link_ticket`'s
+        best-effort `ZohoDeskError`/generic-`Exception` swallow;
+        `close_linked_records`'s already-closed skip branches, empty-id
+        no-op, and per-table exception isolation; `create_support_ticket`'s
+        missing-email re-fetch merge and transcript-append branches),
+        `backend/tests/test_distance_reconciliation_coverage.py` (9 tests —
+        `_pod_id`, `_seconds_until`'s same-day/wrap-to-tomorrow branches,
+        the systematic-bias `logger.error(...)` branch (the whole point of
+        this module per its own docstring), and
+        `distance_reconciliation_loop`'s lock-acquired/lock-held-elsewhere/
+        tick-raises branches), and `backend/tests/test_data_transfer_observability_coverage.py`
+        (8 tests, new file — module had none before — every `record_*`
+        helper plus `capture_failure`'s tagged-event/unimportable-SDK/
+        capture-raises branches). Test-only, no application code changed.
+        **No bugs found** in any of the three files. Remaining uncovered
+        lines in `zoho_desk_integration.py` (2) and `distance_reconciliation.py`
+        (3) are the dual-import `ImportError` fallback boilerplate —
+        structurally near-impossible to reach in this harness once the
+        module is cached in `sys.modules`, same documented pattern as
+        prior Sub-tier B/C files. `utils/location_integrity.py`, the third
+        file originally itemized under Batch 10, was **not** in this
+        batch's scope (a separate concurrent session's assignment per this
+        session's task boundaries) and remains open. Full log:
+        `docs/change-log/2026-08-03-a1c-subtier-c-batch-zoho-distrecon-obs-coverage.md`.
       - **Batch 11:** `routes/webhooks.py` (75.40%, 748 stmts — largest
         file in the whole Sub-tier C list, Stripe-webhook-adjacent;
         recommend Sub-tier-A-style urgency given `CLAUDE.md`'s Stripe-
@@ -1703,6 +1770,65 @@ _Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C Batch 3 CLOSED: `utils/re
           Full suite re-run after: 8742 passed (was 8711), 8 skipped, 1
           xfailed, 0 failed. See
           `docs/change-log/2026-08-02-a1c-period1-finalizer-driver-online-presence-sweeper-coverage.md`.
+      - Continuing from the same re-scope list, three more files picked
+        from the raw Sub-tier C ranking (rider-facing fare-estimate +
+        saved-route surface, plus the AI/MCP surface):
+        - `routes/fares.py` — **CLOSED, 65% → 97%** (2026-08-03, 136
+          stmts, measured via `pytest tests/test_fares_coverage.py
+          tests/test_favorites_coverage.py tests/test_ai_mcp_coverage.py
+          tests/test_fares.py tests/test_ai_mcp.py
+          tests/test_p3_addresses_favorites_safety_disputes.py
+          --cov=routes.fares --cov-report=term-missing`; a fresh
+          `-k fares` run measured 65% at session start against the
+          72.79% documented baseline — other test files exercise the
+          `/fares` HTTP endpoint incidentally without "fares" in their
+          filename, which a name-filtered run misses). The existing
+          `tests/test_fares.py` covered the surge-cap regression and the
+          vehicle-pricing-vs-fare_configs precedence directly, but had
+          zero coverage of `_fd`/`_money_str`'s exception branches, the
+          fare-cache key/invalidate helpers, `resolve_service_area_for_point`,
+          `resolve_area_scope`'s empty-input guard, `build_fares_for_area`'s
+          two early-return guards and its legacy `fare_configs` fallback
+          path, the full `_fares_for_location_impl` orchestration
+          function, and the `/fares` endpoint's Redis cache hit/miss/
+          read-error/write-error branches. Added
+          `backend/tests/test_fares_coverage.py` (29 tests). Per
+          CLAUDE.md's surge-pricing conventions, explicitly asserted (not
+          just exercised) that `SURGE_CAP=2.5` holds even against a 9.9
+          DB value, that the `surge_enabled` admin toggle gates a stale
+          `surge_multiplier`, and that the `/fares` cache TTL caps at 60s
+          while surge is active.
+        - `routes/favorites.py` — **CLOSED, 73% → 97%** (2026-08-03, 67
+          stmts, measured via the same combined command above,
+          `--cov=routes.favorites`). `tests/test_p3_addresses_favorites_safety_disputes.py`
+          covered list/create/duplicate/address-mismatch/delete-not-found
+          but never exercised `POST /favorites/{id}/use`, the delete
+          *success* path, or `POST /favorites/from-ride/{ride_id}` (all
+          three branches). Added `backend/tests/test_favorites_coverage.py`
+          (10 tests).
+        - `ai/mcp_server.py` — **CLOSED, 73% → 94%** (2026-08-03, 124
+          stmts, measured via the same combined command above,
+          `--cov=ai.mcp_server`). `tests/test_ai_mcp.py` covered
+          `MCPAuthMiddleware` and the SDK-exposure rules thoroughly, but
+          the `_list_tools`/`_call_tool` closures registered inside
+          `build_mcp_asgi_app()` were never driven end-to-end — both the
+          `mcp` SDK's `list_tools()`/`call_tool()` decorators return the
+          *original* undecorated function to the caller, not the
+          registered handler, so the only way to exercise them is via the
+          `Server`'s own `request_handlers` dict, which
+          `backend/tests/test_ai_mcp_coverage.py` (12 tests) now does
+          directly against the real `mcp` SDK (present in this
+          environment). Also closed `build_mcp_asgi_app()`'s top-level
+          exception-swallow branch, `_audience_for`, two
+          `MCPAuthMiddleware.__call__` branches (non-HTTP ASGI scope, and
+          an auth failure raising something other than `HTTPException`),
+          and `stop_mcp()`'s shutdown-exception swallow.
+        - Test-only across all three files, no application code changed,
+          no bugs found. Full suite re-run after: 8762 passed (was 8711,
+          measured fresh at session start), 8 skipped, 1 xfailed, 0
+          failed — delta +51 exactly matches the 51 new tests added
+          (29 + 10 + 12). See
+          `docs/change-log/2026-08-03-a1c-subtier-c-fares-fav-mcp-coverage.md`.
     - Next file since this re-scope picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB

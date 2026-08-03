@@ -1,0 +1,85 @@
+# gitleaks config for the `deploy-admin` build-output scan (CI, ci.yml [17-5]).
+#
+# Scope: this file is ONLY used for scanning `.next/` — the compiled Next.js
+# build output — not the source tree. Do not point repo-wide scans at it.
+#
+# WHY THIS IS SEPARATE FROM THE ROOT /.gitleaks.toml — do not "consolidate" the
+# two without re-checking this. The entries below need `[[allowlists]]` blocks
+# (for `condition = "AND"`, which scopes the generic `encryptionKey` pattern to
+# the manifests it may appear in). Two constraints make that unsafe in the root
+# file:
+#
+#   1. gitleaks refuses a config containing both `[allowlist]` and
+#      `[[allowlists]]` ("[allowlist] is deprecated, it cannot be used
+#      alongside [[allowlists]]"). The root file uses `[allowlist]`, so
+#      adding these there means converting its existing suppressions too.
+#   2. gitleaks 8.18.4 — the version pinned by G5b in security-gates.yml —
+#      **silently ignores** `[[allowlists]]`. It loads such a config without
+#      error and applies none of the suppressions. Verified 2026-08-03 against
+#      both binaries: an `sk_test_` key allowlisted via `[[allowlists]]` is
+#      suppressed by 8.27.2 and reported by 8.18.4.
+#
+# So converting the root file would silently disarm every suppression it
+# currently provides to G5b, and to G5a (gitleaks-action@v2, whose bundled
+# version we do not pin) — turning the history scan back into the ~44k-finding
+# noise wall its comments describe. Failing open, with no error.
+#
+# Consolidating is fine once G5a and G5b are both on >= 8.19 with a pinned,
+# verified version. Until then, keep them separate.
+#
+# The gate exists to catch a real secret (a Supabase service_role key, a Stripe
+# secret key, an admin password) reaching a deployed bundle — typically via an
+# `NEXT_PUBLIC_*` var or a hardcoded literal. Every allowlist below suppresses a
+# value that Next.js itself generates at build time, or third-party library
+# source, and none of them can carry one of ours.
+#
+# Verified 2026-08-03 against a local `npm run build`: the default ruleset
+# produced 13 findings, all from the `generic-api-key` rule, all accounted for
+# by the entries below. See PR for the full itemised list.
+
+[extend]
+useDefault = true
+
+# Build scratch, not a deploy artifact — Vercel builds from source and never
+# uploads this directory. Contains the same generated preview-mode keys as the
+# manifests below.
+[[allowlists]]
+description = "Next.js build cache"
+paths = ['''\.next/cache/''']
+
+# Draft Mode (preview) signing/encryption keys and the Server Actions payload
+# encryption key. Next generates fresh random values for these on every build
+# and writes them into its manifests; they are scoped to that one build.
+#
+# regexTarget = "match" so these test the full matched span (which includes the
+# JSON key name), not just the extracted secret. Matching on the secret alone
+# would allowlist by value, and the values change every build — the key *name*
+# is the stable, meaningful discriminator.
+[[allowlists]]
+description = "Next.js per-build generated keys, in Next's own manifests only"
+condition = "AND"
+regexTarget = "match"
+paths = [
+  '''\.next/prerender-manifest\.json$''',
+  '''\.next/(server/)?middleware-manifest\.json$''',
+  '''\.next/server/middleware/middleware-manifest\.json$''',
+  '''\.next/server/server-reference-manifest\.json$''',
+]
+regexes = [
+  '''previewMode(Signing|Encryption)Key''',
+  '''__NEXT_PREVIEW_MODE_(SIGNING|ENCRYPTION)_KEY''',
+  '''NEXT_SERVER_ACTIONS_ENCRYPTION_KEY''',
+  # Generic enough to be worth the path constraint above — on its own it would
+  # mask a real `encryptionKey: "<our secret>"` anywhere in the bundle.
+  '''encryptionKey"\s*:''',
+]
+
+# jsPDF library source, reached through a server sourcemap:
+#   var f2 = (API.f2 = API.__private__.f2 = function(number) { ... })
+# `generic-api-key` reads `API.f2 = <high-entropy blob>` as an assignment to an
+# API key. Anchored on the jsPDF-specific symbol so it cannot mask an assignment
+# to anything else.
+[[allowlists]]
+description = "jsPDF API.f2 helper misread as an API key assignment"
+regexTarget = "match"
+regexes = ['''API\.f2\s*=''']

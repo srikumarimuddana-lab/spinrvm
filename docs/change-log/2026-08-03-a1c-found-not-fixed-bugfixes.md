@@ -834,3 +834,78 @@ document_old_ids = {
 
 - Did not check production import history for whether any already-committed driver rows were affected by the pre-fix bug (i.e. imported as active/verified with only a pending/rejected document) — see the rollback-plan note above; a data remediation pass, if warranted, is a separate follow-up.
 - No staging/manual repro of an actual bulk-import CSV run — verified at the unit level only, via `build_plan`'s pure in-memory planning logic.
+
+---
+
+## Entry 12 — `distance_reconciliation.py`: nightly claim step marks unevaluated rides as reconciled (explicit user approval obtained)
+
+### 1. Issue / gap identified
+
+`utils/distance_reconciliation.py::_run_reconciliation_tick`'s claim step stamped `distance_reconciled_at` onto **every ride fetched in the batch**, not just the rides that were actually evaluated by `evaluate_reconciliation()`. A ride whose `actual_distance_km` wasn't usable yet (e.g. the deferred route finalizer hadn't backfilled it by the time this tick ran) was silently skipped by `evaluate_reconciliation()` — contributing no ratio, no divergence event — yet still got `distance_reconciled_at` stamped by the claim step below it, because that step built its `ids` list from the raw `rides` batch instead of the evaluated subset.
+
+### 2. Root cause
+
+The claim step (`ids = [str(r.get("id")) for r in rides if r.get("id")]`) and the evaluation step (`evaluate_reconciliation`, which internally skips rides failing an inline usable-distance check) used two different, disconnected eligibility checks over the same batch — the claim step had no awareness of which rides evaluation actually skipped.
+
+### 3. Fix / remediation
+
+**User was asked explicitly via `AskUserQuestion` before this fix was applied**, given this is a detection/regulatory-adjacent surface (the module's whole purpose is catching platform-wide fare-distance bias, per its module docstring referencing the prior haversine fare bug). User approved: "Only mark rides actually evaluated." Extracted a shared `_has_usable_distance(ride)` helper (same predicate `evaluate_reconciliation` already used inline) and now use it in both places: `evaluate_reconciliation()` calls it to decide whether to `continue`, and the claim step in `_run_reconciliation_tick()` now filters `ids` through the same helper, so only rides that actually contributed a ratio get `distance_reconciled_at` stamped. Rides skipped for missing distance data are left unclaimed and will be re-fetched (`{"distance_reconciled_at": None}` filter) and evaluated on a future tick once their data lands. Added a `skipped` count to the tick's `logger.info(...)` summary for observability.
+
+### 4. Risk & impact on existing functionality
+
+- **Blast radius: isolated to this module.** Grepped the whole repo for `distance_reconciliation` outside `tests/`: only `core/lifespan.py` (which just starts `distance_reconciliation_loop()` as a background task at startup — no logic coupling) and the module itself. No other module reads or writes `rides.distance_reconciled_at` directly (confirmed via grep for the column name).
+- **Real behavior change**: a ride whose measured distance wasn't ready yet used to be permanently excluded from future reconciliation (silently, forever, once `distance_reconciled_at` was stamped) even after its distance data eventually landed. After this fix, such a ride is correctly re-evaluated on a later tick. This *increases* reconciliation coverage over time — no ride that was previously being checked stops being checked; some rides that were previously slipping through uncounted are now counted once their data is available.
+- This is a detection-only module (per its own docstring: "it never changes a fare or a displayed distance") — the fix cannot affect any fare, receipt, or rider/driver-facing value, only which rides feed the bias-detection aggregate and per-ride divergence events.
+- Batch size effect: rides now left unclaimed will reappear in the next day's `BATCH_LIMIT=500`-row fetch (`ride_completed_at` ascending order) alongside newly-completed rides. If a large volume of rides were persistently missing measured distance (a symptom of a separate bug in the route finalizer), they'd now accumulate in the query window rather than being silently claimed-and-dropped — worth monitoring the `skipped` count in the tick's info log if that scenario is suspected, but not a regression this fix introduces on its own (it restores the intended re-check behavior).
+
+### 5. User-experience effect
+
+None directly rider/driver/admin-facing — this is an internal detection loop with no UI surface. Indirect effect: the platform-wide bias alert (`logger.error` → Sentry, the module's actual purpose) now has a slightly larger and more accurate sample of evaluated rides over time, since previously-dropped rides are no longer permanently excluded.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/utils/distance_reconciliation.py` | Added `_has_usable_distance(ride)` helper; `evaluate_reconciliation()` now calls it instead of an inline check; `_run_reconciliation_tick()`'s claim step now filters `ids` through the same helper and logs a `skipped` count | Close the found-not-fixed claim/evaluate eligibility mismatch, per explicit user approval |
+| `backend/tests/test_distance_reconciliation_coverage.py` | Renamed and rewrote the pinned bug test (`test_ride_with_missing_measured_distance_is_claimed_anyway` → `test_ride_with_missing_measured_distance_is_left_unclaimed`) to assert only the evaluated ride is claimed | Reflect the fix |
+
+### 7. Before / after
+
+```python
+# Before
+ids = [str(r.get("id")) for r in rides if r.get("id")]
+if ids:
+    await db_supabase.update_one("rides", {"id": {"$in": ids}}, {"distance_reconciled_at": now.isoformat()})
+logger.info(
+    "distance reconciliation tick: %d rides, %d claimed, %d divergences, mean_ratio=%s",
+    len(rides), len(ids), len(divergences), aggregate["mean_ratio"],
+)
+
+# After
+ids = [str(r.get("id")) for r in rides if r.get("id") and _has_usable_distance(r)]
+skipped = len(rides) - len(ids)
+if ids:
+    await db_supabase.update_one("rides", {"id": {"$in": ids}}, {"distance_reconciled_at": now.isoformat()})
+logger.info(
+    "distance reconciliation tick: %d rides, %d claimed, %d skipped (missing distance data), "
+    "%d divergences, mean_ratio=%s",
+    len(rides), len(ids), skipped, len(divergences), aggregate["mean_ratio"],
+)
+```
+
+### 8. Rollback plan
+
+`git revert` — the claim step is the only write this module performs (`rides.distance_reconciled_at`), and the fix only *narrows* which rides get that timestamp set (never widens it), so no ride that was correctly claimed before is affected. Reverting restores the prior (buggy) wider-claim behavior with no data-level cleanup needed — no ride's `distance_reconciled_at` needs to be unset either way, since the fix doesn't retroactively touch already-stamped rows, only future tick runs.
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_distance_reconciliation_coverage.py -q --no-cov` — 10 passed.
+- [x] Blast-radius regression check: `pytest tests/test_distance_reconciliation.py -q --no-cov` (the pre-existing, non-coverage-pass test file for this module) — 9 passed, 0 failed.
+- [x] Blast-radius grep performed: see section 4 (only `core/lifespan.py` references the module outside tests; no other reader/writer of `rides.distance_reconciled_at`).
+- [x] User explicitly approved this specific fix via `AskUserQuestion` before it was applied.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- Did not check production data for how many rides, historically, were affected by the pre-fix bug (i.e. already stamped `distance_reconciled_at` despite never having been evaluated) — those rows remain excluded from reconciliation going forward regardless of this code fix; a one-time data remediation (clearing `distance_reconciled_at` for rides that have no corresponding integrity-event/ratio history) would be a separate, out-of-scope follow-up if deemed necessary.
+- No staging/manual repro against a live Supabase instance — verified at the unit level only, via mocked `db_supabase.get_rows`/`update_one`.

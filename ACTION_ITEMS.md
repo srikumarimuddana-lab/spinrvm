@@ -3306,11 +3306,35 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   prompt text only, the same level of verification every other prompt-rule
   fix in this backlog has (prompt content isn't executable, so there's no
   unit-testable "does the model comply" assertion).
-- [ ] **AI8. Stale action cards never expire client-side** — every past
-  quote/suggestion/map-pin card stays tappable
-  (`rider-app/app/ai-assistant.tsx`); backend self-contained messages
-  mitigate, but a stale-yet-consistent quote re-books at a possibly different
-  price. Consider disabling cards older than the latest assistant turn.
+- [x] **AI8. Stale action cards never expire client-side** — done: a card
+  is now "live" only while no USER message has been sent after it — the
+  moment the rider sends any new message, every earlier
+  `fare_quote`/`location_suggestions`/`map_picker` card becomes visibly
+  dimmed (opacity 0.45) and its `TouchableOpacity`(s) `disabled`, with an
+  italic "The conversation has moved on — ask again if you still need
+  this." note. New pure helper `rider-app/utils/staleAiCard.ts::lastUserMessageIndex`
+  (mirrors the existing `activeRideRoute.ts` pattern: small, focused,
+  independently testable) computes the boundary once per render via
+  `useMemo`; `renderMessage` compares each item's FlatList `index` against
+  it. **Deliberately excluded:** `support_action` (an older "Contact
+  support"/cancel-ride link is still a valid way to reach support — no
+  staleness risk in the same sense) and `booking_proposal` (the item's own
+  text names "quote/suggestion/map-pin" specifically, not the proposal
+  card; the real safety boundary for that one is server-side
+  re-validation at `POST /rides`, a separate, higher-risk change out of
+  scope here). Prop threading: `FareQuoteCard`/`LocationSuggestionsCard`
+  gained a `disabled?: boolean` prop each. **Verification actually
+  performed** (more than prior frontend fixes in this batch): ran the
+  project's own `tsc --noEmit` (0 new errors — the only 7 project-wide
+  errors are a pre-existing, unrelated `expo-router/react-navigation`
+  missing-module issue also affecting one existing test suite) and the
+  full `yarn jest` suite (434/434 individual tests pass; the one failing
+  *suite* fails to even load, same pre-existing missing-module issue, not
+  a regression) — plus a new dedicated `staleAiCard.test.ts` (4 cases:
+  empty conversation, no user message yet, single user message, several
+  turns with the boundary comparison itself pinned). **Not verified:** no
+  running dev server / simulator — the visual dimming and disabled-tap
+  behavior were reasoned through and type/logic-tested, not seen rendered.
 - [x] **AI9. Admin AI console quote-card tap still prose-only** — same
   defect class fixed for suggestions;
   `admin-dashboard/.../ai-console/page.tsx:125-131` drops `[lat,lng]` and

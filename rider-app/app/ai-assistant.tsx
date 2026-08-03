@@ -12,7 +12,7 @@
  * header back button and Android hardware back route through
  * activeRideRouteFor while a ride is active.
  */
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
@@ -45,6 +45,7 @@ import { useAiChatStore } from '../store/aiChatStore';
 import { useRideStore } from '../store/rideStore';
 import { showToast } from '../store/toastStore';
 import { activeRideRouteFor } from '../utils/activeRideRoute';
+import { lastUserMessageIndex } from '../utils/staleAiCard';
 
 // expo-speech-recognition is a native module: it exists only in binaries
 // built after it was added (EAS dev-client / store builds). The guarded
@@ -137,11 +138,13 @@ function LocationSuggestionsCard({
   onSelect,
   colors,
   styles,
+  disabled,
 }: {
   item: AiChatMessage;
   onSelect: (candidate: LocationSuggestionCandidate) => void;
   colors: ThemeColors;
   styles: ReturnType<typeof createStyles>;
+  disabled?: boolean;
 }) {
   if (item.action?.type !== 'location_suggestions') return null;
   const role = item.action.location_role;
@@ -153,11 +156,14 @@ function LocationSuggestionsCard({
         : 'Choose a location';
 
   return (
-    <View style={styles.locationCard}>
+    <View style={[styles.locationCard, disabled && styles.staleCard]}>
       <View style={styles.locationHeader}>
         <Ionicons name="location-outline" size={17} color={colors.primary} />
         <Text style={styles.locationTitle}>{title}</Text>
       </View>
+      {disabled ? (
+        <Text style={styles.staleCardNote}>The conversation has moved on — ask again if you still need this.</Text>
+      ) : null}
       {item.action.candidates.slice(0, 10).map((candidate, index) => {
         const primary = candidate.name || candidate.address || `Option ${index + 1}`;
         const secondary = candidate.name && candidate.address ? candidate.address : candidate.service_area;
@@ -172,6 +178,7 @@ function LocationSuggestionsCard({
             key={`${candidate.lat}:${candidate.lng}:${index}`}
             style={styles.locationOption}
             onPress={() => onSelect(candidate)}
+            disabled={disabled}
             accessibilityRole="button"
             accessibilityLabel={`Use ${primary}`}
           >
@@ -303,7 +310,12 @@ export default function AiAssistantScreen() {
     [input, sendMessage],
   );
 
-  const renderMessage = ({ item }: { item: AiChatMessage }) => {
+  // ACTION_ITEMS.md AI8: a card is "live" only while it's still part of the
+  // most recent turn — recomputed only when messages actually change.
+  const lastUserIndex = useMemo(() => lastUserMessageIndex(messages), [messages]);
+
+  const renderMessage = ({ item, index }: { item: AiChatMessage; index: number }) => {
+    const isStaleCard = index < lastUserIndex;
     if (item.kind === 'support_action' && item.action?.type === 'open_support') {
       const isCancelRide = item.action.category === 'cancel_ride';
       const isLostItem = item.action.link === '/lost-and-found';
@@ -344,7 +356,8 @@ export default function AiAssistantScreen() {
       const hasApprox = typeof picker.approx_lat === 'number' && typeof picker.approx_lng === 'number';
       return (
         <TouchableOpacity
-          style={styles.actionCard}
+          style={[styles.actionCard, isStaleCard && styles.staleCard]}
+          disabled={isStaleCard}
           onPress={() =>
             router.push({
               pathname: '/pick-on-map',
@@ -377,6 +390,7 @@ export default function AiAssistantScreen() {
       return (
         <FareQuoteCard
           quote={quote}
+          disabled={isStaleCard}
           onSelect={(option) => {
             // Self-contained message carrying the priced [lat,lng] verbatim —
             // the assistant's next turn sees only message text, and must not
@@ -389,6 +403,7 @@ export default function AiAssistantScreen() {
     if (item.kind === 'location_suggestions' && item.action?.type === 'location_suggestions') {
       return (
         <LocationSuggestionsCard
+          disabled={isStaleCard}
           item={item}
           colors={colors}
           styles={styles}
@@ -641,6 +656,13 @@ const createStyles = (colors: ThemeColors) =>
       alignSelf: 'flex-start',
     },
     actionCardText: { fontSize: 14, fontWeight: '600', color: colors.text },
+    // ACTION_ITEMS.md AI8: applied to a quote/suggestion/map-pin card once a
+    // newer conversation turn has started — dims it and disables its
+    // TouchableOpacity(s) so a stale-but-still-consistent card can't be
+    // tapped and silently re-book/re-resolve at a possibly different price
+    // or location than what the rider currently sees discussed.
+    staleCard: { opacity: 0.45 },
+    staleCardNote: { fontSize: 12, color: colors.textDim, fontStyle: 'italic' },
     locationCard: {
       marginLeft: 34,
       padding: 12,

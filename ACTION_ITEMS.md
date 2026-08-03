@@ -1299,7 +1299,49 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         suite re-run after: 8546 passed (was 8456), 8 skipped, 1 xfailed, 0
         failed. See
         `docs/change-log/2026-08-02-a1c-webhooks-driver_repo-disputes-coverage.md`.
-    - First file since this scoping pass picked up below.
+      - **Fresh re-scope performed** (`pytest tests/ -q --cov=. --cov-report=json`
+        from `backend/`, 2026-08-02): confirms the 60-80% band is now ~41
+        files (down from the original ~54-55 estimate as batches 1-2
+        closed files). Three more picked ahead of raw ranking for
+        dispatch/corporate/payments real-world-consequence, same reasoning
+        as `reconciliation.py`/`payment_retry.py`:
+        - `utils/offer_expiry_reaper.py` — **CLOSED, 61% → 94%** (66 stmts,
+          measured via `pytest tests/test_offer_expiry_reaper_coverage.py
+          tests/test_offer_expiry_reaper.py --cov=utils.offer_expiry_reaper
+          --cov-report=term-missing`). The durable backstop for offer-timeout
+          timers lost on a pod restart — `_reap_tick`'s fetch-exception/
+          scan-cap/settings-fallback/redispatch-exception branches and the
+          entire `offer_expiry_reaper_loop` wrapper (lock branches,
+          tick-exception-survives) were untested. Added
+          `backend/tests/test_offer_expiry_reaper_coverage.py` (8 tests).
+        - `utils/corporate_low_balance.py` — **CLOSED, 62% → 91%** (64
+          stmts, measured via `pytest
+          tests/test_corporate_low_balance_coverage.py
+          tests/test_corporate_low_balance.py --cov=utils.corporate_low_balance
+          --cov-report=term-missing`). Low-balance email nudges for
+          corporate wallets with auto-topup off — the company-not-found
+          branch, malformed-timestamp catch, one-wallet-failure-doesn't-
+          abort-batch swallow, and the entire `corporate_low_balance_loop`
+          wrapper were untested. Added
+          `backend/tests/test_corporate_low_balance_coverage.py` (5 tests).
+        - `utils/orphaned_hold_reconciler.py` — **CLOSED, 69% → 90%** (91
+          stmts, measured via `pytest
+          tests/test_orphaned_hold_reconciler_loop_coverage.py
+          tests/test_orphaned_hold_reconciler.py --cov=utils.orphaned_hold_reconciler
+          --cov-report=term-missing`). Releases stranded Stripe card-hold
+          authorizations on cancelled rides — `find_orphaned_holds`/
+          `_claim`/`reconcile_tick` were already extensively covered (17
+          tests), but the `orphaned_hold_reconciler_loop` wrapper (lock
+          branches, the `CancelledError`-must-propagate contract,
+          generic-exception counting) was only referenced to confirm it's
+          registered in lifespan, never exercised. Added
+          `backend/tests/test_orphaned_hold_reconciler_loop_coverage.py`
+          (6 tests).
+        - Test-only across all three files, no application code changed.
+          Full suite re-run after: 8565 passed (was 8546), 8 skipped, 1
+          xfailed, 0 failed. See
+          `docs/change-log/2026-08-02-a1c-offer-reaper-corp-low-balance-orphaned-hold-coverage.md`.
+    - Next file since this re-scope picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB
     financial drift going undetected) — **16% → 90%** (2026-08-01, measured

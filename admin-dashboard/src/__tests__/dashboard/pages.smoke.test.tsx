@@ -59,6 +59,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const overrides: Record<string, unknown> = {
     getRides: vi.fn().mockResolvedValue({ rides: [], total_count: 0 }),
     getDrivers: vi.fn().mockResolvedValue({ drivers: [], total_count: 0 }),
+    getKybReverificationDue: vi.fn().mockResolvedValue({ threshold_months: 12, count: 0, companies: [] }),
+    getAuditLogTopActors: vi.fn().mockResolvedValue({
+      days: 7,
+      window_start: "",
+      rows_scanned: 0,
+      rows_scanned_capped: false,
+      actors: [],
+    }),
   };
   return {
     ...Object.fromEntries(

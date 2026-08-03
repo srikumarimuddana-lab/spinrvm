@@ -54,6 +54,11 @@ except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore[no-redef]
 
 try:
+    from ..utils.corporate_statement_pdf import generate_corporate_statement_pdf
+except ImportError:
+    from utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore[no-redef]
+
+try:
     from ..services.corporate_membership_service import bootstrap_owner
 except ImportError:
     from services.corporate_membership_service import bootstrap_owner  # type: ignore[no-redef]
@@ -241,6 +246,44 @@ async def get_corporate_accounts(
             status_code=500,
             detail="Failed to fetch corporate accounts.",
         ) from e
+
+
+@router.get("/kyb-reverification-due")
+async def get_kyb_reverification_due(current_admin: dict = Depends(get_current_admin)):
+    """Companies whose KYB approval predates the configured staleness
+    threshold (corporate + admin portal review round 2, "automated KYB
+    re-verification" — visibility only, never auto-changes status).
+
+    Computes live from kyb_reviewed_at using the exact same threshold
+    resolution the background loop (utils/kyb_reverification.py) uses —
+    shared helper, not a re-derived definition — so this list and what
+    the loop flags can never silently disagree. Registered before the
+    single-segment `/{account_id}` route below so it isn't swallowed by
+    it (same static-before-dynamic ordering as GET "" above).
+    """
+    from db_supabase import list_companies_needing_kyb_reverification
+    from settings_loader import get_app_settings
+    from utils.kyb_reverification import kyb_reverify_cutoff_iso, resolve_kyb_reverify_threshold_months
+
+    settings = await get_app_settings()
+    threshold_months = resolve_kyb_reverify_threshold_months(settings)
+    companies = await list_companies_needing_kyb_reverification(
+        reviewed_before_iso=kyb_reverify_cutoff_iso(threshold_months)
+    )
+    return {
+        "threshold_months": threshold_months,
+        "count": len(companies),
+        "companies": [
+            {
+                "id": c["id"],
+                "name": c.get("name"),
+                "legal_name": c.get("legal_name"),
+                "kyb_reviewed_at": c.get("kyb_reviewed_at"),
+                "kyb_reviewed_by": c.get("kyb_reviewed_by"),
+            }
+            for c in companies
+        ],
+    }
 
 
 _ALLOWED_KYB_CONTENT = {"application/pdf", "image/png", "image/jpeg"}
@@ -494,6 +537,57 @@ async def admin_view_kyb_document(
 
     content_type, _ = mimetypes.guess_type(storage_key)
     return Response(content=data, media_type=content_type or "application/octet-stream")
+
+
+@router.get("/{company_id}/billing/statements/{month}/pdf")
+async def admin_download_corporate_statement_pdf(
+    company_id: str,
+    month: str,
+    current_admin: dict = Depends(get_current_admin),
+):
+    """Internal-admin mirror of the company-portal PDF invoice download
+    (routes/corporate_company.py::billing_statement_pdf). Corporate +
+    admin portal review round 2, business decision: downloadable PDF
+    invoice per statement period, "available to company admins in the
+    portal and internal admins." Reuses the exact same aggregation
+    (build_full_month_statement) and renderer (generate_corporate_statement_pdf)
+    so a Spinr admin and the company's own admin see byte-identical
+    documents — no separate admin-side computation to drift from it.
+    """
+    try:
+        from .corporate_company import build_full_month_statement
+    except ImportError:
+        from routes.corporate_company import build_full_month_statement  # type: ignore[no-redef]
+
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    company = await get_corporate_account_by_id(normalized_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Corporate account not found")
+
+    statement = await build_full_month_statement(normalized_id, month)
+    pdf_bytes = generate_corporate_statement_pdf(company, statement)
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="corporate_statement_pdf_download",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={"month": month},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_statement_pdf_download company=%s",
+            normalized_id,
+            exc_info=True,
+        )
+
+    filename = f"spinr-corporate-statement-{normalized_id[:8]}-{month}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("", response_model=CorporateAccountCreatedResponse, status_code=status.HTTP_201_CREATED)

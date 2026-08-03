@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { getFaqs, createFaq, updateFaq, deleteFaq } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,12 +9,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Plus, Pencil, Trash2, RefreshCw } from "lucide-react";
+import { Search, Plus, Pencil, Trash2, RefreshCw, ExternalLink } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -101,6 +103,23 @@ export default function FaqsTab() {
 
     return (
         <div className="space-y-4">
+            {/* Corporate + admin portal review, round 2: "Disputes and FAQs
+                each exist as two live, unreconciled screens." Both views hit
+                the same getFaqs/createFaq/updateFaq/deleteFaq API — no
+                data-model split — but the dedicated FAQs page (linked from
+                the sidebar) is the fuller, actively-maintained screen.
+                Light-touch fix per product decision: point here, don't
+                merge/remove. */}
+            <Alert>
+                <ExternalLink className="h-4 w-4" />
+                <AlertDescription className="flex items-center justify-between gap-3">
+                    <span>This is a condensed view. Manage FAQs in full on the dedicated page.</span>
+                    <Link href="/dashboard/faqs" className="font-medium underline underline-offset-2 whitespace-nowrap">
+                        Open FAQs
+                    </Link>
+                </AlertDescription>
+            </Alert>
+
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search FAQs..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>

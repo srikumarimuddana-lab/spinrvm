@@ -14,6 +14,7 @@ try:
         _DRIVER_CACHE_TTL_SECONDS,
         _driver_by_user_cache_key,
         _driver_cache_key,
+        _postgrest_or_value,
         _read_cached_row,
         _rows_from_res,
         _single_row_from_res,
@@ -336,8 +337,12 @@ async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
             .in_("status", ["searching", "driver_assigned"])
             # Ride must be either unassigned or already pre-assigned to this
             # driver. PostgREST's `.or_()` accepts a comma-separated filter
-            # list; `is.null` maps to `IS NULL` in SQL.
-            .or_(f"driver_id.is.null,driver_id.eq.{driver_id}")
+            # list; `is.null` maps to `IS NULL` in SQL. `driver_id` is routed
+            # through `_postgrest_or_value` per the "Query filters" convention
+            # (CLAUDE.md) — the layer, not the caller, owns escaping any
+            # reserved `,()"\` characters so a malformed value can't silently
+            # corrupt or widen the or-clause.
+            .or_(f"driver_id.is.null,driver_id.eq.{_postgrest_or_value(driver_id)}")
             .execute()
         )
         data = _rows_from_res(res)

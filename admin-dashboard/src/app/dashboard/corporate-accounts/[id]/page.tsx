@@ -359,7 +359,7 @@ export default function CompanyDetailPage() {
                         <Button
                             variant="outline"
                             onClick={() => openTransition("suspend")}
-                            className="text-orange-700"
+                            className="text-orange-700 dark:text-orange-400"
                         >
                             <PauseCircle className="mr-2 h-4 w-4" /> Suspend
                         </Button>
@@ -376,7 +376,7 @@ export default function CompanyDetailPage() {
                         <Button
                             variant="outline"
                             onClick={() => openTransition("close")}
-                            className="text-red-700"
+                            className="text-destructive"
                         >
                             <XCircle className="mr-2 h-4 w-4" /> Close
                         </Button>

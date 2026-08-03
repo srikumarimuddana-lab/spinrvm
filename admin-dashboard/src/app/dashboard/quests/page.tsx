@@ -398,7 +398,7 @@ export default function QuestsPage() {
                                       <TableCell className="font-medium">{p.driver_name}</TableCell>
                                       <TableCell>
                                         <div className="flex items-center gap-2">
-                                          <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                          <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
                                             <div
                                               className="h-full bg-blue-500 rounded-full"
                                               style={{ width: `${Math.min(100, p.progress_pct)}%` }}

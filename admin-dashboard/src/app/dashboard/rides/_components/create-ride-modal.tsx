@@ -452,7 +452,7 @@ export function CreateRideModal({
                                 }}
                                 onFocus={() => setPickupFocused(true)}
                                 onBlur={() => setTimeout(() => setPickupFocused(false), 200)}
-                                className="pl-9 border-blue-200 focus-visible:ring-blue-500"
+                                className="pl-9 border-blue-200 dark:border-blue-800 focus-visible:ring-blue-500"
                                 required
                             />
                         </div>
@@ -494,7 +494,7 @@ export function CreateRideModal({
                                 }}
                                 onFocus={() => setDropoffFocused(true)}
                                 onBlur={() => setTimeout(() => setDropoffFocused(false), 200)}
-                                className="pl-9 border-red-200 focus-visible:ring-red-500"
+                                className="pl-9 border-red-200 dark:border-red-800 focus-visible:ring-red-500"
                                 required
                             />
                         </div>
@@ -630,7 +630,7 @@ export function CreateRideModal({
                         </p>
                     </div>
 
-                    {error && <p className="text-sm font-medium text-red-500">{error}</p>}
+                    {error && <p className="text-sm font-medium text-destructive">{error}</p>}
 
                     <DialogFooter className="pt-2">
                         <Button type="button" variant="outline" onClick={handleClose} disabled={loading}>

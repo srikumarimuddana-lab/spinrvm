@@ -1231,10 +1231,95 @@ _Last updated: 2026-08-02 — A1c (Track 2) Sub-tier C freshly itemized via a re
         small file but dispatch-critical, directly implements CLAUDE.md's
         `is_available ⇒ is_online` invariant — worth prioritizing despite
         landing late alphabetically/by-coverage in this list).
-      - **Batch 4:** `services/guest_notification_service.py` (70.34%, 118
-        stmts), `services/driver_import_service.py` (70.34%, 381 stmts —
-        largest file in this batch), `utils/quest_tracker.py` (70.42%, 71
-        stmts).
+      - **Batch 4 — CLOSED 2026-08-03.**
+        - `services/guest_notification_service.py` — **CLOSED, 70.34% →
+          96%** (118 stmts, 35→5 missing; measured via `pytest
+          tests/test_guest_sms.py
+          tests/test_guest_notification_service_coverage.py
+          --cov=services.guest_notification_service
+          --cov-report=term-missing`, 22 passed, 0 collisions). The
+          pre-existing `test_guest_sms.py` (5 tests) pinned the PII-safe-
+          logging contract and the two most common paths; this pass closed
+          `_send_guest_sms`'s crash-not-just-failure path, all three
+          `_guest_recipient` guard clauses, `_company_name`'s no-id/DB-
+          exception fallbacks, `_ensure_tracking_token`'s reuse-existing-
+          token and mint-failure branches, the no-phone guard and scheduled-
+          ride body in `notify_guest_booking_created`, and — the biggest gap
+          — `notify_guest_driver_arrived`/`notify_guest_cancelled`, which
+          previously only had their early-return guard exercised, never
+          their actual SMS-send body. Added
+          `backend/tests/test_guest_notification_service_coverage.py` (17
+          tests, new file, kept separate from `test_guest_sms.py` per this
+          backlog's established pattern). Test-only, no application code
+          changed. **No bugs found.** Remaining 5 lines are the dual-import
+          `ImportError` fallback, structurally unreachable in this test
+          harness (same documented pattern as every other Sub-tier B/C
+          file).
+        - `services/driver_import_service.py` — **CLOSED, 70.34% → 99%**
+          (381 stmts, 113→4 missing; measured via `pytest
+          tests/test_driver_import_service.py
+          tests/test_admin_driver_import.py
+          tests/test_driver_import_service_coverage.py
+          --cov=services.driver_import_service
+          --cov-report=term-missing`, 87 passed, 0 collisions). The largest
+          file in this batch. The two pre-existing test files (22 tests
+          combined) covered `build_plan`'s prefetch/resume/web-flow-
+          rejection semantics and the admin HTTP endpoints thoroughly, but
+          none of the small pure helpers (`parse_bool`, `parse_date`,
+          `date_is_ambiguous`, `split_name`, `normalize_phone`,
+          `canonical_requirement_key`, `work_auth_status`,
+          `regulatory_authority_defaults`) were exercised branch-by-branch,
+          `storage_signed_url`/`encrypt_pii` had no test touching
+          `supabase.storage`/`supabase.rpc`, `get_service_area`'s by-id and
+          multiple-match/no-match branches were untested, and — the biggest
+          gap — the entire CLI document-row pipeline (`build_plan` with
+          `files_root` set, plus `commit_plan`'s file-upload/document-insert
+          logic and `print_report`) had zero coverage, since every existing
+          test either used `files_root=None` (web flow) or never called
+          `commit_plan` directly with documents/updates queued. Added
+          `backend/tests/test_driver_import_service_coverage.py` (65 tests,
+          new file). Test-only, no application code changed. **No bugs
+          found in application logic; one dead-code observation:**
+          `parse_date`/`date_is_ambiguous` both contain a manual
+          "`year < 100` → `+2000`" adjustment after a `%y`-format
+          `strptime` that appears unreachable — Python's own `%y` parsing
+          already pivots two-digit years into the 1969-2068 range before
+          the manual check runs (confirmed empirically). Left as-is (out of
+          scope for a test-only pass) and flagged for whoever next touches
+          this file. Remaining 4 uncovered lines: the import fallback, the
+          two dead `year<100` branches just described, and one defensive
+          empty-batch guard in `_select_in` that current call sites never
+          trigger (`_prefetch_existing` only calls it when its input list is
+          already non-empty).
+        - `utils/quest_tracker.py` — **CLOSED, 70.42% → 99%** (71 stmts,
+          21→1 missing; measured via `pytest tests/test_quests.py
+          tests/test_quest_tracker_coverage.py --cov=utils.quest_tracker
+          --cov-report=term-missing`, 46 passed, 0 collisions). The
+          pre-existing `TestQuestTrackerOnRideComplete` class in
+          `test_quests.py` (4 tests) covered the `ride_count` happy path and
+          the `peak_rides` local-timezone math, but the progress-fetch DB-
+          error guard, a missing/inactive quest, an expired quest, the
+          `earnings_target` quest type, the `service_areas` timezone lookup
+          (both success and its swallowed-exception fallback — the existing
+          peak-hour tests deliberately kept `service_area_id: None` to avoid
+          `test_quests.py`'s shared `make_mock_db()` raising on an
+          unconfigured `service_areas` sub-mock), an invalid area timezone,
+          a naive (no-tzinfo) `completed_at`, no usable completion timestamp
+          at all, and the per-progress exception guard (one bad quest row
+          must not abort the batch) were all untested. Added
+          `backend/tests/test_quest_tracker_coverage.py` (14 tests, new
+          file, using its own local mock-db helper rather than
+          `test_quests.py`'s shared `make_mock_db()` so a peak_rides test
+          could freely set `service_area_id`). Test-only, no application
+          code changed. **No bugs found.** Remaining 1 line is the
+          dual-import `ImportError` fallback, structurally unreachable in
+          this test harness.
+        Full writeup:
+        `docs/change-log/2026-08-03-a1c-subtier-c-batch-guest-driverimport-quest-coverage.md`.
+        Full backend suite was **not** run for this batch — deferred to a
+        later consolidated pass across all in-flight A1c batches per
+        explicit instruction; see the change-log's "What was NOT verified"
+        section.
       - **Batch 5:** `utils/redis_diag.py` (71.43%, 112 stmts — admin
         diagnostics), `routes/drivers/ride_complete.py` (71.75%, 400 stmts
         — trip-completion/fare-settlement-kickoff/earnings-snapshot;

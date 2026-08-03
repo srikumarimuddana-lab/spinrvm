@@ -420,3 +420,72 @@ except Exception as e:
 ### 10. What was NOT verified
 
 - No staging/manual repro against real background-loop execution (`ENV=production`) — all three verified at the unit level via mocked DB/settings clients, consistent with this repo's dual-import-aware loop-testing convention (`core/lifespan.py`'s `ENV=test` no-op guard prevents real loop spawning in the test suite).
+
+---
+
+## Entry 6 — `corporate_low_balance.py`: malformed timestamp defeats the 12h rate limiter
+
+### 1. Issue / gap identified
+
+`utils/corporate_low_balance.py::run_low_balance_tick` caught `ValueError` from `datetime.fromisoformat` on a corrupt `low_balance_notified_at` value and set `last_dt = None`. Because the rate-limit check is gated on `if last_dt and ...`, a `None` was treated identically to "never notified" — a malformed DB value silently defeated the 12h rate limiter every single tick (this loop runs hourly) until the column was manually repaired, with nothing logged about the corruption.
+
+### 2. Root cause
+
+The `except ValueError` branch chose `None` as the "couldn't parse" sentinel, which happens to collide with the same sentinel the rate-limit check uses for "column never set" — the two distinct states (malformed vs. genuinely-never-notified) were not distinguished.
+
+### 3. Fix / remediation
+
+On a parse failure, the value is now logged via `logger.error` (naming the wallet and the raw malformed value, for ops to find and repair) and `last_dt` is set to "now" instead of `None` — failing closed (treats the corrupt row as if it were *just* notified, so the full 12h window still applies) rather than failing open (spamming an email every tick).
+
+### 4. Risk & impact on existing functionality
+
+- **Blast radius: isolated.** `run_low_balance_tick` has one caller: `corporate_low_balance_loop`, one of the 17 background loops. No other file reads `low_balance_notified_at`'s malformed-value branch.
+- Behavior for the common case (a well-formed timestamp, or a genuinely `None`/absent value) is unchanged — only the malformed-string edge case changes, from "send immediately, every tick" to "wait one rate-limit window, log the corruption."
+- This is a strictly safer default: the previous behavior could spam a corporate admin's inbox hourly; the new behavior waits and surfaces the root cause via logging instead.
+
+### 5. User-experience effect
+
+- Corporate-admin-visible (indirectly): a company whose wallet row has a corrupted `low_balance_notified_at` will now receive at most one low-balance email per 12h window (same as the normal case) instead of one per hour, once this fix ships. No rider/driver-visible effect.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/utils/corporate_low_balance.py` | Malformed-timestamp branch now logs via `logger.error` and fails closed (treats as "just notified") instead of `None`/"never notified" | Close the found-not-fixed rate-limit-bypass gap |
+| `backend/tests/test_corporate_low_balance_coverage.py` | Updated the pinned bug test to assert the fail-closed, logged behavior | Reflect the fix |
+
+### 7. Before / after
+
+```python
+# Before
+try:
+    last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+except ValueError:
+    last_dt = None
+
+# After
+try:
+    last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+except ValueError:
+    logger.error(
+        "low-balance: malformed low_balance_notified_at %r for wallet %s — "
+        "treating as just-notified, not never-notified",
+        last, w.get("id"),
+    )
+    last_dt = datetime.now(timezone.utc)
+```
+
+### 8. Rollback plan
+
+`git revert` — pure code-path fix, no migration, no data written differently.
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_corporate_low_balance_coverage.py -q` — 8 passed.
+- [x] Blast-radius regression check: `pytest tests/test_corporate_low_balance.py -q` — 5 passed, 0 failed.
+- [x] Blast-radius grep performed: see section 4.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- No staging/manual repro of an actual corrupted DB row — verified at the unit level via a hand-crafted malformed string.

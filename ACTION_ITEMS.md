@@ -3582,9 +3582,25 @@ how much they de-risk a public launch._
 - [ ] **E8. CODEOWNERS + review routing** — no `.github/CODEOWNERS`. Route
   `backend/routes/payments*`/`services/fare*`/`migrations/` to designated
   reviewers so money/schema changes can't merge on a drive-by approval.
-- [ ] **E9. Blameless postmortem template** — `data-breach.md` has one for
-  breaches; generalize to `docs/templates/postmortem.md` (timeline, impact,
-  5-whys, action items with owners) and link it from the incident runbooks.
+- [x] **E9. Blameless postmortem template** — done: new
+  `docs/templates/postmortem.md` (mirrors `docs/templates/CHANGE_IMPACT_LOG.md`'s
+  style) — summary, timeline, impact, root cause via 5-whys, what went
+  well/wrong, action items table (owner + due date required per row),
+  lessons for the framework. Found while building it: the four existing
+  incident runbooks each specified a **different output path/timing** for
+  their own postmortems (`docs/audit/postmortem-YYYY-MM-DD-<slug>.md` @ 5
+  business days in `data-breach.md`; `reports/postmortems/YYYY-MM-DD-slug.md`
+  @ 72h in `incident-response.md`; `reports/incidents/YYYY-MM-DD-sos.md` @
+  72h in `sos-incident.md`; no explicit path in `security-incident.md`) —
+  deliberately did **not** unify these (an existing, possibly intentional
+  per-incident-class convention, not something this item asked to change);
+  the template's own "Where this gets saved" section documents all four
+  paths side by side instead. All four runbooks
+  (`docs/runbooks/data-breach.md` §7, `docs/incident-response.md`'s
+  Post-Mortem section, `docs/runbooks/security-incident.md` §9 checklist,
+  `docs/runbooks/sos-incident.md`'s Post-Incident checklist) now reference
+  the shared template for structure while keeping their own path/timing.
+  Docs-only change, no code/tests to run.
 - [ ] **E10. License compliance scan** — dependency *vulnerability* audit exists;
   add license checking (`pip-licenses` + `license-checker` in CI, fail on
   GPL/AGPL in shipped surfaces). Matters for SOC 2 and any future diligence.

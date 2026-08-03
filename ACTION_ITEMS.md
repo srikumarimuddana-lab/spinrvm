@@ -1361,6 +1361,68 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs
         in this list), `routes/faqs.py` (78.12%, 32 stmts — public
         unauthenticated FAQ read endpoint, distinct from the already-
         closed `routes/admin/faqs.py` CRUD).
+      - **Batch "locintegrity-routegap-routedist" (`utils/location_integrity.py`
+        from Batch 10 above — left open when the zoho-distrecon-obs batch
+        closed its other two files — plus `utils/route_gap_monitor.py` and
+        `utils/route_distance.py` from Batch 12 above) — CLOSED 2026-08-03.**
+        `utils/location_integrity.py` 75.00% → **96%** (52 stmts, 13→2
+        missing; no test file existed for this module before this batch),
+        `utils/route_gap_monitor.py` 77.78% → **95%** (108 stmts, 24→5
+        missing), `utils/route_distance.py` 78.12% → **99%** (489 stmts,
+        166→3 missing against the two pre-existing route_distance test
+        files alone, or 115→3 missing measured against its full existing
+        test surface including the indirect-coverage files — see below).
+        Measured via `pytest tests/test_location_integrity.py
+        --cov=utils.location_integrity --cov-report=term-missing` (16
+        passed); `pytest tests/test_route_gap_monitor.py
+        tests/test_route_gap_monitor_coverage.py --cov=utils.route_gap_monitor
+        --cov-report=term-missing` (24 passed); `pytest
+        tests/test_route_distance.py tests/test_route_distance_osrm.py
+        tests/test_route_distance_coverage.py tests/test_compute_route_fallback.py
+        tests/test_e2e_route_tail_recovery.py tests/test_live_route.py
+        tests/test_maps_eta_osrm.py tests/test_phase_distance_parity.py
+        tests/test_trip_distance.py --cov=utils.route_distance
+        --cov-report=term-missing` (118 passed, 2 skipped). All three
+        modules' full test surface together: 158 passed, 2 skipped, 0
+        collisions. Added `backend/tests/test_location_integrity.py` (16
+        tests, new file — mock-flag rejection, both accuracy-sanity
+        branches, impossible-speed rejection, teleport detection within and
+        outside the window, malformed/empty cached-point handling, both
+        Redis soft-failure paths), `backend/tests/test_route_gap_monitor_coverage.py`
+        (11 tests — `_now()`, both `_configured_threshold_seconds`
+        validation failures, `_open_gap_event`'s no-op branch, id-less-ride
+        and `unknown`-state tick scans, and all three `route_gap_monitor_loop`
+        wrapper branches including `CancelledError` not being miscounted as
+        a failure), and `backend/tests/test_route_distance_coverage.py` (52
+        tests — small-helper edge cases, `compute_segmented_road_route`'s
+        three failure branches, `_compute_route_via_osrm`/`snap_endpoint_via_osrm`'s
+        error paths, both `compute_gap_route_via_*` functions' full
+        validation chains, `_decode_encoded_polyline`, `_compute_route_via_google`'s
+        seven branches, and `snap_to_road`'s full OSRM→Google fallback
+        chain — previously untested entirely). Test-only, no application
+        code changed. **No bugs found** in any of the three target files'
+        own logic — every branch behaves per its documented soft-fail/
+        best-effort contract. **One test-hygiene bug was found and fixed
+        during self-review** (not in application code): an early draft of
+        the `_open_gap_event` no-op test patched
+        `route_gap_monitor.db_supabase.insert_many_ignore_conflicts` via a
+        direct attribute assignment + manual `del` in a `finally` block
+        instead of `monkeypatch.setattr(...)`; the `del` removed that
+        function from the real, shared `db_supabase` module for the rest of
+        the test process, which broke an unrelated, otherwise-passing test
+        (`test_e2e_route_tail_recovery.py`) whenever both files ran
+        together — caught by running the new files together with the wider
+        route-adjacent suite before committing (not by the standalone run
+        alone), fixed by switching to `monkeypatch.setattr`. Remaining
+        uncovered lines in all three files (2, 5, and 3 respectively) are
+        the dual-import `ImportError` fallback boilerplate — structurally
+        near-impossible to reach in this harness once the module is cached
+        in `sys.modules`, same documented pattern as prior Sub-tier B/C
+        files. `routes/faqs.py`, the third file originally itemized under
+        Batch 12, was **not** in this batch's scope (this session's task
+        boundaries covered only the two `route_*` utils plus the carried-
+        forward `location_integrity.py`) and remains open. Full log:
+        `docs/change-log/2026-08-03-a1c-subtier-c-batch-locintegrity-routegap-routedist-coverage.md`.
       - **Batch 13:** `utils/apns_client.py` (78.72%, 141 stmts — Apple
         push client), `server.py` (79.20%, 250 stmts — app factory/router
         mounting, see CLAUDE.md's Key Backend Files), `utils/stripe_charge.py`

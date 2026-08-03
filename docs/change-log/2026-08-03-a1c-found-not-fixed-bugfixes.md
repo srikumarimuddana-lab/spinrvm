@@ -322,3 +322,101 @@ if driver and driver.get("user_id"):
 
 - No staging/manual repro against a real Redis-backed `manager.send_personal_message` failure — verified at the unit level only (mocked `RuntimeError` side effect).
 - Did not audit other corporate-lifecycle services (e.g. any sibling cancellation helper not covered by this session's A1c sweep) for the same missing-try/except pattern — only the two files the coverage sweep actually touched were checked.
+
+---
+
+## Entry 5 — Three dispatch/notification silent-swallow and error-isolation fixes
+
+### 1. Issue / gap identified
+
+1. `services/guest_notification_service.py::_guest_recipient` — `db_supabase.get_user_by_id(rider_id)` had no try/except, breaking the module's own documented "never raise into their caller" contract (every other DB call in the file honors it).
+2. `utils/driver_claim_reaper.py::_reap_tick` — the `_has_pending_offer`/`_has_active_ride` check for one driver had no try/except, so a lookup failure on one driver aborted the entire tick's batch, skipping every other already-fetched, otherwise-reapable driver.
+3. `utils/offer_expiry_reaper.py::_reap_tick` — the `get_app_settings()` fallback used a bare `except Exception: miss_threshold = 3` with zero logging, violating CLAUDE.md's "do not silently swallow errors" rule.
+
+### 2. Root cause
+
+1. Inconsistency within the file — the sibling helpers (`_company_name`, `_ensure_tracking_token`, `_send_guest_sms`) are each individually wrapped; this one call site was missed.
+2. The per-driver loop only guarded the initial fetch and the release call, not the offer/ride check in between — narrower failure isolation than the sibling `stuck_ride_sweeper.py`'s per-item try/except convention.
+3. A settings-fetch failure was defaulted silently instead of logged, unlike every other "fail safe with a default" branch elsewhere in the same codebase (which all log).
+
+### 3. Fix / remediation
+
+1. Wrapped the `get_user_by_id` call in try/except, logging via `logger.error(..., exc_info=True)` and returning `None` (same degrade-to-no-op contract every sibling helper already uses).
+2. Wrapped the per-driver offer/ride check in try/except, isolated to that one driver (`continue`s to the next candidate), matching the release-failure guard immediately below it.
+3. Added `logger.error(..., exc_info=True)` before the `miss_threshold = 3` fallback.
+
+### 4. Risk & impact on existing functionality
+
+- All three changes are purely additive error-handling around existing DB/settings calls — no change to the happy-path behavior, no change to what gets written to any table, no change to any public function's return type or contract.
+- **`guest_notification_service.py`**: `_guest_recipient` is called from `notify_guest_driver_assigned`/`notify_guest_driver_arrived`/`notify_guest_cancelled`, all three already spawned off the hot path per the module's own design — this fix makes a transient DB blip degrade to "skip the SMS for this event" instead of crashing the spawned task, which is strictly safer.
+- **`driver_claim_reaper.py`**: `_reap_tick` runs inside `driver_claim_reaper_loop`, one of the 17 background loops (CLAUDE.md's `spinr-background-loop` recipe applies — this fix does not add a new loop, only makes an existing one's per-item isolation match its sibling `stuck_ride_sweeper.py`). Blast radius: isolated to this one internal function; the public `driver_claim_reaper_loop` already catches and retries on any `_reap_tick` exception, so this fix only changes *how much of one tick's batch* gets processed before that outer catch would have fired, never the loop's overall survivability.
+- **`offer_expiry_reaper.py`**: same background-loop pattern; this fix only adds a log line, no control-flow change (the `miss_threshold = 3` fallback still fires identically).
+
+### 5. User-experience effect
+
+- None of the three are directly rider/driver-visible. `guest_notification_service.py`'s fix marginally improves reliability of guest SMS delivery under a transient DB blip (an edge case, not a behavior change under normal operation). The other two are purely internal observability/resilience improvements to background loops.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/services/guest_notification_service.py` | `_guest_recipient` wraps `get_user_by_id` in try/except | Honor the module's own "never raise into caller" contract |
+| `backend/utils/driver_claim_reaper.py` | Per-driver offer/ride check wrapped in try/except, isolated to that driver | Match the sibling per-item isolation convention |
+| `backend/utils/offer_expiry_reaper.py` | Settings-fetch failure now logs via `logger.error` before defaulting | Close the silent-swallow gap per CLAUDE.md |
+| `backend/tests/test_guest_notification_service_coverage.py` | Updated the pinned bug test to assert the swallow-and-return-None behavior | Reflect the fix |
+| `backend/tests/test_driver_claim_reaper_coverage.py` | Updated the pinned bug test to assert per-driver isolation (second driver still reaped) | Reflect the fix |
+| `backend/tests/test_offer_expiry_reaper_coverage.py` | Updated the pinned bug test to assert the error is now logged | Reflect the fix |
+
+### 7. Before / after
+
+```python
+# Before (services/guest_notification_service.py::_guest_recipient)
+user = await db_supabase.get_user_by_id(rider_id)
+
+# After
+try:
+    user = await db_supabase.get_user_by_id(rider_id)
+except Exception:
+    logger.error("guest SMS: recipient lookup failed for rider %s", rider_id, exc_info=True)
+    return None
+```
+
+```python
+# Before (utils/driver_claim_reaper.py::_reap_tick)
+if await _has_pending_offer(driver_id) or await _has_active_ride(driver_id):
+    continue
+
+# After
+try:
+    if await _has_pending_offer(driver_id) or await _has_active_ride(driver_id):
+        continue
+except Exception as e:
+    logger.error("[claim-reaper] offer/ride check failed for driver %s: %s", driver_id, e, exc_info=True)
+    continue
+```
+
+```python
+# Before (utils/offer_expiry_reaper.py::_reap_tick)
+except Exception:
+    miss_threshold = 3
+
+# After
+except Exception as e:
+    logger.error("[offer-expiry-reaper] settings fetch failed, defaulting miss_threshold=3: %s", e, exc_info=True)
+    miss_threshold = 3
+```
+
+### 8. Rollback plan
+
+`git revert` for all three — purely additive error handling, no migration, no data-write-path change.
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_guest_notification_service_coverage.py tests/test_driver_claim_reaper_coverage.py tests/test_offer_expiry_reaper_coverage.py -q` — 42 passed (15 + 10 + 17).
+- [x] Blast-radius regression check: `pytest tests/test_corporate_company_bookings_routes.py tests/test_driver_claim_reaper.py tests/test_guest_sms.py tests/test_offer_expiry_reaper.py tests/test_p0_ship_blockers.py -q` — 62 passed, 0 failed.
+- [x] Blast-radius grep performed: see section 4.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- No staging/manual repro against real background-loop execution (`ENV=production`) — all three verified at the unit level via mocked DB/settings clients, consistent with this repo's dual-import-aware loop-testing convention (`core/lifespan.py`'s `ENV=test` no-op guard prevents real loop spawning in the test suite).

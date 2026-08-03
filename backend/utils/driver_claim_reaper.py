@@ -116,7 +116,16 @@ async def _reap_tick() -> None:
 
         driver_id = driver["id"]
         # Legitimately busy? A pending offer or active ride → leave alone.
-        if await _has_pending_offer(driver_id) or await _has_active_ride(driver_id):
+        try:
+            if await _has_pending_offer(driver_id) or await _has_active_ride(driver_id):
+                continue
+        except Exception as e:
+            # Isolated per-driver, matching the release-failure guard below —
+            # one driver's lookup failure must not abort the rest of this
+            # tick's batch (an unguarded raise here previously propagated
+            # out of _reap_tick entirely, skipping every other already-
+            # fetched, otherwise-reapable driver too).
+            logger.error("[claim-reaper] offer/ride check failed for driver %s: %s", driver_id, e, exc_info=True)
             continue
 
         try:

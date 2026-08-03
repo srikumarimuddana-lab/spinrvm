@@ -98,7 +98,15 @@ async def _guest_recipient(ride: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     rider_id = ride.get("rider_id")
     if not rider_id:
         return None
-    user = await db_supabase.get_user_by_id(rider_id)
+    try:
+        user = await db_supabase.get_user_by_id(rider_id)
+    except Exception:
+        # Per the module docstring, every entry point here must never raise
+        # into its caller — unlike every other DB/network call in this
+        # file, this one was unguarded, so a transient DB blip propagated
+        # straight out of notify_guest_driver_assigned/_arrived/_cancelled.
+        logger.error("guest SMS: recipient lookup failed for rider %s", rider_id, exc_info=True)
+        return None
     if not user or not user.get("is_guest") or not user.get("phone"):
         return None
     return user

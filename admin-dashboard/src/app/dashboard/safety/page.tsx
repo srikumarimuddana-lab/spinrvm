@@ -22,6 +22,8 @@ import {
     UserCheck,
     X,
     XCircle,
+    Plus,
+    GitMerge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,12 +36,21 @@ import { Pagination } from "@/components/ui/pagination";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogFooter,
+} from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import {
     getSafetyIncident,
     getSafetyIncidents,
     updateSafetyIncident,
+    createSafetyIncident,
+    mergeSafetyIncident,
     type SafetyIncident,
     type SafetyIncidentDetail,
     type SafetyRole,
@@ -136,6 +147,11 @@ export default function SafetyPage() {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [detail, setDetail] = useState<SafetyIncidentDetail | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
+
+    // Corporate + admin portal review, round 2: "safety incidents can't be
+    // created ... from the admin side" — e.g. a phone-in report that never
+    // went through the app's own SOS flow.
+    const [createOpen, setCreateOpen] = useState(false);
 
     const reqIdRef = useRef(0);
 
@@ -254,6 +270,10 @@ export default function SafetyPage() {
                             <span className="font-semibold text-foreground">{openCount}</span> open
                         </span>
                     )}
+                    <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
+                        <Plus className="h-4 w-4 mr-1.5" />
+                        Log Incident
+                    </Button>
                     <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
                         <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
                         Refresh
@@ -429,7 +449,134 @@ export default function SafetyPage() {
                     )}
                 </SheetContent>
             </Sheet>
+
+            <CreateIncidentDialog
+                open={createOpen}
+                onOpenChange={setCreateOpen}
+                onCreated={() => {
+                    setCreateOpen(false);
+                    load();
+                }}
+            />
         </div>
+    );
+}
+
+function CreateIncidentDialog({
+    open,
+    onOpenChange,
+    onCreated,
+}: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    onCreated: () => void;
+}) {
+    const { toast } = useToast();
+    const [category, setCategory] = useState("");
+    const [description, setDescription] = useState("");
+    const [role, setRole] = useState<SafetyRole>("rider");
+    const [severity, setSeverity] = useState<SafetySeverity | "unset">("unset");
+    const [reportedByUserId, setReportedByUserId] = useState("");
+    const [rideId, setRideId] = useState("");
+    const [saving, setSaving] = useState(false);
+
+    const reset = () => {
+        setCategory("");
+        setDescription("");
+        setRole("rider");
+        setSeverity("unset");
+        setReportedByUserId("");
+        setRideId("");
+    };
+
+    const handleSubmit = async () => {
+        if (!category.trim() || !description.trim()) {
+            toast({ title: "Category and description are required", variant: "destructive" });
+            return;
+        }
+        setSaving(true);
+        try {
+            await createSafetyIncident({
+                category: category.trim(),
+                description: description.trim(),
+                role,
+                severity: severity === "unset" ? undefined : severity,
+                reported_by_user_id: reportedByUserId.trim() || undefined,
+                ride_id: rideId.trim() || undefined,
+            });
+            toast({ title: "Incident logged" });
+            reset();
+            onCreated();
+        } catch (e: any) {
+            toast({ title: "Could not log incident", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <Dialog open={open} onOpenChange={(o) => { if (!o) reset(); onOpenChange(o); }}>
+            <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                    <DialogTitle>Log a safety incident</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-3 py-1">
+                    <p className="text-xs text-muted-foreground">
+                        For a report that came in by phone or in person and never went through the app&apos;s own SOS flow.
+                    </p>
+                    <div>
+                        <Label className="text-xs mb-1 block">Category</Label>
+                        <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. unsafe_driving" />
+                    </div>
+                    <div>
+                        <Label className="text-xs mb-1 block">Description</Label>
+                        <Textarea value={description} onChange={(e) => setDescription(e.target.value)} className="min-h-[90px]" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <Label className="text-xs mb-1 block">Reported by</Label>
+                            <Select value={role} onValueChange={(v) => setRole(v as SafetyRole)}>
+                                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="rider" className="text-sm">Rider</SelectItem>
+                                    <SelectItem value="driver" className="text-sm">Driver</SelectItem>
+                                    <SelectItem value="system" className="text-sm">System</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div>
+                            <Label className="text-xs mb-1 block">Severity (optional)</Label>
+                            <Select value={severity} onValueChange={(v) => setSeverity(v as SafetySeverity | "unset")}>
+                                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="unset" className="text-sm">Unset</SelectItem>
+                                    <SelectItem value="sev1" className="text-sm">Sev 1 · immediate</SelectItem>
+                                    <SelectItem value="sev2" className="text-sm">Sev 2 · non-safety abuse</SelectItem>
+                                    <SelectItem value="sev3" className="text-sm">Sev 3 · info</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <Label className="text-xs mb-1 block">Reporter user ID (optional)</Label>
+                            <Input value={reportedByUserId} onChange={(e) => setReportedByUserId(e.target.value)} className="font-mono text-xs" />
+                        </div>
+                        <div>
+                            <Label className="text-xs mb-1 block">Ride ID (optional)</Label>
+                            <Input value={rideId} onChange={(e) => setRideId(e.target.value)} className="font-mono text-xs" />
+                        </div>
+                    </div>
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
+                    <Button size="sm" onClick={handleSubmit} disabled={saving}>
+                        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
+                        Log Incident
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 }
 
@@ -451,6 +598,35 @@ function IncidentDetailDrawer({
     const [saving, setSaving] = useState(false);
     const st = statusTone(incident.status);
     const sv = severityTone(incident.severity);
+
+    // Corporate + admin portal review, round 2: "safety incidents can't be
+    // ... merged from the admin side" — link a duplicate report (e.g. rider
+    // and driver both SOS the same event) to the canonical incident.
+    const [mergeTargetId, setMergeTargetId] = useState("");
+    const [merging, setMerging] = useState(false);
+
+    const handleMerge = async () => {
+        const targetId = mergeTargetId.trim();
+        if (!targetId) {
+            toast({ title: "Enter the canonical incident ID to merge into", variant: "destructive" });
+            return;
+        }
+        if (targetId === incident.id) {
+            toast({ title: "Cannot merge an incident into itself", variant: "destructive" });
+            return;
+        }
+        setMerging(true);
+        try {
+            const res = await mergeSafetyIncident(incident.id, targetId);
+            onPatched(res.incident);
+            setMergeTargetId("");
+            toast({ title: "Marked as duplicate", description: `Merged into ${targetId.slice(0, 8)}…` });
+        } catch (e: any) {
+            toast({ title: "Merge failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setMerging(false);
+        }
+    };
 
     const handleSave = async () => {
         const body: Parameters<typeof updateSafetyIncident>[1] = {};
@@ -674,6 +850,40 @@ function IncidentDetailDrawer({
                                 className="text-sm min-h-[100px]"
                             />
                         </div>
+
+                        {/* Merge into another incident — same-event duplicate reports
+                            (e.g. rider + driver both SOS'd the same ride). */}
+                        {incident.merged_into_incident_id ? (
+                            <div className="rounded-lg border border-border/60 bg-muted/10 p-3 text-xs text-muted-foreground flex items-center gap-2">
+                                <GitMerge className="h-3.5 w-3.5" />
+                                Already merged into{" "}
+                                <span className="font-mono">{incident.merged_into_incident_id.slice(0, 16)}…</span>
+                            </div>
+                        ) : (
+                            <div>
+                                <Label className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">
+                                    Duplicate of (merge)
+                                </Label>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        value={mergeTargetId}
+                                        onChange={(e) => setMergeTargetId(e.target.value)}
+                                        placeholder="Canonical incident ID"
+                                        className="font-mono text-xs h-9"
+                                    />
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleMerge}
+                                        disabled={merging || !mergeTargetId.trim()}
+                                    >
+                                        {merging ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <GitMerge className="h-3.5 w-3.5 mr-1.5" />}
+                                        Merge
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="flex items-center justify-end gap-2 pt-1">
                             <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
                             <Button

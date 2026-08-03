@@ -133,6 +133,165 @@ async def test_record_kyb_decision_approval_activates():
     assert "kyb_review_note" not in patch_sent
 
 
+# ── wallet risk portfolio (Corporate + admin portal review, round 2) ───────
+
+
+def _table_router(**by_name):
+    """MagicMock().table(name) dispatcher — a distinct chainable mock per
+    table name, so a test can wire corporate_wallets and corporate_accounts
+    independently without one .execute() override clobbering the other."""
+
+    def _get(name):
+        return by_name[name]
+
+    router = MagicMock(side_effect=_get)
+    return router
+
+
+@pytest.mark.asyncio
+async def test_wallet_risk_portfolio_empty_when_no_wallets():
+    wallets_table = MagicMock()
+    wallets_table.select.return_value = wallets_table
+    wallets_table.execute.return_value = _fake_resp([])
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
+        mock_sb.table = _table_router(corporate_wallets=wallets_table)
+        from db_supabase import list_wallet_risk_portfolio
+
+        rows = await list_wallet_risk_portfolio()
+    assert rows == []
+    # No second query issued against an empty company_id list.
+    assert "corporate_accounts" not in [c.args[0] for c in mock_sb.table.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_wallet_risk_portfolio_flags_negative_and_floor():
+    wallets_table = MagicMock()
+    wallets_table.select.return_value = wallets_table
+    wallets_table.execute.return_value = _fake_resp(
+        [
+            {
+                "id": "w1",
+                "company_id": "c1",
+                "balance": "-25.00",
+                "soft_negative_floor": "-50.00",
+                "auto_topup_enabled": False,
+                "auto_topup_threshold": None,
+            },
+            {
+                "id": "w2",
+                "company_id": "c2",
+                "balance": "-60.00",
+                "soft_negative_floor": "-50.00",
+                "auto_topup_enabled": False,
+                "auto_topup_threshold": None,
+            },
+        ]
+    )
+    accounts_table = MagicMock()
+    accounts_table.select.return_value = accounts_table
+    accounts_table.in_.return_value = accounts_table
+    accounts_table.execute.return_value = _fake_resp(
+        [{"id": "c1", "name": "Acme", "status": "active"}, {"id": "c2", "name": "Beta", "status": "active"}]
+    )
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
+        mock_sb.table = _table_router(corporate_wallets=wallets_table, corporate_accounts=accounts_table)
+        from db_supabase import list_wallet_risk_portfolio
+
+        rows = await list_wallet_risk_portfolio()
+
+    by_id = {r["wallet_id"]: r for r in rows}
+    assert "negative_balance" in by_id["w1"]["risk_flags"]
+    assert "at_floor" not in by_id["w1"]["risk_flags"]  # -25 > floor of -50
+    assert "negative_balance" in by_id["w2"]["risk_flags"]
+    assert "at_floor" in by_id["w2"]["risk_flags"]  # -60 <= floor of -50
+    assert by_id["w1"]["company_name"] == "Acme"
+    assert by_id["w2"]["company_name"] == "Beta"
+
+
+@pytest.mark.asyncio
+async def test_wallet_risk_portfolio_low_balance_flag_depends_on_autotopup():
+    wallets_table = MagicMock()
+    wallets_table.select.return_value = wallets_table
+    wallets_table.execute.return_value = _fake_resp(
+        [
+            {
+                "id": "w1",
+                "company_id": "c1",
+                "balance": "10.00",
+                "soft_negative_floor": "-50.00",
+                "auto_topup_enabled": True,
+                "auto_topup_threshold": "20.00",
+            },
+            {
+                "id": "w2",
+                "company_id": "c2",
+                "balance": "10.00",
+                "soft_negative_floor": "-50.00",
+                "auto_topup_enabled": False,
+                "auto_topup_threshold": "20.00",
+            },
+        ]
+    )
+    accounts_table = MagicMock()
+    accounts_table.select.return_value = accounts_table
+    accounts_table.in_.return_value = accounts_table
+    accounts_table.execute.return_value = _fake_resp([])
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
+        mock_sb.table = _table_router(corporate_wallets=wallets_table, corporate_accounts=accounts_table)
+        from db_supabase import list_wallet_risk_portfolio
+
+        rows = await list_wallet_risk_portfolio()
+
+    by_id = {r["wallet_id"]: r for r in rows}
+    assert "below_autotopup_threshold" in by_id["w1"]["risk_flags"]
+    assert "low_balance_no_autotopup" in by_id["w2"]["risk_flags"]
+
+
+@pytest.mark.asyncio
+async def test_wallet_risk_portfolio_sorts_flagged_and_most_negative_first():
+    wallets_table = MagicMock()
+    wallets_table.select.return_value = wallets_table
+    wallets_table.execute.return_value = _fake_resp(
+        [
+            {
+                "id": "healthy",
+                "company_id": "c1",
+                "balance": "500.00",
+                "soft_negative_floor": "-50.00",
+                "auto_topup_enabled": False,
+                "auto_topup_threshold": None,
+            },
+            {
+                "id": "mild",
+                "company_id": "c2",
+                "balance": "-10.00",
+                "soft_negative_floor": "-50.00",
+                "auto_topup_enabled": False,
+                "auto_topup_threshold": None,
+            },
+            {
+                "id": "severe",
+                "company_id": "c3",
+                "balance": "-100.00",
+                "soft_negative_floor": "-50.00",
+                "auto_topup_enabled": False,
+                "auto_topup_threshold": None,
+            },
+        ]
+    )
+    accounts_table = MagicMock()
+    accounts_table.select.return_value = accounts_table
+    accounts_table.in_.return_value = accounts_table
+    accounts_table.execute.return_value = _fake_resp([])
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
+        mock_sb.table = _table_router(corporate_wallets=wallets_table, corporate_accounts=accounts_table)
+        from db_supabase import list_wallet_risk_portfolio
+
+        rows = await list_wallet_risk_portfolio()
+
+    assert [r["wallet_id"] for r in rows] == ["severe", "mild", "healthy"]
+
+
 @pytest.mark.asyncio
 async def test_set_kyb_document_persists_path_and_submitted_at():
     # Regression: create_kyb_upload_url returned a path but nothing persisted

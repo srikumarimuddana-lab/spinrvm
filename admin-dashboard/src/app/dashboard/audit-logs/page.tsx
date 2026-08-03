@@ -33,9 +33,10 @@ import {
     RefreshCw,
     Download,
     Activity,
+    TrendingUp,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getAuditLogs } from "@/lib/api";
+import { getAuditLogs, getAuditLogTopActors } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 const ENTITY_ICONS: Record<string, any> = {
@@ -70,6 +71,30 @@ export default function AuditLogsPage() {
     const [hasNextPage, setHasNextPage] = useState(false);
     const reqIdRef = useRef(0);
     const { sorted, sort, toggle } = useTableSort(logs);
+
+    // Corporate + admin portal review, round 2: "no 'who touched the most'
+    // rollup views — every threat hunt needs raw SQL."
+    const [topActors, setTopActors] = useState<Awaited<ReturnType<typeof getAuditLogTopActors>>["actors"]>([]);
+    const [topActorsDays, setTopActorsDays] = useState(7);
+    const [topActorsLoading, setTopActorsLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+        setTopActorsLoading(true);
+        getAuditLogTopActors({ days: topActorsDays, limit: 10 })
+            .then((res) => {
+                if (!cancelled) setTopActors(res.actors);
+            })
+            .catch(() => {
+                if (!cancelled) setTopActors([]);
+            })
+            .finally(() => {
+                if (!cancelled) setTopActorsLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [topActorsDays]);
 
     const fetchLogs = async () => {
         setLoading(true);
@@ -211,6 +236,49 @@ export default function AuditLogsPage() {
                     </Button>
                 )}
             </div>
+
+            {/* Top actors — threat-hunting rollup, no raw SQL needed */}
+            <Card className="border-border/50">
+                <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2 text-sm font-semibold">
+                            <TrendingUp className="h-4 w-4 text-violet-500" />
+                            Most active actors
+                        </div>
+                        <Select value={String(topActorsDays)} onValueChange={(v) => setTopActorsDays(Number(v))}>
+                            <SelectTrigger className="w-32" aria-label="Rollup window">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="1">Last 24h</SelectItem>
+                                <SelectItem value="7">Last 7 days</SelectItem>
+                                <SelectItem value="30">Last 30 days</SelectItem>
+                                <SelectItem value="90">Last 90 days</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    {topActorsLoading ? (
+                        <div className="text-sm text-muted-foreground py-2">Loading…</div>
+                    ) : topActors.length === 0 ? (
+                        <div className="text-sm text-muted-foreground py-2">No activity in this window.</div>
+                    ) : (
+                        <div className="flex flex-wrap gap-2">
+                            {topActors.map((a) => (
+                                <div
+                                    key={a.actor_id}
+                                    className="flex items-center gap-2 rounded-md border border-border/50 px-3 py-1.5 text-sm"
+                                    title={a.top_actions.map((t) => `${t.action}: ${t.count}`).join(", ")}
+                                >
+                                    <span className="font-mono text-xs text-muted-foreground">
+                                        {a.actor_id.slice(0, 8)}
+                                    </span>
+                                    <Badge variant="secondary">{a.action_count}</Badge>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
 
             {/* Table */}
             <Card className="border-border/50">

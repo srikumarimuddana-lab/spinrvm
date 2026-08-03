@@ -1183,13 +1183,12 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         background loops; regulatory-adjacent (Saskatchewan Transportation
         Act driver-eligibility — expired documents must suspend the driver).
     - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
-      scoping note** (55 more files, not itemized individually here —
-      notable remaining large ones: `routes/webhooks.py` 75.40%/748 stmts
-      Stripe-adjacent, `routes/promotions.py` 65.85%,
-      `repositories/driver_repo.py` 72.99%, `routes/disputes.py`
-      73.88% — full list reproducible via the same `--cov=.` command
-      above; a future session should re-run it rather than trust this
-      snapshot going stale).
+      scoping note** (~51 more files remaining, not itemized individually
+      here — full list reproducible via the same `--cov=.` command above; a
+      future session should re-run it rather than trust this snapshot going
+      stale). All four originally-named files (`routes/promotions.py`,
+      `routes/webhooks.py`, `repositories/driver_repo.py`,
+      `routes/disputes.py`) are now closed/improved — see below.
       - `utils/payment_retry.py` — **CLOSED, 72.54% → 99%** (2026-08-02,
         244 stmts, 67→2 missing; measured via
         `pytest tests/test_payment_retry.py tests/test_payment_retry_coverage.py
@@ -1341,6 +1340,135 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
           for any future test in this file or a sibling that asserts on this
           module's log output.
     - First file since this scoping pass picked up below.
+      - **Note on `routes/webhooks.py` appearing twice below:** this
+        session's Batch 11 (95%, `test_webhooks_coverage_gap.py`, 56 tests)
+        and a separate concurrent session's pass (78%, explicitly marked
+        "not fully closed" below) both landed independently. No file-path
+        collision (different test file names), so both are kept — Batch
+        11's 95% is the higher/more complete result and should be treated
+        as superseding the 78% entry for planning purposes, but the 78%
+        entry's own findings (the SES/Twilio helper-function coverage) are
+        real and additive, not duplicated by Batch 11, so its bullet is
+        kept intact rather than deleted.
+      - `routes/promotions.py` — **CLOSED, 65.85% → 93%** (2026-08-02, 328
+        stmts, measured via `pytest tests/test_promotions_coverage.py
+        tests/test_p2_promo_wallet_loyalty.py tests/test_promo_discount_parity.py
+        tests/test_promo_per_user_race.py tests/test_promo_rate_limit.py
+        tests/test_ai_tools_booking.py tests/test_create_ride_post_insert_branches.py
+        tests/test_admin_rides_coverage.py tests/test_admin_rides_read_endpoints_coverage.py
+        tests/test_p3_promo_concurrency.py --cov=routes.promotions
+        --cov-report=term-missing`). Existing test files covered rules 1-4
+        of `_validate_promo_for_user`'s 10-rule engine (expiry, total-usage,
+        per-user limit, min fare) and flat/percentage discount math but
+        nothing on rules 5-10 (private coupon, first-ride-only, new-user-only,
+        inactive-user targeting, min/max ride count, budget cap), the
+        `free_ride` branch, the `ride_id` server-side fare re-fetch branch,
+        the malformed-expiry catch, or most of `list_available_promos` (the
+        `/promo/available` engine — service-area resolution, ineligible-but-
+        shown min-fare marking, per-promo exception isolation, sorting).
+        Added `backend/tests/test_promotions_coverage.py` (41 tests). Also
+        found and documented (not fixed) that this module's `admin_router`
+        (4 CRUD functions) is dead code — never mounted in
+        `backend/server.py` (only `routes/admin/promotions.py`'s router is,
+        for the live `/api/admin/promotions` surface); exercised directly as
+        plain functions for coverage purposes only. Test-only, no
+        application code changed. Full suite re-run after: 8456 passed (was
+        8415), 8 skipped, 1 xfailed, 0 failed. See
+        `docs/change-log/2026-08-02-a1c-promotions-coverage.md`.
+      - `routes/webhooks.py` — **IMPROVED (not fully closed), 75.40% → 78%**
+        (2026-08-02, 748 stmts, measured via `pytest
+        tests/test_webhooks_helpers_coverage.py tests/test_webhooks_main.py
+        tests/test_orphan_refund.py tests/test_webhook_stripe_v15.py
+        tests/test_ses_webhook.py tests/test_twilio_inbound.py
+        tests/test_corporate_webhook.py --cov=routes.webhooks
+        --cov-report=term-missing`). The huge `stripe_webhook` route already
+        had deep coverage from existing test files; the module-private
+        SES/Twilio/invoice helper functions
+        (`_extract_invoice_payment_intent`, `_invoice_period_end_iso`/
+        `_invoice_period_start_iso`, `_confirm_sns_subscription`,
+        `_topic_arn_allowed`, `_suppress_address`,
+        `_suppress_marketing_email`, `_handle_ses_notification`,
+        `_resolve_user_id_by_phone`, `_handle_sms_keyword`) had zero direct
+        unit tests. Added `backend/tests/test_webhooks_helpers_coverage.py`
+        (39 tests). Real remaining gap: large chunks of `stripe_webhook`'s
+        deep event-type branches (~lines 904-1094, 1867-1901) are still
+        untested — flagging as unfinished for a future session rather than
+        overstating this as "closed."
+      - `repositories/driver_repo.py` — **CLOSED, 72.99% → 99%**
+        (2026-08-02, 137 stmts, measured via `pytest
+        tests/test_driver_repo_coverage.py
+        tests/test_set_driver_available_invariant.py
+        tests/test_go_online_availability.py tests/test_claim_ride.py
+        tests/test_driver_claim_reaper.py --cov=repositories.driver_repo
+        --cov-report=term-missing`). Only `set_driver_available
+        (available=True)` had a direct unit test before this. Added
+        `backend/tests/test_driver_repo_coverage.py` (38 tests) covering
+        every function's no-supabase/success/exception branches, including
+        the `available=False` release path and claim-won-vs-claim-lost
+        races for `claim_driver_atomic`/`claim_ride_atomic`/
+        `match_and_claim_driver`.
+      - `routes/disputes.py` — **CLOSED, 73.88% → 94%** (2026-08-02, 134
+        stmts, measured via `pytest tests/test_disputes_admin_coverage.py
+        tests/test_dispute_refund_cents.py
+        tests/test_p3_addresses_favorites_safety_disputes.py
+        --cov=routes.disputes --cov-report=term-missing`). User-facing
+        endpoints and the Stripe-refund happy path were already covered;
+        `admin_get_disputes` had zero direct test and
+        `admin_resolve_dispute`'s guard/error branches (404, 400×2,
+        `manual_required`, 503, 502, `rejected`, no-refund-amount,
+        notify-failure-swallow) were untested. Added
+        `backend/tests/test_disputes_admin_coverage.py` (13 tests). Also
+        found and documented (not fixed) that this module's `admin_router`
+        (same dead-code pattern as `promotions.py`'s) is never mounted in
+        `backend/server.py` — the live `/api/admin/disputes` surface is
+        `routes/admin/support.py`.
+      - Test-only across all three files, no application code changed. Full
+        suite re-run after: 8546 passed (was 8456), 8 skipped, 1 xfailed, 0
+        failed. See
+        `docs/change-log/2026-08-02-a1c-webhooks-driver_repo-disputes-coverage.md`.
+      - **Fresh re-scope performed** (`pytest tests/ -q --cov=. --cov-report=json`
+        from `backend/`, 2026-08-02): confirms the 60-80% band is now ~41
+        files (down from the original ~54-55 estimate as batches 1-2
+        closed files). Three more picked ahead of raw ranking for
+        dispatch/corporate/payments real-world-consequence, same reasoning
+        as `reconciliation.py`/`payment_retry.py`:
+        - `utils/offer_expiry_reaper.py` — **CLOSED, 61% → 94%** (66 stmts,
+          measured via `pytest tests/test_offer_expiry_reaper_coverage.py
+          tests/test_offer_expiry_reaper.py --cov=utils.offer_expiry_reaper
+          --cov-report=term-missing`). The durable backstop for offer-timeout
+          timers lost on a pod restart — `_reap_tick`'s fetch-exception/
+          scan-cap/settings-fallback/redispatch-exception branches and the
+          entire `offer_expiry_reaper_loop` wrapper (lock branches,
+          tick-exception-survives) were untested. Added
+          `backend/tests/test_offer_expiry_reaper_coverage.py` (8 tests).
+        - `utils/corporate_low_balance.py` — **CLOSED, 62% → 91%** (64
+          stmts, measured via `pytest
+          tests/test_corporate_low_balance_coverage.py
+          tests/test_corporate_low_balance.py --cov=utils.corporate_low_balance
+          --cov-report=term-missing`). Low-balance email nudges for
+          corporate wallets with auto-topup off — the company-not-found
+          branch, malformed-timestamp catch, one-wallet-failure-doesn't-
+          abort-batch swallow, and the entire `corporate_low_balance_loop`
+          wrapper were untested. Added
+          `backend/tests/test_corporate_low_balance_coverage.py` (5 tests).
+        - `utils/orphaned_hold_reconciler.py` — **CLOSED, 69% → 90%** (91
+          stmts, measured via `pytest
+          tests/test_orphaned_hold_reconciler_loop_coverage.py
+          tests/test_orphaned_hold_reconciler.py --cov=utils.orphaned_hold_reconciler
+          --cov-report=term-missing`). Releases stranded Stripe card-hold
+          authorizations on cancelled rides — `find_orphaned_holds`/
+          `_claim`/`reconcile_tick` were already extensively covered (17
+          tests), but the `orphaned_hold_reconciler_loop` wrapper (lock
+          branches, the `CancelledError`-must-propagate contract,
+          generic-exception counting) was only referenced to confirm it's
+          registered in lifespan, never exercised. Added
+          `backend/tests/test_orphaned_hold_reconciler_loop_coverage.py`
+          (6 tests).
+        - Test-only across all three files, no application code changed.
+          Full suite re-run after: 8565 passed (was 8546), 8 skipped, 1
+          xfailed, 0 failed. See
+          `docs/change-log/2026-08-02-a1c-offer-reaper-corp-low-balance-orphaned-hold-coverage.md`.
+    - Next file since this re-scope picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB
     financial drift going undetected) — **16% → 90%** (2026-08-01, measured

@@ -1376,6 +1376,65 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
           main commits' tests in between, e.g. #3341), 8 skipped, 1
           xfailed, 0 failed. See
           `docs/change-log/2026-08-02-a1c-claim-reaper-preauth-allowance-reset-coverage.md`.
+      - Continuing from the same re-scope list, three more files picked
+        from the raw Sub-tier C ranking (rider-facing fare-estimate +
+        saved-route surface, plus the AI/MCP surface):
+        - `routes/fares.py` — **CLOSED, 65% → 97%** (2026-08-03, 136
+          stmts, measured via `pytest tests/test_fares_coverage.py
+          tests/test_favorites_coverage.py tests/test_ai_mcp_coverage.py
+          tests/test_fares.py tests/test_ai_mcp.py
+          tests/test_p3_addresses_favorites_safety_disputes.py
+          --cov=routes.fares --cov-report=term-missing`; a fresh
+          `-k fares` run measured 65% at session start against the
+          72.79% documented baseline — other test files exercise the
+          `/fares` HTTP endpoint incidentally without "fares" in their
+          filename, which a name-filtered run misses). The existing
+          `tests/test_fares.py` covered the surge-cap regression and the
+          vehicle-pricing-vs-fare_configs precedence directly, but had
+          zero coverage of `_fd`/`_money_str`'s exception branches, the
+          fare-cache key/invalidate helpers, `resolve_service_area_for_point`,
+          `resolve_area_scope`'s empty-input guard, `build_fares_for_area`'s
+          two early-return guards and its legacy `fare_configs` fallback
+          path, the full `_fares_for_location_impl` orchestration
+          function, and the `/fares` endpoint's Redis cache hit/miss/
+          read-error/write-error branches. Added
+          `backend/tests/test_fares_coverage.py` (29 tests). Per
+          CLAUDE.md's surge-pricing conventions, explicitly asserted (not
+          just exercised) that `SURGE_CAP=2.5` holds even against a 9.9
+          DB value, that the `surge_enabled` admin toggle gates a stale
+          `surge_multiplier`, and that the `/fares` cache TTL caps at 60s
+          while surge is active.
+        - `routes/favorites.py` — **CLOSED, 73% → 97%** (2026-08-03, 67
+          stmts, measured via the same combined command above,
+          `--cov=routes.favorites`). `tests/test_p3_addresses_favorites_safety_disputes.py`
+          covered list/create/duplicate/address-mismatch/delete-not-found
+          but never exercised `POST /favorites/{id}/use`, the delete
+          *success* path, or `POST /favorites/from-ride/{ride_id}` (all
+          three branches). Added `backend/tests/test_favorites_coverage.py`
+          (10 tests).
+        - `ai/mcp_server.py` — **CLOSED, 73% → 94%** (2026-08-03, 124
+          stmts, measured via the same combined command above,
+          `--cov=ai.mcp_server`). `tests/test_ai_mcp.py` covered
+          `MCPAuthMiddleware` and the SDK-exposure rules thoroughly, but
+          the `_list_tools`/`_call_tool` closures registered inside
+          `build_mcp_asgi_app()` were never driven end-to-end — both the
+          `mcp` SDK's `list_tools()`/`call_tool()` decorators return the
+          *original* undecorated function to the caller, not the
+          registered handler, so the only way to exercise them is via the
+          `Server`'s own `request_handlers` dict, which
+          `backend/tests/test_ai_mcp_coverage.py` (12 tests) now does
+          directly against the real `mcp` SDK (present in this
+          environment). Also closed `build_mcp_asgi_app()`'s top-level
+          exception-swallow branch, `_audience_for`, two
+          `MCPAuthMiddleware.__call__` branches (non-HTTP ASGI scope, and
+          an auth failure raising something other than `HTTPException`),
+          and `stop_mcp()`'s shutdown-exception swallow.
+        - Test-only across all three files, no application code changed,
+          no bugs found. Full suite re-run after: 8762 passed (was 8711,
+          measured fresh at session start), 8 skipped, 1 xfailed, 0
+          failed — delta +51 exactly matches the 51 new tests added
+          (29 + 10 + 12). See
+          `docs/change-log/2026-08-03-a1c-subtier-c-fares-fav-mcp-coverage.md`.
     - Next file since this re-scope picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB

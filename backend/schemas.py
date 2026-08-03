@@ -424,6 +424,10 @@ class SavedAddress(BaseModel):
     lat: float
     lng: float
     icon: str = "location"
+    # B9 enhancement (ACTION_ITEMS.md): captured from the write-time
+    # geocode-verify check when a result was returned; None when
+    # verification failed open (no API key, budget exhausted, no match).
+    place_id: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

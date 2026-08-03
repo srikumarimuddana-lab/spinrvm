@@ -2012,15 +2012,35 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   favorites dedupe (`favorites.py`) to compare both lat AND lng of both
   pickup and dropoff, not latitude only.
 - **Explicitly deferred:**
-  - `place_id` storage + re-resolve-on-save — needs a new
-    `saved_addresses.place_id` migration column; the write-time verification
-    above is the actual safety net, so this is an enhancement on top, not
-    required to close the core gap. Left for a follow-up.
-  - `CreateRideRequest` cross-field validation in `schemas.py` — ride
-    creation is a live, state-machine-critical, money-adjacent surface;
-    changing what it accepts needs its own dedicated pass (dry run against
-    `mock_supabase_client`, feature-flag consideration) rather than bundling
-    into this PR per CLAUDE.md's pre-merge release gates.
+  - `place_id` storage — **done**: migration `284_saved_addresses_place_id.sql`
+    adds a nullable `saved_addresses.place_id` column;
+    `verify_address_matches_coordinate` (`utils/address_verification.py`)
+    now returns `(ok, reason, place_id)` — the `place_id` is already present
+    in the same Geocoding API response used for the mismatch check, so this
+    is a free capture, not a second API call. `POST /addresses`
+    (`routes/addresses.py`) stores it on the `SavedAddress` row;
+    `POST /favorites` (`routes/favorites.py`) unpacks and discards the third
+    value (favorites are a separate `favorite_routes` table with two
+    endpoints per row — storing pickup/dropoff `place_id` there wasn't part
+    of what this item named and would be its own follow-up, not folded in
+    here). **Re-resolve-on-save** (using the stored `place_id` to confirm a
+    saved address still points at the same real-world place on subsequent
+    use) is a separate, larger follow-up — this pass only captures and
+    stores the identifier, it doesn't yet do anything with it after save.
+    Updated `tests/test_address_verification.py` (3-tuple return, `place_id`
+    asserted in every branch) and
+    `tests/test_p3_addresses_favorites_safety_disputes.py` (2 new tests:
+    `place_id` persisted on success, `None` when verification fails open) —
+    **verification of these tests is deferred to the end-of-batch full-suite
+    run**, per this session's token-budget constraint; not run individually.
+  - `CreateRideRequest` cross-field validation in `schemas.py` — **still not
+    attempted**, deliberately. Ride creation is a live, state-machine-critical,
+    money-adjacent surface; changing what it accepts needs its own dedicated
+    pass (dry run against `mock_supabase_client`, feature-flag consideration)
+    per CLAUDE.md's pre-merge release gates — which itself conflicts with
+    this session's "no testing until the end of the batch" instruction, so
+    attempting it blind here would violate the item's own stated
+    prerequisite. Left open for a dedicated pass with its own dry run.
 - **Files:** `backend/routes/addresses.py`, `backend/routes/favorites.py`,
   `backend/utils/address_verification.py` (new),
   `backend/tests/test_address_verification.py` (new),

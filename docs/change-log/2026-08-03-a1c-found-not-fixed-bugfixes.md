@@ -552,3 +552,73 @@ if not isinstance(data, dict):
 
 - Not run against a real Supabase/Postgres RPC call — verified at the unit level only, against mocked `supabase.rpc(...).execute()` responses.
 - Did not confirm with the compliance/legal owner of the retention policy whether hard-failing (vs. the prior soft-fail) is the definitively correct choice for this specific RPC — the fix follows this same file's own existing precedent (the `purge_trip_route_geometry` half already does this), which is the strongest available signal for "intended" behavior in this codebase, but a compliance sign-off was not separately sought.
+
+---
+
+## Entry 8 — `driver_onboarding_reminder_rules.py`: per-area document opt-out silently ignored
+
+### 1. Issue / gap identified
+
+`utils/driver_onboarding_reminder_rules.py::mandatory_requirements` — when every item in an area's `required_documents` list was explicitly marked not-required (`required: False` / `is_mandatory: False`), the filtered result (`out`) ended up empty, and the function fell through to the *global* mandatory-document list. This made an area-level "nothing is required here" configuration indistinguishable from "this area has no `required_documents` configured at all" — an operator's deliberate opt-out was silently overridden and the global list was enforced instead.
+
+### 2. Root cause
+
+The fallback-to-global decision was gated on `if out: return out`, checking the *filtered* result rather than whether the area had configured a list at all — conflating two different input states ("no list" vs. "list present, all items opted out") that should produce different outputs.
+
+### 3. Fix / remediation
+
+The check now inspects `raw_items` (the list *before* the `required: False` filter) rather than `out` (the list *after*). An area with no `required_documents` key at all still falls back to global (unchanged); an area with an explicit list — even one where every entry is opted out — now returns that empty result and is respected as-is.
+
+### 4. Risk & impact on existing functionality
+
+- **Blast radius: isolated to reminder-email content.** `mandatory_requirements` feeds `missing_required_document_uploads`, which is used only by `utils/driver_onboarding_reminders.py`'s reminder-nudge loop (one of the 17 background loops) and `utils/driver_status_notifications.py`. Grepped both callers: neither uses this function's output to gate actual driver approval/activation — that logic lives elsewhere (`routes/admin/drivers.py`'s verification endpoints) and is untouched by this change. This fix can only change *which documents a driver is reminded to upload*, never whether they're approved to drive.
+- Any area that currently has a `required_documents` list with every entry marked not-required (a real, if unusual, config state) will see its drivers stop getting global-list reminder nudges for documents the area operator deliberately opted out of. This is the intended effect of the fix — before, such an area's opt-out was silently ignored.
+- Areas with a normal (non-empty, has-active-entries) `required_documents` list, or no list at all, are unaffected — verified by the existing/updated test suite's coverage of both branches.
+
+### 5. User-experience effect
+
+- Driver-facing (indirectly): a driver whose service area explicitly opted out of area-specific document requirements will no longer receive onboarding reminder nudges for the global document list on that area's behalf. This only affects reminder *email/push content*, not account status or driving eligibility.
+- No rider or corporate-admin-facing effect.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/utils/driver_onboarding_reminder_rules.py` | `mandatory_requirements`'s global-fallback check now inspects the raw (pre-filter) list instead of the filtered result | Close the found-not-fixed silent-opt-out-override gap |
+| `backend/tests/test_driver_onboarding_reminder_rules_coverage.py` | Renamed/updated the pinned bug test to assert the area's explicit empty list is now respected | Reflect the fix |
+
+### 7. Before / after
+
+```python
+# Before
+out: list[...] = []
+for item in _load_list((area or {}).get("required_documents")):
+    ...
+if out:
+    return out
+return [...global fallback...]
+
+# After
+raw_items = _load_list((area or {}).get("required_documents"))
+out: list[...] = []
+for item in raw_items:
+    ...
+if raw_items:
+    return out
+return [...global fallback...]
+```
+
+### 8. Rollback plan
+
+`git revert` — pure code-path fix, no migration, no data-write-path change (this function only reads config and produces reminder content, it writes nothing).
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_driver_onboarding_reminder_rules_coverage.py -q` — 67 passed.
+- [x] Blast-radius regression check: `pytest tests/test_driver_needs_review_notification.py tests/test_driver_onboarding_reminders.py tests/test_driver_status_notifications.py -q` — 50 passed, 0 failed.
+- [x] Blast-radius grep performed: confirmed neither caller of `mandatory_requirements`'s output gates driver approval/activation — see section 4.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- Did not check production data for how many service areas, if any, currently have a `required_documents` list with every entry marked not-required — the practical prevalence of the previously-silently-overridden config state is unknown.

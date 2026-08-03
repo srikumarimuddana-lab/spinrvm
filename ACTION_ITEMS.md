@@ -3514,7 +3514,22 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   left undone. No code change needed; correcting the stale item.
 - [ ] **D2. Distributed tracing** — request-ID propagation exists (`X-Request-ID`);
   full OpenTelemetry only if multi-replica latency debugging becomes painful.
-- [ ] **D3. Driver destination mode** — biggest driver-retention feature gap vs industry.
+- [x] **D3. Driver destination mode** — backend was already fully built
+  (`backend/routes/drivers/profile.py` L428-497: `POST/GET/DELETE
+  /drivers/destination`; `backend/services/dispatch_service.py` L151-209
+  already filters ride offers by `destination_mode`/`destination_lat`/
+  `destination_lng`, gated no-op when off). The only real gap was the
+  driver-app UI — added `driver-app/app/driver/destination-mode.tsx`, a
+  new settings screen (status card, address input, activate/update/clear
+  actions) reusing `addresses.tsx`'s geocode-on-save pattern (Places
+  autocomplete+details via the backend proxy, not direct Google calls) to
+  turn a free-text address into lat/lng before `POST /drivers/destination`.
+  Linked from Settings → Account. i18n strings added to en/fr/es (no
+  fallback-to-English exists in this app's `t()`, so all three needed
+  entries to avoid a raw key showing in fr/es UI). Not run against a
+  simulator/device and no `tsc`/`yarn jest` pass performed for this
+  change, per the standing no-test-suite instruction — deferred to the
+  end-of-batch verification pass.
 - [x] **D4. Driver heatmap UI** — stale, already done. Backend
   `GET /drivers/demand-heatmap` (`backend/routes/drivers/profile.py` ~L235-260)
   is gated on the `service_area.show_demand_heatmap` admin setting and returns

@@ -1668,9 +1668,30 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
-- [ ] **Status:** open — found 2026-07-30 while adding migration 275. Migration
-  274 itself is clean (verified by simulating the runner's splitter); this is a
-  pre-existing defect in the runner affecting **34 already-merged migrations**.
+- [x] **Status:** done — `scripts/migrate.py` now has `_split_sql_statements`,
+  a lexical scanner (comment/`'...'`-string/`$tag$...$tag$`-dollar-quote
+  aware) replacing the naive `sql.split(";")`. `needs_autocommit` routing now
+  checks the comment-free split statements instead of raw text, so a file
+  whose only "CONCURRENTLY" is inside a comment correctly runs through the
+  normal transactional path instead of the no-transaction autocommit path.
+  Validated against all 44 CONCURRENTLY-mentioning migrations in the repo —
+  zero produce a non-SQL-looking fragment (was 34 broken before the fix); 14
+  of them are now correctly reclassified out of the autocommit path.
+  `_KNOWN_UNSPLITTABLE` in `test_migration_concurrently_splitting.py` is now
+  empty (kept as a frozenset, not deleted, so a future regression has
+  somewhere obvious to record a real unsplittable file). Two new direct
+  regression tests pin the original failure modes (mid-line semicolon inside
+  a comment; a `$$`-quoted function body) plus one pinning the
+  comment-only-CONCURRENTLY routing fix. `test_migrate_autocommit_chunks.py`
+  updated for `_apply_migration_autocommit`'s new signature (takes
+  pre-split `statements: list[str]` instead of raw `sql: str`, since the
+  split now happens once in `apply_migration` rather than being redone
+  inside the autocommit path). All 51 tests in both files pass. **Not yet
+  verified:** an actual fresh-database `python scripts/migrate.py` run
+  end-to-end against a real Postgres instance — this fix was validated by
+  running the real splitter against every migration file's text and by unit
+  tests with a mocked connection, not by applying the full migration set to
+  a live throwaway schema.
 - **Files:** `backend/scripts/migrate.py:195` (`_apply_migration_autocommit`),
   frozen list in `backend/tests/test_migration_concurrently_splitting.py`
   (`_KNOWN_UNSPLITTABLE`)

@@ -3540,17 +3540,36 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   calls" optimization WS pub/sub allows — collapsing it further (e.g. an
   FCM multicast batch call) would be a different, separate item, not what
   this one's own text asked for. No code change needed.
-- [ ] **D9. `compliance_export_events` has no purge job for its claimed 7-year
-  retention** — `backend/migrations/263_compliance_export_events.sql`'s table
-  comment states "7-year retention" but no background loop or scheduled job
-  enforces it; rows accumulate forever today. Long time horizon (first purge
-  wouldn't be due until 2033), so not urgent, but the claim in the migration
-  comment currently overstates what the system actually does — nothing
-  deletes a row past 7 years yet. Migration itself is append-only and merged
-  (can't be edited per `backend/migrations/CLAUDE.md`); the fix is a new
-  migration/cron adding a scheduled purge (mirror the pattern in
-  `utils/retention_purge.py`) before 2033, not a comment edit. Tracked here
-  as gap G8 from `reports/audits/2026-07-28-compliance-reporting-module-lifecycle-audit-v1.md`.
+- [x] **D9. `compliance_export_events` has no purge job for its claimed 7-year
+  retention** — done: new migration
+  `285_retention_purge_compliance_export_events.sql`. Found the real blocker
+  while implementing: migration 263's own `compliance_export_events_no_mutate`
+  trigger blocks DELETE **unconditionally** (no session-flag bypass, unlike
+  `audit_logs`'s equivalent trigger) — so a purge job literally could not
+  have deleted a row even if one had been written, regardless of the
+  migration comment's "7-year retention" claim. Fixed by mirroring migration
+  56's exact `audit_logs` pattern: `_compliance_export_events_immutable()`
+  now gates DELETE behind a new session-local flag
+  (`spinr.compliance_export_events.allow_delete`) instead of blocking it
+  outright — UPDATE stays unconditionally blocked, unchanged. Forked
+  `purge_pii_retention()` verbatim from migration 228 (the current
+  authoritative definition, confirmed via `grep` across all migrations —
+  no later one replaces it) and added Step M: deletes
+  `compliance_export_events` rows older than 7 years, setting/clearing the
+  flag immediately around the DELETE (including on exception), exactly
+  mirroring Step G's `audit_logs` handling. `utils/retention_purge.py`
+  needed **no Python change** — it already logs whatever keys
+  `purge_pii_retention()` returns generically; verified via
+  `_split_sql_statements` (the B0 fix) that the new migration parses into 7
+  clean top-level statements with no CONCURRENTLY. No dedicated Python test
+  added: `tests/test_retention_purge.py`'s own docstring states this
+  function is "exercised via migration + integration tests" — the Python
+  suite only pins the generic RPC-response-passthrough wrapper, which is
+  unchanged by this migration, matching the existing convention for every
+  prior Step (A through L) added by migrations 56/117/141/143/216/228.
+  **Verification deferred to the end-of-batch run** — like every SQL-only
+  migration in this backlog, this needs an actual Postgres apply to fully
+  confirm, not just static parsing.
 - [x] **D10. `compliance_export_events` rollback command not re-verified
   against real staging** — `DROP TABLE IF EXISTS compliance_export_events;`
   (the migration's documented rollback) was verified by applying the

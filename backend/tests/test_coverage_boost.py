@@ -716,6 +716,86 @@ class TestGetClientIdentifier:
         assert result.startswith("ip:")
 
 
+class TestGetAiChatKey:
+    """Tests for get_ai_chat_key / _extract_unverified_user_id (ACTION_ITEMS.md AI1)."""
+
+    def test_keys_by_user_id_claim(self):
+        import jwt
+
+        from backend.utils.rate_limiter import get_ai_chat_key
+
+        token = jwt.encode({"user_id": "rider_42"}, "unused-secret", algorithm="HS256")
+        req = MagicMock()
+        req.headers = {"Authorization": f"Bearer {token}"}
+        assert get_ai_chat_key(req) == "user:rider_42"
+
+    def test_falls_back_to_sub_claim(self):
+        import jwt
+
+        from backend.utils.rate_limiter import get_ai_chat_key
+
+        token = jwt.encode({"sub": "driver_7"}, "unused-secret", algorithm="HS256")
+        req = MagicMock()
+        req.headers = {"Authorization": f"Bearer {token}"}
+        assert get_ai_chat_key(req) == "user:driver_7"
+
+    def test_two_ips_same_token_share_one_bucket(self):
+        import jwt
+
+        from backend.utils.rate_limiter import get_ai_chat_key
+
+        token = jwt.encode({"user_id": "rider_99"}, "unused-secret", algorithm="HS256")
+        req_a = MagicMock()
+        req_a.headers = {"Authorization": f"Bearer {token}", "cf-connecting-ip": "1.1.1.1"}
+        req_b = MagicMock()
+        req_b.headers = {"Authorization": f"Bearer {token}", "cf-connecting-ip": "2.2.2.2"}
+        assert get_ai_chat_key(req_a) == get_ai_chat_key(req_b) == "user:rider_99"
+
+    def test_falls_back_to_ip_when_no_bearer_token(self):
+        from backend.utils.rate_limiter import get_ai_chat_key
+
+        req = MagicMock()
+        req.headers = {"cf-connecting-ip": "9.9.9.9"}
+        assert get_ai_chat_key(req) == "ip:9.9.9.9"
+
+    def test_falls_back_to_ip_when_token_is_garbage(self):
+        from backend.utils.rate_limiter import get_ai_chat_key
+
+        req = MagicMock()
+        req.headers = {"Authorization": "Bearer not-a-real-jwt", "cf-connecting-ip": "9.9.9.9"}
+        assert get_ai_chat_key(req) == "ip:9.9.9.9"
+
+    def test_falls_back_to_ip_when_token_has_no_user_claim(self):
+        import jwt
+
+        from backend.utils.rate_limiter import get_ai_chat_key
+
+        token = jwt.encode({"foo": "bar"}, "unused-secret", algorithm="HS256")
+        req = MagicMock()
+        req.headers = {"Authorization": f"Bearer {token}", "cf-connecting-ip": "9.9.9.9"}
+        assert get_ai_chat_key(req) == "ip:9.9.9.9"
+
+    def test_unverified_extraction_does_not_require_correct_signature(self):
+        """A token signed with an unknown/wrong secret still yields its
+        claimed user_id -- correctness is enforced by get_current_user
+        downstream, not by this rate-limit key function."""
+        import jwt
+
+        from backend.utils.rate_limiter import _extract_unverified_user_id
+
+        token = jwt.encode({"user_id": "whatever"}, "not-the-real-jwt-secret", algorithm="HS256")
+        req = MagicMock()
+        req.headers = {"Authorization": f"Bearer {token}"}
+        assert _extract_unverified_user_id(req) == "whatever"
+
+    def test_extraction_returns_none_without_bearer_prefix(self):
+        from backend.utils.rate_limiter import _extract_unverified_user_id
+
+        req = MagicMock()
+        req.headers = {"Authorization": "Basic dXNlcjpwYXNz"}
+        assert _extract_unverified_user_id(req) is None
+
+
 class TestGetPhoneBasedKey:
     """Tests for the get_phone_based_key key function."""
 

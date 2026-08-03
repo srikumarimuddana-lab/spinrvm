@@ -526,6 +526,41 @@ jobs:
           print(f'OK — {len(data)} packages, no copyleft/proprietary licences detected.')
           "
 
+  # G7b — license-checker: same denylist strategy as G7 (pip-licenses), for the
+  # JS surfaces. ACTION_ITEMS.md E10: G7 already covered Python deps; this was
+  # the missing JS half.
+  license-check-js:
+    name: G7b · license-checker (JS deps)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    strategy:
+      # Same rationale as the G4b yarn-audit matrix above: one failing module
+      # must not cancel the others mid-run and mask their license state.
+      fail-fast: false
+      matrix:
+        module: [rider-app, driver-app, admin-dashboard, shared]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+      - name: Install deps
+        working-directory: ${{ matrix.module }}
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          elif [ -f package-lock.json ]; then npm ci
+          else echo "No lockfile in ${{ matrix.module }}" && exit 1
+          fi
+      - name: Print full license summary
+        working-directory: ${{ matrix.module }}
+        run: npx --yes license-checker --production --excludePrivatePackages --summary
+      - name: Block copyleft / proprietary licenses (production deps only —
+          "shipped surfaces" per ACTION_ITEMS.md E10, not devDependencies)
+        working-directory: ${{ matrix.module }}
+        run: |
+          npx --yes license-checker --production --excludePrivatePackages \
+            --failOn 'GPL;AGPL;LGPL;SSPL;Elastic;Commons-Clause;BUSL'
+
   # Summary job — required check for branch protection once gates are enforced
   summary:
     name: Security gates summary

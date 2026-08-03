@@ -64,12 +64,23 @@ import {
   onTokenRefresh,
   getAppCheckToken,
 } from '@shared/services/firebase';
-import { setAppCheckTokenProvider } from '@shared/api/client';
+import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
+import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 
 // Register App Check token retrieval at module load so early startup requests
 // (driver active-ride hydration and login OTP) wait for Firebase App Check
 // instead of racing ahead without X-Firebase-AppCheck.
 setAppCheckTokenProvider(getAppCheckToken);
+
+// Forced-upgrade gate (ACTION_ITEMS.md E3): tag every request with this
+// build's platform + native version so the backend can reject stale
+// binaries with 426. nativeApplicationVersion reflects the installed
+// binary (stable across OTA updates); expoConfig?.version is the
+// build-time fallback for environments where that's unset (e.g. web).
+setAppIdentity('driver', Constants.nativeApplicationVersion || Constants.expoConfig?.version || '0.0.0');
+
+const DRIVER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr-driver/id0000000000';
+const DRIVER_APP_STORE_ANDROID = 'https://play.google.com/store/apps/details?id=com.spinr.driver';
 
 // Notifee — rich notifications (heads-up + full-screen intent + Accept/Decline
 // action buttons). Lazy-required because the native module isn't linked in
@@ -290,6 +301,10 @@ function RootLayout() {
   // the shared vehicleTypeStore (also refreshes on foreground).
   useVehicleTypesSync();
   const [isOffline, setIsOffline] = useState(false);
+  const [forceUpdate, setForceUpdate] = useState<{ visible: boolean; minVersion?: string }>({ visible: false });
+  useEffect(() => {
+    onForceUpgrade((minVersion) => setForceUpdate({ visible: true, minVersion }));
+  }, []);
   // Hold the branded splash for a minimum duration so the logo + tagline are
   // actually seen — auth/location init can finish in <400ms, cutting off the
   // tagline before it animates in. The loading gate below waits on this too.
@@ -545,7 +560,7 @@ function RootLayout() {
       }}
     >
       <ThemeProvider>
-        <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
+        <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} forceUpdate={forceUpdate} />
       </ThemeProvider>
     </PersistQueryClientProvider>
   );
@@ -554,14 +569,21 @@ function RootLayout() {
 function DriverRootLayoutInner({
   isOffline,
   setIsOffline,
+  forceUpdate,
 }: {
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
+  forceUpdate: { visible: boolean; minVersion?: string };
 }) {
   const { isDark } = useTheme();
   usePushNotificationRouter();
   return (
     <ErrorBoundary>
+      <ForceUpdateOverlay
+        visible={forceUpdate.visible}
+        minVersion={forceUpdate.minVersion}
+        storeUrl={Platform.OS === 'ios' ? DRIVER_APP_STORE_IOS : DRIVER_APP_STORE_ANDROID}
+      />
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>

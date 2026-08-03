@@ -89,7 +89,7 @@ While a driver's SOS is active:
 
 ## Post-Incident (within 72 h)
 
-- [ ] Incident post-mortem filed: `reports/incidents/YYYY-MM-DD-sos.md`
+- [ ] Incident post-mortem filed (use `docs/templates/postmortem.md`): `reports/incidents/YYYY-MM-DD-sos.md`
 - [ ] Regulatory assessment: does SK-CPPA or E911 filing apply?
   - Serious harm or investigation opened → likely YES
   - File OPC breach notification only if PII was disclosed beyond legal

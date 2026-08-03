@@ -291,14 +291,9 @@ if their platform holds the data (check `docs/vendor-register.md`).
 
 ## 7. Post-mortem (within 5 business days)
 
-Format: `docs/audit/postmortem-YYYY-MM-DD-<slug>.md`
-
-Required sections:
-1. Timeline (UTC timestamps)
-2. Root cause (5-whys)
-3. What went well
-4. What went wrong
-5. Action items (owner + due date for each)
+Use the shared template: `docs/templates/postmortem.md` (timeline, impact,
+5-whys, action items with owner + due date for each). Save the completed
+copy to `docs/audit/postmortem-YYYY-MM-DD-<slug>.md`.
 
 Share with: IC, Tech Lead, Legal, on-call rotation. Store in `docs/audit/`.
 

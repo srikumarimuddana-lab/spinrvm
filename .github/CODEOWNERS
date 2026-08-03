@@ -1,0 +1,43 @@
+# CODEOWNERS — review routing for money/schema/security-sensitive paths.
+#
+# GitHub requires actual org members or teams here — the handles below are
+# placeholders (`@spinr-org/TBD-*`) until real GitHub usernames/teams are
+# assigned. Until then, GitHub will not be able to resolve these owners and
+# review-routing enforcement (via branch protection's "Require review from
+# Code Owners") will not actually block merges — this file alone is
+# necessary but not sufficient; branch protection must also enable that
+# setting once real owners are filled in. See ACTION_ITEMS.md E8.
+#
+# Rules are evaluated bottom-up: the last matching pattern wins, so more
+# specific paths are listed after more general ones.
+
+# Default — every PR needs at least one reviewer from core eng
+# TODO(E8): replace with the real GitHub team slug (e.g. @spinr-org/backend-eng)
+*                                       @spinr-org/TBD-core-eng
+
+# Money-adjacent backend surfaces
+backend/routes/payments*               @spinr-org/TBD-payments-reviewers
+backend/services/fare_service.py       @spinr-org/TBD-payments-reviewers
+backend/services/corporate_*           @spinr-org/TBD-payments-reviewers
+backend/routes/corporate_*             @spinr-org/TBD-payments-reviewers
+backend/routes/wallet*                 @spinr-org/TBD-payments-reviewers
+backend/utils/payment_retry.py         @spinr-org/TBD-payments-reviewers
+backend/utils/surge_engine.py          @spinr-org/TBD-payments-reviewers
+
+# Schema changes — every migration touches production data
+backend/migrations/                    @spinr-org/TBD-migration-reviewers
+
+# Auth / security-sensitive surfaces
+backend/routes/auth*                   @spinr-org/TBD-security-reviewers
+backend/core/config.py                 @spinr-org/TBD-security-reviewers
+backend/core/middleware.py             @spinr-org/TBD-security-reviewers
+backend/utils/crypto.py                @spinr-org/TBD-security-reviewers
+backend/utils/rate_limiter.py          @spinr-org/TBD-security-reviewers
+.github/workflows/security-gates.yml   @spinr-org/TBD-security-reviewers
+
+# Dispatch / ride state machine
+backend/services/dispatch_service.py   @spinr-org/TBD-dispatch-reviewers
+backend/routes/rides/                  @spinr-org/TBD-dispatch-reviewers
+
+# Safety / SOS
+backend/routes/safety*                 @spinr-org/TBD-safety-reviewers

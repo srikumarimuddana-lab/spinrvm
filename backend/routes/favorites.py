@@ -87,7 +87,7 @@ async def save_favorite_route(req: SaveFavoriteRequest, current_user: dict = Dep
         ("pickup", req.pickup_address, req.pickup_lat, req.pickup_lng),
         ("dropoff", req.dropoff_address, req.dropoff_lat, req.dropoff_lng),
     ):
-        ok, mismatch_reason = await verify_address_matches_coordinate(address, lat, lng)
+        ok, mismatch_reason, _place_id = await verify_address_matches_coordinate(address, lat, lng)
         if not ok:
             raise HTTPException(
                 status_code=400,

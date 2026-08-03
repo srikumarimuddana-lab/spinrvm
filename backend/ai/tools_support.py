@@ -39,12 +39,18 @@ ESCALATION_CATEGORIES = [
     "complaint",
     "payment_issue",
     "safety",
+    "cancel_ride",
     "other",
 ]
 
 # Deep-link targets the apps know how to open (see rider-app routes).
 _CATEGORY_LINKS = {
     "lost_item": "/lost-and-found",
+    # ACTION_ITEMS.md AI11: cancelling is self-serve (a button on the active
+    # ride screen) -- a rider asking to cancel doesn't need a human support
+    # ticket, just a deep link back to the screen that already has the
+    # cancel button.
+    "cancel_ride": "/ride-status",
 }
 _DEFAULT_LINK = "/support"
 
@@ -345,6 +351,9 @@ async def escalate_to_support(user: Dict[str, Any], reason: str, category: str) 
             "If anyone is in danger, call 911 now or use the SOS button in the app. "
             "For non-urgent safety concerns our support team will follow up."
         )
+    elif category == "cancel_ride":
+        # Self-serve, not a human handoff -- don't call it one.
+        result["message"] = "You can cancel from your ride screen — tap below to go there."
 
     settings = await get_app_settings()
     if settings.get("ai_escalation_creates_ticket"):

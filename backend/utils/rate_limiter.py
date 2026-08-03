@@ -14,6 +14,7 @@ import time
 from functools import wraps
 from typing import Callable, Dict
 
+import jwt
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from limits.aio.storage import MemoryStorage
@@ -104,6 +105,41 @@ def get_real_client_ip(request: Request) -> str:
     if real_ip:
         return real_ip.strip()
     return get_ipaddr(request)
+
+
+def _extract_unverified_user_id(request: Request) -> str | None:
+    """Best-effort user id from the bearer token, signature NOT verified.
+
+    Mirrors `core/middleware.py::_extract_user_id` (used there for log
+    correlation only) — safe for rate-limit *keying* because it never grants
+    authorization: the same request still has to pass the real,
+    signature-verified `get_current_user` dependency before any handler code
+    runs, so a forged/garbage token can only ever land in a throwaway bucket
+    for a request that then 401s, not impersonate another user's bucket.
+    """
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    try:
+        payload = jwt.decode(auth[len("Bearer ") :], options={"verify_signature": False})
+    except Exception:
+        return None
+    uid = payload.get("user_id") or payload.get("sub")
+    return str(uid) if uid is not None else None
+
+
+def get_ai_chat_key(request: Request) -> str:
+    """Key AI-chat rate limiting by user, not IP (ACTION_ITEMS.md AI1).
+
+    An IP-keyed limit is defeated for free by rotating source IPs (cheap via
+    any VPN/proxy pool), which removes the per-minute ceiling on LLM spend
+    for a single account. Falls back to IP only when no bearer token is
+    present (the request will 401 downstream regardless).
+    """
+    user_id = _extract_unverified_user_id(request)
+    if user_id:
+        return f"user:{user_id}"
+    return f"ip:{get_real_client_ip(request)}"
 
 
 # Default limiter — keyed on the authoritative client IP (CF-Connecting-IP when
@@ -350,8 +386,11 @@ admin_statement_email_limit = default_limiter.limit("20/hour")
 admin_statement_download_limit = default_limiter.limit("60/hour")
 
 # AI assistant chat — each message triggers LLM spend; per-user daily cap
-# (ai_daily_message_cap) is enforced separately in backend/ai/orchestrator.py
-ai_chat_limit = default_limiter.limit("10/minute")
+# (ai_daily_message_cap) is enforced separately in backend/ai/orchestrator.py.
+# Keyed by user (ACTION_ITEMS.md AI1), not IP — an IP-keyed limit is defeated
+# by rotating source IPs, multiplying one account's effective per-minute
+# budget by however many IPs it rotates through.
+ai_chat_limit = default_limiter.limit("10/minute", key_func=get_ai_chat_key)
 
 # In-ride messaging — generous but bounded to prevent SMS relay abuse
 ride_message_limit = default_limiter.limit("30/minute")

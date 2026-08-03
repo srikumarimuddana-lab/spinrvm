@@ -2541,9 +2541,30 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "faqs-apns-server" 
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
-- [ ] **Status:** open — found 2026-07-30 while adding migration 275. Migration
-  274 itself is clean (verified by simulating the runner's splitter); this is a
-  pre-existing defect in the runner affecting **34 already-merged migrations**.
+- [x] **Status:** done — `scripts/migrate.py` now has `_split_sql_statements`,
+  a lexical scanner (comment/`'...'`-string/`$tag$...$tag$`-dollar-quote
+  aware) replacing the naive `sql.split(";")`. `needs_autocommit` routing now
+  checks the comment-free split statements instead of raw text, so a file
+  whose only "CONCURRENTLY" is inside a comment correctly runs through the
+  normal transactional path instead of the no-transaction autocommit path.
+  Validated against all 44 CONCURRENTLY-mentioning migrations in the repo —
+  zero produce a non-SQL-looking fragment (was 34 broken before the fix); 14
+  of them are now correctly reclassified out of the autocommit path.
+  `_KNOWN_UNSPLITTABLE` in `test_migration_concurrently_splitting.py` is now
+  empty (kept as a frozenset, not deleted, so a future regression has
+  somewhere obvious to record a real unsplittable file). Two new direct
+  regression tests pin the original failure modes (mid-line semicolon inside
+  a comment; a `$$`-quoted function body) plus one pinning the
+  comment-only-CONCURRENTLY routing fix. `test_migrate_autocommit_chunks.py`
+  updated for `_apply_migration_autocommit`'s new signature (takes
+  pre-split `statements: list[str]` instead of raw `sql: str`, since the
+  split now happens once in `apply_migration` rather than being redone
+  inside the autocommit path). All 51 tests in both files pass. **Not yet
+  verified:** an actual fresh-database `python scripts/migrate.py` run
+  end-to-end against a real Postgres instance — this fix was validated by
+  running the real splitter against every migration file's text and by unit
+  tests with a mocked connection, not by applying the full migration set to
+  a live throwaway schema.
 - **Files:** `backend/scripts/migrate.py:195` (`_apply_migration_autocommit`),
   frozen list in `backend/tests/test_migration_concurrently_splitting.py`
   (`_KNOWN_UNSPLITTABLE`)
@@ -2864,15 +2885,35 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "faqs-apns-server" 
   favorites dedupe (`favorites.py`) to compare both lat AND lng of both
   pickup and dropoff, not latitude only.
 - **Explicitly deferred:**
-  - `place_id` storage + re-resolve-on-save — needs a new
-    `saved_addresses.place_id` migration column; the write-time verification
-    above is the actual safety net, so this is an enhancement on top, not
-    required to close the core gap. Left for a follow-up.
-  - `CreateRideRequest` cross-field validation in `schemas.py` — ride
-    creation is a live, state-machine-critical, money-adjacent surface;
-    changing what it accepts needs its own dedicated pass (dry run against
-    `mock_supabase_client`, feature-flag consideration) rather than bundling
-    into this PR per CLAUDE.md's pre-merge release gates.
+  - `place_id` storage — **done**: migration `284_saved_addresses_place_id.sql`
+    adds a nullable `saved_addresses.place_id` column;
+    `verify_address_matches_coordinate` (`utils/address_verification.py`)
+    now returns `(ok, reason, place_id)` — the `place_id` is already present
+    in the same Geocoding API response used for the mismatch check, so this
+    is a free capture, not a second API call. `POST /addresses`
+    (`routes/addresses.py`) stores it on the `SavedAddress` row;
+    `POST /favorites` (`routes/favorites.py`) unpacks and discards the third
+    value (favorites are a separate `favorite_routes` table with two
+    endpoints per row — storing pickup/dropoff `place_id` there wasn't part
+    of what this item named and would be its own follow-up, not folded in
+    here). **Re-resolve-on-save** (using the stored `place_id` to confirm a
+    saved address still points at the same real-world place on subsequent
+    use) is a separate, larger follow-up — this pass only captures and
+    stores the identifier, it doesn't yet do anything with it after save.
+    Updated `tests/test_address_verification.py` (3-tuple return, `place_id`
+    asserted in every branch) and
+    `tests/test_p3_addresses_favorites_safety_disputes.py` (2 new tests:
+    `place_id` persisted on success, `None` when verification fails open) —
+    **verification of these tests is deferred to the end-of-batch full-suite
+    run**, per this session's token-budget constraint; not run individually.
+  - `CreateRideRequest` cross-field validation in `schemas.py` — **still not
+    attempted**, deliberately. Ride creation is a live, state-machine-critical,
+    money-adjacent surface; changing what it accepts needs its own dedicated
+    pass (dry run against `mock_supabase_client`, feature-flag consideration)
+    per CLAUDE.md's pre-merge release gates — which itself conflicts with
+    this session's "no testing until the end of the batch" instruction, so
+    attempting it blind here would violate the item's own stated
+    prerequisite. Left open for a dedicated pass with its own dry run.
 - **Files:** `backend/routes/addresses.py`, `backend/routes/favorites.py`,
   `backend/utils/address_verification.py` (new),
   `backend/tests/test_address_verification.py` (new),
@@ -4047,12 +4088,29 @@ driver-persona-secrecy prompt rules, per-tool timeouts for the Maps fan-out
 tools, `/mcp` read-only enforcement + per-user daily cap, truncation-preserves-
 guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 
-- [ ] **AI1. `/ai/chat` rate limit is per-IP, not per-user** —
-  `backend/routes/ai.py:130` uses `ai_chat_limit` keyed on client IP
-  (`utils/rate_limiter.py:111-118`); the per-user daily cap fails OPEN on
-  Redis errors (`backend/ai/orchestrator.py:82-84`). One user on many IPs, or
-  a Redis blip, removes the LLM-cost ceiling (kill switch remains the hard
-  stop). Consider a user-keyed limiter + fail-closed above a generous floor.
+- [x] **AI1. `/ai/chat` rate limit is per-IP, not per-user** — done: the
+  IP-keying half is fixed. `ai_chat_limit` (`utils/rate_limiter.py`) now uses
+  a new `get_ai_chat_key`, which keys on the bearer token's `user_id`/`sub`
+  claim (signature not verified for keying purposes — the real,
+  signature-verified `get_current_user` dependency still gates the request
+  itself downstream, so a forged token can only land in a throwaway bucket
+  for a request that then 401s, never impersonate another user's bucket;
+  mirrors the existing unverified-extraction pattern already established in
+  `core/middleware.py::_extract_user_id` for log correlation) and falls back
+  to IP only when no bearer token is present. 12 new unit tests in
+  `tests/test_coverage_boost.py::TestGetAiChatKey` cover the user-id/sub
+  claim paths, the two-IPs-one-token-one-bucket property, and every
+  IP-fallback branch (no token, garbage token, no user claim). The
+  **daily-cap fail-open** half was deliberately left alone: it's an
+  existing, already-documented, cross-referenced design decision
+  (`ai/orchestrator.py::_over_daily_cap`'s own docstring: "Fails OPEN with a
+  loud log — the kill switch remains the hard stop when Redis is down"),
+  not an oversight — changing an accepted trade-off wasn't this fix's call
+  to make silently. **Not yet verified:** no live-Redis integration test
+  exercising the actual distributed counter across two rotated IPs with the
+  same token — the unit tests confirm the key function's own logic, not the
+  full rate-limit-storage round trip (that's the same level of verification
+  every other key-function in this file has, per existing test coverage).
 - [x] **AI2. Assistant output is persisted un-scrubbed** — only the user
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with
@@ -4080,22 +4138,96 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   before building the card, returning a structured `{"error": ...}` result
   on failure (same shape as the existing out-of-area refusal); the
   Confirm-time validator in `schemas.py` is unchanged (defense in depth).
-- [ ] **AI5. `find_place` offers out-of-service-area street addresses** —
-  the area filter is skipped for street-address-shaped queries
-  (`tools_booking.py:538-539`), so a rider can pick a location the booking
-  step later refuses. Filter (or visibly mark) out-of-area candidates for
-  street queries too.
-- [ ] **AI6. No handling for pasted Google Maps URLs / raw coordinates** —
-  bare `lat,lng` is scrubbed to `[COORDS]` before the model sees it
-  (`pii.py:33`) with no prompt rule for the token; short links carry no
-  coordinates and get text-searched as URL strings.
-- [ ] **AI7. Multilingual gap** — no language rule in prompts; Maps calls
-  hard-code `language: "en"`; FAQ keyword matching is English-only.
-- [ ] **AI8. Stale action cards never expire client-side** — every past
-  quote/suggestion/map-pin card stays tappable
-  (`rider-app/app/ai-assistant.tsx`); backend self-contained messages
-  mitigate, but a stale-yet-consistent quote re-books at a possibly different
-  price. Consider disabling cards older than the latest assistant turn.
+- [x] **AI5. `find_place` offers out-of-service-area street addresses** —
+  done: chose **visibly mark** over **filter** — a hard filter risked
+  silently returning zero results for a legitimate numbered address just
+  outside the boundary (unlike a named-place search, a street address
+  usually has no in-area fallback candidate to substitute), so the
+  candidate stays in the result but `find_place` now checks
+  `best.get("in_service_area")` for street-address-shaped queries and, when
+  false, sets `result["out_of_service_area"] = True` plus an explicit note
+  telling the model not to quote/book it and to tell the rider it's outside
+  coverage — same warning-note pattern already used right above it for the
+  imprecise-address case. 3 new tests in `tests/test_ai_tools_booking.py::TestFindPlace`
+  (out-of-area street address marked but not dropped, in-area street
+  address unflagged, named-place search keeps its pre-existing hard
+  filter unchanged). Full `test_ai_tools_booking.py` suite (97 tests)
+  passes.
+- [x] **AI6. No handling for pasted Google Maps URLs / raw coordinates** —
+  done, two independent fixes: (1) raw coordinates — did NOT extend
+  `keep_trip_pins`'s bracketed-pin exemption to bare/unbracketed
+  coordinates (that would redefine what `keep_trip_pins` means — currently
+  documented as app-generated pins specifically — a bigger privacy-tradeoff
+  decision than this item asked for); instead added a `GROUND RULES` line
+  in `ai/prompts.py` telling the model the literal `[COORDS]` token means
+  the rider pasted coordinates that were removed before it ever saw them,
+  and to ask for the address or offer `request_map_pin`. (2) Maps URLs —
+  new `_looks_like_a_url` regex guard in `tools_booking.py::find_place`
+  (checks for `http(s)://`, `goo.gl/`, `maps.app.goo.gl`, or
+  `google.<tld>/maps`) short-circuits with a clear note *before* any Maps
+  API call — defense-in-depth in case the model ignores the matching new
+  prompt rule (also added) telling it not to pass a pasted link to
+  `find_place`. 6 new tests in `tests/test_ai_tools_booking.py::TestFindPlace`
+  (4 URL shapes rejected with zero HTTP calls made, an ordinary query
+  unaffected). Full `test_ai_tools_booking.py`/`test_ai_orchestrator.py`
+  (127 tests) pass. Did not attempt URL-unshortening/parsing to actually
+  resolve a Maps link's destination — out of scope for "lightweight";
+  the fix makes the assistant ask the rider instead of silently mishandling
+  it, not resolve the link itself.
+- [x] **AI7. Multilingual gap** — done, scoped to the reply-language half
+  only: new `STYLE` rule in both `_RIDER_CORE` and `_DRIVER_CORE`
+  (`ai/prompts.py`) telling the model to mirror the rider/driver's own
+  language for every reply, not just the first one, and never switch on its
+  own. **Deliberately left unchanged:** the hardcoded `language: "en"` /
+  `"languageCode": "en"` params on the four Maps API call sites
+  (`tools_booking.py` geocode calls, `google_places_new.py`'s Places API
+  (New) requests) — those control what language Google returns *address
+  text* in (e.g. street/place names), not what language the assistant
+  replies in; Saskatchewan addresses/street names aren't meaningfully
+  "translated" the way conversational text is (same convention as Google
+  Maps itself, which shows local-language street names regardless of app
+  UI language), and re-plumbing a `language` parameter through 4 call sites
+  for uncertain benefit is a bigger, separate change than this item's
+  "lightweight" framing. FAQ keyword matching stays English-only too, per
+  the item's own framing — translating FAQ content is a data/content
+  problem, not a prompt fix. New `test_prompts_mirror_the_users_language`
+  in `tests/test_ai_tools_booking.py` pins both personas' new rule text.
+  Full `test_ai_tools_booking.py`/`test_ai_orchestrator.py` (128 tests)
+  pass. **Not verified:** no live LLM call was made to confirm the model
+  actually follows this instruction in practice (e.g. correctly detects
+  and sustains French across a multi-turn conversation) — this pins the
+  prompt text only, the same level of verification every other prompt-rule
+  fix in this backlog has (prompt content isn't executable, so there's no
+  unit-testable "does the model comply" assertion).
+- [x] **AI8. Stale action cards never expire client-side** — done: a card
+  is now "live" only while no USER message has been sent after it — the
+  moment the rider sends any new message, every earlier
+  `fare_quote`/`location_suggestions`/`map_picker` card becomes visibly
+  dimmed (opacity 0.45) and its `TouchableOpacity`(s) `disabled`, with an
+  italic "The conversation has moved on — ask again if you still need
+  this." note. New pure helper `rider-app/utils/staleAiCard.ts::lastUserMessageIndex`
+  (mirrors the existing `activeRideRoute.ts` pattern: small, focused,
+  independently testable) computes the boundary once per render via
+  `useMemo`; `renderMessage` compares each item's FlatList `index` against
+  it. **Deliberately excluded:** `support_action` (an older "Contact
+  support"/cancel-ride link is still a valid way to reach support — no
+  staleness risk in the same sense) and `booking_proposal` (the item's own
+  text names "quote/suggestion/map-pin" specifically, not the proposal
+  card; the real safety boundary for that one is server-side
+  re-validation at `POST /rides`, a separate, higher-risk change out of
+  scope here). Prop threading: `FareQuoteCard`/`LocationSuggestionsCard`
+  gained a `disabled?: boolean` prop each. **Verification actually
+  performed** (more than prior frontend fixes in this batch): ran the
+  project's own `tsc --noEmit` (0 new errors — the only 7 project-wide
+  errors are a pre-existing, unrelated `expo-router/react-navigation`
+  missing-module issue also affecting one existing test suite) and the
+  full `yarn jest` suite (434/434 individual tests pass; the one failing
+  *suite* fails to even load, same pre-existing missing-module issue, not
+  a regression) — plus a new dedicated `staleAiCard.test.ts` (4 cases:
+  empty conversation, no user message yet, single user message, several
+  turns with the boundary comparison itself pinned). **Not verified:** no
+  running dev server / simulator — the visual dimming and disabled-tap
+  behavior were reasoned through and type/logic-tested, not seen rendered.
 - [x] **AI9. Admin AI console quote-card tap still prose-only** — same
   defect class fixed for suggestions;
   `admin-dashboard/.../ai-console/page.tsx:125-131` drops `[lat,lng]` and
@@ -4108,13 +4240,66 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   unchanged); the admin console's quote-card `onClick` now calls the shared
   builder instead of its own prose-only template. See
   `docs/change-log/2026-08-01-ai9-admin-quote-card-coords.md`.
-- [ ] **AI10. No conversation-level concurrency lock server-side** — two
-  clients on one `conversation_id` interleave `append_message` writes and
-  race history snapshots (client is single-flight only).
-- [ ] **AI11. Cancel-ride escalation UX** — the assistant correctly refuses
-  to cancel rides, but there is no `cancel`/`ride_issue` escalation category
-  and no deep link to the ride screen — riders get a support ticket for a
-  self-serve action.
+- [x] **AI10. No conversation-level concurrency lock server-side** — done:
+  `orchestrator.py::run_chat_turn` is now a thin locking wrapper
+  (`ai:conv_lock:{conversation_id}`, `redis_set_nx`/`redis_delete`, 90s TTL
+  — a generous ceiling for a full multi-iteration tool-calling turn) around
+  the renamed original implementation, `_run_chat_turn` (both
+  `routes/ai.py` and `routes/admin/ai_console.py` still import the public
+  `run_chat_turn` name unchanged). A second turn on the same
+  `conversation_id` while the first is still in flight gets a clean
+  `conversation_busy` error frame instead of silently racing; a brand-new
+  conversation (`conversation_id is None`) has no shared id yet to race on,
+  so it skips the lock entirely — verified by
+  `test_new_conversation_skips_the_lock` asserting `redis_set_nx` is never
+  called on that path. New `TestConversationLock` class in
+  `tests/test_ai_orchestrator.py` (3 tests): a real interleaved-concurrency
+  test using a blocking fake adapter + `asyncio.Event` handshake (not just
+  a unit test of the lock function in isolation) confirms the second
+  concurrent call is rejected while the first completes normally; a
+  sequential-reuse test confirms the lock is released after completion, not
+  left stale; the skip-lock test above. Full existing
+  `test_ai_orchestrator.py`/`test_ai_pii.py`/`test_ai_admin_console.py`/
+  `test_ai_tools_booking.py` suites (196 tests) still pass unchanged. **Not
+  yet verified:** behavior against a real Redis instance under actual
+  network-level concurrency — the concurrency test exercises the in-process
+  fallback store (`REDIS_URL` unset in the test env, per this repo's
+  documented Redis-transparency convention), not the real `SET NX EX`
+  round-trip against Redis itself.
+- [x] **AI11. Cancel-ride escalation UX** — done: added one new
+  `escalate_to_support` category, `cancel_ride` (not a separate `ride_issue`
+  category too — the item's concretely-described gap was specifically
+  cancellation requests getting a generic ticket instead of a self-serve
+  deep link; a broader `ride_issue` category wasn't scoped by this item and
+  wasn't added to avoid inventing an undefined feature). Backend
+  (`ai/tools_support.py`): `cancel_ride` maps to `/ride-status` in
+  `_CATEGORY_LINKS` and gets its own response message ("You can cancel from
+  your ride screen — tap below to go there.") instead of the default
+  "handoff to human support" phrasing, which was actively misleading for a
+  self-serve action. `ai/prompts.py`'s rider-only cancel-refusal rule now
+  tells the model to use `category="cancel_ride"` for cancel requests
+  specifically. Frontend (`rider-app/app/ai-assistant.tsx`): the
+  `open_support` action card, on a `cancel_ride` category, now resolves the
+  actual ride-owning screen via the same `activeRideRouteFor(status)`
+  resolver the screen's own header back-button already uses (searching/
+  driver_assigned/driver_accepted → `/driver-arriving`, driver_arrived →
+  `/driver-arrived`, in_progress → `/ride-in-progress`), falling back to the
+  backend's static `/ride-status` link only if there's no live ride state to
+  resolve from (e.g. the ride already ended by the time the rider taps it) —
+  reusing the existing resolver instead of hardcoding a second, possibly-
+  inconsistent path. 6 new backend unit tests
+  (`tests/test_ai_tools_support.py::TestEscalation::test_cancel_ride_links_to_ride_status_not_a_ticket_message`
+  plus the existing suite unaffected); full
+  `test_ai_tools_support.py`/`test_ai_orchestrator.py`/`test_ai_pii.py`/
+  `test_ai_tools_booking.py`/`test_ai_admin_console.py` (232 tests) pass.
+  **Not verified:** the `rider-app/app/ai-assistant.tsx` frontend change has
+  no dedicated component test (none existed for this screen before this
+  change either) and was not visually tested in a running app/simulator —
+  reasoned through by reading the existing `activeRideRouteFor` +
+  `useRideStore` usage pattern already in the same file (the header
+  back-button handler), not executed. Flagging per this repo's own
+  "state what was NOT verified" convention, not silently claiming full
+  coverage.
 - [x] **AI12. Admin console endpoint has no rate limiter and a stale
   docstring** — `routes/admin/ai_console.py` claims turns count against the
   daily cap; the orchestrator deliberately exempts them, and the endpoint has
@@ -4142,11 +4327,28 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `precise=False` on the card and let the assistant quote immediately while
   offering the map pin as an optional refinement (the "quote + note" option),
   rather than gating the quote.
-- [ ] **AI13. No output-side leakage filter** — prompt rules (added
-  2026-07-28) are the only defense against the model printing tool names /
-  internal jargon; nothing greps the reply stream. A lightweight post-filter
-  for snake_case tool names in assistant text would make the secrecy rule
-  structural.
+- [x] **AI13. No output-side leakage filter** — done: new
+  `backend/ai/pii.py::filter_tool_leakage` regexes for snake_case-shaped
+  tokens (`\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b`) generally, not just the
+  current tool registry, so the backstop stays structural against a
+  hallucinated or future internal-identifier name too. Wired into
+  `orchestrator.py`'s existing `stored_text = scrub_pii(...)` line
+  (`stored_text = filter_tool_leakage(scrub_pii(...))`), the same call site
+  AI2's PII scrub already uses — **same scope decision as AI2**: this
+  filters the persisted/replayed copy (`ai_messages`, the FAQ
+  cross-user cache) only. The raw text has already streamed to the client
+  live by the time this runs (SSE token-by-token), matching the existing,
+  already-documented convention at that exact call site ("the raw text has
+  already streamed to the client this turn... only stored/replayed copies
+  change") — a true live-stream filter would need per-token buffering,
+  which is an architectural change this item's own "lightweight" framing
+  didn't ask for and wasn't attempted. 6 new unit tests in
+  `tests/test_ai_pii.py::TestFilterToolLeakage` (registered + hypothetical
+  future tool names, normal prose unaffected, multi-leak, idempotent, no
+  cross-contamination with `scrub_pii`'s own uppercase placeholder tokens)
+  plus 1 orchestrator-level regression test
+  (`test_assistant_text_has_tool_leakage_filtered_before_persistence`)
+  pinning the real call site the same way AI2's own regression test does.
 - [x] **AI15. `backend/ai/pii.py` had no card-number or government-ID/SIN
   scrubbing** — `scrub_pii()` covered phones, emails, GPS coordinates, and
   postal codes but had zero regex coverage for payment card numbers, and zero
@@ -4170,31 +4372,107 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `test_ai_pii.py` + `test_log_guard.py`, including 16 new tests). See
   `docs/change-log/2026-08-01-ai-pii-card-govid-coverage.md`.
 
-- [ ] **D1. PostGIS surge query** — `surge_engine.py` caps at 500 drivers with Python
-  point-in-polygon; move the count server-side when driver count approaches the cap.
+- [x] **D1. PostGIS surge query** — stale, already substantially done by
+  another session before this pass. `utils/surge_engine.py` already: (1)
+  raised the fetch cap 500 → 5000 and made truncation loud (metric +
+  warning) so a hit can never silently mis-price surge; (2) implemented
+  `_count_supply_spatial()` — the actual PostGIS `ST_Covers` + GIST-index
+  server-side count this item asked for (migration 170); (3) gated it
+  behind `SURGE_SPATIAL_COUNT` (env flag, off by default, fallback-safe on
+  any error) exactly per CLAUDE.md's "ship dark, verify in staging, then
+  flip on" convention for anything touching a live-tested, money-adjacent
+  path. **Deliberately not flipped on here**: turning the flag on is an
+  ops decision gated on an actual staging rehearsal this session cannot
+  perform (no staging environment — see C1/E1), not an engineering task
+  left undone. No code change needed; correcting the stale item.
 - [ ] **D2. Distributed tracing** — request-ID propagation exists (`X-Request-ID`);
   full OpenTelemetry only if multi-replica latency debugging becomes painful.
-- [ ] **D3. Driver destination mode** — biggest driver-retention feature gap vs industry.
-- [ ] **D4. Driver heatmap UI** — `utils/demand_forecast.py` exists server-side; surface
-  it in the driver app.
+- [x] **D3. Driver destination mode** — backend was already fully built
+  (`backend/routes/drivers/profile.py` L428-497: `POST/GET/DELETE
+  /drivers/destination`; `backend/services/dispatch_service.py` L151-209
+  already filters ride offers by `destination_mode`/`destination_lat`/
+  `destination_lng`, gated no-op when off). The only real gap was the
+  driver-app UI — added `driver-app/app/driver/destination-mode.tsx`, a
+  new settings screen (status card, address input, activate/update/clear
+  actions) reusing `addresses.tsx`'s geocode-on-save pattern (Places
+  autocomplete+details via the backend proxy, not direct Google calls) to
+  turn a free-text address into lat/lng before `POST /drivers/destination`.
+  Linked from Settings → Account. i18n strings added to en/fr/es (no
+  fallback-to-English exists in this app's `t()`, so all three needed
+  entries to avoid a raw key showing in fr/es UI). Not run against a
+  simulator/device and no `tsc`/`yarn jest` pass performed for this
+  change, per the standing no-test-suite instruction — deferred to the
+  end-of-batch verification pass.
+- [x] **D4. Driver heatmap UI** — stale, already done. Backend
+  `GET /drivers/demand-heatmap` (`backend/routes/drivers/profile.py` ~L235-260)
+  is gated on the `service_area.show_demand_heatmap` admin setting and returns
+  the heatmap cells. Driver-app already consumes it: `driver-app/app/driver/
+  (tabs)/index.tsx` renders a `react-native-maps` `Heatmap` component fed from
+  this endpoint. No code change needed; correcting the stale item.
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.
-- [ ] **D7. Admin analytics Redis cache** — 5-min cache on cancellation-breakdown
-  (`routes/admin/analytics.py:72`), drops dashboard DB load ~98%.
-- [ ] **D8. Payment-retry admin alert via WS broadcast** — replace per-admin push loop
-  (`utils/payment_retry.py:80`) with one `broadcast_to_admins`.
-- [ ] **D9. `compliance_export_events` has no purge job for its claimed 7-year
-  retention** — `backend/migrations/263_compliance_export_events.sql`'s table
-  comment states "7-year retention" but no background loop or scheduled job
-  enforces it; rows accumulate forever today. Long time horizon (first purge
-  wouldn't be due until 2033), so not urgent, but the claim in the migration
-  comment currently overstates what the system actually does — nothing
-  deletes a row past 7 years yet. Migration itself is append-only and merged
-  (can't be edited per `backend/migrations/CLAUDE.md`); the fix is a new
-  migration/cron adding a scheduled purge (mirror the pattern in
-  `utils/retention_purge.py`) before 2033, not a comment edit. Tracked here
-  as gap G8 from `reports/audits/2026-07-28-compliance-reporting-module-lifecycle-audit-v1.md`.
+- [x] **D7. Admin analytics Redis cache** — done: `GET /admin/analytics/cancellation-reasons`
+  now caches its response for 5 minutes (`_OVERVIEW_CACHE_TTL`, same TTL
+  constant `/overview` already used — reused rather than duplicated), exact
+  same `redis_get`/corrupt-cache-fallthrough/`redis_set`-with-fail-open
+  pattern as the existing `/overview` endpoint (F-50). Cache key includes
+  both `date_range` and `service_area_id` (`analytics:cancellation-reasons:{date_range}:{service_area_id or 'all'}`)
+  so two different service-area filters don't collide on one cached entry.
+  Updated the 3 existing tests in
+  `tests/test_admin_analytics_coverage.py::TestCancellationReasons` to
+  explicitly patch `redis_get`/`redis_set` (matching `TestAnalyticsOverview`'s
+  own established convention) — without this, the module-level in-memory
+  redis fallback (no `REDIS_URL` in the test env) would have let one test's
+  cached result leak into a later test with the same default-params cache
+  key and silently skip exercising its mocked RPC path, the same class of
+  test-pollution bug already tracked as A8. Added 4 new tests mirroring
+  `TestAnalyticsOverview`'s own cache-specific cases (cache hit skips the
+  RPC entirely, corrupt cache falls through, different `service_area_id`
+  values get different cache keys, a `redis_set` failure doesn't turn a
+  200 into a 500). **Verification deferred to the end-of-batch run.**
+- [x] **D8. Payment-retry admin alert via WS broadcast** — stale, already
+  done by another session before this pass. `utils/payment_retry.py::_alert_admins_payment_exhausted`
+  already calls `manager.broadcast_to_admins({...})` once for the real-time
+  in-dashboard WS alert — the exact fix this item asked for. The remaining
+  per-admin loop right below it is a **different, legitimately separate**
+  channel: native mobile push notifications (`send_push_notification`) to
+  reach admins who don't have the dashboard open, not a second redundant WS
+  mechanism. FCM/APNs push delivery is inherently per-device-token, so that
+  loop isn't the same kind of "one broadcast call replaces N per-admin
+  calls" optimization WS pub/sub allows — collapsing it further (e.g. an
+  FCM multicast batch call) would be a different, separate item, not what
+  this one's own text asked for. No code change needed.
+- [x] **D9. `compliance_export_events` has no purge job for its claimed 7-year
+  retention** — done: new migration
+  `285_retention_purge_compliance_export_events.sql`. Found the real blocker
+  while implementing: migration 263's own `compliance_export_events_no_mutate`
+  trigger blocks DELETE **unconditionally** (no session-flag bypass, unlike
+  `audit_logs`'s equivalent trigger) — so a purge job literally could not
+  have deleted a row even if one had been written, regardless of the
+  migration comment's "7-year retention" claim. Fixed by mirroring migration
+  56's exact `audit_logs` pattern: `_compliance_export_events_immutable()`
+  now gates DELETE behind a new session-local flag
+  (`spinr.compliance_export_events.allow_delete`) instead of blocking it
+  outright — UPDATE stays unconditionally blocked, unchanged. Forked
+  `purge_pii_retention()` verbatim from migration 228 (the current
+  authoritative definition, confirmed via `grep` across all migrations —
+  no later one replaces it) and added Step M: deletes
+  `compliance_export_events` rows older than 7 years, setting/clearing the
+  flag immediately around the DELETE (including on exception), exactly
+  mirroring Step G's `audit_logs` handling. `utils/retention_purge.py`
+  needed **no Python change** — it already logs whatever keys
+  `purge_pii_retention()` returns generically; verified via
+  `_split_sql_statements` (the B0 fix) that the new migration parses into 7
+  clean top-level statements with no CONCURRENTLY. No dedicated Python test
+  added: `tests/test_retention_purge.py`'s own docstring states this
+  function is "exercised via migration + integration tests" — the Python
+  suite only pins the generic RPC-response-passthrough wrapper, which is
+  unchanged by this migration, matching the existing convention for every
+  prior Step (A through L) added by migrations 56/117/141/143/216/228.
+  **Verification deferred to the end-of-batch run** — like every SQL-only
+  migration in this backlog, this needs an actual Postgres apply to fully
+  confirm, not just static parsing.
 - [x] **D10. `compliance_export_events` rollback command not re-verified
   against real staging** — `DROP TABLE IF EXISTS compliance_export_events;`
   (the migration's documented rollback) was verified by applying the
@@ -4227,11 +4505,24 @@ how much they de-risk a public launch._
   GPS pings, SLA gates from the CLAUDE.md table. **Execution still open** —
   blocked on E1 (no staging env). First run: seed bot accounts per
   `loadtest/README.md`, run the ramp scenario, record the breaking point.
-- [ ] **E3. Forced-upgrade gate for mobile apps** — no minimum-supported-version
-  check exists. Old app binaries in the wild will eventually hit removed/changed
-  APIs. Add `min_supported_version` to `app_settings`, a version header from the
-  apps, a 426-style backend response, and an "update required" screen in both apps.
-  Cheap now, impossible to retrofit onto clients that are already old.
+- [x] **E3. Forced-upgrade gate for mobile apps** — done. `app_settings` gained
+  `min_rider_app_version`/`min_driver_app_version` (empty = off, `schemas.py` +
+  `routes/admin/settings.py` semver-pattern-validated). New
+  `ForcedUpgradeMiddleware` (`core/middleware.py`) reads `X-App-Version`/
+  `X-App-Platform` and returns 426 `upgrade_required` when a client is below
+  the configured floor — soft-fails open on missing/unparseable headers or an
+  unset minimum, mounted unconditionally (no ENV branch needed). Shared API
+  client (`shared/api/client.ts`) gained `setAppIdentity()` (sends the two
+  headers on every call) and `onForceUpgrade()` (fires on 426, mirrors the
+  existing `setSignOutCallback` pattern). Both apps call `setAppIdentity()` at
+  module load with `Constants.nativeApplicationVersion` and mount a new shared
+  `ForceUpdateOverlay` (full-screen, non-dismissible) at their root, driven by
+  `onForceUpgrade()`. Store links reuse the placeholder App Store/Play Store
+  IDs already in `rider-app/app/become-driver.tsx`. Ships fully dark today —
+  zero effect until an admin sets a non-empty minimum. Not run against a
+  simulator/device, no `tsc`/`yarn jest`/pytest pass performed, per the
+  standing no-test-suite instruction — deferred to the end-of-batch
+  verification pass.
 - [ ] **E4. Synthetic monitoring + SLO alerting** — nothing external probes the
   platform; a total outage is currently discovered by users. Add an external
   monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and
@@ -4250,21 +4541,89 @@ how much they de-risk a public launch._
   (like the failover runbook) has never been exercised. Restore a Supabase PITR
   snapshot into a scratch project, verify row counts + a sample ride lifecycle,
   record actual RTO in the runbook. A backup is only real after a restore.
-- [ ] **E8. CODEOWNERS + review routing** — no `.github/CODEOWNERS`. Route
-  `backend/routes/payments*`/`services/fare*`/`migrations/` to designated
-  reviewers so money/schema changes can't merge on a drive-by approval.
-- [ ] **E9. Blameless postmortem template** — `data-breach.md` has one for
-  breaches; generalize to `docs/templates/postmortem.md` (timeline, impact,
-  5-whys, action items with owners) and link it from the incident runbooks.
-- [ ] **E10. License compliance scan** — dependency *vulnerability* audit exists;
-  add license checking (`pip-licenses` + `license-checker` in CI, fail on
-  GPL/AGPL in shipped surfaces). Matters for SOC 2 and any future diligence.
-- [ ] **E11. a11y checks in CI** — WCAG 2.1 AA is a stated regulatory mandate and
-  axe is already in admin-dashboard devDeps, but nothing runs it in CI. Wire
-  axe into the Playwright E2E suite for the customer-facing surfaces.
-- [ ] **E12. On-call & escalation policy doc** — PagerDuty is referenced by
-  alerts, but there is no rotation/escalation/severity-matrix document. One page:
-  who is paged, when P0 vs P1, response-time expectations (support SLA says <2h P1).
+- [ ] **E8. CODEOWNERS + review routing** — partially done. Added
+  `.github/CODEOWNERS` routing payments/corporate/wallet/surge, migrations,
+  auth/security-sensitive files, dispatch, and safety paths to distinct
+  owner groups, bottom-up-specific per GitHub's matching rules. **Still
+  blocked**: the owner handles are placeholders
+  (`@spinr-org/TBD-payments-reviewers` etc.) — this session has no real
+  GitHub org/team roster to assign, and GitHub CODEOWNERS entries must
+  resolve to actual org members/teams to have any effect. Also still open:
+  enabling "Require review from Code Owners" in branch protection, which
+  needs GitHub repo-admin access this session doesn't have. File the real
+  team slugs in once eng leadership assigns owners, then flip the branch
+  protection setting.
+- [x] **E9. Blameless postmortem template** — done: new
+  `docs/templates/postmortem.md` (mirrors `docs/templates/CHANGE_IMPACT_LOG.md`'s
+  style) — summary, timeline, impact, root cause via 5-whys, what went
+  well/wrong, action items table (owner + due date required per row),
+  lessons for the framework. Found while building it: the four existing
+  incident runbooks each specified a **different output path/timing** for
+  their own postmortems (`docs/audit/postmortem-YYYY-MM-DD-<slug>.md` @ 5
+  business days in `data-breach.md`; `reports/postmortems/YYYY-MM-DD-slug.md`
+  @ 72h in `incident-response.md`; `reports/incidents/YYYY-MM-DD-sos.md` @
+  72h in `sos-incident.md`; no explicit path in `security-incident.md`) —
+  deliberately did **not** unify these (an existing, possibly intentional
+  per-incident-class convention, not something this item asked to change);
+  the template's own "Where this gets saved" section documents all four
+  paths side by side instead. All four runbooks
+  (`docs/runbooks/data-breach.md` §7, `docs/incident-response.md`'s
+  Post-Mortem section, `docs/runbooks/security-incident.md` §9 checklist,
+  `docs/runbooks/sos-incident.md`'s Post-Incident checklist) now reference
+  the shared template for structure while keeping their own path/timing.
+  Docs-only change, no code/tests to run.
+- [x] **E10. License compliance scan** — done, and found half of this was
+  already stale: `pip-licenses` (Python deps) was **already wired into CI**
+  as `security-gates.yml`'s `G7 · pip-licenses (Python deps)` job (denylist
+  strategy: GPL/AGPL/SSPL/Elastic/Commons Clause/BUSL) — the item's own text
+  implied both halves were missing, only the JS half actually was. New
+  `G7b · license-checker (JS deps)` job added right after G7, mirroring the
+  existing `G4b · yarn audit (JS deps)` matrix job's exact structure
+  (`fail-fast: false` across `[rider-app, driver-app, admin-dashboard,
+  shared]` so one module's failure doesn't mask the others' unknown state —
+  same rationale, same historical incident class this repo already hit once
+  on G4b). Scoped to `--production --excludePrivatePackages` (shipped
+  surfaces only, per the item's own framing — not devDependencies), same
+  denylist family as G7 (`GPL;AGPL;LGPL;SSPL;Elastic;Commons-Clause;BUSL`).
+  **Verification deferred to the end-of-batch run** (this session's
+  token-budget constraint) — the new job's YAML syntax was reviewed by eye
+  against the G4b job it mirrors, but was not dry-run through `act` or an
+  actual GitHub Actions run, and the current dependency trees across the
+  four JS modules were not audited for a real copyleft/proprietary license
+  that would fail the new gate on first run. If it does fail on first run,
+  that's real signal the gate is working, not a bug in the job — resolve
+  per-package (swap, pin an alternate version, or get a documented CR
+  exception), don't loosen the denylist to make it pass.
+- [x] **E11. a11y checks in CI** — stale, already done by another session
+  before this pass. `admin-dashboard/e2e/crawl-audit.spec.ts` already runs
+  `@axe-core/playwright`'s `AxeBuilder` against every crawled route, with a
+  per-route baseline-ratchet in `e2e/a11y-baseline.json` (64 pre-existing
+  violations across 41 routes tracked as debt, but any route regressing
+  past its own baseline fails the E2E suite; a route with no baseline entry
+  defaults to 0 tolerance) — the code's own comment already cites this
+  exact item ("WCAG 2.1 AA a11y ratchet (ACTION_ITEMS.md E11)"). No code
+  change needed; correcting the stale checkbox.
+- [x] **E12. On-call & escalation policy doc** — done: new
+  `docs/runbooks/on-call.md`. Found while writing it: this repo already had
+  a substantial Severity Ladder + escalation flow + roles table inside
+  `docs/incident-response.md` — the genuinely missing piece was "who" (a
+  rotation roster) and a single page a newly-paged engineer can read
+  standalone, not a from-scratch severity matrix. Explicitly reconciles the
+  **two separate severity vocabularies already in this codebase** that the
+  item's own "P0 vs P1" phrasing conflates: engineering-incident SEV-1..4
+  (`docs/incident-response.md`) vs support-ticket P0..P3
+  (`CLAUDE.md`'s KPI table) — states plainly that a P1 support ticket does
+  not auto-page, only a SEV-1/SEV-2 does, plus a support→engineering
+  escalation path for the case where a ticket turns out to be a live
+  incident. Restates (does not redefine) the existing escalation ladder and
+  response-time targets from `docs/incident-response.md`/
+  `docs/runbooks/sos-incident.md`/`CLAUDE.md`, explicitly marked as
+  secondary to those sources so they can't silently drift apart. **The
+  rotation roster itself is left as an explicit fillable table (cadence,
+  handoff time, PagerDuty schedule link, escalation-policy name), not
+  invented** — no real names/schedule exist in this repo to draw from, and
+  fabricating them would be actively misleading in an ops document. Linked
+  from `docs/incident-response.md`'s Runbook Index. Docs-only, no code.
 
 ## Recently completed (do not redo)
 

@@ -63,7 +63,23 @@ async def get_cancellation_breakdown(
     service_area_id: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
 ):
-    """Aggregated cancellation reason breakdown by date range and optionally service area."""
+    """Aggregated cancellation reason breakdown by date range and optionally
+    service area. Cached 5 min (ACTION_ITEMS.md D7) — same pattern as
+    /overview (F-50): this endpoint's own RPC already does the Postgres-side
+    aggregation to avoid fetching thousands of rows per request, but the
+    dashboard polls it on every load, so a short cache still meaningfully
+    cuts DB load on top of that.
+    """
+    import json as _json
+
+    cache_key = f"analytics:cancellation-reasons:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
     start_date = _parse_date_range(date_range)
 
     # Reason / party / hour classification is done in Postgres
@@ -104,13 +120,18 @@ async def get_cancellation_breakdown(
     hourly_map = bd.get("hourly") or {}
     hourly = [{"hour": h, "count": int(hourly_map.get(str(h), 0) or 0)} for h in range(24)]
 
-    return {
+    result = {
         "total_cancellations": total,
         "date_range": date_range,
         "reasons": reasons,
         "by_party": by_party,
         "hourly_distribution": hourly,
     }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
 
 
 # ── Driver Acceptance Rates ──────────────────────────────────────────

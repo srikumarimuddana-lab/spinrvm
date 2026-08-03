@@ -37,6 +37,12 @@ def admin_client(test_client):
 
 
 class TestCancellationReasons:
+    # ACTION_ITEMS.md D7: this endpoint is now cached the same way /overview
+    # is (redis_get/redis_set around the RPC) — every test here explicitly
+    # patches both, same convention as TestAnalyticsOverview below, so a
+    # cached result from one test can't leak into another via the shared
+    # module-level in-memory redis fallback (no REDIS_URL in the test env).
+
     def test_happy_path_computes_pct(self, admin_client):
         bd = {
             "total": 10,
@@ -44,7 +50,11 @@ class TestCancellationReasons:
             "by_party": [{"party": "rider", "count": 5}, {"party": "system", "count": 5}],
             "hourly": {"3": 2},
         }
-        with patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[bd])):
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[bd])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
             resp = admin_client.get("/api/admin/analytics/cancellation-reasons", params={"date_range": "7d"})
         assert resp.status_code == 200
         data = resp.json()
@@ -54,15 +64,76 @@ class TestCancellationReasons:
         assert data["hourly_distribution"][3]["count"] == 2
 
     def test_zero_total_no_division_error(self, admin_client):
-        with patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[{}])):
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[{}])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
             resp = admin_client.get("/api/admin/analytics/cancellation-reasons")
         assert resp.status_code == 200
         assert resp.json()["total_cancellations"] == 0
 
     def test_rpc_error_returns_503(self, admin_client):
-        with patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=RuntimeError("boom"))):
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
             resp = admin_client.get("/api/admin/analytics/cancellation-reasons")
         assert resp.status_code == 503
+
+    def test_cache_hit_returns_cached_payload_without_rpc(self, admin_client):
+        import json
+
+        cached = json.dumps({"date_range": "30d", "total_cancellations": 999})
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=cached)),
+            patch(
+                "backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=AssertionError("should not be called"))
+            ),
+        ):
+            resp = admin_client.get("/api/admin/analytics/cancellation-reasons")
+        assert resp.status_code == 200
+        assert resp.json()["total_cancellations"] == 999
+
+    def test_corrupt_cache_falls_through_to_fresh_fetch(self, admin_client):
+        bd = {"total": 2, "reasons": [{"reason": "no_driver", "count": 2}]}
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value="{not json")),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[bd])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            resp = admin_client.get("/api/admin/analytics/cancellation-reasons")
+        assert resp.status_code == 200
+        assert resp.json()["total_cancellations"] == 2
+
+    def test_different_service_area_gets_its_own_cache_key(self, admin_client):
+        """A cached result for one service_area_id must not be served for a
+        different one — regression pin for the cache key including it."""
+        seen_keys = []
+
+        async def fake_get(key):
+            seen_keys.append(key)
+            return None
+
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(side_effect=fake_get)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[{}])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/cancellation-reasons", params={"service_area_id": "area-1"})
+            admin_client.get("/api/admin/analytics/cancellation-reasons", params={"service_area_id": "area-2"})
+        assert seen_keys[0] != seen_keys[1]
+
+    def test_redis_set_failure_does_not_break_response(self, admin_client):
+        """Redis being unavailable must not turn a successful fetch into a 500."""
+        bd = {"total": 1, "reasons": [{"reason": "no_driver", "count": 1}]}
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[bd])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock(side_effect=RuntimeError("redis down"))),
+        ):
+            resp = admin_client.get("/api/admin/analytics/cancellation-reasons")
+        assert resp.status_code == 200
 
 
 # ── driver-acceptance ─────────────────────────────────────────────────

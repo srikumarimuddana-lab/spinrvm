@@ -13,11 +13,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.address_verification import verify_address_matches_coordinate  # noqa: E402
 
 
-def _geocode_response(status="OK", location_type="ROOFTOP", partial_match=False, lat=52.1, lng=-106.0):
+def _geocode_response(
+    status="OK", location_type="ROOFTOP", partial_match=False, lat=52.1, lng=-106.0, place_id="ChIJ_fake_place_id"
+):
     return {
         "status": status,
         "results": [
             {
+                "place_id": place_id,
                 "partial_match": partial_match,
                 "geometry": {"location_type": location_type, "location": {"lat": lat, "lng": lng}},
             }
@@ -29,17 +32,19 @@ def _geocode_response(status="OK", location_type="ROOFTOP", partial_match=False,
 
 @pytest.mark.anyio
 async def test_empty_address_passes_open():
-    ok, reason = await verify_address_matches_coordinate("", 52.1, -106.0)
+    ok, reason, place_id = await verify_address_matches_coordinate("", 52.1, -106.0)
     assert ok is True
     assert reason is None
+    assert place_id is None
 
 
 @pytest.mark.anyio
 async def test_no_api_key_fails_open():
     with patch("utils.address_verification.get_app_settings", AsyncMock(return_value={})):
-        ok, reason = await verify_address_matches_coordinate("123 Main St", 52.1, -106.0)
+        ok, reason, place_id = await verify_address_matches_coordinate("123 Main St", 52.1, -106.0)
     assert ok is True
     assert reason is None
+    assert place_id is None
 
 
 @pytest.mark.anyio
@@ -51,9 +56,10 @@ async def test_budget_exhausted_fails_open():
         ),
         patch("utils.address_verification.check_budget", AsyncMock(return_value=(False, 1000, 1000))),
     ):
-        ok, reason = await verify_address_matches_coordinate("123 Main St", 52.1, -106.0)
+        ok, reason, place_id = await verify_address_matches_coordinate("123 Main St", 52.1, -106.0)
     assert ok is True
     assert reason is None
+    assert place_id is None
 
 
 def _mock_http_client(response_json):
@@ -80,9 +86,12 @@ async def test_precise_geocode_far_away_rejects():
         patch("utils.address_verification.record_call", AsyncMock()),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
-        ok, reason = await verify_address_matches_coordinate("456 Office Blvd", 52.2, -106.1)
+        ok, reason, place_id = await verify_address_matches_coordinate("456 Office Blvd", 52.2, -106.1)
     assert ok is False
     assert "geocodes" in reason
+    # A result WAS returned (just too far away to confirm a match) — place_id
+    # still comes back since it's discarded by the caller on a reject anyway.
+    assert place_id == "ChIJ_fake_place_id"
 
 
 @pytest.mark.anyio
@@ -97,13 +106,14 @@ async def test_precise_geocode_nearby_passes():
         patch("utils.address_verification.record_call", AsyncMock()),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
-        ok, reason = await verify_address_matches_coordinate("456 Office Blvd", 52.2, -106.1)
+        ok, reason, place_id = await verify_address_matches_coordinate("456 Office Blvd", 52.2, -106.1)
     assert ok is True
     assert reason is None
+    assert place_id == "ChIJ_fake_place_id"
 
 
 @pytest.mark.anyio
-async def test_approximate_geocode_fails_open():
+async def test_approximate_geocode_fails_open_but_still_returns_place_id():
     response_json = _geocode_response(location_type="APPROXIMATE", lat=45.5, lng=-73.6)
     with (
         patch(
@@ -114,13 +124,14 @@ async def test_approximate_geocode_fails_open():
         patch("utils.address_verification.record_call", AsyncMock()),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
-        ok, reason = await verify_address_matches_coordinate("Some Business Name", 52.2, -106.1)
+        ok, reason, place_id = await verify_address_matches_coordinate("Some Business Name", 52.2, -106.1)
     assert ok is True
     assert reason is None
+    assert place_id == "ChIJ_fake_place_id"
 
 
 @pytest.mark.anyio
-async def test_partial_match_fails_open():
+async def test_partial_match_fails_open_but_still_returns_place_id():
     response_json = _geocode_response(location_type="ROOFTOP", partial_match=True, lat=45.5, lng=-73.6)
     with (
         patch(
@@ -131,9 +142,10 @@ async def test_partial_match_fails_open():
         patch("utils.address_verification.record_call", AsyncMock()),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
-        ok, reason = await verify_address_matches_coordinate("Mistyped Address", 52.2, -106.1)
+        ok, reason, place_id = await verify_address_matches_coordinate("Mistyped Address", 52.2, -106.1)
     assert ok is True
     assert reason is None
+    assert place_id == "ChIJ_fake_place_id"
 
 
 @pytest.mark.anyio
@@ -146,9 +158,10 @@ async def test_geocode_call_failure_fails_open():
         patch("utils.address_verification.check_budget", AsyncMock(return_value=(True, 0, 1000))),
         patch("utils.address_verification.httpx.AsyncClient", side_effect=RuntimeError("network down")),
     ):
-        ok, reason = await verify_address_matches_coordinate("123 Main St", 52.1, -106.0)
+        ok, reason, place_id = await verify_address_matches_coordinate("123 Main St", 52.1, -106.0)
     assert ok is True
     assert reason is None
+    assert place_id is None
 
 
 @pytest.mark.anyio
@@ -163,6 +176,7 @@ async def test_zero_results_fails_open():
         patch("utils.address_verification.record_call", AsyncMock()),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
-        ok, reason = await verify_address_matches_coordinate("Nonexistent Place XYZ", 52.1, -106.0)
+        ok, reason, place_id = await verify_address_matches_coordinate("Nonexistent Place XYZ", 52.1, -106.0)
     assert ok is True
     assert reason is None
+    assert place_id is None

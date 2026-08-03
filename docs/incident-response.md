@@ -67,6 +67,7 @@ Post-mortem ≤ 72h (blameless)
 
 | Scenario | Runbook |
 |---|---|
+| Who gets paged, when, and rotation policy | `docs/runbooks/on-call.md` |
 | Supabase unavailable | `docs/runbooks/supabase-down.md` |
 | Redis unavailable | `docs/runbooks/redis-down.md` |
 | Stripe reconciliation delta | `docs/runbooks/stripe-reconciliation.md` |
@@ -146,16 +147,12 @@ Must be reviewed by `legal` before send.
 
 ## Post-Mortem (Blameless)
 
-Within 72 hours of resolution, publish `reports/postmortems/YYYY-MM-DD-slug.md`:
-
-- Summary (1 paragraph)
-- Timeline (UTC timestamps)
-- Impact (users affected, duration, financial cost)
-- Root cause (technical + contributing factors)
-- What went well
-- What did not go well
-- Action items (each = new `OPEN-ITEMS-TRACKER.md` row with owner + target date)
-- Lessons for framework per ground-rules.md rule 7 (incident → audit feedback)
+Within 72 hours of resolution, publish `reports/postmortems/YYYY-MM-DD-slug.md`
+using the shared template: `docs/templates/postmortem.md` (summary, timeline,
+impact, root cause via 5-whys, what went well/wrong, action items with owner
++ due date, lessons for the framework). Each action item = a new
+`OPEN-ITEMS-TRACKER.md` row per ground-rules.md rule 7 (incident → audit
+feedback).
 
 **Blameless:** focus on systems + process, not individual blame. Anyone should
 feel safe describing what they did.

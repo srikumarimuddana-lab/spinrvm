@@ -8,7 +8,7 @@ rider-AI cases (coordinates pasted from the app, postal codes in addresses).
 
 import pytest
 
-from backend.ai.pii import scrub_pii
+from backend.ai.pii import filter_tool_leakage, scrub_pii
 
 
 class TestPhoneNumbers:
@@ -246,3 +246,51 @@ class TestComposite:
         assert support.scrub_pii.__name__ == "scrub_pii"
         sample = "call 306-555-1234 or email jane@x.ca"
         assert support.scrub_pii(sample) == scrub_pii(sample)
+
+
+class TestFilterToolLeakage:
+    """ACTION_ITEMS.md AI13 -- structural backstop for the prompt-only
+    driver-persona-secrecy rule against printing tool names / internal
+    jargon in the persisted/replayed reply copy."""
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "find_place",
+            "get_fare_quote",
+            "propose_ride_booking",
+            "some_future_tool_name",  # not in today's registry -- still caught
+        ],
+    )
+    def test_snake_case_tool_names_redacted(self, tool_name):
+        text = f"Let me call {tool_name} to check that for you."
+        filtered = filter_tool_leakage(text)
+        assert tool_name not in filtered
+        assert "[internal]" in filtered
+
+    def test_normal_prose_is_unaffected(self):
+        text = "Your ride to 123 Main St will be $18.50, arriving in about 5 minutes."
+        assert filter_tool_leakage(text) == text
+
+    def test_single_word_is_not_matched(self):
+        # A single lowercase word has no underscore -- not tool-name-shaped.
+        text = "search for a nearby driver"
+        assert filter_tool_leakage(text) == text
+
+    def test_multiple_leaks_in_one_message_all_redacted(self):
+        text = "I ran find_place then get_fare_quote to build your quote."
+        filtered = filter_tool_leakage(text)
+        assert "find_place" not in filtered
+        assert "get_fare_quote" not in filtered
+        assert filtered.count("[internal]") == 2
+
+    def test_idempotent(self):
+        once = filter_tool_leakage("calling propose_ride_booking now")
+        assert filter_tool_leakage(once) == once
+
+    def test_does_not_interfere_with_pii_placeholders(self):
+        # scrub_pii's own placeholder tokens are uppercase, no underscore --
+        # confirm chaining the two scrubbers doesn't cross-contaminate.
+        text = scrub_pii("call 306-555-1234")
+        assert filter_tool_leakage(text) == text
+        assert "[PHONE]" in text

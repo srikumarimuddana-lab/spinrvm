@@ -87,6 +87,42 @@ class TestAddresses:
         assert r.status_code == 200
         assert r.json()["name"] == "Work"
 
+    def test_create_address_stores_place_id_from_verification(self, client):
+        # B9 enhancement: place_id captured during the write-time
+        # geocode-verify call is persisted on the saved address row.
+        db = _mock_db()
+        with (
+            patch("routes.addresses.db_supabase", db),
+            patch(
+                "routes.addresses.verify_address_matches_coordinate",
+                AsyncMock(return_value=(True, None, "ChIJ_real_place_id")),
+            ),
+        ):
+            r = client.post(
+                "/api/v1/addresses",
+                json={"name": "Work", "address": "456 Office Blvd", "lat": 52.2, "lng": -106.1, "icon": "work"},
+            )
+        assert r.status_code == 200
+        assert r.json()["place_id"] == "ChIJ_real_place_id"
+        inserted = db.insert_one.call_args.args[1]
+        assert inserted["place_id"] == "ChIJ_real_place_id"
+
+    def test_create_address_place_id_none_when_verification_fails_open(self, client):
+        db = _mock_db()
+        with (
+            patch("routes.addresses.db_supabase", db),
+            patch(
+                "routes.addresses.verify_address_matches_coordinate",
+                AsyncMock(return_value=(True, None, None)),
+            ),
+        ):
+            r = client.post(
+                "/api/v1/addresses",
+                json={"name": "Home", "address": "123 Main St", "lat": 52.1, "lng": -106.0, "icon": "home"},
+            )
+        assert r.status_code == 200
+        assert r.json()["place_id"] is None
+
     def test_delete_address_success(self, client):
         db = _mock_db(delete_one=AsyncMock(return_value=[{"id": "a1"}]))
         with patch("routes.addresses.db_supabase", db):
@@ -108,7 +144,9 @@ class TestAddresses:
             patch("routes.addresses.db_supabase", db),
             patch(
                 "routes.addresses.verify_address_matches_coordinate",
-                AsyncMock(return_value=(False, "'456 Office Blvd' geocodes 12.3 km from the supplied location")),
+                AsyncMock(
+                    return_value=(False, "'456 Office Blvd' geocodes 12.3 km from the supplied location", None)
+                ),
             ),
         ):
             r = client.post(
@@ -210,8 +248,8 @@ class TestFavorites:
 
         async def fake_verify(address, lat, lng):
             if address == SAVE_PAYLOAD["dropoff_address"]:
-                return False, f"'{address}' geocodes 8.0 km from the supplied location"
-            return True, None
+                return False, f"'{address}' geocodes 8.0 km from the supplied location", None
+            return True, None, None
 
         with (
             patch("routes.favorites.db", fdb),
@@ -239,7 +277,7 @@ class TestFavorites:
         fdb = _mock_fav_db(get_rows=AsyncMock(return_value=[FAV_ROW]))
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post("/api/v1/favorites", json=same_lat_different_lng)
         assert r.status_code == 200

@@ -133,6 +133,96 @@ _APP_CHECK_EXEMPT_PREFIXES = (
 )
 
 
+# ── Forced-upgrade gate (ACTION_ITEMS.md E3) ──────────────────────────
+# Old rider/driver binaries in the wild will eventually hit removed or
+# changed backend behaviour with no way to prompt the user to update. This
+# middleware compares the client-reported X-App-Version against an
+# admin-configured floor (app_settings.min_rider_app_version /
+# min_driver_app_version) and returns 426 Upgrade Required when the client
+# is below it.
+#
+# Deliberately soft-fails open: a missing/unparseable header, an unknown
+# X-App-Platform, or an unset (empty-string) minimum all pass the request
+# through unmodified. This is what makes the feature safe to ship dark —
+# today's binaries don't send the header yet, so enforcement has zero
+# effect until (a) both apps are updated to send it and (b) an admin
+# explicitly sets a non-empty minimum.
+_FORCED_UPGRADE_PATH_PREFIX = "/api/v1/"
+# Pre-auth / bootstrap endpoints a genuinely-too-old client still needs to
+# reach in order to *learn* it needs to update (fetch config, see the
+# update-required copy) rather than being locked out before it can render
+# anything.
+_FORCED_UPGRADE_EXEMPT_PREFIXES = (
+    "/api/v1/settings",
+    "/api/v1/auth/send-otp",
+    "/api/v1/auth/verify-otp",
+)
+
+
+def _parse_semver(value: str) -> tuple | None:
+    parts = value.strip().split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError:
+        return None
+
+
+class ForcedUpgradeMiddleware(BaseHTTPMiddleware):
+    """Reject requests from app builds older than the configured minimum."""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if not path.startswith(_FORCED_UPGRADE_PATH_PREFIX):
+            return await call_next(request)
+        if any(path.startswith(p) for p in _FORCED_UPGRADE_EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        platform = request.headers.get("X-App-Platform")
+        client_version_raw = request.headers.get("X-App-Version")
+        if platform not in ("rider", "driver") or not client_version_raw:
+            # Old binaries that don't send these headers yet — pass through.
+            return await call_next(request)
+
+        client_version = _parse_semver(client_version_raw)
+        if client_version is None:
+            return await call_next(request)
+
+        try:
+            from settings_loader import get_app_settings  # type: ignore
+
+            app_settings = await get_app_settings()
+        except Exception as exc:
+            # Settings lookup failing must never itself lock users out.
+            logger.warning("ForcedUpgrade: settings lookup failed, passing through: {}", exc)
+            return await call_next(request)
+
+        min_key = "min_rider_app_version" if platform == "rider" else "min_driver_app_version"
+        min_version_raw = app_settings.get(min_key, "") or ""
+        min_version = _parse_semver(min_version_raw)
+        if min_version is None:
+            return await call_next(request)
+
+        if client_version < min_version:
+            logger.info(
+                "ForcedUpgrade: blocking {} v{} (min v{}) on {}",
+                platform,
+                client_version_raw,
+                min_version_raw,
+                path,
+            )
+            return JSONResponse(
+                status_code=426,
+                content={
+                    "detail": "upgrade_required",
+                    "min_version": min_version_raw,
+                },
+            )
+
+        return await call_next(request)
+
+
 class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
     """Enforce Firebase App Check on every API request.
 
@@ -626,6 +716,8 @@ def init_middleware(app):
             "X-CSRF-Token",
             "X-Request-ID",
             "X-Deadline-Ms",
+            "X-App-Version",
+            "X-App-Platform",
         ],
     )
 
@@ -645,6 +737,11 @@ def init_middleware(app):
     # above FirebaseAppCheckMiddleware for the manual Firebase Console
     # steps required before shipping to production.
     app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=is_production)
+
+    # Forced-upgrade gate — ships dark (see ForcedUpgradeMiddleware docstring);
+    # no ENV branch needed, it self-disables whenever the admin-configured
+    # minimum is unset.
+    app.add_middleware(ForcedUpgradeMiddleware)
 
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
     async def cors_exception_handler(request: Request, exc: Exception):

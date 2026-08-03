@@ -26,6 +26,7 @@ import argparse
 import glob
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -160,6 +161,84 @@ def get_applied_versions(conn) -> set:
         return set()
 
 
+# Matches a dollar-quote tag opener: `$$` or `$tag$` (tag must start with a
+# letter/underscore, so positional parameters like `$1` never match).
+_DOLLAR_TAG_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a SQL script into individual, comment-free, executable statements.
+
+    A lexical scan (not a naive `str.split(";")`) tracks state so top-level
+    semicolons are the only split points — ones inside `--` line comments,
+    `/* */` block comments, `'...'` string literals (with `''` escaping), and
+    `$tag$...$tag$` dollar-quoted bodies (PL/pgSQL function bodies) are never
+    treated as statement boundaries. Comment text is dropped from the output
+    entirely, so the result is directly executable and safe to scan for
+    keywords like CONCURRENTLY without re-parsing comments out again.
+    """
+    statements: list[str] = []
+    buf: list[str] = []
+    i, n = 0, len(sql)
+    state = "normal"  # normal | string | dollar
+    dollar_tag = None
+
+    while i < n:
+        ch = sql[i]
+        if state == "normal":
+            if sql[i : i + 2] == "--":
+                j = sql.find("\n", i)
+                i = n if j == -1 else j + 1
+                continue
+            if sql[i : i + 2] == "/*":
+                j = sql.find("*/", i + 2)
+                i = n if j == -1 else j + 2
+                continue
+            if ch == "'":
+                buf.append(ch)
+                state = "string"
+                i += 1
+                continue
+            m = _DOLLAR_TAG_RE.match(sql, i)
+            if m:
+                dollar_tag = m.group(0)
+                buf.append(dollar_tag)
+                state = "dollar"
+                i += len(dollar_tag)
+                continue
+            if ch == ";":
+                statements.append("".join(buf))
+                buf = []
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+        elif state == "string":
+            if sql[i : i + 2] == "''":
+                buf.append("''")
+                i += 2
+                continue
+            buf.append(ch)
+            if ch == "'":
+                state = "normal"
+            i += 1
+        else:  # state == "dollar"
+            if sql[i : i + len(dollar_tag)] == dollar_tag:
+                buf.append(dollar_tag)
+                i += len(dollar_tag)
+                state = "normal"
+                dollar_tag = None
+                continue
+            buf.append(ch)
+            i += 1
+
+    tail = "".join(buf).strip()
+    if tail:
+        statements.append(tail)
+
+    return [s.strip() for s in statements if s.strip()]
+
+
 def apply_migration(conn, version: str, sql: str, dry_run: bool) -> bool:
     """Execute a single migration. Returns True on success.
 
@@ -172,10 +251,16 @@ def apply_migration(conn, version: str, sql: str, dry_run: bool) -> bool:
         logger.info(f"  [DRY-RUN] Would apply: {version}")
         return True
 
-    needs_autocommit = "CONCURRENTLY" in sql.upper()
+    statements = _split_sql_statements(sql)
+    # Detect CONCURRENTLY from the comment-free, split statements rather than
+    # raw text — a file whose only "CONCURRENTLY" occurrence is inside a
+    # comment (e.g. a rollback note) must not be routed into the no-transaction
+    # autocommit path, since that path can't wrap it in a single implicit
+    # transaction with its sibling statements.
+    needs_autocommit = any("CONCURRENTLY" in stmt.upper() for stmt in statements)
 
     if needs_autocommit:
-        return _apply_migration_autocommit(conn, version, sql)
+        return _apply_migration_autocommit(conn, version, statements)
 
     try:
         with conn.cursor() as cur:
@@ -192,33 +277,20 @@ def apply_migration(conn, version: str, sql: str, dry_run: bool) -> bool:
         return False
 
 
-def _apply_migration_autocommit(conn, version: str, sql: str) -> bool:
+def _apply_migration_autocommit(conn, version: str, statements: list[str]) -> bool:
     """Run a migration that contains CONCURRENTLY statements.
 
     psycopg2 requires autocommit=True for any statement that cannot run inside
     a transaction block (CREATE/DROP INDEX CONCURRENTLY, VACUUM, CLUSTER, etc.).
-    We execute each semicolon-delimited statement individually so that the
-    schema_migrations INSERT can follow without being inside the same implicit
-    transaction that CONCURRENTLY would reject.
+    We execute each already-split, comment-free statement individually so that
+    the schema_migrations INSERT can follow without being inside the same
+    implicit transaction that CONCURRENTLY would reject.
     """
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
-            # Split on semicolons, then strip leading `--` comment lines from
-            # each chunk BEFORE deciding whether to skip it. The previous
-            # `stmt.startswith("--")` check threw away any chunk whose first
-            # line was a comment — which is every migration that opens with
-            # the conventional header/rollback comment block — silently
-            # skipping the CREATE INDEX CONCURRENTLY it was written to run.
-            statements = [s.strip() for s in sql.split(";") if s.strip()]
             for stmt in statements:
-                lines = stmt.splitlines()
-                while lines and (not lines[0].strip() or lines[0].strip().startswith("--")):
-                    lines.pop(0)
-                executable = "\n".join(lines).strip()
-                if not executable:
-                    continue
-                cur.execute(executable)
+                cur.execute(stmt)
             cur.execute(
                 "INSERT INTO schema_migrations (version) VALUES (%s) ON CONFLICT (version) DO NOTHING;", (version,)
             )

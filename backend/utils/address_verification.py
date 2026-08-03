@@ -57,31 +57,39 @@ MISMATCH_KM = 1.0
 _PRECISE_LOCATION_TYPES = frozenset({"ROOFTOP", "RANGE_INTERPOLATED"})
 
 
-async def verify_address_matches_coordinate(address: str, lat: float, lng: float) -> tuple[bool, Optional[str]]:
+async def verify_address_matches_coordinate(
+    address: str, lat: float, lng: float
+) -> tuple[bool, Optional[str], Optional[str]]:
     """Best-effort check that ``address`` and ``(lat, lng)`` describe the
-    same place. Returns ``(ok, reason)`` — ``ok`` is False only when a
-    precise geocode confidently disagrees with the supplied coordinate;
-    every ambiguous or unavailable case fails open (``ok=True``).
+    same place. Returns ``(ok, reason, place_id)`` — ``ok`` is False only
+    when a precise geocode confidently disagrees with the supplied
+    coordinate; every ambiguous or unavailable case fails open
+    (``ok=True``). ``place_id`` is the resolved Google Places place_id
+    whenever a geocode result was actually returned (B9 enhancement —
+    already fetched as part of this same call, free to capture for the
+    caller to persist alongside a saved address); ``None`` when no result
+    was returned at all (no API key, budget exhausted, call failed, no
+    match).
     """
     if not address or not address.strip():
-        return True, None
+        return True, None, None
 
     try:
         settings = await get_app_settings()
         api_key = (settings or {}).get("google_maps_api_key") or ""
     except Exception as exc:
         logger.warning("address_verification: settings lookup failed, failing open: %s", exc)
-        return True, None
+        return True, None, None
     if not api_key:
-        return True, None
+        return True, None, None
 
     try:
         within_budget, _spent, _budget = await check_budget()
     except Exception as exc:
         logger.warning("address_verification: budget check failed, failing open: %s", exc)
-        return True, None
+        return True, None, None
     if not within_budget:
-        return True, None
+        return True, None, None
 
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
@@ -93,24 +101,25 @@ async def verify_address_matches_coordinate(address: str, lat: float, lng: float
         await record_call("geocode")
     except Exception as exc:
         logger.warning("address_verification: geocode call failed, failing open: %s", exc)
-        return True, None
+        return True, None, None
 
     if data.get("status") != "OK" or not data.get("results"):
-        return True, None
+        return True, None, None
 
     result = data["results"][0]
+    place_id = result.get("place_id")
     if result.get("partial_match"):
-        return True, None
+        return True, None, place_id
     geometry = result.get("geometry") or {}
     if geometry.get("location_type") not in _PRECISE_LOCATION_TYPES:
-        return True, None
+        return True, None, place_id
 
     loc = geometry.get("location") or {}
     geo_lat, geo_lng = loc.get("lat"), loc.get("lng")
     if geo_lat is None or geo_lng is None:
-        return True, None
+        return True, None, place_id
 
     distance_km = calculate_distance(lat, lng, geo_lat, geo_lng)
     if distance_km > MISMATCH_KM:
-        return False, f"'{address}' geocodes {distance_km:.1f} km from the supplied location"
-    return True, None
+        return False, f"'{address}' geocodes {distance_km:.1f} km from the supplied location", place_id
+    return True, None, place_id

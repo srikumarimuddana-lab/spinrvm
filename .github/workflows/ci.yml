@@ -614,12 +614,34 @@ jobs:
 
       - name: Scan build output for accidentally bundled secrets ([17-5])
         working-directory: admin-dashboard
+        # Allowlists live in admin-dashboard/.gitleaks.toml — every entry is a
+        # value Next.js generates at build time or third-party library source.
+        # Read the comments there before adding to it.
+        #
+        # On failure, print the redacted findings. Without this the log said only
+        # "leaks found: 13", which is unactionable: you cannot tell a real leak
+        # from a build artefact, so the gate gets ignored or blanket-disabled.
         run: |
           GITLEAKS_VERSION=8.27.2
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | tar -xz gitleaks
-          ./gitleaks detect --source .next --no-git --redact --exit-code 1
-          rm gitleaks
+          set +e
+          ./gitleaks detect --source .next --no-git --redact \
+            --config .gitleaks.toml \
+            --report-format json --report-path gitleaks-report.json \
+            --exit-code 1
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::gitleaks found secrets in the admin build output."
+            python3 -c "
+import json
+for f in json.load(open('gitleaks-report.json')):
+    print(f\"  {f['RuleID']:24} {f['File']}:{f['StartLine']}  {f['Match'][:100]}\")
+"
+          fi
+          rm -f gitleaks gitleaks-report.json
+          exit $RC
 
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v42
@@ -914,26 +936,51 @@ jobs:
         # Verifies the auth middleware is wired: unauthenticated access to a
         # protected route must return 401, not 500 (misconfigured JWT secret
         # or missing middleware would return 500).
+        #
+        # GET /api/v1/rides/active — not bare /api/v1/rides, which is POST-only
+        # (booking). FastAPI answers a method mismatch with 405 from the routing
+        # layer *before* dependencies run, so probing it tested nothing about
+        # auth. 404/405 are called out separately below: they mean this probe's
+        # path drifted from the router, not that auth broke.
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            "${{ steps.resolve.outputs.url }}/api/v1/rides")
-          echo "GET /api/v1/rides → HTTP $STATUS"
-          [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ] || {
-            echo "FAIL: expected 401/403, got $STATUS — auth middleware may be misconfigured"
-            exit 1
-          }
+            "${{ steps.resolve.outputs.url }}/api/v1/rides/active")
+          echo "GET /api/v1/rides/active → HTTP $STATUS"
+          case "$STATUS" in
+            401|403) ;;
+            404|405)
+              echo "FAIL: got $STATUS — the probe path no longer matches a protected GET route."
+              echo "      Auth was NOT exercised. Re-point this probe, don't relax the assertion."
+              exit 1 ;;
+            *)
+              echo "FAIL: expected 401/403, got $STATUS — auth middleware may be misconfigured"
+              exit 1 ;;
+          esac
 
       - name: Fare service — confirm 401 not 500 on fare estimate
         # Verifies the fare service is mounted and responding (not crashed):
         # unauthenticated request must return 401, not 500 or 404.
+        #
+        # POST /api/v1/rides/estimate — the real fare-estimate route. The old
+        # probe used GET /api/v1/fares/estimate, which has never existed
+        # (fares.py exposes GET /fares and GET /vehicle-types); it only stayed
+        # green because the step above it failed first and skipped this one.
+        # 422 is accepted because the empty body is invalid, but auth resolves
+        # first so 401 is the expected answer.
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            "${{ steps.resolve.outputs.url }}/api/v1/fares/estimate")
-          echo "GET /api/v1/fares/estimate → HTTP $STATUS"
-          [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ] || [ "$STATUS" = "422" ] || {
-            echo "FAIL: expected 401/403/422, got $STATUS — fare service may be down or unregistered"
-            exit 1
-          }
+            -X POST -H 'Content-Type: application/json' -d '{}' \
+            "${{ steps.resolve.outputs.url }}/api/v1/rides/estimate")
+          echo "POST /api/v1/rides/estimate → HTTP $STATUS"
+          case "$STATUS" in
+            401|403|422) ;;
+            404|405)
+              echo "FAIL: got $STATUS — the fare-estimate route is unregistered or the path drifted."
+              exit 1 ;;
+            *)
+              echo "FAIL: expected 401/403/422, got $STATUS — fare service may be down"
+              exit 1 ;;
+          esac
 
   # Notify on failure
   notify-failure:

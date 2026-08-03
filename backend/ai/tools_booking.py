@@ -105,6 +105,17 @@ def _money(v) -> Decimal:
     return Decimal(str(v)).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
+# ACTION_ITEMS.md AI6: a pasted Google Maps link carries no usable place text
+# — geocoding/text-searching the URL string itself wastes a paid Maps API
+# call and never resolves. The prompt tells the model not to pass one, but
+# this backstops that in case it does anyway.
+_URL_LIKE_RE = re.compile(r"https?://|\bgoo\.gl/|\bmaps\.app\.goo\.gl\b|\bgoogle\.[a-z.]+/maps\b", re.IGNORECASE)
+
+
+def _looks_like_a_url(query: str) -> bool:
+    return bool(_URL_LIKE_RE.search(query))
+
+
 def _looks_like_street_address(query: str) -> bool:
     q = query.lower()
     return any(ch.isdigit() for ch in q) and any(
@@ -651,6 +662,16 @@ async def find_place(
     api_key, error = await _places_available()
     if error:
         return error
+
+    if _looks_like_a_url(query):
+        return {
+            "candidates": [],
+            "note": (
+                "That looks like a Maps link, not a place name or address — it cannot be searched "
+                "directly. Ask the rider for the address or place name, or call request_map_pin so "
+                "they can drop a pin instead."
+            ),
+        }
 
     # No explicit bias from the model → centre the search on the rider's
     # best-known location so "superstore" means THEIR superstore, not one

@@ -3260,10 +3260,27 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   address unflagged, named-place search keeps its pre-existing hard
   filter unchanged). Full `test_ai_tools_booking.py` suite (97 tests)
   passes.
-- [ ] **AI6. No handling for pasted Google Maps URLs / raw coordinates** —
-  bare `lat,lng` is scrubbed to `[COORDS]` before the model sees it
-  (`pii.py:33`) with no prompt rule for the token; short links carry no
-  coordinates and get text-searched as URL strings.
+- [x] **AI6. No handling for pasted Google Maps URLs / raw coordinates** —
+  done, two independent fixes: (1) raw coordinates — did NOT extend
+  `keep_trip_pins`'s bracketed-pin exemption to bare/unbracketed
+  coordinates (that would redefine what `keep_trip_pins` means — currently
+  documented as app-generated pins specifically — a bigger privacy-tradeoff
+  decision than this item asked for); instead added a `GROUND RULES` line
+  in `ai/prompts.py` telling the model the literal `[COORDS]` token means
+  the rider pasted coordinates that were removed before it ever saw them,
+  and to ask for the address or offer `request_map_pin`. (2) Maps URLs —
+  new `_looks_like_a_url` regex guard in `tools_booking.py::find_place`
+  (checks for `http(s)://`, `goo.gl/`, `maps.app.goo.gl`, or
+  `google.<tld>/maps`) short-circuits with a clear note *before* any Maps
+  API call — defense-in-depth in case the model ignores the matching new
+  prompt rule (also added) telling it not to pass a pasted link to
+  `find_place`. 6 new tests in `tests/test_ai_tools_booking.py::TestFindPlace`
+  (4 URL shapes rejected with zero HTTP calls made, an ordinary query
+  unaffected). Full `test_ai_tools_booking.py`/`test_ai_orchestrator.py`
+  (127 tests) pass. Did not attempt URL-unshortening/parsing to actually
+  resolve a Maps link's destination — out of scope for "lightweight";
+  the fix makes the assistant ask the rider instead of silently mishandling
+  it, not resolve the link itself.
 - [ ] **AI7. Multilingual gap** — no language rule in prompts; Maps calls
   hard-code `language: "en"`; FAQ keyword matching is English-only.
 - [ ] **AI8. Stale action cards never expire client-side** — every past

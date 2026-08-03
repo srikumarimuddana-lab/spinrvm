@@ -478,6 +478,51 @@ class TestFindPlace:
         assert "out_of_service_area" not in result
 
     @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "https://maps.app.goo.gl/abc123",
+            "https://goo.gl/maps/xyz789",
+            "https://www.google.com/maps/place/somewhere",
+            "check this out https://maps.app.goo.gl/abc123 thanks",
+        ],
+    )
+    async def test_maps_url_is_rejected_without_an_api_call(self, query):
+        # ACTION_ITEMS.md AI6: a pasted Maps link has no usable place text —
+        # must not burn a paid Maps API call geocoding/text-searching it.
+        client = MagicMock()
+        client.get = AsyncMock()
+        client.post = AsyncMock()
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            patch("backend.ai.tools_booking.httpx.AsyncClient", return_value=ctx),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": query}, user=RIDER)
+        assert ok
+        assert result["candidates"] == []
+        assert "maps link" in result["note"].lower()
+        client.get.assert_not_awaited()
+        client.post.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_ordinary_query_is_not_treated_as_a_url(self):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(PLACES_OK),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "walmart"}, user=RIDER)
+        assert ok
+        assert result["candidates"]
+
+    @pytest.mark.anyio
     async def test_out_of_area_named_place_is_still_filtered_out(self):
         # A non-street query keeps the pre-existing hard filter -- AI5 only
         # changes behavior for street-address-shaped queries.

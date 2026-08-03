@@ -3528,8 +3528,18 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   RPC entirely, corrupt cache falls through, different `service_area_id`
   values get different cache keys, a `redis_set` failure doesn't turn a
   200 into a 500). **Verification deferred to the end-of-batch run.**
-- [ ] **D8. Payment-retry admin alert via WS broadcast** — replace per-admin push loop
-  (`utils/payment_retry.py:80`) with one `broadcast_to_admins`.
+- [x] **D8. Payment-retry admin alert via WS broadcast** — stale, already
+  done by another session before this pass. `utils/payment_retry.py::_alert_admins_payment_exhausted`
+  already calls `manager.broadcast_to_admins({...})` once for the real-time
+  in-dashboard WS alert — the exact fix this item asked for. The remaining
+  per-admin loop right below it is a **different, legitimately separate**
+  channel: native mobile push notifications (`send_push_notification`) to
+  reach admins who don't have the dashboard open, not a second redundant WS
+  mechanism. FCM/APNs push delivery is inherently per-device-token, so that
+  loop isn't the same kind of "one broadcast call replaces N per-admin
+  calls" optimization WS pub/sub allows — collapsing it further (e.g. an
+  FCM multicast batch call) would be a different, separate item, not what
+  this one's own text asked for. No code change needed.
 - [ ] **D9. `compliance_export_events` has no purge job for its claimed 7-year
   retention** — `backend/migrations/263_compliance_export_events.sql`'s table
   comment states "7-year retention" but no background loop or scheduled job

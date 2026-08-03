@@ -769,3 +769,68 @@ if mocked:
 
 - No staging/manual repro against a real Android/iOS client sending a non-boolean mock flag — verified at the unit level only, with hand-crafted `mocked=1`/`mocked="true"` inputs.
 - Did not audit whether any client-side (rider-app/driver-app) code in this repo ever sends the mock flag as a non-boolean shape in practice — the fix is defensive regardless of current client behavior, but the real-world prevalence of the bypass being actively exploited (vs. theoretical) was not investigated.
+
+---
+
+## Entry 11 — `driver_import_service.py`: bulk import ignores document approval status (regulatory, explicit user approval obtained)
+
+### 1. Issue / gap identified
+
+`services/driver_import_service.py::build_plan`'s `has_import_documents` flag — which gates whether a bulk-imported driver is planned with `status="active"`/`is_verified=True` (vs. `"needs_review"`) — was computed from mere *presence* of a document row for that driver's `old_driver_id` in the documents CSV, never checking that document row's own `status` column. A driver row with `spinr_approved=yes` + `regulatory_authority_approved=yes` plus a document row whose `status` was explicitly `"rejected"` (or merely `"pending"`) was still planned as `status="active"`, `is_verified=True` — bulk-import could mark a driver active/verified with a rejected or unreviewed document attached, bypassing the document-approval gate the rest of the system relies on for driver eligibility.
+
+### 2. Root cause
+
+`document_old_ids` (the set used to compute `has_import_documents`) was built from every document row's `old_driver_id` unconditionally, without filtering on that row's `status` field — even though the very next code block (the per-document-row validation loop) already reads and validates `status` against `VALID_DOC_STATUSES = {"pending", "approved", "rejected"}`. The two pieces of logic simply weren't connected.
+
+### 3. Fix / remediation
+
+**User was asked explicitly via `AskUserQuestion` before this fix was applied**, given this is a regulatory driver-eligibility gate; the user approved requiring `status == "approved"`. `document_old_ids` now only includes a driver's `old_driver_id` if at least one of their document rows has `status == "approved"` (defaulting unset/blank status to `"pending"`, matching the same default the validation loop already uses).
+
+### 4. Risk & impact on existing functionality
+
+- **Blast radius: isolated to the bulk-import planning function.** `build_plan` is called from the admin bulk-driver-import flow (`routes/admin/...` — CSV-based import) and the CLI/script import path; grepped every test file mentioning `driver_import_service`: all 8 pass unmodified against this fix (`test_admin_driver_import.py`, `test_driver_import_service.py`, and 6 others whose match was incidental, not functional — see verification below).
+- **Real behavior change**: any bulk-import CSV batch that includes a driver with a non-approved (pending or rejected) document row will now correctly plan that driver as `needs_review` instead of `active`. This is the intended, corrective effect of the fix — a driver import operator relying on the old (buggy) behavior to fast-track drivers with unreviewed documents will see those drivers routed to manual review instead, which is the desired regulatory posture.
+- This only affects the *planning* stage (`build_plan`, a pure function with no I/O) — `commit_plan` (the actual DB write step) is unmodified; it simply persists whatever `driver_status`/`is_verified` values `build_plan` computed, so no separate write-path risk.
+
+### 5. User-experience effect
+
+- Internal-admin-facing (bulk driver import operators): a CSV batch containing a driver with a pending/rejected document will now correctly show that driver routed to `needs_review` in the import preview/report, instead of silently marking them `active`/`verified`. This is a correctness fix to the import tool's own reporting, not a new feature.
+- Driver-facing (indirectly): a driver whose bulk-imported document was rejected or not yet reviewed will now correctly stay in `needs_review` status (unable to go online) instead of being incorrectly marked active — this closes a real regulatory-eligibility gap, not a cosmetic one.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/services/driver_import_service.py` | `document_old_ids`'s set comprehension now filters on `status == "approved"`, not mere row presence | Close the found-not-fixed document-approval-bypass gap, per explicit user approval |
+| `backend/tests/test_driver_import_service_coverage.py` | Renamed/updated the pinned bug test to assert `needs_review`/`is_verified=False` for a rejected document; added sibling tests for the approved-document and pending-document cases | Reflect the fix |
+
+### 7. Before / after
+
+```python
+# Before
+document_old_ids = {r.get("old_driver_id") for r in document_rows if r.get("old_driver_id")}
+
+# After
+document_old_ids = {
+    r.get("old_driver_id")
+    for r in document_rows
+    if r.get("old_driver_id") and (r.get("status") or "pending").strip().lower() == "approved"
+}
+```
+
+### 8. Rollback plan
+
+`git revert` — `build_plan` is a pure function (no I/O); reverting restores the prior (buggy) planning behavior with no data-level cleanup needed. Note: if any driver was already committed as `active`/`verified` via `commit_plan` under the old buggy planning logic *before* this fix ships, reverting the code does not retroactively fix those already-imported rows — that would require a separate data remediation pass (out of scope for this fix, flagged here for awareness).
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_driver_import_service_coverage.py -q` — 62 passed.
+- [x] Blast-radius regression check: `pytest tests/test_admin_driver_import.py tests/test_admin_stripe_import.py tests/test_admin_stripe_payout_sync.py tests/test_driver_import_service.py tests/test_entity_export_service.py tests/test_entity_import_service.py tests/test_stripe_mapping_import_service.py tests/test_stripe_payout_sync_service.py -q` — 125 passed, 0 failed.
+- [x] Blast-radius grep performed: see section 4.
+- [x] User explicitly approved this specific fix via `AskUserQuestion` before it was applied, given the regulatory driver-eligibility sensitivity.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- Did not check production import history for whether any already-committed driver rows were affected by the pre-fix bug (i.e. imported as active/verified with only a pending/rejected document) — see the rollback-plan note above; a data remediation pass, if warranted, is a separate follow-up.
+- No staging/manual repro of an actual bulk-import CSV run — verified at the unit level only, via `build_plan`'s pure in-memory planning logic.

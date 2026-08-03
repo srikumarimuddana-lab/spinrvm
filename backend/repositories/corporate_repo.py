@@ -1071,7 +1071,7 @@ async def get_active_corporate_subscription(company_id: str) -> Optional[Dict[st
     """Return the company's current active/past_due subscription row, if any.
 
     At most one such row exists per company (enforced by a partial unique
-    index — see migration 280), so `.limit(1)` is a defensive belt, not the
+    index — see migration 281), so `.limit(1)` is a defensive belt, not the
     source of the invariant.
     """
 
@@ -1141,7 +1141,7 @@ async def update_corporate_subscription(subscription_id: str, patch: Dict[str, A
 
 async def record_section_spend(*, section_id: str, month: str, amount: Decimal) -> Decimal:
     """Atomically add `amount` to a section's running month-to-date spend
-    total via the corporate_section_spend_add RPC (migration 281) — a
+    total via the corporate_section_spend_add RPC (migration 282) — a
     single-statement upsert-increment, safe under concurrency without a
     row lock. Visibility only: never raises for "over budget," there is no
     budget-cap enforcement here. Returns the new running total.
@@ -1207,7 +1207,7 @@ async def list_companies_needing_kyb_reverification(*, reviewed_before_iso: str)
 
 
 async def mark_kyb_reverify_flagged(*, company_id: str) -> None:
-    """Replay-safety claim flag only (migration 282) — not the source of
+    """Replay-safety claim flag only (migration 283) — not the source of
     truth for staleness, which the admin filter computes live from
     kyb_reviewed_at."""
 

@@ -1,4 +1,4 @@
--- Migration 282: corporate_accounts.kyb_reverify_flagged_at
+-- Migration 283: corporate_accounts.kyb_reverify_flagged_at
 --
 -- Rollback:
 --   ALTER TABLE public.corporate_accounts DROP COLUMN IF EXISTS kyb_reverify_flagged_at;

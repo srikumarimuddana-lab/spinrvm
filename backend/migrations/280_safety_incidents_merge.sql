@@ -1,4 +1,4 @@
--- 279_safety_incidents_merge.sql
+-- 280_safety_incidents_merge.sql
 -- Corporate + admin portal review, round 2: "safety incidents can't be
 -- created or merged from the admin side" — routes/admin/safety.py only
 -- had list/get/PATCH-status. Two duplicate SOS reports for the same

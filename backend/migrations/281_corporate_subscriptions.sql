@@ -1,4 +1,4 @@
--- Migration 280: corporate_subscription_plans + corporate_subscriptions
+-- Migration 281: corporate_subscription_plans + corporate_subscriptions
 --
 -- Rollback:
 --   DROP TABLE IF EXISTS public.corporate_subscriptions;
@@ -75,10 +75,38 @@ CREATE INDEX IF NOT EXISTS idx_corporate_subscriptions_stripe_sub
 CREATE INDEX IF NOT EXISTS idx_corporate_subscription_plans_active
     ON public.corporate_subscription_plans (is_active);
 
--- Backend-only tables (service role bypasses RLS); no anon/user policies —
--- companies never read/write these directly, only admins via the backend API.
+-- Service role (backend) bypasses RLS by design; the explicit admin-only
+-- policies below match corporate_section_spend's own (migration 282) so a
+-- direct authenticated (non-service-role) admin session reads/writes the
+-- same rows a service-role-backed route would, rather than silently getting
+-- zero rows. Companies never read/write these tables directly — no
+-- authenticated-non-admin or anon policy is added.
 ALTER TABLE public.corporate_subscription_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.corporate_subscriptions ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename  = 'corporate_subscription_plans'
+          AND policyname = 'Admin full access corporate_subscription_plans'
+    ) THEN
+        EXECUTE 'CREATE POLICY "Admin full access corporate_subscription_plans" ON corporate_subscription_plans '
+                'FOR ALL TO authenticated '
+                'USING (EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND users.role = ''admin''))';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename  = 'corporate_subscriptions'
+          AND policyname = 'Admin full access corporate_subscriptions'
+    ) THEN
+        EXECUTE 'CREATE POLICY "Admin full access corporate_subscriptions" ON corporate_subscriptions '
+                'FOR ALL TO authenticated '
+                'USING (EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND users.role = ''admin''))';
+    END IF;
+END $$;
 
 COMMENT ON TABLE public.corporate_subscription_plans IS
     'Admin-managed catalog of flat SaaS subscription tiers for corporate accounts.';

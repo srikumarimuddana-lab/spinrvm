@@ -1,4 +1,4 @@
--- Migration 281: corporate_sections.monthly_budget_cap + corporate_section_spend
+-- Migration 282: corporate_sections.monthly_budget_cap + corporate_section_spend
 --
 -- Rollback:
 --   DROP TABLE IF EXISTS public.corporate_section_spend;
@@ -66,7 +66,7 @@ BEGIN
 END $$;
 
 COMMENT ON COLUMN public.corporate_sections.monthly_budget_cap IS
-    'Optional visibility-only monthly spend cap for this section (CAD). Never blocks a booking — see migration 281.';
+    'Optional visibility-only monthly spend cap for this section (CAD). Never blocks a booking — see migration 282.';
 COMMENT ON TABLE public.corporate_section_spend IS
     'Running month-to-date spend total per section, recorded at ride settlement. Visibility only, not an enforcement gate.';
 

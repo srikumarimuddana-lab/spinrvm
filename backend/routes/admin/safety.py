@@ -369,7 +369,7 @@ async def admin_merge_safety_incident(
     Never deletes a row -- safety_incidents is an append-only regulated
     audit record under the SK Transportation Act (94_safety_incidents.sql's
     own table comment: "do not purge"). A merge sets status='duplicate' and
-    records merged_into_incident_id (migration 279); the duplicate row
+    records merged_into_incident_id (migration 280); the duplicate row
     stays fully intact and queryable.
     """
     if incident_id == body.canonical_incident_id:

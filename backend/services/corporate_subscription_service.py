@@ -14,7 +14,7 @@ this module does not poll or reconcile that state itself, same division of
 responsibility as `driver_subscriptions` (Spinr Pass).
 
 At most one live (`active`/`past_due`) subscription may exist per company —
-enforced both by a partial unique index (migration 280) and by
+enforced both by a partial unique index (migration 281) and by
 `assign_subscription` refusing to create a second one. Switching plans is a
 deliberate two-step admin action (cancel, then assign) rather than an
 implicit swap, so an admin can never accidentally trigger an unintended

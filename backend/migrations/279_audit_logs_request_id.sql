@@ -1,4 +1,4 @@
--- 278_audit_logs_request_id.sql
+-- 279_audit_logs_request_id.sql
 -- Corporate + admin portal review, round 2: "no correlation ID links an
 -- admin action to the Sentry error or downstream row it caused." The
 -- request-scoped correlation ID already exists everywhere else --

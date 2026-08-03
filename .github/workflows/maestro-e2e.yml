@@ -1,0 +1,147 @@
+name: Maestro Mobile E2E (Android, real native build)
+
+# Runs the .maestro/{driver,rider} flows against a REAL native Android build
+# (EAS-built APK), on Maestro Cloud's hosted device farm — no local
+# simulator/emulator, no macOS runner needed anywhere in this pipeline.
+#
+# Why this exists: the Playwright driver-app/rider-app E2E suites
+# (driver-app/e2e/, ci.yml's driver-app-test/rider-app-test jobs) only
+# exercise the web/react-native-web build. A real native-only bug — e.g.
+# #3174, a native Expo module export missing at runtime — can be fully
+# invisible to Playwright and only reproduce on an actual native build.
+# This workflow closes that gap using infrastructure already staged in this
+# repo: the "test" EAS build profile (eas.json, developmentClient + internal
+# APK distribution — built for exactly this) and the existing .maestro/
+# flows (previously unwired to any CI job — see .maestro/README.md).
+#
+# iOS is intentionally NOT included yet: eas.json's "test" profile has no
+# iOS override, meaning an iOS build here would need Apple Developer
+# credentials configured in EAS that don't exist yet. Android alone is
+# sufficient to reproduce/verify a JS-level native-module bug like #3174,
+# since the same JS bundle runs on both platforms — add an iOS job here
+# once Apple credentials are provisioned, don't block on it.
+#
+# Required secrets (must be added before this workflow can run):
+#   EXPO_TOKEN            — already used by the mobile-build job below;
+#                            an Expo access token with EAS Build permission.
+#   MAESTRO_CLOUD_API_KEY — from https://console.mobile.dev — a Maestro
+#                            Cloud (Robin) API key with upload+run permission.
+# Until both secrets exist, every run of this workflow fails at the
+# corresponding CLI login step with a clear, actionable error — it does not
+# silently no-op.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: "Which app(s) to test"
+        required: true
+        default: "both"
+        type: choice
+        options:
+          - both
+          - driver-app
+          - rider-app
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: maestro-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  maestro-android:
+    # Gate 1 (trigger): workflow_dispatch always runs; on a PR, only when
+    # explicitly labeled "run-maestro" — EAS Build + Maestro Cloud both
+    # consume real, billed minutes, so this must never run silently on
+    # every push (same cost discipline as this repo's `[build]`-commit-
+    # message gate on mobile-build below).
+    # Gate 2 (matrix filter): GitHub Actions' matrix `exclude` only accepts
+    # literal values, not runtime expressions, so picking one app via the
+    # workflow_dispatch `apps` input can't be done with `exclude` — it's
+    # folded into this same `if` instead (a job can only have one `if:`
+    # key; a second one would silently overwrite the first, not combine
+    # with it). The `pull_request` trigger has no `inputs.apps` at all, so
+    # both matrix entries run by default in that case.
+    if: >
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' && github.event.label.name == 'run-maestro')
+      ) && (
+        github.event.inputs.apps == null ||
+        github.event.inputs.apps == 'both' ||
+        github.event.inputs.apps == matrix.app.dir
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - { dir: driver-app, appId: com.spinr.driver, flows: .maestro/driver }
+          - { dir: rider-app, appId: com.spinr.user, flows: .maestro/rider }
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install ${{ matrix.app.dir }} dependencies
+        working-directory: ${{ matrix.app.dir }}
+        run: yarn install --frozen-lockfile
+
+      - name: Build Android (EAS, "test" profile — internal APK)
+        id: build
+        working-directory: ${{ matrix.app.dir }}
+        # --wait blocks until the cloud build finishes (not just queues it —
+        # mobile-build's fire-and-forget `eas build` below is fine for a
+        # nightly/manual store build, but this job needs the finished
+        # artifact to hand to Maestro Cloud); --json makes the artifact URL
+        # machine-parseable instead of scraping human-readable CLI output.
+        run: |
+          eas build --platform android --profile test --non-interactive --wait --json > eas-build.json
+          cat eas-build.json
+          BUILD_URL=$(jq -r '.[0].artifacts.buildUrl // .artifacts.buildUrl' eas-build.json)
+          if [ -z "$BUILD_URL" ] || [ "$BUILD_URL" = "null" ]; then
+            echo "::error::EAS build produced no artifact URL — check eas-build.json above"
+            exit 1
+          fi
+          echo "build_url=$BUILD_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Download built APK
+        working-directory: ${{ matrix.app.dir }}
+        run: curl -fL -o app.apk "${{ steps.build.outputs.build_url }}"
+
+      - name: Install Maestro CLI
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          # The installer puts the binary at $HOME/.maestro/bin — on a
+          # GitHub-hosted runner that's /home/runner, not /root; appending
+          # to GITHUB_PATH (rather than trying to set `env.PATH` in a later
+          # step, which can't read the shell's own inherited PATH) is the
+          # documented way to make a step-installed binary available to
+          # every later step without repeating the full path each time.
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Run Maestro Cloud flows
+        working-directory: ${{ matrix.app.dir }}
+        env:
+          MAESTRO_CLOUD_API_KEY: ${{ secrets.MAESTRO_CLOUD_API_KEY }}
+        # `maestro cloud` uploads the APK + flow files to Maestro's hosted
+        # device farm and runs them there — the runner itself never boots
+        # an emulator, so this step works unmodified on a plain
+        # ubuntu-latest runner. Non-zero exit on any flow failure fails
+        # the job, same as any other CI test step.
+        run: maestro cloud app.apk "../${{ matrix.app.flows }}" --app-id "${{ matrix.app.appId }}"
+
+      - name: Upload EAS build metadata (debugging aid on failure)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eas-build-json-${{ matrix.app.dir }}
+          path: ${{ matrix.app.dir }}/eas-build.json
+          retention-days: 7

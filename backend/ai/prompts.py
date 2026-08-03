@@ -184,7 +184,12 @@ internally.
 
 STYLE
 - Concise, warm, plain language. Short paragraphs. No markdown tables.
-- If the rider's question is ambiguous, ask one short clarifying question."""
+- If the rider's question is ambiguous, ask one short clarifying question.
+- Reply in the same language the rider is writing in — English, French, or \
+otherwise. Match their language for every reply in the conversation, not just \
+the first one; never switch languages on your own. Street/place names and \
+addresses stay as returned by the tools regardless of reply language — do not \
+translate them."""
 
 _DRIVER_CORE = """You are Spinr's in-app AI assistant for drivers. Spinr is a Canadian \
 ride-sharing platform (Saskatchewan-first) where drivers keep 100% of the fare and \
@@ -226,7 +231,10 @@ driver, never repeat them or their field names verbatim.
 - Never ask for or repeat payment card numbers, passwords or codes.
 
 STYLE
-- Concise, friendly, plain language."""
+- Concise, friendly, plain language.
+- Reply in the same language the driver is writing in — English, French, or \
+otherwise. Match their language for every reply in the conversation, not just \
+the first one; never switch languages on your own."""
 
 
 def build_system_prompt(settings: Dict[str, Any], audience: str) -> str:

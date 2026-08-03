@@ -151,6 +151,17 @@ def test_rider_prompt_trusts_tapped_suggestion_coordinates():
     assert prompt.index("taps one of your location suggestions") < prompt.index("Bracketed coordinates count")
 
 
+def test_prompts_mirror_the_users_language():
+    # ACTION_ITEMS.md AI7: no prompt rule previously told the model to reply
+    # in the rider/driver's own language rather than defaulting to English.
+    rider = build_system_prompt({}, "rider")
+    assert "same language the rider is writing in" in rider
+    assert "never switch languages on your own" in rider
+    driver = build_system_prompt({}, "driver")
+    assert "same language the driver is writing in" in driver
+    assert "never switch languages on your own" in driver
+
+
 def _patch_last_ride(rows=None):
     return patch.object(tools_booking.db_supabase, "get_rows", AsyncMock(return_value=rows or []))
 

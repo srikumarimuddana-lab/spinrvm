@@ -3281,8 +3281,31 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   resolve a Maps link's destination — out of scope for "lightweight";
   the fix makes the assistant ask the rider instead of silently mishandling
   it, not resolve the link itself.
-- [ ] **AI7. Multilingual gap** — no language rule in prompts; Maps calls
-  hard-code `language: "en"`; FAQ keyword matching is English-only.
+- [x] **AI7. Multilingual gap** — done, scoped to the reply-language half
+  only: new `STYLE` rule in both `_RIDER_CORE` and `_DRIVER_CORE`
+  (`ai/prompts.py`) telling the model to mirror the rider/driver's own
+  language for every reply, not just the first one, and never switch on its
+  own. **Deliberately left unchanged:** the hardcoded `language: "en"` /
+  `"languageCode": "en"` params on the four Maps API call sites
+  (`tools_booking.py` geocode calls, `google_places_new.py`'s Places API
+  (New) requests) — those control what language Google returns *address
+  text* in (e.g. street/place names), not what language the assistant
+  replies in; Saskatchewan addresses/street names aren't meaningfully
+  "translated" the way conversational text is (same convention as Google
+  Maps itself, which shows local-language street names regardless of app
+  UI language), and re-plumbing a `language` parameter through 4 call sites
+  for uncertain benefit is a bigger, separate change than this item's
+  "lightweight" framing. FAQ keyword matching stays English-only too, per
+  the item's own framing — translating FAQ content is a data/content
+  problem, not a prompt fix. New `test_prompts_mirror_the_users_language`
+  in `tests/test_ai_tools_booking.py` pins both personas' new rule text.
+  Full `test_ai_tools_booking.py`/`test_ai_orchestrator.py` (128 tests)
+  pass. **Not verified:** no live LLM call was made to confirm the model
+  actually follows this instruction in practice (e.g. correctly detects
+  and sustains French across a multi-turn conversation) — this pins the
+  prompt text only, the same level of verification every other prompt-rule
+  fix in this backlog has (prompt content isn't executable, so there's no
+  unit-testable "does the model comply" assertion).
 - [ ] **AI8. Stale action cards never expire client-side** — every past
   quote/suggestion/map-pin card stays tappable
   (`rider-app/app/ai-assistant.tsx`); backend self-contained messages

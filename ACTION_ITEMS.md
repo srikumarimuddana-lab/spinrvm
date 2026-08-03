@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs" CLOSED: `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100% (test-only, no bugs found). Also CLOSED 2026-08-02: Sub-tier C Batch 3 — `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added). Prior 2026-08-02: A1c (Track 2) Sub-tier C freshly itemized via a re-run coverage scan: 38 files (5635 stmts) in the 60-80% band, batched ≤3 files/subtask, replacing the prior stale "55 files, not itemized" note; `utils/payment_retry.py` (independently closed by a concurrent session to 99% during this scan) reconciled in rather than overwritten. Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "faqs-apns-server" CLOSED: `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap). Prior same-day: A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs" CLOSED: `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100% (test-only, no bugs found). Also CLOSED 2026-08-02: Sub-tier C Batch 3 — `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added). Prior 2026-08-02: A1c (Track 2) Sub-tier C freshly itemized via a re-run coverage scan: 38 files (5635 stmts) in the 60-80% band, batched ≤3 files/subtask, replacing the prior stale "55 files, not itemized" note; `utils/payment_retry.py` (independently closed by a concurrent session to 99% during this scan) reconciled in rather than overwritten. Prior same-day: `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -1455,9 +1455,60 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C batch "zoho-distrecon-obs
         push client), `server.py` (79.20%, 250 stmts — app factory/router
         mounting, see CLAUDE.md's Key Backend Files), `utils/stripe_charge.py`
         (79.74%, 227 stmts — payment-adjacent, closest file in this list
-        to the 80% line). `apns_client.py` and `server.py` were closed by a
-        concurrent session (see "faqs-apns-server" batch below); this
-        session's scope was `stripe_charge.py` only.
+        to the 80% line).
+      - **Batch "faqs-apns-server" (`routes/faqs.py` from Batch 12 above,
+        plus `utils/apns_client.py` and `server.py` from Batch 13 above) —
+        CLOSED 2026-08-03.** `routes/faqs.py` 78.12% → **94%** (32 stmts,
+        7→2 missing), `utils/apns_client.py` 78.72% → **100%** (141 stmts,
+        30→0 missing), `server.py` 79.20% → **88%** (253 stmts — 3 more
+        than the 250 quoted above, minor drift since that number was taken;
+        71→31 missing). Measured via `pytest tests/test_utils_extended.py
+        tests/test_faqs_coverage.py tests/test_apns_client.py
+        tests/test_apns_client_coverage.py tests/test_live_activity.py
+        tests/test_p3_push_notifications.py tests/test_server_coverage.py
+        tests/test_deprecated_route_admin_exempt.py tests/test_metrics_auth.py
+        -o addopts="" --cov=routes.faqs --cov=utils.apns_client
+        --cov=backend.server --cov-report=term-missing` (290 passed, 1
+        pre-existing skip, 0 collisions). Added `backend/tests/test_faqs_coverage.py`
+        (9 tests — `_resolve_area_scope`'s explicit-id-wins, lat/lng-resolves-
+        to-an-area, lat/lng-resolves-to-no-area, partial-coordinates no-op,
+        and outer exception-swallow branches; `get_public_faqs`'s end-to-end
+        area-scope filtering), `backend/tests/test_apns_client_coverage.py`
+        (15 tests — `_load_apns_config`'s settings-load-raises and
+        malformed-PEM branches; `_load_templates`'s real file load/missing/
+        malformed-JSON branches against the real bundled template file, not a
+        monkeypatched stand-in; the real `_get_client()`/`aclose()`
+        lifecycle; `send_apns_live_activity`'s httpx/jwt-unavailable and
+        empty-token guards, the `use_sandbox=None` settings-driven branch,
+        the retry-still-fails branch, and the outer exception handler;
+        `_reason`'s own exception branch), and `backend/tests/test_server_coverage.py`
+        (18 tests, new file — module had zero dedicated tests before —
+        `_db_ready`'s cache-hit/fresh-success/non-dict-result/ping-raises/
+        ping-timeout branches; `/health`'s healthy/unhealthy shapes;
+        `_metrics_token()`'s real env-var read; `/metrics`'s Redis-connected
+        gauge block including missing-field defaults and `get_redis_stats`
+        raising, plus its query-param-token path;
+        `DeprecatedRootPathMiddleware`'s root-prefix `/settings`/
+        `/company-info` branch, the only branch taking the non-`/api/`
+        canonical-path derivation). Test-only, no application code changed.
+        **No bugs found** in any of the three files. Remaining gaps: `routes/faqs.py`'s
+        2 missing lines are the dual-import `ImportError` fallback (same
+        structurally-near-impossible-to-reach class documented elsewhere in
+        this backlog); `utils/apns_client.py` is fully closed at 100%;
+        `server.py`'s 31 missing lines are its Sentry-init module-level block
+        (`if sentry_dsn: ...`) and `if __name__ == "__main__":` entrypoint —
+        both execute only at *import* time before any test can patch
+        `settings.sentry_dsn`/`settings.ENV`, and reloading `backend.server`
+        mid-suite to reach them risks corrupting the single shared `app`
+        instance every other test file in the suite depends on; deliberately
+        not attempted per this task's "test additively, don't refactor"
+        instruction for this file — flagged as a standing gap for a future
+        subprocess-isolated import test, not chased further here.
+        `utils/stripe_charge.py`, the third file originally itemized under
+        Batch 13, was **not** in this batch's scope (a separate concurrent
+        session's assignment per this session's task boundaries) and remains
+        open. Full log:
+        `docs/change-log/2026-08-03-a1c-subtier-c-batch-faqs-apns-server-coverage.md`.
       - **Batch "stripe-charge" (`utils/stripe_charge.py` from Batch 13
         above) — CLOSED 2026-08-03.** 79.74% → **99%** (227 stmts, 46→1
         missing). Measured via `pytest tests/test_stripe_charge.py

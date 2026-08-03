@@ -440,6 +440,96 @@ def _event_to_plain_dict(event):
         return dict(event)
 
 
+async def _sync_corporate_subscription_event(event_type: str, data_object: dict, corp_sub: dict, event_id: str) -> None:
+    """Mirror a corporate flat-SaaS subscription's Stripe state into
+    corporate_subscriptions. Stripe owns the recurring-charge schedule
+    (services/corporate_subscription_service.py only ever creates/cancels
+    the Subscription object); this is the read-model sync, the corporate
+    equivalent of the driver_subscriptions handling elsewhere in this file
+    — deliberately a separate table and a separate code path, zero shared
+    state or logic with Spinr Pass.
+    """
+    row_id = corp_sub["id"]
+    terminal = corp_sub.get("status") == "cancelled"
+
+    if event_type == "customer.subscription.deleted":
+        if not terminal:
+            await db_supabase.update_corporate_subscription(
+                row_id,
+                {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                    "cancel_at_period_end": False,
+                },
+            )
+        logger.info(
+            "Corporate subscription cancelled via Stripe: row=%s sub=%s",
+            row_id,
+            corp_sub.get("stripe_subscription_id"),
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+        return
+
+    # A late/duplicate event arriving after a terminal cancel must never
+    # resurrect the row — same guard the driver_subscriptions invoice.paid
+    # handler applies for the same reason.
+    if terminal:
+        logger.warning(
+            "Corporate subscription event %s ignored for cancelled row=%s",
+            event_type,
+            row_id,
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+        return
+
+    if event_type == "customer.subscription.updated":
+        stripe_status = data_object.get("status")
+        patch: dict = {
+            "cancel_at_period_end": bool(data_object.get("cancel_at_period_end")),
+        }
+        period_end = data_object.get("current_period_end")
+        if period_end:
+            patch["current_period_end"] = datetime.fromtimestamp(int(period_end), tz=timezone.utc).isoformat()
+        if stripe_status in ("active", "trialing"):
+            patch["status"] = "active"
+        elif stripe_status == "past_due":
+            patch["status"] = "past_due"
+        elif stripe_status in ("canceled", "unpaid", "incomplete_expired"):
+            patch["status"] = "cancelled"
+            patch["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+        await db_supabase.update_corporate_subscription(row_id, patch)
+        logger.info(
+            "Corporate subscription updated: row=%s stripe_status=%s -> status=%s",
+            row_id,
+            stripe_status,
+            patch.get("status", corp_sub.get("status")),
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+
+    elif event_type == "invoice.paid":
+        patch = {"status": "active"}
+        new_period_end = _invoice_period_end_iso(data_object)
+        if new_period_end:
+            patch["current_period_end"] = new_period_end
+        await db_supabase.update_corporate_subscription(row_id, patch)
+        logger.info(
+            "Corporate subscription renewed: row=%s sub=%s until=%s",
+            row_id,
+            corp_sub.get("stripe_subscription_id"),
+            new_period_end,
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+
+    elif event_type == "invoice.payment_failed":
+        await db_supabase.update_corporate_subscription(row_id, {"status": "past_due"})
+        logger.warning(
+            "Corporate subscription payment failed: row=%s sub=%s — flagged past_due, Stripe dunning in progress",
+            row_id,
+            corp_sub.get("stripe_subscription_id"),
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+
+
 @api_router.post("/stripe")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events for server-side payment confirmation."""
@@ -539,6 +629,30 @@ async def stripe_webhook(request: Request):
 
     if not is_new:
         return {"received": True, "duplicate": True, "event_id": event_id}
+
+    # ── Corporate flat-SaaS subscription events ─────────────────────
+    # Checked first (cheap lookup) and, if matched, handled entirely by
+    # _sync_corporate_subscription_event and returned immediately — the
+    # driver-specific dispatch below assumes a driver_subscriptions row for
+    # these same event types and must never run against a corporate one.
+    if event_type in (
+        "customer.subscription.deleted",
+        "customer.subscription.updated",
+        "invoice.paid",
+        "invoice.payment_failed",
+    ):
+        _corp_stripe_sub_id = (
+            data_object.get("subscription") if event_type.startswith("invoice.") else data_object.get("id")
+        )
+        corp_sub = (
+            await db_supabase.get_corporate_subscription_by_stripe_id(_corp_stripe_sub_id)
+            if _corp_stripe_sub_id
+            else None
+        )
+        if corp_sub:
+            await _sync_corporate_subscription_event(event_type, data_object, corp_sub, event_id)
+            await mark_stripe_event_processed(event_id)
+            return {"received": True, "scope": "corporate_subscription", "event_id": event_id}
 
     # ── Dispatch ─────────────────────────────────────────────────────
     # Any exception raised below propagates as 5xx, leaving processed_at

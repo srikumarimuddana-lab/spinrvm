@@ -108,6 +108,77 @@ def test_geofence_valid_passes(test_client, rider_override):
     assert resp.status_code == 200, resp.text
 
 
+# ── geofence_enforced=False annotation ──────────────────────────────────
+# Corporate + admin portal review, round 2: "geofence policy is
+# configurable ... and silently does nothing" — services/
+# corporate_policy_service.py's evaluate_policy_for_ride permanently
+# defers this rule pending PostGIS, but nothing told an API caller that.
+# No UI control exists to hide (checked — no frontend references
+# allowed_geofence at all), so the fix is response-level transparency.
+
+
+def test_get_policy_flags_geofence_unenforced_when_set(test_client, rider_override):
+    stored = {"id": "p1", "allowed_geofence": {"type": "FeatureCollection", "features": []}}
+    with (
+        _as_admin(),
+        patch(_ROUTE + "get_corporate_policy", AsyncMock(return_value=stored)),
+    ):
+        resp = test_client.get("/company/c1/policy")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["geofence_enforced"] is False
+
+
+def test_get_policy_no_flag_when_geofence_unset(test_client, rider_override):
+    stored = {"id": "p1", "max_fare_per_ride": 80}
+    with (
+        _as_admin(),
+        patch(_ROUTE + "get_corporate_policy", AsyncMock(return_value=stored)),
+    ):
+        resp = test_client.get("/company/c1/policy")
+    assert resp.status_code == 200, resp.text
+    assert "geofence_enforced" not in resp.json()
+
+
+def test_replace_policy_flags_geofence_unenforced(test_client, rider_override):
+    upserted = {
+        "id": "p1",
+        "allowed_geofence": {"type": "FeatureCollection", "features": []},
+    }
+    with (
+        _as_admin(),
+        patch(_ROUTE + "upsert_corporate_policy", AsyncMock(return_value=upserted)),
+        patch(_ROUTE + "log_user_action", AsyncMock()),
+    ):
+        resp = test_client.put(
+            "/company/c1/policy",
+            json={
+                "allowed_payment_source": "allowance_only",
+                "allowed_geofence": {
+                    "type": "FeatureCollection",
+                    "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}}],
+                },
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["geofence_enforced"] is False
+
+
+def test_patch_policy_flags_geofence_unenforced():
+    """Unit-level: doesn't need the app/RBAC scaffolding — directly proves
+    _annotate_geofence_enforcement's contract used by patch_policy."""
+    from routes.corporate_company import _annotate_geofence_enforcement
+
+    with_geofence = {"id": "p1", "allowed_geofence": {"type": "FeatureCollection", "features": []}}
+    without = {"id": "p1", "max_fare_per_ride": 80}
+    empty = {}
+
+    assert _annotate_geofence_enforcement(with_geofence)["geofence_enforced"] is False
+    assert "geofence_enforced" not in _annotate_geofence_enforcement(without)
+    assert _annotate_geofence_enforcement(empty) == {}
+    # Never mutates the input dict in place.
+    assert "geofence_enforced" not in with_geofence
+
+
 # ── list_members status filter ──────────────────────────────────────────
 
 
@@ -507,3 +578,97 @@ def test_billing_statement_pages_through_all_rows(test_client, rider_override):
     body = resp.json()
     assert body["summary"]["ride_count"] == 1001
     assert len(body["line_items"]) == 200
+
+
+# ── GST/PST tax breakdown on statements ─────────────────────────────────
+# Corporate + admin portal review, round 2: "no GST/PST breakdown on
+# corporate statements" — tax was already computed and stored per-ride
+# (rides.tax_amount / tax_breakdown) but never surfaced here.
+
+
+@pytest.mark.asyncio
+async def test_attach_ride_tax_merges_amount_and_breakdown():
+    from routes.corporate_company import _attach_ride_tax
+
+    rows = [{"ride_id": "r1", "member_id": "m1"}, {"ride_id": "r2", "member_id": "m2"}]
+    rides = [
+        {"id": "r1", "tax_amount": "5.00", "tax_breakdown": {"GST": {"rate": 0.05, "amount": "3.00"}}},
+        {"id": "r2", "tax_amount": "0", "tax_breakdown": {}},
+    ]
+    with patch("backend.db_supabase.get_rows", AsyncMock(return_value=rides)):
+        out = await _attach_ride_tax(rows)
+    assert out[0]["tax_amount"] == "5.00"
+    assert out[0]["tax_breakdown"] == {"GST": {"rate": 0.05, "amount": "3.00"}}
+    assert out[1]["tax_amount"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_attach_ride_tax_short_circuits_when_no_ride_ids():
+    """No ride_id on any row (e.g. a legacy/malformed payment-source row)
+    must not issue an $in query with an empty list."""
+    from routes.corporate_company import _attach_ride_tax
+
+    rows = [{"member_id": "m1"}]
+    with patch("backend.db_supabase.get_rows", AsyncMock()) as mock_get_rows:
+        out = await _attach_ride_tax(rows)
+    mock_get_rows.assert_not_awaited()
+    assert out == rows
+
+
+def test_aggregate_rows_sums_tax_total_and_by_type():
+    from routes.corporate_company import _aggregate_rows
+
+    rows = [
+        {
+            "allowance_debit_amount": "10.00",
+            "master_fallback_amount": "0",
+            "member_id": "m1",
+            "tax_amount": "1.30",
+            "tax_breakdown": {"GST": {"rate": 0.05, "amount": "0.50"}, "PST": {"rate": 0.06, "amount": "0.80"}},
+        },
+        {
+            "allowance_debit_amount": "20.00",
+            "master_fallback_amount": "0",
+            "member_id": "m1",
+            "tax_amount": "2.60",
+            "tax_breakdown": {"GST": {"rate": 0.05, "amount": "1.00"}, "PST": {"rate": 0.06, "amount": "1.60"}},
+        },
+    ]
+    result = _aggregate_rows(rows)
+    assert result["tax_total"] == "3.90"
+    assert result["tax_by_type"] == {"GST": "1.50", "PST": "2.40"}
+
+
+def test_aggregate_rows_tax_defaults_to_zero_when_absent():
+    """Rows never passed through _attach_ride_tax (e.g. a caller that
+    forgets to call it) must not KeyError -- tax fields default to zero,
+    same posture as every other money field's _d() default."""
+    from routes.corporate_company import _aggregate_rows
+
+    result = _aggregate_rows([{"allowance_debit_amount": "10.00", "master_fallback_amount": "0", "member_id": "m1"}])
+    assert result["tax_total"] == "0.00"
+    assert result["tax_by_type"] == {}
+
+
+def test_billing_summary_includes_tax_fields(test_client, rider_override):
+    rows = [
+        {
+            "amount": "10.00",
+            "allowance_debit_amount": "10.00",
+            "master_fallback_amount": "0",
+            "member_id": "m1",
+            "ride_id": "r1",
+        }
+    ]
+    rides = [{"id": "r1", "tax_amount": "1.30", "tax_breakdown": {"GST": {"rate": 0.05, "amount": "0.50"}}}]
+    with (
+        _as_admin(),
+        patch(_ROUTE + "list_company_ride_payment_sources", AsyncMock(return_value=rows)),
+        patch(_ROUTE + "get_corporate_wallet_by_company", AsyncMock(return_value={"balance": "500.00"})),
+        patch("backend.db_supabase.get_rows", AsyncMock(return_value=rides)),
+    ):
+        resp = test_client.get("/company/c1/billing/summary?month=2026-07")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tax_total"] == "1.30"
+    assert body["tax_by_type"] == {"GST": "0.50"}

@@ -10,6 +10,16 @@ import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+// Corporate + admin portal review, round 2: "staff management is the one
+// list page that breaks the portal's own pattern" — every other admin
+// list page (audit-logs, safety, drivers, users, ...) renders through
+// Table/SortableHead/Card/Button/Input, not raw <div>/<button>/<input>.
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 
 const ALL_MODULES = [
   { key: "dashboard", label: "Dashboard" },
@@ -75,6 +85,7 @@ export default function StaffPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const { sorted, sort, toggle } = useTableSort(staff);
 
   // Form state
   const [form, setForm] = useState({
@@ -91,8 +102,10 @@ export default function StaffPage() {
     try {
       const data = await getStaff();
       setStaff(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("Failed to load staff:", e);
+    } catch (e: any) {
+      // Every other admin list page surfaces a load failure via toast, not
+      // a silent console.error only the developer console would show.
+      toast({ title: "Failed to load staff", description: e?.message, variant: "destructive" });
     }
     setLoading(false);
   };
@@ -219,33 +232,29 @@ export default function StaffPage() {
           <h1 className="text-2xl font-bold text-foreground">Staff Management</h1>
           <p className="text-muted-foreground mt-1">Create staff accounts and control module access</p>
         </div>
-        <button
-          onClick={() => { resetForm(); setShowForm(true); }}
-          className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl font-semibold hover:bg-primary/90 transition"
-        >
-          <Plus className="h-5 w-5" />
+        <Button onClick={() => { resetForm(); setShowForm(true); }}>
+          <Plus className="h-4 w-4 mr-1.5" />
           Add Staff
-        </button>
+        </Button>
       </div>
 
       {/* Add/Edit Form */}
       {showForm && (
-        <div className="bg-card rounded-2xl border p-6 mb-6 shadow-sm">
+        <Card className="border-border/50 mb-6">
+          <CardContent className="p-6">
           <h3 className="text-lg font-bold mb-4">{editingId ? "Edit Staff" : "New Staff Member"}</h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1">First Name</label>
-              <input
-                className="w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+              <Label className="mb-1 block">First Name</Label>
+              <Input
                 value={form.first_name}
                 onChange={(e) => setForm({ ...form, first_name: e.target.value })}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1">Last Name</label>
-              <input
-                className="w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+              <Label className="mb-1 block">Last Name</Label>
+              <Input
                 value={form.last_name}
                 onChange={(e) => setForm({ ...form, last_name: e.target.value })}
               />
@@ -254,9 +263,8 @@ export default function StaffPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1">Email</label>
-              <input
-                className="w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+              <Label className="mb-1 block">Email</Label>
+              <Input
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -265,10 +273,10 @@ export default function StaffPage() {
             </div>
             {!editingId && (
               <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-1">Password</label>
+                <Label className="mb-1 block">Password</Label>
                 <div className="relative">
-                  <input
-                    className="w-full border rounded-xl px-4 py-2.5 text-sm pr-10 focus:outline-none focus:ring-2 focus:ring-ring/40"
+                  <Input
+                    className="pr-10"
                     type={showPassword ? "text" : "password"}
                     value={form.password}
                     onChange={(e) => setForm({ ...form, password: e.target.value })}
@@ -340,99 +348,123 @@ export default function StaffPage() {
           </div>
 
           <div className="flex gap-3">
-            <button onClick={handleSubmit} className="bg-primary text-primary-foreground px-6 py-2.5 rounded-xl font-semibold hover:bg-primary/90 transition">
+            <Button onClick={handleSubmit}>
               {editingId ? "Save Changes" : "Create Staff"}
-            </button>
-            <button onClick={resetForm} className="bg-muted text-foreground px-6 py-2.5 rounded-xl font-semibold hover:bg-muted/70 transition">
+            </Button>
+            <Button variant="outline" onClick={resetForm}>
               Cancel
-            </button>
+            </Button>
           </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
-      {/* Staff List */}
-      {loading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading staff...</div>
-      ) : staff.length === 0 ? (
-        <div className="text-center py-16 bg-card rounded-2xl border">
-          <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-lg font-bold text-foreground">No staff members yet</h3>
-          <p className="text-muted-foreground mt-1">Add your first team member to share admin access</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {staff.map((s) => (
-            <div key={s.id} className={`bg-card rounded-2xl border p-5 flex items-start gap-4 ${!s.is_active ? "opacity-50" : ""}`}>
-              {/* Avatar */}
-              <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center text-foreground font-bold text-lg shrink-0">
-                {s.first_name?.[0]}{s.last_name?.[0]}
-              </div>
-
-              {/* Info */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h4 className="font-bold text-foreground">{s.first_name} {s.last_name}</h4>
-                  <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${ROLE_COLORS[s.role] || ROLE_COLORS.custom}`}>
-                    {s.role.replace("_", " ").toUpperCase()}
-                  </span>
-                  {!s.is_active && (
-                    <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-yellow-100 text-yellow-700">DISABLED</span>
-                  )}
-                  {s.mfa_enabled && (
-                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-green-100 text-green-700">
-                      <ShieldCheck className="h-3 w-3" />
-                      MFA
-                    </span>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground mt-0.5">{s.email}</p>
-
-                {/* Modules */}
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {(s.modules || []).map((m) => (
-                    <span key={m} className="px-2 py-0.5 bg-muted text-foreground text-xs rounded-md">
-                      {ALL_MODULES.find((am) => am.key === m)?.label || m}
-                    </span>
-                  ))}
-                </div>
-
-                {s.last_login && (
-                  <p className="text-xs text-muted-foreground mt-2">Last login: {new Date(s.last_login).toLocaleString()}</p>
-                )}
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center gap-2 shrink-0">
-                {/* Lost-phone recovery — super_admin only, never on your own
-                    account (self-service goes through Settings / backup codes;
-                    backend enforces both rules too). */}
-                {user?.role === "super_admin" && s.mfa_enabled && s.id !== user?.id && (
-                  <button
-                    onClick={() => setMfaResetTarget(s)}
-                    className="p-2 hover:bg-orange-50 rounded-lg transition"
-                    title="Reset MFA (lost phone)"
-                  >
-                    <ShieldOff className="h-4 w-4 text-orange-500" />
-                  </button>
-                )}
-                <button onClick={() => handleEdit(s)} className="p-2 hover:bg-muted rounded-lg transition" title="Edit">
-                  <Edit className="h-4 w-4 text-muted-foreground" />
-                </button>
-                <button
-                  onClick={() => handleToggleActive(s)}
-                  className="p-2 hover:bg-muted rounded-lg transition"
-                  title={s.is_active ? "Disable" : "Enable"}
-                >
-                  {s.is_active ? <X className="h-4 w-4 text-yellow-500" /> : <Check className="h-4 w-4 text-green-500" />}
-                </button>
-                <button onClick={() => handleDelete(s)} className="p-2 hover:bg-red-50 rounded-lg transition" title="Delete">
-                  <Trash2 className="h-4 w-4 text-red-400" />
-                </button>
-              </div>
+      {/* Staff List — every other admin list page (audit-logs, safety,
+          drivers, users) renders through Table/SortableHead, not a
+          hand-rolled card list. Corporate + admin portal review, round 2. */}
+      <Card className="border-border/50">
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex items-center justify-center p-12">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             </div>
-          ))}
-        </div>
-      )}
+          ) : staff.length === 0 ? (
+            <div className="text-center py-16">
+              <Users className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold">No staff members yet</h3>
+              <p className="text-muted-foreground mt-1">Add your first team member to share admin access</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <SortableHead column="first_name" sort={sort} onSort={toggle}>Name</SortableHead>
+                  <SortableHead column="email" sort={sort} onSort={toggle}>Email</SortableHead>
+                  <SortableHead column="role" sort={sort} onSort={toggle}>Role</SortableHead>
+                  <TableHead>Modules</TableHead>
+                  <TableHead>Status</TableHead>
+                  <SortableHead column="last_login" sort={sort} onSort={toggle}>Last Login</SortableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sorted.map((s) => (
+                  <TableRow key={s.id} className={!s.is_active ? "opacity-50" : ""}>
+                    <TableCell>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-foreground font-bold text-xs shrink-0">
+                          {s.first_name?.[0]}{s.last_name?.[0]}
+                        </div>
+                        <span className="font-medium">{s.first_name} {s.last_name}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{s.email}</TableCell>
+                    <TableCell>
+                      <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${ROLE_COLORS[s.role] || ROLE_COLORS.custom}`}>
+                        {s.role.replace("_", " ").toUpperCase()}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1 max-w-xs">
+                        {(s.modules || []).map((m) => (
+                          <span key={m} className="px-2 py-0.5 bg-muted text-foreground text-xs rounded-md">
+                            {ALL_MODULES.find((am) => am.key === m)?.label || m}
+                          </span>
+                        ))}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        {!s.is_active && (
+                          <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-yellow-100 text-yellow-700">DISABLED</span>
+                        )}
+                        {s.mfa_enabled && (
+                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-green-100 text-green-700">
+                            <ShieldCheck className="h-3 w-3" />
+                            MFA
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                      {s.last_login ? new Date(s.last_login).toLocaleString() : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        {/* Lost-phone recovery — super_admin only, never on your
+                            own account (self-service goes through Settings /
+                            backup codes; backend enforces both rules too). */}
+                        {user?.role === "super_admin" && s.mfa_enabled && s.id !== user?.id && (
+                          <button
+                            onClick={() => setMfaResetTarget(s)}
+                            className="p-2 hover:bg-orange-50 rounded-lg transition"
+                            title="Reset MFA (lost phone)"
+                          >
+                            <ShieldOff className="h-4 w-4 text-orange-500" />
+                          </button>
+                        )}
+                        <button onClick={() => handleEdit(s)} className="p-2 hover:bg-muted rounded-lg transition" title="Edit">
+                          <Edit className="h-4 w-4 text-muted-foreground" />
+                        </button>
+                        <button
+                          onClick={() => handleToggleActive(s)}
+                          className="p-2 hover:bg-muted rounded-lg transition"
+                          title={s.is_active ? "Disable" : "Enable"}
+                        >
+                          {s.is_active ? <X className="h-4 w-4 text-yellow-500" /> : <Check className="h-4 w-4 text-green-500" />}
+                        </button>
+                        <button onClick={() => handleDelete(s)} className="p-2 hover:bg-red-50 rounded-lg transition" title="Delete">
+                          <Trash2 className="h-4 w-4 text-red-400" />
+                        </button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
       <AlertDialog open={!!mfaResetTarget} onOpenChange={(open) => { if (!open) setMfaResetTarget(null); }}>
         <AlertDialogContent>

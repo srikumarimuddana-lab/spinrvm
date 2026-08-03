@@ -315,6 +315,59 @@ async def get_audit_logs(
     return logs
 
 
+@router.get("/audit-logs/top-actors")
+async def get_audit_log_top_actors(
+    days: int = Query(7, ge=1, le=90),
+    limit: int = Query(20, ge=1, le=200),
+    _admin: dict = Depends(require_module("audit")),
+):
+    """Corporate + admin portal review, round 2: "no 'who touched the
+    most' rollup views — every threat hunt needs raw SQL." Aggregates
+    audit_logs by actor over a bounded recent window so a SOC investigation
+    doesn't start from a blank raw-SQL prompt every time.
+
+    Same shape as monitoring.py::get_email_deliverability (bounded days
+    window, single get_rows fetch capped at 5000, Counter aggregation in
+    Python) rather than a Postgres GROUP BY RPC — this table doesn't have
+    one, and standing one up is out of scope for a SOC convenience view.
+    """
+    from collections import Counter
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = await db_supabase.get_rows(
+        "audit_logs",
+        {"created_at": {"$gte": since}},
+        order="created_at",
+        desc=True,
+        limit=5000,
+    )
+    by_actor: Counter = Counter()
+    actions_by_actor: Dict[str, Counter] = {}
+    for row in rows:
+        actor = row.get("actor_id") or "unknown"
+        by_actor[actor] += 1
+        actions_by_actor.setdefault(actor, Counter())[row.get("action") or "unknown"] += 1
+
+    top = [
+        {
+            "actor_id": actor,
+            "action_count": count,
+            "top_actions": [
+                {"action": action, "count": action_count}
+                for action, action_count in actions_by_actor[actor].most_common(5)
+            ],
+        }
+        for actor, count in by_actor.most_common(limit)
+    ]
+    return {
+        "days": days,
+        "window_start": since,
+        "rows_scanned": len(rows),
+        "rows_scanned_capped": len(rows) >= 5000,
+        "actors": top,
+    }
+
+
 class PiiRevealRequest(BaseModel):
     entity_type: str
     entity_id: str

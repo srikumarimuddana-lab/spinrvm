@@ -51,6 +51,7 @@ import {
     ArrowLeft,
     Building2,
     CheckCircle2,
+    CreditCard,
     FileText,
     PauseCircle,
     Pencil,
@@ -347,6 +348,11 @@ export default function CompanyDetailPage() {
                     <Link href={`/dashboard/corporate-accounts/${id}/policy`}>
                         <Button variant="outline">
                             <ShieldCheck className="mr-2 h-4 w-4" /> Policy
+                        </Button>
+                    </Link>
+                    <Link href={`/dashboard/corporate-accounts/${id}/subscription`}>
+                        <Button variant="outline">
+                            <CreditCard className="mr-2 h-4 w-4" /> Subscription
                         </Button>
                     </Link>
                     {company.status !== "suspended" && company.status !== "closed" && (

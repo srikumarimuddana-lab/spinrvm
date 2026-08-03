@@ -122,6 +122,25 @@ export const getAuditLogs = (opts: {
     return request<any[]>(`/api/admin/audit-logs?${sp.toString()}`);
 };
 
+// Corporate + admin portal review, round 2: "no 'who touched the most'
+// rollup views — every threat hunt needs raw SQL."
+export const getAuditLogTopActors = (opts: { days?: number; limit?: number } = {}) => {
+    const sp = new URLSearchParams();
+    sp.set("days", String(opts.days ?? 7));
+    sp.set("limit", String(opts.limit ?? 20));
+    return request<{
+        days: number;
+        window_start: string;
+        rows_scanned: number;
+        rows_scanned_capped: boolean;
+        actors: Array<{
+            actor_id: string;
+            action_count: number;
+            top_actions: Array<{ action: string; count: number }>;
+        }>;
+    }>(`/api/admin/audit-logs/top-actors?${sp.toString()}`);
+};
+
 /* ── Quests / Bonus Challenges ──────────── */
 export const getQuests = (isActive?: boolean) =>
     request<any[]>(`/api/v1/quests/admin/list${isActive !== undefined ? `?is_active=${isActive}` : ''}`);

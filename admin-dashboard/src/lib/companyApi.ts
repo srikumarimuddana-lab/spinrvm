@@ -364,12 +364,20 @@ export interface CompanySection {
     status: "active" | "archived";
     member_count?: number;
     created_at?: string;
+    // Corporate + admin portal review, round 2, "department/section
+    // budgets" — visibility only, never blocks a booking.
+    monthly_budget_cap?: number | null;
+    budget_month?: string;
+    budget_spend_used?: string;
 }
 
 export const listCompanySections = (companyId: string) =>
     companyRequest<{ sections: CompanySection[] }>(`/api/company/${companyId}/sections`);
 
-export const createCompanySection = (companyId: string, body: { name: string; description?: string }) =>
+export const createCompanySection = (
+    companyId: string,
+    body: { name: string; description?: string; monthly_budget_cap?: number | null }
+) =>
     companyRequest<CompanySection>(`/api/company/${companyId}/sections`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -378,7 +386,12 @@ export const createCompanySection = (companyId: string, body: { name: string; de
 export const updateCompanySection = (
     companyId: string,
     sectionId: string,
-    body: { name?: string; description?: string; status?: "active" | "archived" }
+    body: {
+        name?: string;
+        description?: string;
+        status?: "active" | "archived";
+        monthly_budget_cap?: number | null;
+    }
 ) =>
     companyRequest<CompanySection>(`/api/company/${companyId}/sections/${sectionId}`, {
         method: "PATCH",
@@ -516,6 +529,34 @@ export const getCompanyBillingTransactions = (companyId: string, skip = 0, limit
     companyRequest<BillingTransactionsPage>(
         `/api/company/${companyId}/billing/transactions?skip=${skip}&limit=${limit}`
     );
+
+// Corporate + admin portal review, round 2: self-serve wallet funding.
+// Charges the company's default card on file — this slice does not add a
+// "manage payment methods" flow, so there is no client-supplied
+// payment_method_id yet; the backend falls back to the saved default.
+export interface SelfServeTopUpResult {
+    payment_intent_id: string;
+    client_secret: string;
+}
+
+export const selfServeWalletTopup = (companyId: string, amount: number) =>
+    companyRequest<SelfServeTopUpResult>(`/api/company/${companyId}/wallet/topup`, {
+        method: "POST",
+        body: JSON.stringify({ amount }),
+    });
+
+// Corporate + admin portal review, round 2: downloadable PDF invoice per
+// statement period. Binary response — bypasses companyRequest's JSON-only
+// parsing, same minimal pattern as lib/api/corporate.ts's
+// fetchKybDocumentBlob (no silent-refresh retry on a blob download).
+export async function fetchCompanyStatementPdfBlob(companyId: string, month: string): Promise<Blob> {
+    const token = useCompanyAuthStore.getState().token;
+    const res = await fetch(`/api/company/${companyId}/billing/statements/${encodeURIComponent(month)}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Could not load statement PDF (${res.status})`);
+    return res.blob();
+}
 
 export interface PortalVehicleType {
     id: string;

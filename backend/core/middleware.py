@@ -10,6 +10,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import settings
+from utils.log_context import set_request_context
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
 # ── CSRF double-submit constants ─────────────────────────────────────
@@ -237,6 +238,13 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         ctx = {"request_id": request_id}
         if user_id is not None:
             ctx["user_id"] = user_id
+        # utils/log_context.py's ContextVar-backed request_id, read by
+        # utils/audit_logger.py so audit_logs rows can be joined back to
+        # the Sentry event / log lines from the same request (both already
+        # carry request_id via logger.contextualize below). Task-scoped —
+        # asyncio ContextVars propagate through awaits within this request's
+        # own task without leaking across concurrent requests.
+        set_request_context(request_id, user_id or "")
         with logger.contextualize(**ctx):
             response = await call_next(request)
         response.headers["X-Request-ID"] = request_id

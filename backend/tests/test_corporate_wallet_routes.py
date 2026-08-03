@@ -197,6 +197,7 @@ def test_manual_adjust_writes_audit_log(test_client, admin_override):
             AsyncMock(return_value={"transaction_id": "t1", "balance_after": "75.00"}),
         ),
         patch("routes.corporate_wallet.log_admin_action", AsyncMock()) as mock_audit,
+        patch("routes.corporate_wallet.get_rows", AsyncMock(return_value=[])),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/wallet/adjust",
@@ -205,3 +206,147 @@ def test_manual_adjust_writes_audit_log(test_client, admin_override):
     assert resp.status_code == 200, resp.text
     mock_audit.assert_awaited_once()
     assert mock_audit.await_args.kwargs["details"]["notes"] == "manual correction"
+
+
+def test_adjust_blocked_when_daily_cap_exceeded(test_client, admin_override):
+    """Corporate + admin portal review, "$100k/minute" finding:
+    /wallet/adjust accepted up to $100,000 per call with no limit on
+    repeated calls by the same admin. A daily cumulative cap now blocks a
+    call that would push the day's total over the configured limit."""
+    prior_rows = [
+        {"details": {"amount": "40000.00"}},
+        {"details": {"amount": "-5000.00"}},  # abs() summed — direction doesn't matter
+    ]
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "100000.00", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_wallet.get_app_settings",
+            AsyncMock(return_value={"corporate_wallet_admin_adjust_daily_cap": 50000.0}),
+        ),
+        patch("routes.corporate_wallet.get_rows", AsyncMock(return_value=prior_rows)),
+        patch("routes.corporate_wallet.apply_adjustment", AsyncMock()) as m_adjust,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/adjust",
+            json={"amount": 6000, "notes": "another top-up"},
+        )
+    # 45000 already moved today + 6000 this call = 51000 > 50000 cap
+    assert resp.status_code == 429, resp.text
+    assert "cap" in resp.json()["detail"].lower()
+    m_adjust.assert_not_awaited()
+
+
+def test_adjust_allowed_under_configured_daily_cap(test_client, admin_override):
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "100000.00", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_wallet.get_app_settings",
+            AsyncMock(return_value={"corporate_wallet_admin_adjust_daily_cap": 50000.0}),
+        ),
+        patch(
+            "routes.corporate_wallet.get_rows",
+            AsyncMock(return_value=[{"details": {"amount": "40000.00"}}]),
+        ),
+        patch(
+            "routes.corporate_wallet.apply_adjustment",
+            AsyncMock(return_value={"transaction_id": "t1", "balance_after": "104000.00"}),
+        ) as m_adjust,
+        patch("routes.corporate_wallet.log_admin_action", AsyncMock()),
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/adjust",
+            json={"amount": 4000, "notes": "within cap"},
+        )
+    # 40000 + 4000 = 44000, under the 50000 cap
+    assert resp.status_code == 200, resp.text
+    m_adjust.assert_awaited_once()
+
+
+def test_adjust_daily_cap_defaults_when_unconfigured(test_client, admin_override):
+    """No app_settings value set -> falls back to the built-in default cap
+    rather than silently allowing an unbounded amount."""
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "1000000.00", "soft_negative_floor": -50}),
+        ),
+        patch("routes.corporate_wallet.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "routes.corporate_wallet.get_rows",
+            AsyncMock(return_value=[{"details": {"amount": "49999.00"}}]),
+        ),
+        patch("routes.corporate_wallet.apply_adjustment", AsyncMock()) as m_adjust,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/adjust",
+            # Max per-call amount (100000) pushed on top of 49999 already moved
+            # today blows past the $50,000 default cap even before this call.
+            json={"amount": 100000, "notes": "large top-up"},
+        )
+    assert resp.status_code == 429, resp.text
+    m_adjust.assert_not_awaited()
+
+
+# ── wallet risk portfolio ────────────────────────────────────────────────
+# Corporate + admin portal review, round 2: "no portfolio-level view of
+# corporate wallet risk."
+
+
+def test_wallet_portfolio_returns_flagged_count(test_client, admin_override):
+    rows = [
+        {
+            "wallet_id": "w1",
+            "company_id": "c1",
+            "company_name": "Acme",
+            "company_status": "active",
+            "balance": "-25.00",
+            "soft_negative_floor": "-50.00",
+            "auto_topup_enabled": False,
+            "risk_flags": ["negative_balance"],
+        },
+        {
+            "wallet_id": "w2",
+            "company_id": "c2",
+            "company_name": "Beta",
+            "company_status": "active",
+            "balance": "500.00",
+            "soft_negative_floor": "-50.00",
+            "auto_topup_enabled": False,
+            "risk_flags": [],
+        },
+    ]
+    with patch("routes.corporate_wallet.list_wallet_risk_portfolio", AsyncMock(return_value=rows)):
+        resp = test_client.get("/api/admin/corporate-accounts/wallet-portfolio")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_wallets"] == 2
+    assert body["flagged_count"] == 1
+    assert body["wallets"] == rows
+
+
+def test_wallet_portfolio_empty_when_no_wallets(test_client, admin_override):
+    with patch("routes.corporate_wallet.list_wallet_risk_portfolio", AsyncMock(return_value=[])):
+        resp = test_client.get("/api/admin/corporate-accounts/wallet-portfolio")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_wallets"] == 0
+    assert body["flagged_count"] == 0
+    assert body["wallets"] == []
+
+
+def test_wallet_portfolio_does_not_collide_with_company_wallet_route(test_client, admin_override):
+    """The static /wallet-portfolio path and the dynamic /{company_id}/wallet
+    path must not shadow each other — a below-minimum topup on a literal
+    company_id of "wallet-portfolio" would be a red flag if they collided,
+    but the real check is that the portfolio route itself resolves to its
+    own handler, not get_wallet's 404-on-missing-wallet path."""
+    with patch("routes.corporate_wallet.list_wallet_risk_portfolio", AsyncMock(return_value=[])):
+        resp = test_client.get("/api/admin/corporate-accounts/wallet-portfolio")
+    assert resp.status_code == 200
+    assert "wallets" in resp.json()

@@ -432,3 +432,204 @@ def test_update_audit_log_failure_does_not_fail_the_request(admin_client):
         resp = admin_client.patch("/api/admin/safety/incidents/inc-1", json={"severity": "sev1"})
     assert resp.status_code == 200
     assert resp.json()["updated"] is True
+
+
+# ── create ────────────────────────────────────────────────────────────────
+# Corporate + admin portal review, round 2: "safety incidents can't be
+# created ... from the admin side."
+
+
+def test_create_writes_open_incident(admin_client):
+    with (
+        patch("backend.db_supabase.insert_one", new=AsyncMock(return_value=None)) as insert_one,
+        patch("routes.admin.safety.log_admin_action", new=AsyncMock(return_value="aud-1")) as log,
+    ):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents",
+            json={"category": "unsafe_driving", "description": "Phoned in by rider.", "role": "rider"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()["incident"]
+    assert body["status"] == "open"
+    assert body["category"] == "unsafe_driving"
+    assert body["role"] == "rider"
+    assert body["id"]  # a uuid was generated
+    inserted = insert_one.call_args.args[1]
+    assert inserted["status"] == "open"
+    log.assert_awaited_once()
+
+
+def test_create_accepts_optional_ride_and_reporter(admin_client):
+    with (
+        patch("backend.db_supabase.insert_one", new=AsyncMock(return_value=None)) as insert_one,
+        patch("routes.admin.safety.log_admin_action", new=AsyncMock(return_value="aud-1")),
+    ):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents",
+            json={
+                "category": "assault",
+                "description": "Driver reported by phone.",
+                "role": "driver",
+                "reported_by_user_id": "drv-1",
+                "ride_id": "ride-1",
+                "severity": "sev1",
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    inserted = insert_one.call_args.args[1]
+    assert inserted["reported_by_user_id"] == "drv-1"
+    assert inserted["ride_id"] == "ride-1"
+    assert inserted["severity"] == "sev1"
+
+
+def test_create_rejects_blank_category(admin_client):
+    resp = admin_client.post(
+        "/api/admin/safety/incidents",
+        json={"category": "", "description": "x"},
+    )
+    assert resp.status_code == 422
+
+
+def test_create_db_failure_maps_to_503(admin_client):
+    with patch("backend.db_supabase.insert_one", new=AsyncMock(side_effect=RuntimeError("db down"))):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents",
+            json={"category": "unsafe_driving", "description": "x"},
+        )
+    assert resp.status_code == 503
+
+
+def test_create_audit_log_failure_does_not_fail_the_request(admin_client):
+    with (
+        patch("backend.db_supabase.insert_one", new=AsyncMock(return_value=None)),
+        patch("routes.admin.safety.log_admin_action", new=AsyncMock(side_effect=RuntimeError("audit down"))),
+    ):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents",
+            json={"category": "unsafe_driving", "description": "x"},
+        )
+    assert resp.status_code == 200
+
+
+# ── merge ─────────────────────────────────────────────────────────────────
+# Corporate + admin portal review, round 2: "safety incidents can't be
+# ... merged from the admin side."
+
+
+def test_merge_marks_source_as_duplicate(admin_client):
+    canonical = {**_INCIDENT, "id": "inc-canonical", "merged_into_incident_id": None}
+    merged = {**_INCIDENT, "status": "duplicate", "merged_into_incident_id": "inc-canonical"}
+    calls_holder = {"n": 0}
+
+    async def _fake_get_rows(table, filters=None, **kw):
+        assert table == "safety_incidents"
+        calls_holder["n"] += 1
+        if calls_holder["n"] == 1:
+            return [_INCIDENT]  # source lookup
+        if calls_holder["n"] == 2:
+            return [canonical]  # canonical lookup
+        return [merged]  # refresh after update
+
+    with (
+        patch("backend.db_supabase.get_rows", new=_fake_get_rows),
+        patch("backend.db_supabase.update_one", new=AsyncMock(return_value=None)) as update_one,
+        patch("routes.admin.safety.log_admin_action", new=AsyncMock(return_value="aud-1")) as log,
+    ):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents/inc-1/merge",
+            json={"canonical_incident_id": "inc-canonical"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["merged"] is True
+    assert body["incident"]["status"] == "duplicate"
+
+    updates = update_one.call_args.args[2]
+    assert updates["status"] == "duplicate"
+    assert updates["merged_into_incident_id"] == "inc-canonical"
+    assert updates["resolved_by"] == "admin-1"
+    log.assert_awaited_once()
+
+
+def test_merge_rejects_self_merge(admin_client):
+    resp = admin_client.post(
+        "/api/admin/safety/incidents/inc-1/merge",
+        json={"canonical_incident_id": "inc-1"},
+    )
+    assert resp.status_code == 422
+
+
+def test_merge_404_when_source_missing(admin_client):
+    with patch("backend.db_supabase.get_rows", new=_get_rows_by_table(safety_incidents=[])):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents/nope/merge",
+            json={"canonical_incident_id": "inc-canonical"},
+        )
+    assert resp.status_code == 404
+
+
+def test_merge_404_when_canonical_missing(admin_client):
+    """Source exists, canonical target doesn't — still a 404, not a
+    silent write to a target that isn't real."""
+    calls_holder = {"n": 0}
+
+    async def _fake_get_rows(table, filters=None, **kw):
+        calls_holder["n"] += 1
+        return [_INCIDENT] if calls_holder["n"] == 1 else []
+
+    with patch("backend.db_supabase.get_rows", new=_fake_get_rows):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents/inc-1/merge",
+            json={"canonical_incident_id": "nope"},
+        )
+    assert resp.status_code == 404
+
+
+def test_merge_flattens_chain_to_the_root_canonical(admin_client):
+    """Merging into an incident that is itself already a duplicate of
+    something else must point at the chain's root, not build a 2-hop
+    chain — otherwise "find every duplicate of X" stops being a
+    single-hop query."""
+    already_merged_canonical = {
+        **_INCIDENT,
+        "id": "inc-b",
+        "status": "duplicate",
+        "merged_into_incident_id": "inc-root",
+    }
+    calls_holder = {"n": 0}
+
+    async def _fake_get_rows(table, filters=None, **kw):
+        calls_holder["n"] += 1
+        if calls_holder["n"] == 1:
+            return [_INCIDENT]
+        if calls_holder["n"] == 2:
+            return [already_merged_canonical]
+        return [_INCIDENT]
+
+    with (
+        patch("backend.db_supabase.get_rows", new=_fake_get_rows),
+        patch("backend.db_supabase.update_one", new=AsyncMock(return_value=None)) as update_one,
+        patch("routes.admin.safety.log_admin_action", new=AsyncMock(return_value="aud-1")),
+    ):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents/inc-1/merge",
+            json={"canonical_incident_id": "inc-b"},
+        )
+    assert resp.status_code == 200, resp.text
+    updates = update_one.call_args.args[2]
+    assert updates["merged_into_incident_id"] == "inc-root"
+
+
+def test_merge_db_failure_maps_to_503(admin_client):
+    with (
+        patch(
+            "backend.db_supabase.get_rows",
+            new=_get_rows_by_table(safety_incidents=[_INCIDENT]),
+        ),
+        patch("backend.db_supabase.update_one", new=AsyncMock(side_effect=RuntimeError("db down"))),
+    ):
+        resp = admin_client.post(
+            "/api/admin/safety/incidents/inc-1/merge",
+            json={"canonical_incident_id": "inc-canonical"},
+        )
+    assert resp.status_code == 503

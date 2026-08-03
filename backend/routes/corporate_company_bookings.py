@@ -17,7 +17,8 @@ the POST /bookings pydantic body to a QUERY param, 422ing every real booking
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -295,7 +296,6 @@ async def booking_fare_estimate(
 ):
     """Fare preview for the portal book page — same canonical pipeline as the
     booking itself, surge pinned to 1.0 (corporate rides never surge)."""
-    from decimal import Decimal
 
     return await compute_fare_estimate(
         pickup_lat=pickup_lat,
@@ -315,6 +315,10 @@ async def booking_fare_estimate(
 class SectionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
+    # Corporate + admin portal review, round 2, "department/section budgets"
+    # — visibility only (business decision). Never read by any booking-time
+    # or settlement-time gate; purely a reference number the company sets.
+    monthly_budget_cap: Optional[Decimal] = Field(default=None, ge=0, decimal_places=2)
 
     @field_validator("name")
     @classmethod
@@ -332,6 +336,7 @@ class SectionUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
     status: Optional[str] = Field(default=None, pattern="^(active|archived)$")
+    monthly_budget_cap: Optional[Decimal] = Field(default=None, ge=0, decimal_places=2)
 
     @field_validator("name")
     @classmethod
@@ -346,8 +351,9 @@ class SectionUpdate(BaseModel):
 
 @router.get("/sections")
 async def list_sections(ctx: dict = Depends(require_company_member)):
-    """Sections with live member counts. Member-readable — the bookings list
-    filter needs them; only owner/admin can mutate."""
+    """Sections with live member counts and current-month budget spend.
+    Member-readable — the bookings list filter needs them; only
+    owner/admin can mutate."""
     sections = (
         await db_supabase.get_rows(
             "corporate_sections",
@@ -371,8 +377,23 @@ async def list_sections(ctx: dict = Depends(require_company_member)):
         sid = m.get("section_id")
         if sid:
             counts[sid] = counts.get(sid, 0) + 1
+
+    # Corporate + admin portal review, round 2, "department/section
+    # budgets" (visibility only). Batch read, not N+1 — one query for
+    # every section's current calendar month, not one per section.
+    current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    spend_map = await db_supabase.get_section_spend_map([s["id"] for s in sections], current_month)
+
     return {
-        "sections": [{**s, "member_count": counts.get(s["id"], 0)} for s in sections],
+        "sections": [
+            {
+                **s,
+                "member_count": counts.get(s["id"], 0),
+                "budget_month": current_month,
+                "budget_spend_used": str(spend_map.get(s["id"]) or Decimal("0.00")),
+            }
+            for s in sections
+        ],
     }
 
 
@@ -387,6 +408,7 @@ async def create_section(body: SectionCreate, ctx: dict = Depends(require_compan
         "name": body.name.strip(),
         "description": (body.description or "").strip() or None,
         "status": "active",
+        "monthly_budget_cap": float(body.monthly_budget_cap) if body.monthly_budget_cap is not None else None,
         "created_by": ctx["user"]["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -426,6 +448,8 @@ async def update_section(
     patch = {k: v for k, v in body.model_dump(exclude_none=True).items()}
     if "name" in patch:
         patch["name"] = patch["name"].strip()
+    if "monthly_budget_cap" in patch and isinstance(patch["monthly_budget_cap"], Decimal):
+        patch["monthly_budget_cap"] = float(patch["monthly_budget_cap"])
     if not patch:
         return existing[0]
     try:

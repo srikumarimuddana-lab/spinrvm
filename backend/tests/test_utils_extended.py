@@ -1140,6 +1140,71 @@ class TestAuditLogger:
             # Should NOT raise — audit errors are always swallowed
             asyncio.run(log_admin_action(admin, "view", "rides", "ride_99"))
 
+    def test_log_admin_action_records_request_id_from_context(self):
+        """Corporate + admin portal review, round 2: "no correlation ID
+        links an admin action to the Sentry error or downstream row it
+        caused" — utils/log_context.py's request-scoped ContextVar
+        (populated by core/middleware.py's RequestIDMiddleware) must land
+        on the audit_logs row so it can be joined to the same request's
+        Sentry event / log lines (both already tag request_id)."""
+        from backend.utils.audit_logger import log_admin_action
+        from backend.utils.log_context import set_request_context
+
+        admin = {"id": "admin_4", "role": "super_admin"}
+        try:
+            set_request_context("req-abc-123", admin["id"])
+            with patch(
+                "backend.utils.audit_logger.db_supabase.insert_one", AsyncMock(return_value={"id": "log_4"})
+            ) as mock_insert:
+                asyncio.run(log_admin_action(admin, "update", "users", "user_1"))
+            assert mock_insert.await_args.args[1]["request_id"] == "req-abc-123"
+        finally:
+            set_request_context("", "")  # avoid leaking into other tests' contexts
+
+    def test_log_admin_action_request_id_null_outside_request_context(self):
+        """A background loop (no HTTP request, no middleware) calling
+        log_admin_action must not write the ContextVar's empty-string
+        default as a literal "" — NULL keeps the partial index meaningful."""
+        from backend.utils.audit_logger import log_admin_action
+        from backend.utils.log_context import set_request_context
+
+        admin = {"id": "admin_5", "role": "ops"}
+        try:
+            set_request_context("", "")  # simulates no RequestIDMiddleware having run
+            with patch(
+                "backend.utils.audit_logger.db_supabase.insert_one", AsyncMock(return_value={"id": "log_5"})
+            ) as mock_insert:
+                asyncio.run(log_admin_action(admin, "update", "users", "user_1"))
+            assert mock_insert.await_args.args[1]["request_id"] is None
+        finally:
+            set_request_context("", "")
+
+    def test_request_id_middleware_populates_log_context(self):
+        """End-to-end wiring: core/middleware.py's RequestIDMiddleware must
+        actually call utils/log_context.py's set_request_context, not just
+        bind the loguru context — a route handler reading get_request_id()
+        mid-request must see the same ID as the X-Request-ID response
+        header (and thus the same ID any log_admin_action call from that
+        handler would record)."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from backend.core.middleware import RequestIDMiddleware
+        from backend.utils.log_context import get_request_id
+
+        app = FastAPI()
+        app.add_middleware(RequestIDMiddleware)
+
+        @app.get("/probe")
+        async def probe():
+            return {"seen_request_id": get_request_id()}
+
+        client = TestClient(app)
+        resp = client.get("/probe", headers={"X-Request-ID": "req-fixed-999"})
+        assert resp.status_code == 200
+        assert resp.headers["X-Request-ID"] == "req-fixed-999"
+        assert resp.json()["seen_request_id"] == "req-fixed-999"
+
 
 # ===========================================================================
 # utils/ride_code.py

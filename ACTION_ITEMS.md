@@ -3499,8 +3499,19 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `test_ai_pii.py` + `test_log_guard.py`, including 16 new tests). See
   `docs/change-log/2026-08-01-ai-pii-card-govid-coverage.md`.
 
-- [ ] **D1. PostGIS surge query** — `surge_engine.py` caps at 500 drivers with Python
-  point-in-polygon; move the count server-side when driver count approaches the cap.
+- [x] **D1. PostGIS surge query** — stale, already substantially done by
+  another session before this pass. `utils/surge_engine.py` already: (1)
+  raised the fetch cap 500 → 5000 and made truncation loud (metric +
+  warning) so a hit can never silently mis-price surge; (2) implemented
+  `_count_supply_spatial()` — the actual PostGIS `ST_Covers` + GIST-index
+  server-side count this item asked for (migration 170); (3) gated it
+  behind `SURGE_SPATIAL_COUNT` (env flag, off by default, fallback-safe on
+  any error) exactly per CLAUDE.md's "ship dark, verify in staging, then
+  flip on" convention for anything touching a live-tested, money-adjacent
+  path. **Deliberately not flipped on here**: turning the flag on is an
+  ops decision gated on an actual staging rehearsal this session cannot
+  perform (no staging environment — see C1/E1), not an engineering task
+  left undone. No code change needed; correcting the stale item.
 - [ ] **D2. Distributed tracing** — request-ID propagation exists (`X-Request-ID`);
   full OpenTelemetry only if multi-replica latency debugging becomes painful.
 - [ ] **D3. Driver destination mode** — biggest driver-retention feature gap vs industry.

@@ -1183,13 +1183,12 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         background loops; regulatory-adjacent (Saskatchewan Transportation
         Act driver-eligibility — expired documents must suspend the driver).
     - **Sub-tier C — 60-80% band, lowest urgency per the original Track 2
-      scoping note** (~54 more files remaining, not itemized individually
-      here — notable remaining large ones: `routes/webhooks.py`
-      75.40%/748 stmts Stripe-adjacent, `repositories/driver_repo.py`
-      72.99%, `routes/disputes.py` 73.88% — full list reproducible via the
-      same `--cov=.` command above; a future session should re-run it
-      rather than trust this snapshot going stale). `routes/promotions.py`
-      65.85% was also named here and is now closed — see below.
+      scoping note** (~51 more files remaining, not itemized individually
+      here — full list reproducible via the same `--cov=.` command above; a
+      future session should re-run it rather than trust this snapshot going
+      stale). All four originally-named files (`routes/promotions.py`,
+      `routes/webhooks.py`, `repositories/driver_repo.py`,
+      `routes/disputes.py`) are now closed/improved — see below.
       - `utils/payment_retry.py` — **CLOSED, 72.54% → 99%** (2026-08-02,
         244 stmts, 67→2 missing; measured via
         `pytest tests/test_payment_retry.py tests/test_payment_retry_coverage.py
@@ -1249,6 +1248,57 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
         application code changed. Full suite re-run after: 8456 passed (was
         8415), 8 skipped, 1 xfailed, 0 failed. See
         `docs/change-log/2026-08-02-a1c-promotions-coverage.md`.
+      - `routes/webhooks.py` — **IMPROVED (not fully closed), 75.40% → 78%**
+        (2026-08-02, 748 stmts, measured via `pytest
+        tests/test_webhooks_helpers_coverage.py tests/test_webhooks_main.py
+        tests/test_orphan_refund.py tests/test_webhook_stripe_v15.py
+        tests/test_ses_webhook.py tests/test_twilio_inbound.py
+        tests/test_corporate_webhook.py --cov=routes.webhooks
+        --cov-report=term-missing`). The huge `stripe_webhook` route already
+        had deep coverage from existing test files; the module-private
+        SES/Twilio/invoice helper functions
+        (`_extract_invoice_payment_intent`, `_invoice_period_end_iso`/
+        `_invoice_period_start_iso`, `_confirm_sns_subscription`,
+        `_topic_arn_allowed`, `_suppress_address`,
+        `_suppress_marketing_email`, `_handle_ses_notification`,
+        `_resolve_user_id_by_phone`, `_handle_sms_keyword`) had zero direct
+        unit tests. Added `backend/tests/test_webhooks_helpers_coverage.py`
+        (39 tests). Real remaining gap: large chunks of `stripe_webhook`'s
+        deep event-type branches (~lines 904-1094, 1867-1901) are still
+        untested — flagging as unfinished for a future session rather than
+        overstating this as "closed."
+      - `repositories/driver_repo.py` — **CLOSED, 72.99% → 99%**
+        (2026-08-02, 137 stmts, measured via `pytest
+        tests/test_driver_repo_coverage.py
+        tests/test_set_driver_available_invariant.py
+        tests/test_go_online_availability.py tests/test_claim_ride.py
+        tests/test_driver_claim_reaper.py --cov=repositories.driver_repo
+        --cov-report=term-missing`). Only `set_driver_available
+        (available=True)` had a direct unit test before this. Added
+        `backend/tests/test_driver_repo_coverage.py` (38 tests) covering
+        every function's no-supabase/success/exception branches, including
+        the `available=False` release path and claim-won-vs-claim-lost
+        races for `claim_driver_atomic`/`claim_ride_atomic`/
+        `match_and_claim_driver`.
+      - `routes/disputes.py` — **CLOSED, 73.88% → 94%** (2026-08-02, 134
+        stmts, measured via `pytest tests/test_disputes_admin_coverage.py
+        tests/test_dispute_refund_cents.py
+        tests/test_p3_addresses_favorites_safety_disputes.py
+        --cov=routes.disputes --cov-report=term-missing`). User-facing
+        endpoints and the Stripe-refund happy path were already covered;
+        `admin_get_disputes` had zero direct test and
+        `admin_resolve_dispute`'s guard/error branches (404, 400×2,
+        `manual_required`, 503, 502, `rejected`, no-refund-amount,
+        notify-failure-swallow) were untested. Added
+        `backend/tests/test_disputes_admin_coverage.py` (13 tests). Also
+        found and documented (not fixed) that this module's `admin_router`
+        (same dead-code pattern as `promotions.py`'s) is never mounted in
+        `backend/server.py` — the live `/api/admin/disputes` surface is
+        `routes/admin/support.py`.
+      - Test-only across all three files, no application code changed. Full
+        suite re-run after: 8546 passed (was 8456), 8 skipped, 1 xfailed, 0
+        failed. See
+        `docs/change-log/2026-08-02-a1c-webhooks-driver_repo-disputes-coverage.md`.
     - First file since this scoping pass picked up below.
   - `backend/utils/reconciliation.py` (Sub-tier B above, daily Stripe ↔ DB ↔
     `financial_events` reconciliation loop — the only alarm for a Stripe/DB

@@ -290,7 +290,15 @@ async def admin_resolve_dispute(
     # Notify rider of outcome
     rider_id = dispute.get("user_id")
     if rider_id:
-        resolution_label = "approved" if req.resolution == "refund" else "reviewed"
+        # `req.resolution` is one of approved | partial_refund | rejected
+        # ("refund" is never a valid value — comparing against it here
+        # previously made every notification say "reviewed" regardless of
+        # outcome, even a full approval or an explicit rejection).
+        resolution_label = {
+            "approved": "approved",
+            "partial_refund": "approved",
+            "rejected": "rejected",
+        }.get(req.resolution, "reviewed")
         amount_text = (
             f" A refund of ${req.refund_amount:.2f} has been issued."
             if req.resolution in ("approved", "partial_refund") and req.refund_amount

@@ -177,3 +177,79 @@ description = msg or ("" if transcript else "(no message)")
 
 - `favorites.py`'s rider-app consumption of the response shape was not checked (out of scope for this backend-only PR) — the fix only corrects values under existing field names, so no rider-app contract change is expected, but this wasn't confirmed against the actual mobile client code.
 - No staging/manual repro for any of the three — all verified via the existing/updated unit test suites against mocked DB/Redis clients.
+
+---
+
+## Entry 3 — Dispute-resolution notification wording; fares crash on NULL `surge_multiplier`
+
+### 1. Issue / gap identified
+
+1. `routes/disputes.py::admin_resolve_dispute` — the rider-facing push-notification wording compared `req.resolution == "refund"`, a value that is never actually sent (the documented/used set is `approved | partial_refund | rejected`), so the notification always said "Your dispute has been reviewed." regardless of the actual outcome — even a full approval with a real Stripe refund issued.
+2. `routes/fares.py::build_fares_for_area` — `min(matched_area.get("surge_multiplier", 1.0), SURGE_CAP)` only falls back to `1.0` when the `surge_multiplier` key is *absent*, not when it's explicitly SQL `NULL` (Python `None`). A `service_areas` row with `surge_enabled=True`, `surge_active=True`, and an explicit `NULL` `surge_multiplier` (a plausible admin data-entry state) raised `TypeError` inside `min()`, a 500 on the public `/fares` endpoint for that entire service area.
+
+### 2. Root cause
+
+1. Likely a copy/paste or renamed-constant bug — `"refund"` isn't a valid `resolution` value anywhere else in the file.
+2. `dict.get(key, default)`'s well-known "default only substitutes on absent key, not on `None` value" gap — every other value read in this function that could plausibly be `NULL` isn't run through `min()`/arithmetic directly, so this was the one spot the gap actually mattered.
+
+### 3. Fix / remediation
+
+1. `resolution_label` is now computed via an explicit dict lookup: `{"approved": "approved", "partial_refund": "approved", "rejected": "rejected"}.get(req.resolution, "reviewed")`. `rejected` disputes now correctly say "rejected" instead of the old generic "reviewed" fallback (an accuracy improvement, not a new category — `rejected` was always a valid, already-used `resolution` value in this same file).
+2. `matched_area.get("surge_multiplier") or 1.0` replaces the two-arg `.get(..., 1.0)`, so an explicit `NULL` now degrades to a 1.0x multiplier (same as the "surge not enabled" case) instead of crashing.
+
+### 4. Risk & impact on existing functionality
+
+- **`disputes.py`**: `admin_resolve_dispute` is admin-only and its refund/Stripe/DB-write logic is entirely unchanged — only the *push notification wording* sent to the rider changes. Blast radius: isolated to this one notification string; no other file constructs this message. This is a live-tested, rider-visible copy change (flagged per CLAUDE.md's "No silent behavior change to a live-tested flow" rule) — riders resolving a dispute mid-session will now see accurate wording instead of always "reviewed".
+- **`fares.py`**: `build_fares_for_area` is called from `routes/fares.py` itself (the `/fares` and `/rides` fare-estimate paths) and `diagnose_nearby_drivers.py` (an internal diagnostic script) — grepped, no other callers. For the common case (a real, non-NULL `surge_multiplier`) behavior is byte-identical; this only changes what happens on the previously-crashing NULL case, converting a 500 into a graceful 1.0x-surge estimate. Pure risk-reduction — there is no code path today that could regress from "worked" to "broken."
+
+### 5. User-experience effect
+
+- `disputes.py`: rider-visible — a rider who has an open dispute resolved will now see accurate wording ("approved"/"rejected") in their push notification instead of always "reviewed". This is a copy fix to an already-shipped notification, not a new notification type.
+- `fares.py`: rider-visible only in the previously-broken case — a service area with a NULL `surge_multiplier` now successfully returns fare estimates (at 1.0x) instead of the `/fares` endpoint 500ing for that area. No change for the normal case.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/routes/disputes.py` | `admin_resolve_dispute`'s `resolution_label` now maps `approved`/`partial_refund` → "approved", `rejected` → "rejected" | Close the found-not-fixed wording gap |
+| `backend/routes/fares.py` | `build_fares_for_area`'s surge multiplier read now uses `or 1.0` instead of `.get(..., 1.0)` | Close the found-not-fixed NULL-crash gap |
+| `backend/tests/test_routes_disputes_coverage.py` | Updated the pinned bug test to assert the corrected wording; added a `rejected`-resolution wording test | Reflect the fix |
+| `backend/tests/test_routes_fares_coverage.py` | Updated the pinned bug test to assert the graceful 1.0x degrade instead of `pytest.raises(TypeError)` | Reflect the fix |
+
+### 7. Before / after
+
+```python
+# Before (routes/disputes.py::admin_resolve_dispute)
+resolution_label = "approved" if req.resolution == "refund" else "reviewed"
+
+# After
+resolution_label = {
+    "approved": "approved",
+    "partial_refund": "approved",
+    "rejected": "rejected",
+}.get(req.resolution, "reviewed")
+```
+
+```python
+# Before (routes/fares.py::build_fares_for_area)
+min(matched_area.get("surge_multiplier", 1.0), SURGE_CAP)
+
+# After
+min(matched_area.get("surge_multiplier") or 1.0, SURGE_CAP)
+```
+
+### 8. Rollback plan
+
+`git revert` for both — no migration, no data written differently, no wallet/Stripe state touched by either fix (the `disputes.py` change is pure notification copy; the `fares.py` change only prevents a crash on a specific NULL-data shape).
+
+### 9. Verification performed
+
+- [x] Automated tests run: `pytest tests/test_routes_disputes_coverage.py tests/test_routes_fares_coverage.py -q` — 49 passed (16 + 33).
+- [x] Blast-radius regression check: `pytest tests/test_ai_tools_support.py tests/test_corporate_surge_bypass.py tests/test_fares.py tests/test_routes_faqs_coverage.py tests/test_dispute_refund_cents.py -q` — 66 passed, 0 failed.
+- [x] Blast-radius grep performed: see section 4.
+- [ ] Full backend suite — pending, run once at the end of this batch of fixes (per explicit user instruction to defer the full-suite/CI run).
+
+### 10. What was NOT verified
+
+- No staging/manual repro of the actual push notification delivery — verified at the unit level only (the string passed to `send_push_notification`).
+- Did not check whether any admin-dashboard surface also displays `resolution`/the old "reviewed" wording independently — only the backend notification-copy call site was in scope for this fix.

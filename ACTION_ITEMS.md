@@ -3195,12 +3195,29 @@ driver-persona-secrecy prompt rules, per-tool timeouts for the Maps fan-out
 tools, `/mcp` read-only enforcement + per-user daily cap, truncation-preserves-
 guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 
-- [ ] **AI1. `/ai/chat` rate limit is per-IP, not per-user** —
-  `backend/routes/ai.py:130` uses `ai_chat_limit` keyed on client IP
-  (`utils/rate_limiter.py:111-118`); the per-user daily cap fails OPEN on
-  Redis errors (`backend/ai/orchestrator.py:82-84`). One user on many IPs, or
-  a Redis blip, removes the LLM-cost ceiling (kill switch remains the hard
-  stop). Consider a user-keyed limiter + fail-closed above a generous floor.
+- [x] **AI1. `/ai/chat` rate limit is per-IP, not per-user** — done: the
+  IP-keying half is fixed. `ai_chat_limit` (`utils/rate_limiter.py`) now uses
+  a new `get_ai_chat_key`, which keys on the bearer token's `user_id`/`sub`
+  claim (signature not verified for keying purposes — the real,
+  signature-verified `get_current_user` dependency still gates the request
+  itself downstream, so a forged token can only land in a throwaway bucket
+  for a request that then 401s, never impersonate another user's bucket;
+  mirrors the existing unverified-extraction pattern already established in
+  `core/middleware.py::_extract_user_id` for log correlation) and falls back
+  to IP only when no bearer token is present. 12 new unit tests in
+  `tests/test_coverage_boost.py::TestGetAiChatKey` cover the user-id/sub
+  claim paths, the two-IPs-one-token-one-bucket property, and every
+  IP-fallback branch (no token, garbage token, no user claim). The
+  **daily-cap fail-open** half was deliberately left alone: it's an
+  existing, already-documented, cross-referenced design decision
+  (`ai/orchestrator.py::_over_daily_cap`'s own docstring: "Fails OPEN with a
+  loud log — the kill switch remains the hard stop when Redis is down"),
+  not an oversight — changing an accepted trade-off wasn't this fix's call
+  to make silently. **Not yet verified:** no live-Redis integration test
+  exercising the actual distributed counter across two rotated IPs with the
+  same token — the unit tests confirm the key function's own logic, not the
+  full rate-limit-storage round trip (that's the same level of verification
+  every other key-function in this file has, per existing test coverage).
 - [x] **AI2. Assistant output is persisted un-scrubbed** — only the user
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with

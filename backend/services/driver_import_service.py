@@ -496,7 +496,15 @@ def build_plan(
     planned_driver_ids: dict[str, str] = {}
     resumed_driver_ids: set[str] = set()
     existing_docs_cache: dict[str, set[tuple[str, str | None]]] = {}
-    document_old_ids = {r.get("old_driver_id") for r in document_rows if r.get("old_driver_id")}
+    # Only an APPROVED document counts toward `has_import_documents` below —
+    # a document row merely existing (pending or rejected) must not let a
+    # driver through as active/verified, bypassing the document-approval
+    # gate the rest of the system relies on.
+    document_old_ids = {
+        r.get("old_driver_id")
+        for r in document_rows
+        if r.get("old_driver_id") and (r.get("status") or "pending").strip().lower() == "approved"
+    }
 
     for row in driver_rows:
         old_id = row.get("old_driver_id") or "<missing>"

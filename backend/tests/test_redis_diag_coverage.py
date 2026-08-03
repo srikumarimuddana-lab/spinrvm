@@ -141,6 +141,25 @@ class TestPubsubRoundtrip:
         ps.unsubscribe.assert_awaited_once()
         ps.aclose.assert_awaited_once()
 
+    async def test_get_message_respects_caller_timeout(self):
+        """Fixed: `ps.get_message(...)`'s per-poll timeout is now bounded by
+        the time actually remaining until the caller's deadline (capped at
+        1s per iteration), not a fixed 1.0s -- previously a caller asking
+        for a fast 0.01s probe could still have an individual get_message()
+        call block for up to a full second when nothing arrived."""
+        client = MagicMock()
+        ps = _fake_ps(messages=[])  # never echoes
+        client.pubsub = MagicMock(return_value=ps)
+        client.publish = AsyncMock()
+
+        result = await _pubsub_roundtrip(client, timeout=0.01)
+
+        assert result["ok"] is False
+        # The per-poll timeout must be bounded by the ~0.01s requested
+        # budget, never the old hardcoded 1.0s.
+        _, kwargs = ps.get_message.call_args
+        assert kwargs["timeout"] <= 0.01
+
     async def test_cleanup_exceptions_are_swallowed(self):
         """unsubscribe/aclose raising must not propagate past the roundtrip."""
         client = MagicMock()

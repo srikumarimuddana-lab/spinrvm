@@ -38,7 +38,7 @@ _PROD_BASE = {
     "SUPABASE_URL": "https://test.supabase.co",
     "SUPABASE_SERVICE_ROLE_KEY": "test_key",
     "JWT_SECRET": "a" * 32,
-    "ADMIN_PASSWORD": "StrongPass123!",
+    "ADMIN_PASSWORD": "StrongPass123!ExtraLong",  # >=20 chars — see TestAdminPasswordLengthGuard
     "FIREBASE_DRIVER_APP_ID": "driver-app-id",
     "FIREBASE_RIDER_APP_ID": "rider-app-id",
     "SUPABASE_REGION": "ca-central-1",
@@ -108,7 +108,7 @@ class TestGuardProductionSecretsPlaceholders:
             _make_settings(_PROD_BASE, ADMIN_PASSWORD=weak_pw)
 
     def test_strong_admin_password_passes(self):
-        strong_pw = "Correct-Horse-42!"
+        strong_pw = "Correct-Horse-42!-Battery"  # >=20 chars — see TestAdminPasswordLengthGuard
         _make_settings(_PROD_BASE, ADMIN_PASSWORD=strong_pw)  # must not raise
 
     def test_missing_supabase_url_raises(self):
@@ -125,6 +125,24 @@ class TestGuardProductionSecretsPlaceholders:
         every 'raises' test pass for the wrong reason)."""
         s = _make_settings(_PROD_BASE)
         assert s.ENV.lower() == "production"
+
+
+class TestAdminPasswordLengthGuard:
+    """`_guard_production_secrets` also length-checks ADMIN_PASSWORD
+    (>=20 chars), matching JWT_SECRET's existing minimum-length check and
+    core/middleware.py's separate guard on the same field."""
+
+    def test_short_admin_password_rejected(self):
+        with pytest.raises(Exception, match="ADMIN_PASSWORD must be at least 20 characters"):
+            _make_settings(_PROD_BASE, ADMIN_PASSWORD="x")
+
+    def test_admin_password_exactly_19_chars_rejected(self):
+        with pytest.raises(Exception, match="ADMIN_PASSWORD must be at least 20 characters"):
+            _make_settings(_PROD_BASE, ADMIN_PASSWORD="a" * 19)
+
+    def test_admin_password_exactly_20_chars_accepted(self):
+        s = _make_settings(_PROD_BASE, ADMIN_PASSWORD="a" * 20)
+        assert s.ADMIN_PASSWORD == "a" * 20
 
 
 # ---------------------------------------------------------------------------

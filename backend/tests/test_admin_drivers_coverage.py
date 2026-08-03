@@ -1,17 +1,33 @@
 """Coverage push for backend/routes/admin/drivers.py.
 
-Prioritizes write/mutation endpoints (status transitions, bulk-adjacent
-document/photo decisions, notes, SIN reveal) over pure read/list endpoints,
-per ACTION_ITEMS.md A1b Track 1 item 4: a broken admin write here can lock a
-real driver out of the platform or leave an ineligible driver online, which
-is a regulatory (Saskatchewan Transportation Act driver-eligibility) as well
-as a production-data-integrity risk.
+A1c Sub-tier C, test-only work: this file adds/extends tests only, no
+application code in routes/admin/drivers.py (or anywhere else) was
+modified. drivers.py is ~1090 statements across ~30 endpoints (driver
+CRUD/status, approval queue, stats, referrals leaderboard/analytics,
+payouts summary, ...) -- full 100% line coverage was not attempted given
+the file's size; this pass prioritizes the largest previously-uncovered
+blocks and the ones most consequential to a live product:
+
+  1. write/mutation endpoints (status transitions, bulk-adjacent
+     document/photo decisions, notes, SIN reveal) over pure read/list
+     endpoints, per ACTION_ITEMS.md A1b Track 1 item 4: a broken admin
+     write here can lock a real driver out of the platform or leave an
+     ineligible driver online, which is a regulatory (Saskatchewan
+     Transportation Act driver-eligibility) as well as a
+     production-data-integrity risk.
+  2. the largest remaining read/aggregation blocks by missed-line count
+     (driver stats, approval queue, referral summary/leaderboards/
+     analytics, payouts summary) -- lower blast radius than #1, but still
+     ops-facing surfaces an admin acts on.
 
 All DB access is mocked via the `mock_supabase_client`-style patches used
 elsewhere in this suite (see test_admin_driver_photo.py, test_admin_business_logic.py)
--- no real Supabase, Stripe, or push-notification calls are made.
+-- no real Supabase, Stripe, or push-notification calls are made. Per repo
+convention (CLAUDE.md), pytest was NOT run for this file in this session --
+it is part of a larger batch whose full suite runs once, separately.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -870,3 +886,656 @@ class TestRevealSin:
         ):
             resp = test_client.post("/api/admin/drivers/drv-1/reveal-sin")
         assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# _subscription_summary -- pure helper, no DB
+# ---------------------------------------------------------------------------
+
+
+class TestSubscriptionSummary:
+    def test_no_subscription_row(self):
+        from routes.admin.drivers import _subscription_summary
+
+        now = datetime.now(timezone.utc)
+        assert _subscription_summary(None, now) == (None, None, None)
+
+    def test_cancelled_reads_as_no_subscription(self):
+        from routes.admin.drivers import _subscription_summary
+
+        now = datetime.now(timezone.utc)
+        sub = {"status": "cancelled", "plan_name": "Pro", "expires_at": "2099-01-01T00:00:00Z"}
+        assert _subscription_summary(sub, now) == (None, None, None)
+
+    def test_past_expiry_reads_expired_even_when_status_still_active(self):
+        """The expiry-loop hasn't flipped the row yet -- the summary must not
+        lie to the admin by trusting a stale `status` column."""
+        from routes.admin.drivers import _subscription_summary
+
+        now = datetime.now(timezone.utc)
+        sub = {"status": "active", "plan_name": "Pro", "expires_at": "2000-01-01T00:00:00Z"}
+        status, plan, expires = _subscription_summary(sub, now)
+        assert status == "expired"
+        assert plan == "Pro"
+        assert expires == "2000-01-01T00:00:00Z"
+
+    def test_active_status_future_expiry(self):
+        from routes.admin.drivers import _subscription_summary
+
+        now = datetime.now(timezone.utc)
+        sub = {"status": "active", "plan_name": "Pro", "expires_at": "2099-01-01T00:00:00Z"}
+        assert _subscription_summary(sub, now)[0] == "active"
+
+    def test_expired_status_no_expiry_date(self):
+        from routes.admin.drivers import _subscription_summary
+
+        now = datetime.now(timezone.utc)
+        assert _subscription_summary({"status": "expired", "plan_name": "Basic"}, now)[0] == "expired"
+
+    def test_unrecognized_status_falls_through_to_none(self):
+        from routes.admin.drivers import _subscription_summary
+
+        now = datetime.now(timezone.utc)
+        status, plan, expires = _subscription_summary({"status": "trial", "plan_name": "Trial"}, now)
+        assert status is None
+        assert plan == "Trial"
+
+
+# ---------------------------------------------------------------------------
+# admin_get_driver_stats
+# ---------------------------------------------------------------------------
+
+
+def _stats_rows(table, filters=None, **kwargs):
+    filters = filters or {}
+    if table == "service_areas":
+        return [{"id": "area-1", "name": "Regina"}]
+    if table == "drivers":
+        return [
+            {
+                "id": "drv-1",
+                "user_id": "usr-1",
+                "status": "active",
+                "service_area_id": "area-1",
+                "created_at": "2026-07-01T00:00:00Z",
+                "is_online": True,
+                "is_verified": True,
+                "total_rides": 5,
+                "total_earnings": "100.00",
+                "rating": "4.5",
+                # Expired license -> auto-flips an "active" driver to needs_review.
+                "license_expiry_date": "2020-01-01T00:00:00Z",
+            },
+            {
+                "id": "drv-2",
+                "user_id": "usr-2",
+                "status": "active",
+                "service_area_id": "area-1",
+                "created_at": "2026-07-02T00:00:00Z",
+                "is_online": True,
+                "is_verified": False,
+                "total_rides": 0,
+                "total_earnings": "0",
+                "rating": None,
+                # Soft-deleted -> classified as "deleted" for display, and never
+                # counted as online even though the stale intent flag says so.
+                "deleted_at": "2026-07-05T00:00:00Z",
+            },
+        ]
+    if table == "users":
+        return [{"id": "usr-1", "profile_image_status": "pending_review", "first_name": "A", "last_name": "B"}]
+    if table == "driver_documents":
+        return []
+    if table == "rides":
+        return [
+            {
+                "driver_id": "drv-1",
+                "created_at": "2026-07-10T00:00:00Z",
+                "status": "completed",
+                "driver_earnings": "10.00",
+            }
+        ]
+    return []
+
+
+class TestDriverStats:
+    def test_basic_aggregate_and_needs_review_and_deleted_classification(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=_stats_rows)):
+            resp = test_client.get("/api/admin/drivers/stats")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["stats"]["total"] == 2
+        assert body["stats"]["needs_review"] == 1
+        assert body["stats"]["deleted"] == 1
+        assert body["stats"]["active"] == 0
+        # Deleted driver is never counted online even with a stale is_online=True.
+        assert body["stats"]["online"] == 1
+        assert body["stats"]["pending_photos"] == 1
+        assert len(body["area_stats"]) == 1
+        assert len(body["charts"]["daily_joins"]) > 0
+
+    def test_service_area_filter_and_custom_date_range(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=_stats_rows)):
+            resp = test_client.get(
+                "/api/admin/drivers/stats",
+                params={"service_area_id": "area-1", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+            )
+        assert resp.status_code == 200, resp.text
+
+
+# ---------------------------------------------------------------------------
+# admin_get_approval_queue
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalQueue:
+    def test_empty_queue(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(return_value=[])):
+            resp = test_client.get("/api/admin/drivers/approval-queue")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {
+            "stats": {
+                "total_pending": 0,
+                "oldest_in_queue_hours": 0.0,
+                "median_wait_hours": 0.0,
+                "over_24h_count": 0,
+                "new_applicants": 0,
+                "resubmissions": 0,
+                "photo_review": 0,
+            },
+            "items": [],
+        }
+
+    def _queue_rows(self, table, filters=None, **kwargs):
+        filters = filters or {}
+        if table == "drivers":
+            if filters.get("status") == "pending":
+                return [
+                    {
+                        "id": "drv-1",
+                        "user_id": "usr-1",
+                        "status": "pending",
+                        "service_area_id": "area-1",
+                        "vehicle_type_id": "vt-1",
+                        "created_at": "2026-07-01T00:00:00Z",
+                        "phone": "306-555-0100",
+                    }
+                ]
+            return []
+        if table == "driver_documents":
+            return []
+        if table == "users":
+            if filters.get("profile_image_status") == "pending_review":
+                return []
+            return [{"id": "usr-1", "first_name": "Amy", "last_name": "Lee", "email": "amy@x.com"}]
+        if table == "service_areas":
+            # required_documents drives the missing-docs count (line-block
+            # 982-1004): with no approved docs on file, the one required key
+            # is unmet, so missing_docs_count should come back as 1.
+            return [{"id": "area-1", "name": "Regina", "required_documents": [{"key": "license"}]}]
+        if table == "vehicle_types":
+            return [{"id": "vt-1", "name": "Sedan"}]
+        return []
+
+    def test_populated_queue_computes_missing_docs_and_sla_stats(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=self._queue_rows)):
+            resp = test_client.get("/api/admin/drivers/approval-queue")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["stats"]["total_pending"] == 1
+        assert body["stats"]["new_applicants"] == 1
+        item = body["items"][0]
+        assert item["driver_id"] == "drv-1"
+        assert item["missing_docs_count"] == 1
+        assert item["is_new_applicant"] is True
+        assert item["service_area_name"] == "Regina"
+        assert item["vehicle_type_name"] == "Sedan"
+
+
+# ---------------------------------------------------------------------------
+# admin_get_driver_activity
+# ---------------------------------------------------------------------------
+
+
+class TestDriverActivity:
+    def test_returns_timeline(self, test_client, super_admin_override):
+        rows = [{"id": "act-1", "action": "went_online", "created_at": "2026-07-01T00:00:00Z"}]
+        with patch("db_supabase.get_rows", AsyncMock(return_value=rows)) as get_rows:
+            resp = test_client.get("/api/admin/drivers/drv-1/activity")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == rows
+        assert get_rows.await_args.args[0] == "driver_activity_log"
+        assert get_rows.await_args.kwargs["limit"] == 100
+
+    def test_empty_returns_empty_list_not_none(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(return_value=None)):
+            resp = test_client.get("/api/admin/drivers/drv-1/activity")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# admin_get_driver_referrals -> _driver_referral_summary
+# ---------------------------------------------------------------------------
+
+
+REFERRER_DRIVER = {"id": "drv-1", "user_id": "usr-1", "service_area_id": "area-1", "driver_code": "DRIVER1"}
+
+
+class TestDriverReferrals:
+    def _rows(self, table, filters=None, **kwargs):
+        filters = filters or {}
+        if table == "users" and "referral_code_used" in filters:
+            return [
+                {
+                    "id": "usr-referee-1",
+                    "first_name": "Bob",
+                    "last_name": "R",
+                    "email": "bob@x.com",
+                    "created_at": "2026-07-01T00:00:00Z",
+                }
+            ]
+        if table == "users" and "id" in filters:
+            # `me` lookup for the inbound referred_by chain -- no row means
+            # this driver was not referred by anyone.
+            return []
+        if table == "drivers" and filters.get("user_id") == "usr-referee-1":
+            return [{"id": "drv-referee-1"}]
+        return []
+
+    def test_driver_not_found_404(self, test_client, super_admin_override):
+        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
+            resp = test_client.get("/api/admin/drivers/nope/referrals")
+        assert resp.status_code == 404
+
+    def test_qualified_referee_counted_and_earnings_estimated(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=REFERRER_DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=3)),
+            patch(
+                "routes.admin.drivers.resolve_referral_terms",
+                AsyncMock(return_value={"rides": 3, "referrer": 25}),
+            ),
+            # No PAID payout row yet -> summary must fall back to the estimate
+            # (qualified * reward_amount) rather than reporting $0.
+            patch("routes.admin.drivers.paid_referral_earnings", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/referrals")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total_referrals"] == 1
+        assert body["qualified_referrals"] == 1
+        assert body["referral_earnings"] == 25
+        assert body["referred_by"] is None
+        assert body["referees"][0]["qualified"] is True
+        assert body["referees"][0]["status"] == "earned"
+
+    def test_unqualified_referee_still_in_progress(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=REFERRER_DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=1)),
+            patch(
+                "routes.admin.drivers.resolve_referral_terms",
+                AsyncMock(return_value={"rides": 3, "referrer": 25}),
+            ),
+            patch("routes.admin.drivers.paid_referral_earnings", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/referrals")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["qualified_referrals"] == 0
+        assert body["referees"][0]["status"] == "in_progress"
+        assert body["referees"][0]["rides_remaining"] == 2
+
+
+# ---------------------------------------------------------------------------
+# admin_get_driver_training
+# ---------------------------------------------------------------------------
+
+
+class TestDriverTraining:
+    def test_driver_not_found_404(self, test_client, super_admin_override):
+        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
+            resp = test_client.get("/api/admin/drivers/nope/training")
+        assert resp.status_code == 404
+
+    def test_no_usable_phone(self, test_client, super_admin_override):
+        driver = {**DRIVER, "phone": None}
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("routes.admin.drivers.lms_service.normalize_phone", return_value=None),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/training")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"matched": False, "reason": "no_phone", "phone_last4": None, "lms": None}
+
+    def test_matched_returns_lms_payload(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value={"phone": "+13065550100"})),
+            patch("routes.admin.drivers.lms_service.normalize_phone", return_value="+13065550100"),
+            patch(
+                "routes.admin.drivers.lms_service.get_training_by_phone",
+                AsyncMock(return_value={"matched": True, "data": {"status": "complete"}}),
+            ),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/training")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["matched"] is True
+        assert body["phone_last4"] == "0100"
+        assert body["lms"] == {"status": "complete"}
+
+    def test_lms_not_configured_returns_503(self, test_client, super_admin_override):
+        from routes.admin.drivers import lms_service
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value={"phone": "+13065550100"})),
+            patch("routes.admin.drivers.lms_service.normalize_phone", return_value="+13065550100"),
+            patch(
+                "routes.admin.drivers.lms_service.get_training_by_phone",
+                AsyncMock(side_effect=lms_service.LMSNotConfiguredError("not configured")),
+            ),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/training")
+        assert resp.status_code == 503
+
+    def test_lms_upstream_error_returns_502(self, test_client, super_admin_override):
+        from routes.admin.drivers import lms_service
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value={"phone": "+13065550100"})),
+            patch("routes.admin.drivers.lms_service.normalize_phone", return_value="+13065550100"),
+            patch(
+                "routes.admin.drivers.lms_service.get_training_by_phone",
+                AsyncMock(side_effect=lms_service.LMSUpstreamError("upstream down")),
+            ),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/training")
+        assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# /referrals/leaderboard, /referrals/rider-leaderboard
+# ---------------------------------------------------------------------------
+
+
+class TestReferralLeaderboard:
+    def _rows(self, table, filters=None, **kwargs):
+        filters = filters or {}
+        if table == "referral_payouts":
+            return [
+                {"referrer_user_id": "usr-1", "referrer_reward": "10", "status": "paid"},
+                {"referrer_user_id": "usr-1", "referrer_reward": "10", "status": "pending"},
+            ]
+        if table == "drivers":
+            return [{"id": "drv-1", "driver_code": "ABC123", "name": "Amy Lee"}]
+        return []
+
+    def test_leaderboard_aggregates_by_referrer(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value={"first_name": "Amy", "last_name": "Lee"})),
+        ):
+            resp = test_client.get("/api/admin/referrals/leaderboard")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["fleet_total_referrers"] == 1
+        assert body["leaders"][0]["total_referrals"] == 2
+        assert body["leaders"][0]["qualified_referrals"] == 1
+        assert body["leaders"][0]["driver_id"] == "drv-1"
+
+
+class TestRiderReferralLeaderboard:
+    def _rows(self, table, filters=None, **kwargs):
+        filters = filters or {}
+        if table == "users":
+            return [
+                {
+                    "id": "u1",
+                    "referral_code_used": "RIDEABCD1234",
+                    "referred_by": "ref-1",
+                    "first_name": "Bob",
+                    "last_name": "K",
+                },
+                # Not a rider-referral code -> excluded from the board.
+                {"id": "u2", "referral_code_used": "DRIVERXYZ", "referred_by": "ref-2"},
+            ]
+        return []
+
+    def test_only_ride_prefixed_codes_count(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=1)),
+            patch("routes.admin.drivers.paid_referral_earnings", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/referrals/rider-leaderboard")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["fleet_total_referrers"] == 1
+        assert body["leaders"][0]["driver_id"] == "ref-1"
+        assert body["leaders"][0]["total_referrals"] == 1
+        assert body["leaders"][0]["qualified_referrals"] == 1
+        assert body["leaders"][0]["referral_earnings"] == 5
+
+
+# ---------------------------------------------------------------------------
+# /referrals/analytics
+# ---------------------------------------------------------------------------
+
+
+class TestReferralAnalytics:
+    def _rows(self, table, filters=None, **kwargs):
+        filters = filters or {}
+        if table == "referral_payouts":
+            return [
+                {
+                    "status": "paid",
+                    "referrer_reward": "10",
+                    "referee_reward": "5",
+                    "paid_at": "2026-07-01T00:00:00Z",
+                    "created_at": "2026-07-01T00:00:00Z",
+                },
+                {"status": "processing", "created_at": "2026-07-02T00:00:00Z"},
+                {"status": "failed", "created_at": "2026-07-03T00:00:00Z"},
+            ]
+        if table == "users":
+            return [
+                {"referred_by": "r1", "referral_code_used": "DRV1234", "created_at": "2026-07-01T00:00:00Z"},
+                {"referred_by": "r2", "referral_code_used": "RIDE1234", "created_at": "2026-07-01T00:00:00Z"},
+            ]
+        return []
+
+    def test_driver_source_computes_funnel_and_trend(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)):
+            resp = test_client.get("/api/admin/referrals/analytics", params={"source": "driver"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        funnel = body["funnel"]
+        assert funnel["qualified"] == 3
+        assert funnel["redeemed"] == 1
+        assert funnel["processing"] == 1
+        assert funnel["failed"] == 1
+        # Only the DRV-coded signup counts for the driver funnel.
+        assert funnel["total_referred"] == 1
+        assert funnel["total_paid"] == "15.00"
+        assert len(body["trend"]) == 1
+
+    def test_service_area_filter_skips_total_referred(self, test_client, super_admin_override):
+        """When scoped to a service area, top-of-funnel signups (not yet
+        area-tagged) can't be attributed -- the endpoint must show None/'--'
+        rather than a misleadingly precise (and wrong) number."""
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)):
+            resp = test_client.get(
+                "/api/admin/referrals/analytics",
+                params={"source": "driver", "service_area_id": "area-1"},
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["funnel"]["total_referred"] is None
+        assert body["funnel"]["redemption_rate"] is None
+
+    def test_rider_source_uses_rider_terms(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)):
+            resp = test_client.get("/api/admin/referrals/analytics", params={"source": "rider"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["rides_required"] == 1  # RIDER_REFERRAL_RIDES_REQUIRED
+        assert body["reward_amount"] == 5  # RIDER_REFERRER_REWARD
+
+
+# ---------------------------------------------------------------------------
+# /referrals/failed-claims, requeue, /referrals/pairs
+# ---------------------------------------------------------------------------
+
+
+class TestFailedReferralClaims:
+    def test_lists_failed_claims_with_names(self, test_client, super_admin_override):
+        rows = [
+            {
+                "id": "rp-1",
+                "referrer_user_id": "usr-1",
+                "referee_user_id": "usr-2",
+                "kind": "driver",
+                "referrer_reward": "10",
+                "referee_reward": "5",
+                "created_at": "2026-07-01T00:00:00Z",
+            }
+        ]
+
+        def _get_user(uid):
+            return {
+                "usr-1": {"first_name": "Amy", "last_name": "Lee"},
+                "usr-2": {"first_name": "Bob", "last_name": "R"},
+            }[uid]
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rows)),
+            patch("db_supabase.get_user_by_id", AsyncMock(side_effect=_get_user)),
+        ):
+            resp = test_client.get("/api/admin/referrals/failed-claims", params={"source": "driver"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["claims"][0]["referrer_name"] == "Amy Lee"
+        assert body["claims"][0]["referee_name"] == "Bob R"
+
+
+class TestRequeueFailedReferral:
+    def test_success(self, test_client, super_admin_override):
+        with (
+            patch(
+                "routes.admin.drivers.recredit_failed_claim",
+                AsyncMock(return_value={"id": "rp-1", "kind": "driver", "credited": ["referrer"]}),
+            ),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()) as log,
+        ):
+            resp = test_client.post("/api/admin/referrals/failed-claims/usr-2/requeue")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["success"] is True
+        assert body["credited"] == ["referrer"]
+        log.assert_awaited_once()
+
+    def test_no_failed_claim_404(self, test_client, super_admin_override):
+        from routes.admin.drivers import ReferralClaimNotFound
+
+        with patch(
+            "routes.admin.drivers.recredit_failed_claim",
+            AsyncMock(side_effect=ReferralClaimNotFound()),
+        ):
+            resp = test_client.post("/api/admin/referrals/failed-claims/usr-2/requeue")
+        assert resp.status_code == 404
+
+
+class TestReferralPairs:
+    def test_lists_pairs_with_names(self, test_client, super_admin_override):
+        rows = [
+            {
+                "id": "rp-1",
+                "referrer_user_id": "usr-1",
+                "referee_user_id": "usr-2",
+                "status": "paid",
+                "referrer_reward": "10",
+                "referee_reward": "5",
+                "created_at": "2026-07-01T00:00:00Z",
+            }
+        ]
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rows)),
+            patch(
+                "db_supabase.get_user_by_id",
+                AsyncMock(side_effect=lambda uid: {"first_name": "Amy" if uid == "usr-1" else "Bob", "last_name": "L"}),
+            ),
+        ):
+            resp = test_client.get("/api/admin/referrals/pairs", params={"source": "driver"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["pairs"][0]["referrer_name"] == "Amy L"
+        assert body["pairs"][0]["referee_name"] == "Bob L"
+
+
+# ---------------------------------------------------------------------------
+# admin_get_driver_payouts_summary
+# ---------------------------------------------------------------------------
+
+
+class TestPayoutsSummary:
+    def _rows(self, table, filters=None, **kwargs):
+        filters = filters or {}
+        if table == "rides":
+            return [
+                {
+                    "driver_earnings": "50.00",
+                    "tip_amount": "5.00",
+                    "ride_completed_at": "2026-07-01T00:00:00Z",
+                    "created_at": "2026-07-01T00:00:00Z",
+                }
+            ]
+        if table == "payouts":
+            return [
+                {
+                    "id": "po-1",
+                    "amount": "40.00",
+                    "status": "completed",
+                    "created_at": "2026-06-01T00:00:00Z",
+                    "processed_at": "2026-06-02T00:00:00Z",
+                },
+                {"id": "po-2", "amount": "5.00", "status": "failed", "created_at": "2026-06-03T00:00:00Z"},
+            ]
+        if table == "bank_accounts":
+            return [{"bank_name": "Bank of X", "account_last4": "1234", "is_verified": True}]
+        return []
+
+    def test_driver_not_found_404(self, test_client, super_admin_override):
+        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
+            resp = test_client.get("/api/admin/drivers/nope/payouts-summary")
+        assert resp.status_code == 404
+
+    def test_summary_aggregates_earnings_and_payouts(self, test_client, super_admin_override):
+        driver = {**DRIVER, "stripe_account_id": "acct_ABCDEFGHIJ"}
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        summary = body["summary"]
+        assert summary["lifetime_earnings"] == 50.0
+        assert summary["lifetime_tips"] == 5.0
+        assert summary["total_paid_out"] == 40.0
+        assert summary["on_hold"] == 5.0
+        # 50 earned - 40 paid - 0 in-flight = 10 still owed.
+        assert summary["pending_balance"] == 10.0
+        assert summary["last_payout"]["id"] == "po-1"
+        assert summary["last_failed_payout"]["id"] == "po-2"
+        assert body["payment_method"]["stripe_connected"] is True
+        assert body["payment_method"]["stripe_account_hint"] == "ABCDEFGHIJ"[-6:]
+        assert body["payment_method"]["bank_name"] == "Bank of X"

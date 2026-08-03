@@ -124,6 +124,24 @@ async def test_guest_recipient_user_not_found_returns_none():
 
 
 @pytest.mark.anyio
+async def test_guest_recipient_db_error_is_swallowed_and_returns_none():
+    """Fixed: `_guest_recipient` now wraps `db_supabase.get_user_by_id` in
+    try/except, matching the module docstring's "never raise into caller"
+    contract -- every other DB/network call in this file was already
+    guarded, this one previously was not."""
+    from backend.services.guest_notification_service import notify_guest_driver_arrived
+
+    patches = _patches()
+    patches[_GNS + "db_supabase.get_user_by_id"] = AsyncMock(side_effect=RuntimeError("db down"))
+    patchers, mocks = _start(patches)
+    try:
+        await notify_guest_driver_arrived(dict(_RIDE))  # must not raise
+    finally:
+        _stop(patchers)
+    mocks[_GNS + "send_sms"].assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_guest_recipient_no_phone_returns_none():
     from backend.services.guest_notification_service import notify_guest_driver_arrived
 

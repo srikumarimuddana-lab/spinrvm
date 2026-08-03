@@ -232,7 +232,13 @@ async def build_fares_for_area(matched_area, vehicle_types):
     # the admin panel it never applies — no multiplier, no rider-facing surge —
     # even if a stale multiplier or surge_active=True is left on the row.
     surge = (
-        min(matched_area.get("surge_multiplier", 1.0), SURGE_CAP)
+        # `.get(key, default)` only substitutes the default when the key is
+        # ABSENT, not when it's explicitly SQL NULL (Python None) — an `or
+        # 1.0` guard is needed so a service_areas row with surge_enabled=True
+        # but a NULL surge_multiplier degrades to 1.0x instead of crashing
+        # `min()` with a TypeError (was a 500 on the whole /fares endpoint
+        # for that area).
+        min(matched_area.get("surge_multiplier") or 1.0, SURGE_CAP)
         if matched_area.get("surge_enabled", False) and matched_area.get("surge_active", False)
         else 1.0
     )

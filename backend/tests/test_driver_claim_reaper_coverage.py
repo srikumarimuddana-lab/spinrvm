@@ -70,6 +70,45 @@ async def test_release_exception_does_not_abort_batch():
         await _reap_tick()
 
 
+async def test_offer_check_error_isolated_to_one_driver():
+    """Fixed: `_has_pending_offer`/`_has_active_ride` are now individually
+    try/excepted per-driver, so an error on the FIRST driver's lookup is
+    logged and skipped, and the SECOND (otherwise reapable) driver still
+    gets processed in the same tick."""
+    from backend.utils.driver_claim_reaper import _reap_tick
+
+    def _two_drivers(driver_id, minutes_ago=5):
+        stamp = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+        return {
+            "id": driver_id,
+            "user_id": f"u_{driver_id}",
+            "is_online": True,
+            "is_available": False,
+            "availability_claimed_at": stamp,
+        }
+
+    drivers = [_two_drivers("drv_first"), _two_drivers("drv_second")]
+
+    async def _get_rows(table, flt, **kw):
+        if table == "drivers":
+            return drivers
+        if table == "ride_offers" and flt.get("driver_id") == "drv_first":
+            raise RuntimeError("transient postgrest error")
+        return []
+
+    release = AsyncMock(return_value={"is_available": True})
+
+    with (
+        patch(P + "db.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch(P + "set_driver_available", release),
+    ):
+        # Must not raise -- drv_first's lookup failure is isolated.
+        await _reap_tick()
+
+    # drv_second was still reaped despite drv_first's lookup error.
+    release.assert_awaited_once_with("drv_second", available=True)
+
+
 async def test_release_returning_non_available_dict_does_not_warn_crash(caplog):
     """release succeeding but the returned row not reflecting is_available=True
     (e.g. clamped to is_online=False) must not raise -- only the warning log

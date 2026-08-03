@@ -356,3 +356,20 @@ async def test_support_ticket_blank_message_uses_placeholder_and_default_subject
     await integ.create_support_ticket(user={"id": "u3", "email": "u3@x.ca"}, message="   ")
     assert created.call_args.kwargs["description"] == "(no message)"
     assert created.call_args.kwargs["subject"] == "Support — Support request"
+
+
+async def test_support_ticket_blank_message_with_transcript_leads_with_transcript(monkeypatch):
+    """Fixed: `description` previously fell through to the literal
+    "(no message)" placeholder even when a transcript was supplied, so a
+    blank-message escalation with a real transcript produced a ticket body
+    misleadingly prefixed with "(no message)". Now the placeholder is only
+    used when there is truly nothing to show (no message AND no
+    transcript) -- see test_support_ticket_blank_message_uses_placeholder_
+    and_default_subject above for that case."""
+    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock(return_value={"id": "zt-sup4"})
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    await integ.create_support_ticket(user={"id": "u4", "email": "u4@x.ca"}, message="   ", transcript="user: hello?")
+    assert created.call_args.kwargs["description"] == "\n\n--- Chat transcript ---\nuser: hello?"

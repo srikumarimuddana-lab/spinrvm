@@ -97,7 +97,8 @@ async def _reap_tick() -> None:
     try:
         settings = await get_app_settings()
         miss_threshold = int(settings.get("auto_offline_miss_threshold", 3))
-    except Exception:
+    except Exception as e:
+        logger.error("[offer-expiry-reaper] settings fetch failed, defaulting miss_threshold=3: %s", e, exc_info=True)
         miss_threshold = 3
 
     results = await asyncio.gather(

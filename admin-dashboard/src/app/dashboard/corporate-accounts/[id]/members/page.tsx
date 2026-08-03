@@ -410,7 +410,7 @@ export default function CompanyMembersPage() {
                                                     <Button
                                                         size="sm"
                                                         variant="outline"
-                                                        className="text-orange-700 hover:text-orange-800"
+                                                        className="text-orange-700 dark:text-orange-400 hover:text-orange-800 dark:hover:text-orange-300"
                                                         onClick={() => handleStatusChange(m, "suspended")}
                                                         title="Suspend member"
                                                     >
@@ -421,7 +421,7 @@ export default function CompanyMembersPage() {
                                                     <Button
                                                         size="sm"
                                                         variant="outline"
-                                                        className="text-emerald-700 hover:text-emerald-800"
+                                                        className="text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300"
                                                         onClick={() => handleStatusChange(m, "active")}
                                                         title="Reactivate member"
                                                     >
@@ -432,7 +432,7 @@ export default function CompanyMembersPage() {
                                                     <Button
                                                         size="sm"
                                                         variant="ghost"
-                                                        className="text-red-600 hover:text-red-700"
+                                                        className="text-destructive hover:text-destructive/80"
                                                         onClick={() => handleRemove(m.id)}
                                                         title="Remove member"
                                                     >

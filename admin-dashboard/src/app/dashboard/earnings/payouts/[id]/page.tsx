@@ -135,7 +135,7 @@ function RetryModal({
                         <p><span className="text-muted-foreground">Driver: </span>{payout?.driver_name ?? "Unknown"}</p>
                         <p><span className="text-muted-foreground">Amount: </span>{formatCurrency(payout?.amount)}</p>
                         {payout?.failure_reason && (
-                            <p className="text-red-600"><span className="text-muted-foreground">Failure: </span>{payout.failure_reason}</p>
+                            <p className="text-red-600 dark:text-red-400"><span className="text-muted-foreground">Failure: </span>{payout.failure_reason}</p>
                         )}
                     </div>
                     <p className="text-muted-foreground text-xs">
@@ -256,9 +256,9 @@ export default function PayoutDetailPage() {
                         </CardContent>
                         {payout.failure_reason && (
                             <div className="px-6 pb-4">
-                                <div className="rounded-md bg-red-50 border border-red-200 p-3">
-                                    <p className="text-xs font-semibold text-red-700 mb-0.5">Failure Reason</p>
-                                    <p className="text-sm text-red-700">{payout.failure_reason}</p>
+                                <div className="rounded-md bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 p-3">
+                                    <p className="text-xs font-semibold text-red-700 dark:text-red-300 mb-0.5">Failure Reason</p>
+                                    <p className="text-sm text-red-700 dark:text-red-300">{payout.failure_reason}</p>
                                 </div>
                             </div>
                         )}

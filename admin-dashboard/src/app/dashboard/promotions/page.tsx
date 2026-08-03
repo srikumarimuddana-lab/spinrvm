@@ -768,7 +768,7 @@ export default function PromotionsPage() {
                                                         <span className="text-muted-foreground text-xs">—</span>
                                                     )}
                                                 </TableCell>
-                                                <TableCell className="text-sm font-medium text-emerald-600">{formatCurrency(u.discount_applied)}</TableCell>
+                                                <TableCell className="text-sm font-medium text-emerald-600 dark:text-emerald-400">{formatCurrency(u.discount_applied)}</TableCell>
                                             </TableRow>
                                         );
                                     })}

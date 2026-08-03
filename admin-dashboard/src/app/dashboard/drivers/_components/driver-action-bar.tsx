@@ -238,22 +238,22 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                             onClick={() => openAction("approve", "Approve Driver", "This will activate the driver and allow them to go online and accept rides.", false, "Approve Driver", "bg-emerald-600 hover:bg-emerald-700 text-white")}>
                             <CheckCircle className="h-3.5 w-3.5 mr-1.5" />Approve
                         </Button>
-                        <Button size="sm" variant="outline" className="text-orange-600 border-orange-200 hover:bg-orange-50"
+                        <Button size="sm" variant="outline" className="text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
                             onClick={() => openAction("suspend", "Suspend Driver", "Suspend this driver without approving. They cannot go online.", true, "Suspend", "bg-orange-600 hover:bg-orange-700 text-white")}>
                             <Pause className="h-3.5 w-3.5 mr-1.5" />Suspend
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50"
+                        <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
                             onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-red-700 hover:bg-red-800 text-white")}>
                             <Ban className="h-3.5 w-3.5 mr-1.5" />Ban
                         </Button>
                     </>)}
 
                     {status === "active" && (<>
-                        <Button size="sm" variant="outline" className="text-orange-600 border-orange-200 hover:bg-orange-50"
+                        <Button size="sm" variant="outline" className="text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
                             onClick={() => openAction("suspend", "Suspend Driver", "Temporarily suspend this driver. They will be taken offline and cannot accept rides until reactivated.", true, "Suspend Driver", "bg-orange-600 hover:bg-orange-700 text-white")}>
                             <Pause className="h-3.5 w-3.5 mr-1.5" />Suspend
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50"
+                        <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
                             onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-red-700 hover:bg-red-800 text-white")}>
                             <Ban className="h-3.5 w-3.5 mr-1.5" />Ban
                         </Button>
@@ -264,11 +264,11 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                             onClick={() => openAction("approve", "Re-approve Driver", "Confirm the driver's updated documents/vehicle are valid and set them back to Active.", false, "Re-approve", "bg-emerald-600 hover:bg-emerald-700 text-white")}>
                             <CheckCircle className="h-3.5 w-3.5 mr-1.5" />Re-approve
                         </Button>
-                        <Button size="sm" variant="outline" className="text-orange-600 border-orange-200 hover:bg-orange-50"
+                        <Button size="sm" variant="outline" className="text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
                             onClick={() => openAction("suspend", "Suspend Driver", "Suspend this driver pending investigation.", true, "Suspend", "bg-orange-600 hover:bg-orange-700 text-white")}>
                             <Pause className="h-3.5 w-3.5 mr-1.5" />Suspend
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50"
+                        <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
                             onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver.", true, "Ban Driver", "bg-red-700 hover:bg-red-800 text-white")}>
                             <Ban className="h-3.5 w-3.5 mr-1.5" />Ban
                         </Button>
@@ -279,14 +279,14 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                             onClick={() => openAction("reactivate", "Reactivate Driver", "Lift the suspension and allow the driver to go online again.", false, "Reactivate", "bg-emerald-600 hover:bg-emerald-700 text-white")}>
                             <Play className="h-3.5 w-3.5 mr-1.5" />Reactivate
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50"
+                        <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
                             onClick={() => openAction("ban", "Escalate to Ban", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-red-700 hover:bg-red-800 text-white")}>
                             <Ban className="h-3.5 w-3.5 mr-1.5" />Escalate to Ban
                         </Button>
                     </>)}
 
                     {status === "banned" && (
-                        <Button size="sm" variant="outline" className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                        <Button size="sm" variant="outline" className="text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/20"
                             onClick={() => openAction("unban", "Unban Driver", "Lift the ban and restore the driver's account. Provide a reason for audit.", true, "Unban Driver", "bg-emerald-600 hover:bg-emerald-700 text-white")}>
                             <ShieldOff className="h-3.5 w-3.5 mr-1.5" />Unban
                         </Button>

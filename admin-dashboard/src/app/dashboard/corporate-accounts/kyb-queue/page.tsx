@@ -249,7 +249,7 @@ export default function KybQueuePage() {
                                                         setRejectNote("");
                                                     }}
                                                     disabled={busyId === c.id}
-                                                    className="text-red-600 hover:text-red-700"
+                                                    className="text-destructive hover:text-destructive/80"
                                                 >
                                                     <XCircle className="mr-1 h-4 w-4" />
                                                     Reject

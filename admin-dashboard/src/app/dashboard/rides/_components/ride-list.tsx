@@ -280,7 +280,7 @@ export default function RideList({
                                     <td className="py-3 px-4 text-right">
                                         <p className="text-sm font-bold">{formatCurrency(ride.total_fare || 0)}</p>
                                         {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
-                                            <p className="text-[10px] font-semibold text-emerald-600 mt-0.5">+{formatCurrency(ride.tip_amount)} tip</p>
+                                            <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">+{formatCurrency(ride.tip_amount)} tip</p>
                                         )}
                                     </td>
                                     <td className="py-3 px-4 text-right hidden md:table-cell tabular-nums">

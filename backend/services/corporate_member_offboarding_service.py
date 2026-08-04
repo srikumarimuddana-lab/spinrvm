@@ -70,12 +70,8 @@ async def cancel_pre_pickup_rides_for_member(company_id: str, member_id: str) ->
             if await _cancel_one_ride(ride):
                 cancelled_count += 1
         except Exception as exc:
-            logger.error(
-                "[CORP-MEMBER-REMOVE] failed to cancel ride %s for member %s: %s",
-                ride.get("id"),
-                member_id,
-                exc,
-                exc_info=True,
+            logger.opt(exception=True).error(
+                "[CORP-MEMBER-REMOVE] failed to cancel ride {} for member {}: {}", ride.get("id"), member_id, exc
             )
     return cancelled_count
 
@@ -101,7 +97,7 @@ async def _cancel_one_ride(ride: Dict[str, Any]) -> bool:
         },
     )
     if claim is None:
-        logger.info("[CORP-MEMBER-REMOVE] claim skipped ride_id=%s — already left pre-trip state", ride_id)
+        logger.info("[CORP-MEMBER-REMOVE] claim skipped ride_id={} — already left pre-trip state", ride_id)
         return False
 
     driver_id = ride.get("driver_id")
@@ -123,8 +119,8 @@ async def _cancel_one_ride(ride: Dict[str, Any]) -> bool:
                     f"driver_{driver['user_id']}",
                 )
             except Exception as exc:
-                logger.error(
-                    "[CORP-MEMBER-REMOVE] driver WS notify failed ride_id=%s: %s", ride_id, exc, exc_info=True
+                logger.opt(exception=True).error(
+                    "[CORP-MEMBER-REMOVE] driver WS notify failed ride_id={}: {}", ride_id, exc
                 )
 
     rider_id = ride.get("rider_id")
@@ -135,7 +131,7 @@ async def _cancel_one_ride(ride: Dict[str, Any]) -> bool:
                 f"rider_{rider_id}",
             )
         except Exception as exc:
-            logger.error("[CORP-MEMBER-REMOVE] rider WS notify failed ride_id=%s: %s", ride_id, exc, exc_info=True)
+            logger.opt(exception=True).error("[CORP-MEMBER-REMOVE] rider WS notify failed ride_id={}: {}", ride_id, exc)
         try:
             await send_push_notification(
                 rider_id,
@@ -144,7 +140,7 @@ async def _cancel_one_ride(ride: Dict[str, Any]) -> bool:
                 {"type": "ride_cancelled", "ride_id": ride_id, "is_auto": "true"},
             )
         except Exception as exc:
-            logger.error("[CORP-MEMBER-REMOVE] push notify failed ride_id=%s: %s", ride_id, exc, exc_info=True)
+            logger.opt(exception=True).error("[CORP-MEMBER-REMOVE] push notify failed ride_id={}: {}", ride_id, exc)
 
     if ride.get("guest_booking"):
         try:
@@ -154,7 +150,9 @@ async def _cancel_one_ride(ride: Dict[str, Any]) -> bool:
         try:
             await notify_guest_cancelled(dict(ride))
         except Exception as exc:
-            logger.error("[CORP-MEMBER-REMOVE] guest SMS notify failed ride_id=%s: %s", ride_id, exc, exc_info=True)
+            logger.opt(exception=True).error(
+                "[CORP-MEMBER-REMOVE] guest SMS notify failed ride_id={}: {}", ride_id, exc
+            )
 
-    logger.info("[CORP-MEMBER-REMOVE] cancelled pre-pickup ride %s for removed member", ride_id)
+    logger.info("[CORP-MEMBER-REMOVE] cancelled pre-pickup ride {} for removed member", ride_id)
     return True

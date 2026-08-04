@@ -397,7 +397,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 # fall through to "create new user" on a None lookup.)
                 if not user:
                     logger.error(
-                        "get_current_user(firebase): no user row for uid=%s — "
+                        "get_current_user(firebase): no user row for uid={} — "
                         "refusing to auto-create (likely transient DB miss)",
                         uid,
                     )
@@ -468,7 +468,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         # which returns a clean 503.
         raise
     except Exception as e:
-        logger.error(f"Unexpected error looking up user from DB: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Unexpected error looking up user from DB: {e}")
         raise DatabaseError(details={"original": str(e)}) from e
 
     if user:
@@ -502,7 +502,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         # the client retries; user creation belongs only in the auth endpoints.
         # (CLAUDE.md: never fall through to "create new user" on a None lookup.)
         logger.error(
-            "get_current_user(jwt): valid JWT but no user row for %s — "
+            "get_current_user(jwt): valid JWT but no user row for {} — "
             "refusing to auto-create (likely transient DB miss)",
             payload["user_id"],
         )
@@ -519,7 +519,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         # is_driver=False caused drivers to see the rider UI mid-outage.
         raise
     except Exception as e:
-        logger.error(f"Unexpected error looking up driver row: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Unexpected error looking up driver row: {e}")
         raise DatabaseError(details={"original": str(e)}) from e
     _enforce_account_active(user)
     # Defense in depth: the admin gate is a private marker only

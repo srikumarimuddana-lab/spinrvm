@@ -1967,6 +1967,34 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   the larger proposal.
 
 ### B15. Rider/driver SOS: DB insert has no fallback on failure, and "PagerDuty" in domain-safety.md doesn't exist in code
+- [ ] **2026-08-04 update — (b) was built but NOT shippable; now fixed.** The
+  paging feature shipped 2026-08-01 was documented as "dark, ready to enable."
+  It was not enableable at all: **no migration ever added
+  `sos_paging_webhook_url` / `sos_paging_routing_key` to `public.settings`**,
+  and there was no admin dashboard field. Reads masked it
+  (`get_app_settings()` merges `AppSettings` defaults, so the keys always
+  resolved to `""`); writes would not have — `admin_update_settings` passes
+  `model_dump(exclude_none=True)` straight to PostgREST, so the first attempt
+  to configure paging returns `PGRST204` and **fails the entire settings
+  save**. Nothing caught it because nothing exercised the write path.
+  Closed by migration 277 + an admin Settings field + a
+  `spinr_safety_sos_paging_total{outcome}` counter (the disabled branch logged
+  at DEBUG only, so the dark state was undetectable — and the module docstring
+  already claimed a metric it did not have). Full detail:
+  `docs/change-log/2026-08-04-b15b-sos-paging-shippable.md`.
+  - **Guard added.** `backend/tests/test_settings_schema_drift.py` asserts every
+    admin-*writable* settings field has a backing column. It found **six more**
+    instances of the same defect — `ai_disabled_mode`, four `apns_*` fields, and
+    `stripe_auto_heal_processing` (whose own docstring says it must be
+    "validated in staging before an operator enables it in production", which
+    the operator could not have done). Fixed in migration 278.
+  - **Still open in (b):** paging has never fired against a real provider —
+    there is still no PagerDuty/Opsgenie account. Enabling it is now a
+    config-only action for ops. Note the enable **also** puts a
+    up-to-5s inline `await` on the SOS response path
+    (`trigger_emergency` awaits `page_sos_on_call` rather than using
+    `asyncio.create_task` as `routes/safety.py:114` does) — accepted for now,
+    worth its own change before paging goes live under load.
 - [ ] **Status:** partially done — the DB-insert-fallback / try-except
   sub-finding is **fixed and merged**: PR #2931
   (https://github.com/srikumarimuddana-lab/spinrvm/pull/2931) wraps the
@@ -2103,7 +2131,31 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   made.
 
 ### B16. Driver SOS UX doesn't implement the discretion the design sketch chose it for
-- [ ] **Status:** open — found 2026-07-30, same trace session as B15, this
+- [x] **Status: discreet mode DONE 2026-08-04** (ships dark behind
+  `driver_sos_discreet_enabled`). `SOSButton` gained an opt-in `discreet` prop —
+  3s hold, fill bar instead of a pulse, muted slate instead of red-with-glow,
+  one 40ms haptic instead of the audible six-pulse buzz, no on-screen hold hint,
+  and a small dark toast instead of `Alert.alert()`. Rider behaviour is
+  unchanged **by construction** (default `false`; all four rider call sites omit
+  it) and pinned by two regression tests. Detail:
+  `docs/change-log/2026-08-04-b16-driver-discreet-sos.md`.
+  - **Found and fixed while wiring it: the driver SOS reported success when it
+    had failed.** The driver call site wrapped `onTrigger` in its own
+    `try/catch`, and `SOSButton` decides "Alert Sent" vs "Not Sent" purely on
+    whether that promise rejects — so `backendOk` was **always true** and a
+    driver whose SOS never reached the backend saw *"🚨 Emergency Alert Sent."*
+    The exact false confirmation the component was built to prevent, defeated at
+    the call site. The rider path rethrows correctly
+    (`rideStore.triggerEmergency`); only the driver site was wrong. Deliberately
+    **not** flag-gated — the flag gates discretion, not correctness.
+  - **`SOSButton` had zero component tests** before this (only the API and store
+    layers beneath it). Ten added, including the two rider pins.
+  - **Still open:** the tap-opens-Safety-overlay half of sketch 011 — see B17.
+  - **Not verified:** no EAS/production mobile build, and never run on a real
+    device. Colour, contrast, haptic strength, and toast legibility-at-a-glance
+    are reasoned from the sketch and checked only in a jsdom renderer. A
+    real-device pass is required before enabling the flag for any driver.
+- [ ] **Original status:** open — found 2026-07-30, same trace session as B15, this
   time against the actual design-decision artifacts rather than a context
   doc: `.planning/sketches/010-rider-sos/index.html` and
   `.planning/sketches/011-driver-sos/index.html`. Product/design call, not
@@ -2165,6 +2217,32 @@ _Last updated: 2026-08-02 — A1c (Track 2): `routes/drivers/subscriptions.py` (
   build.
 - **Acceptance:** not yet defined — pending the dedicated follow-up
   scoping (b)/(c) above into concrete acceptance criteria.
+
+### B17. Driver Safety overlay — the tap half of sketch 011 (split out of B16)
+- [ ] **Status:** open, scoped 2026-08-04. B16 shipped the *hold* half of
+  `.planning/sketches/011-driver-sos/index.html` (discreet silent alert). The
+  *tap* half is not built: a short tap on the shield should open a full Safety
+  overlay with a 911 button, "Share Live Trip Link", a per-contact
+  "✓ Notified" list, an explicit "Discreet mode on" label with a toggle, and
+  "I'm Safe — Close".
+- **Why it was split rather than built with B16:** it is a genuinely larger
+  piece — a new screen, a tap-vs-hold duality on a safety-critical control, and
+  **a backend change**. The per-contact notified list is the blocker:
+  `trigger_emergency` (`backend/routes/rides/safety.py`) returns
+  `contacts_notified` as an **integer count**, not a list of who was reached.
+  Rendering "✓ Notified" per contact needs the endpoint to return per-contact
+  outcomes — which is a PIPEDA-relevant response-shape change (contact names to
+  the client), not just UI work.
+- **Not blocking:** 911 is already one tap away in both modes today (standard
+  mode via the native `Alert`, discreet mode via the toast — pinned by test).
+  The overlay is a better affordance, not a missing one.
+- **Also carried forward from B16(c):** decide whether sketches 010/011 are
+  still the intent now that one shared component serves both apps with a
+  `discreet` prop, and update or archive them accordingly so they stop
+  describing a split nobody plans to build further.
+- **Acceptance:** tap opens the overlay; hold still fires the silent alert
+  unchanged; overlay is reachable only on the driver surface; per-contact list
+  is backed by a real endpoint response, not a fabricated client-side list.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

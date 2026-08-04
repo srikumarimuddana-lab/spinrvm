@@ -298,18 +298,43 @@ def _extract_signed_url(res: Any) -> str:
     if isinstance(res, dict):
         url = res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
         if not url:
-            raise RuntimeError(f"create_signed_url returned no URL: {res!r}")
+            raise RuntimeError(f"create_signed_url returned no URL: {_shape_of(res)}")
         return url
     data = getattr(res, "data", None)
     if data is None:
-        raise RuntimeError(f"create_signed_url returned unexpected shape: {res!r}")
+        raise RuntimeError(f"create_signed_url returned unexpected shape: {_shape_of(res)}")
     if isinstance(data, dict):
         url = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
     else:
         url = getattr(data, "signed_url", None) or getattr(data, "signedURL", None)
     if not url:
-        raise RuntimeError(f"create_signed_url missing URL field: {res!r}")
+        raise RuntimeError(f"create_signed_url missing URL field: {_shape_of(res)}")
     return url
+
+
+def _shape_of(res: Any) -> str:
+    """Describe a Supabase response for an error message WITHOUT its contents.
+
+    The three RuntimeErrors above used to interpolate `{res!r}`. Every one of
+    them fires on the "shape I don't recognise" path — which is precisely the
+    case where the signed URL is present but under a key this function doesn't
+    know yet (that is what happened when supabase-py flipped the return type).
+    So the repr could carry a live, hour-long credential for a driver's
+    identity document, and both callers log the exception text:
+    `regenerate_signed_url` at the warning below, and the upload handler via
+    `logger.exception("Supabase Storage upload failed: {}", e)`.
+
+    The shape is what a maintainer actually needs to fix the extractor; the
+    values are what must never reach a log sink.
+    """
+    if isinstance(res, dict):
+        return f"dict(keys={sorted(res)})"
+    data = getattr(res, "data", None)
+    if isinstance(data, dict):
+        return f"{type(res).__name__}(data=dict(keys={sorted(data)}))"
+    if data is not None:
+        return f"{type(res).__name__}(data={type(data).__name__})"
+    return type(res).__name__
 
 
 _STORAGE_KEY_RE = _re.compile(r"/storage/v1/object/(?:sign|public)/driver-documents/([^?#]+)")

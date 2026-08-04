@@ -54,6 +54,8 @@ docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md Entry 13.
 from __future__ import annotations
 
 import asyncio
+import builtins
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -754,6 +756,42 @@ def _patch_get_app_settings(return_value):
     return stack
 
 
+@pytest.fixture
+def _real_twilio():
+    """Undo a session-wide `sys.modules["twilio"] = MagicMock()` for this test.
+
+    test_data_export_purge.py, test_data_export_purge_loop_coverage.py and
+    test_dsar_export.py each stub `twilio` (and `twilio.rest`) in a module-level
+    `_STUBS` loop. pytest imports every test module during collection, so once
+    any of them is collected the stub is in place for the whole session — and
+    all three sort before this file, which is why the full-suite run was
+    deterministic while running this class alone passed.
+
+    The consequence is not a mere import error in the test: `routes/webhooks.py`
+    does `from twilio.request_validator import RequestValidator` at request
+    time, which against a MagicMock raises ModuleNotFoundError ("twilio is not
+    a package"). The source then took its ImportError branch and skipped
+    signature verification entirely, returning 200 for a request the test had
+    set up to be rejected. The red test was reporting a real fail-open, which
+    has now been closed in webhooks.py — but the stub still has to be lifted
+    here or these tests exercise the 503 path instead of the validator.
+
+    test_webhooks_coverage_gap.py carries the same workaround
+    (`_ensure_real_twilio_imported`) and notes the root cause was not chased;
+    it is named above now.
+    """
+    saved = {k: v for k, v in sys.modules.items() if k == "twilio" or k.startswith("twilio.")}
+    for key in saved:
+        del sys.modules[key]
+    import twilio.request_validator  # noqa: F401
+
+    yield
+    # Leave the genuine modules in place rather than restoring the stubs: a real
+    # package is never the wrong thing for a later test to find, and restoring a
+    # MagicMock would just re-arm the landmine for whatever runs next.
+
+
+@pytest.mark.usefixtures("_real_twilio")
 class TestTwilioInboundSignatureVerification:
     def test_valid_signature_processes_stop(self, test_client: TestClient):
         with (
@@ -784,6 +822,45 @@ class TestTwilioInboundSignatureVerification:
             )
 
         assert r.status_code == 403
+
+
+class TestTwilioInboundValidatorUnimportable:
+    """An unimportable validator must fail closed, not process the webhook.
+
+    The handler used to catch ImportError, set RequestValidator = None and fall
+    straight through to the STOP/START logic. An admin who has configured
+    twilio_auth_token has asked for verification; silently not performing it
+    while still honouring the message body means anyone able to reach the
+    endpoint can opt an arbitrary phone number in or out of marketing SMS.
+
+    Deliberately NOT using the _real_twilio fixture — this test wants the
+    broken-import state.
+    """
+
+    def test_import_error_returns_503_and_does_not_process(self, test_client: TestClient):
+        real_import = builtins.__import__
+
+        def _no_twilio(name, *args, **kwargs):
+            if name == "twilio.request_validator" or name == "twilio":
+                raise ImportError("simulated: twilio not installed")
+            return real_import(name, *args, **kwargs)
+
+        with (
+            _patch_get_app_settings({"twilio_auth_token": "tok123"}),
+            patch("services.marketing_consent.set_consent", AsyncMock()) as consent_mock,
+            patch("services.marketing_consent.add_marketing_suppression", AsyncMock()) as suppress_mock,
+            patch.object(builtins, "__import__", _no_twilio),
+        ):
+            r = test_client.post(
+                _TWILIO_URL,
+                data={"Body": "STOP", "From": "+13065551234"},
+                headers={"X-Twilio-Signature": "sig123"},
+            )
+
+        assert r.status_code == 503, "unverifiable webhook must fail closed"
+        # The point of failing closed: the STOP must NOT have taken effect.
+        consent_mock.assert_not_awaited()
+        suppress_mock.assert_not_awaited()
 
 
 class TestTwilioInboundMissingFromPhone:

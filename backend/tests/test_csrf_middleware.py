@@ -338,3 +338,83 @@ class TestCsrfTokenGeneration:
         raw = response.headers.get("set-cookie", "")
         assert "csrf_token=" in raw
         assert "max-age=0" in raw.lower()
+
+
+# ── Rejection log formatting ──────────────────────────────────────────────────
+
+
+class TestRejectionLogsAreInterpolated:
+    """A CSRF rejection must log the method/path/origin, not literal '%s'.
+
+    Regression: `core/middleware.py` imports loguru's logger, which formats
+    with `str.format` ({}), not %-style. `logger.warning("... %s %s", method,
+    path)` therefore emitted the placeholders verbatim and silently dropped
+    every argument, so a production 403 gave:
+
+        CSRF token mismatch: %s %s origin=%s
+
+    with nothing identifying which request failed — exactly the fields needed
+    to diagnose it.
+    """
+
+    def _capture(self, fn) -> list[str]:
+        from loguru import logger as _loguru_logger
+
+        messages: list[str] = []
+        sink_id = _loguru_logger.add(
+            lambda m: messages.append(m.record["message"]), level="WARNING", format="{message}"
+        )
+        try:
+            fn()
+        finally:
+            _loguru_logger.remove(sink_id)
+        return messages
+
+    def test_mismatch_log_contains_request_details(self, client: TestClient, valid_csrf_token):
+        messages = self._capture(
+            lambda: client.put(
+                "/api/v1/test",
+                headers={
+                    "Origin": "https://admin.spinr.ca",
+                    "X-CSRF-Token": "stale-token-from-before-refresh",
+                },
+                cookies={"csrf_token": valid_csrf_token},
+            )
+        )
+        mismatch = [m for m in messages if "CSRF token mismatch" in m]
+        assert mismatch, f"no mismatch warning emitted; got {messages}"
+        logged = mismatch[0]
+        assert "%s" not in logged
+        assert "PUT" in logged
+        assert "/api/v1/test" in logged
+        assert "https://admin.spinr.ca" in logged
+
+    def test_mismatch_log_never_leaks_token_values(self, client: TestClient, valid_csrf_token):
+        """The tokens are session credentials — the count is logged, not the value."""
+        messages = self._capture(
+            lambda: client.put(
+                "/api/v1/test",
+                headers={
+                    "Origin": "https://admin.spinr.ca",
+                    "X-CSRF-Token": "stale-token-from-before-refresh",
+                },
+                cookies={"csrf_token": valid_csrf_token},
+            )
+        )
+        logged = next(m for m in messages if "CSRF token mismatch" in m)
+        assert valid_csrf_token not in logged
+        assert "stale-token-from-before-refresh" not in logged
+
+    def test_missing_log_contains_request_details(self, client: TestClient):
+        messages = self._capture(
+            lambda: client.put(
+                "/api/v1/test",
+                headers={"Origin": "https://admin.spinr.ca"},
+            )
+        )
+        missing = [m for m in messages if "CSRF token missing" in m]
+        assert missing, f"no missing warning emitted; got {messages}"
+        logged = missing[0]
+        assert "%s" not in logged
+        assert "PUT" in logged
+        assert "/api/v1/test" in logged

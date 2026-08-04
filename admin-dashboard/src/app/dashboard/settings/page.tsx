@@ -711,23 +711,17 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Safety — distribution list for SOS / safety-incident
-                        alert emails. Empty disables outbound email cleanly;
-                        WS broadcast + critical log line still fire so
-                        on-call paging via log aggregators keeps working. */}
+                    {/* Safety — the two channels that reach a human when an SOS
+                        fires: a distribution-list email, and (once configured)
+                        real on-call paging. Both are optional and independent;
+                        the admin WS broadcast and the critical log line fire
+                        regardless. */}
                     <Card className="border-border/50 lg:col-span-2">
                         <CardHeader>
                             <CardTitle className="text-base">Safety alerts</CardTitle>
                         </CardHeader>
                         <Separator />
-                        <CardContent className="pt-4 space-y-3">
-                            <p className="text-xs text-muted-foreground">
-                                These addresses receive a transactional email whenever a safety
-                                incident opens — rider SOS, driver-app safety report, or the
-                                auto check-in escalation. Comma-separated. Leave blank to disable
-                                email alerts (admin dashboard WS notification + critical log line
-                                still fire so log-aggregator paging keeps working).
-                            </p>
+                        <CardContent className="pt-4 space-y-5">
                             <div className="space-y-2">
                                 <Label htmlFor="safety-emails">Alert recipients</Label>
                                 <Textarea
@@ -740,9 +734,94 @@ export default function SettingsPage() {
                                     rows={2}
                                 />
                                 <p className="text-[11px] text-muted-foreground">
-                                    Recipients with read access to the safety queue in the admin
-                                    dashboard. Email body contains the reporter, ride id, and (when
-                                    available) the location — same data the dashboard surfaces.
+                                    These addresses receive a transactional email whenever a safety
+                                    incident opens — rider SOS, driver-app safety report, or the
+                                    auto check-in escalation. Comma-separated. Leave blank to
+                                    disable email alerts. Email body contains the reporter, ride id,
+                                    and (when available) the location — same data the dashboard
+                                    surfaces.
+                                </p>
+                            </div>
+
+                            <Separator />
+
+                            {/* On-call paging. Ships disabled: a blank webhook URL
+                                means page_on_call makes zero HTTP calls. This is the
+                                only channel that reaches someone who is NOT watching
+                                the dashboard or a log stream. */}
+                            <div className="space-y-4">
+                                <div>
+                                    <Label className="text-sm">On-call paging</Label>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        Pages an on-call human when a rider or driver triggers SOS.
+                                        This is the only channel that reaches someone who is{" "}
+                                        <strong>not</strong> already watching this dashboard or a log
+                                        stream — email and the in-dashboard alert both assume
+                                        somebody is looking. Leave the URL blank to keep paging off.
+                                    </p>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Paging webhook URL</Label>
+                                    <Input
+                                        value={settings.sos_paging_webhook_url || ""}
+                                        onChange={(e) =>
+                                            update("sos_paging_webhook_url", e.target.value)
+                                        }
+                                        placeholder="https://events.pagerduty.com/v2/enqueue"
+                                    />
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Must be <code>https://</code>. Payload is PagerDuty Events
+                                        API v2 shape; an Opsgenie (or other) endpoint that accepts
+                                        that shape works without a code change. Only IDs and a
+                                        ~5&nbsp;km geohashed area are sent — never a name, phone,
+                                        exact location, or the reporter&apos;s free-text message.
+                                    </p>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Routing / integration key</Label>
+                                    <Input
+                                        type="password"
+                                        value={settings.sos_paging_routing_key || ""}
+                                        onChange={(e) =>
+                                            update("sos_paging_routing_key", e.target.value)
+                                        }
+                                        placeholder="PagerDuty Integration Key"
+                                    />
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Both fields are super-admin only — saving a change to either
+                                        as a non-super-admin is rejected, because repointing the
+                                        webhook would redirect every future SOS page.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <Separator />
+
+                            {/* B16 rollout flag. Off = drivers get the shared
+                                (rider) SOS button. Flipping this off is the
+                                rollback path — no redeploy. */}
+                            <div className="space-y-2">
+                                <Label htmlFor="driver-discreet-sos">Driver discreet SOS</Label>
+                                <div className="flex items-center gap-3">
+                                    <Switch
+                                        id="driver-discreet-sos"
+                                        checked={!!settings.driver_sos_discreet_enabled}
+                                        onCheckedChange={(v) =>
+                                            update("driver_sos_discreet_enabled", v)
+                                        }
+                                    />
+                                    <span className="text-xs text-muted-foreground">
+                                        {settings.driver_sos_discreet_enabled
+                                            ? "On — driver alerts send silently"
+                                            : "Off — drivers use the standard SOS button"}
+                                    </span>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground">
+                                    When on, the driver SOS button uses a longer hold and confirms
+                                    silently — no red flash, no full-screen dialog a passenger in
+                                    the car could see. Riders are unaffected either way. Switch it
+                                    off to roll back instantly; takes effect within a minute, no
+                                    app update needed.
                                 </p>
                             </div>
                         </CardContent>

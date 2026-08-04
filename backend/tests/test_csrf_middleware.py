@@ -357,21 +357,45 @@ class TestRejectionLogsAreInterpolated:
     to diagnose it.
     """
 
-    def _capture(self, fn) -> list[str]:
-        from loguru import logger as _loguru_logger
+    # Deliberately NOT captured through a real loguru sink.
+    #
+    # The obvious implementation — logger.add(<collector>) around the request —
+    # depends on global loguru state that the rest of the suite mutates from
+    # several directions: test_log_guard.py's fixture calls a bare
+    # logger.remove() (drops every handler) and logger.configure(patcher=...),
+    # and test_p3_loop_jitter_metrics.py / test_p3_ws_broadcast.py /
+    # test_ws_health.py each run `sys.modules["loguru"].logger = MagicMock()`
+    # at import time, permanently. That version passed alone and in several
+    # subsets, then failed in two full-suite runs and passed in a third with no
+    # code change — flaky, in a test whose whole job is to prove a log line is
+    # correct.
+    #
+    # So intercept the call instead: replace core.middleware.logger with a
+    # recorder and apply loguru's own formatting rule (str.format with the
+    # positional args) to what the middleware passed. That is exactly the
+    # defect under test — with "%s" placeholders, .format() returns the string
+    # untouched and the arguments vanish — and it depends on no global state at
+    # all.
+    def _capture(self, monkeypatch, fn) -> list[str]:
+        import core.middleware as mw
 
-        messages: list[str] = []
-        sink_id = _loguru_logger.add(
-            lambda m: messages.append(m.record["message"]), level="WARNING", format="{message}"
-        )
-        try:
-            fn()
-        finally:
-            _loguru_logger.remove(sink_id)
-        return messages
+        calls: list[tuple[str, tuple]] = []
 
-    def test_mismatch_log_contains_request_details(self, client: TestClient, valid_csrf_token):
+        class _Recorder:
+            def warning(self, message, *args, **kwargs):
+                calls.append((message, args))
+
+            def __getattr__(self, _name):  # error/info/debug — unused here
+                return lambda *a, **k: None
+
+        monkeypatch.setattr(mw, "logger", _Recorder())
+        fn()
+        # loguru renders with str.format when (and only when) args are given.
+        return [msg.format(*args) if args else msg for msg, args in calls]
+
+    def test_mismatch_log_contains_request_details(self, monkeypatch, client: TestClient, valid_csrf_token):
         messages = self._capture(
+            monkeypatch,
             lambda: client.put(
                 "/api/v1/test",
                 headers={
@@ -379,7 +403,7 @@ class TestRejectionLogsAreInterpolated:
                     "X-CSRF-Token": "stale-token-from-before-refresh",
                 },
                 cookies={"csrf_token": valid_csrf_token},
-            )
+            ),
         )
         mismatch = [m for m in messages if "CSRF token mismatch" in m]
         assert mismatch, f"no mismatch warning emitted; got {messages}"
@@ -389,9 +413,10 @@ class TestRejectionLogsAreInterpolated:
         assert "/api/v1/test" in logged
         assert "https://admin.spinr.ca" in logged
 
-    def test_mismatch_log_never_leaks_token_values(self, client: TestClient, valid_csrf_token):
+    def test_mismatch_log_never_leaks_token_values(self, monkeypatch, client: TestClient, valid_csrf_token):
         """The tokens are session credentials — the count is logged, not the value."""
         messages = self._capture(
+            monkeypatch,
             lambda: client.put(
                 "/api/v1/test",
                 headers={
@@ -399,18 +424,19 @@ class TestRejectionLogsAreInterpolated:
                     "X-CSRF-Token": "stale-token-from-before-refresh",
                 },
                 cookies={"csrf_token": valid_csrf_token},
-            )
+            ),
         )
         logged = next(m for m in messages if "CSRF token mismatch" in m)
         assert valid_csrf_token not in logged
         assert "stale-token-from-before-refresh" not in logged
 
-    def test_missing_log_contains_request_details(self, client: TestClient):
+    def test_missing_log_contains_request_details(self, monkeypatch, client: TestClient):
         messages = self._capture(
+            monkeypatch,
             lambda: client.put(
                 "/api/v1/test",
                 headers={"Origin": "https://admin.spinr.ca"},
-            )
+            ),
         )
         missing = [m for m in messages if "CSRF token missing" in m]
         assert missing, f"no missing warning emitted; got {messages}"

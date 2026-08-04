@@ -764,7 +764,7 @@ def init_middleware(app):
         if hasattr(exc, "status_code") and hasattr(exc, "detail"):
             response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         else:
-            logger.error(f"Unhandled exception: {exc}", exc_info=True)
+            logger.opt(exception=True).error(f"Unhandled exception: {exc}")
             response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
         # Add CORS headers if origin is allowed

@@ -168,7 +168,7 @@ async def issue_refresh_token(
                 {"$set": {"replaced_by": row_id, "revoked_at": now.isoformat()}},
             )
         except Exception as e:  # pragma: no cover
-            logger.error(f"Could not chain refresh token {replaces} → {row_id}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"Could not chain refresh token {replaces} → {row_id}: {e}")
 
     return raw, row_id, expires_at
 
@@ -391,7 +391,7 @@ async def revoke_refresh_token(raw: str) -> bool:
     try:
         row = await db.find_one("refresh_tokens", {"token_hash": token_hash})
     except Exception as e:
-        logger.error(f"revoke_refresh_token lookup failed: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"revoke_refresh_token lookup failed: {e}")
         return False
     if not row or row.get("revoked_at"):
         return False
@@ -403,7 +403,7 @@ async def revoke_refresh_token(raw: str) -> bool:
         )
         return True
     except Exception as e:
-        logger.error(f"revoke_refresh_token update failed: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"revoke_refresh_token update failed: {e}")
         return False
 
 
@@ -424,7 +424,7 @@ async def revoke_all_for_user(user_id: str) -> int:
     try:
         rows = await db.get_rows("refresh_tokens", {"user_id": user_id}, limit=1000)
     except Exception as e:
-        logger.error(f"refresh_tokens scan failed for user {user_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"refresh_tokens scan failed for user {user_id}: {e}")
         return 0
     n = 0
     for row in rows or []:
@@ -438,5 +438,5 @@ async def revoke_all_for_user(user_id: str) -> int:
             )
             n += 1
         except Exception as e:  # pragma: no cover
-            logger.error(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}")
     return n

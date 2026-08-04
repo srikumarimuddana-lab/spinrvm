@@ -171,12 +171,8 @@ async def record_payment_event(
             },
         )
     except Exception as ledger_err:
-        logger.error(
-            "[PAYMENT] financial_events write failed for ride %s pi=%s: %s",
-            ride_id,
-            payment_intent_id,
-            ledger_err,
-            exc_info=True,
+        logger.opt(exception=True).error(
+            "[PAYMENT] financial_events write failed for ride {} pi={}: {}", ride_id, payment_intent_id, ledger_err
         )
 
 
@@ -230,12 +226,11 @@ async def record_refund_event(
             },
         )
     except Exception as ledger_err:
-        logger.error(
-            "[PAYMENT] refund financial_events write failed for ride %s pi=%s: %s",
+        logger.opt(exception=True).error(
+            "[PAYMENT] refund financial_events write failed for ride {} pi={}: {}",
             ride_id,
             payment_intent_id,
             ledger_err,
-            exc_info=True,
         )
 
 
@@ -289,13 +284,13 @@ async def settle_wallet(
                 error=f"Insufficient wallet balance. Need ${debit}, have ${current}",
                 status_code=400,
             )
-        logger.error("settle_wallet: wallet_pay_for_ride failed for ride %s: %s", ride_id, exc, exc_info=True)
+        logger.opt(exception=True).error("settle_wallet: wallet_pay_for_ride failed for ride {}: {}", ride_id, exc)
         return PaymentResult(success=False, error="Wallet payment failed", status_code=400)
 
     # None means the RPC fired its idempotent no-op (ride already paid in a
     # previous attempt). No money moved, so we must NOT append a ledger row.
     if new_balance is None:
-        logger.info("settle_wallet: ride %s already paid — idempotent no-op, skipping ledger write", ride_id)
+        logger.info("settle_wallet: ride {} already paid — idempotent no-op, skipping ledger write", ride_id)
         return PaymentResult(success=True, already_paid=True, charged_amount=_money_str(total_charge))
 
     grand_total = _round(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0))
@@ -373,7 +368,7 @@ async def settle_corporate(
             # is no longer active) is a contract violation — surface loudly
             # and leave the ride pending rather than guessing a payer.
             logger.error(
-                "[PAYMENT] ride %s corporate_member_id %s invalid for company %s (found=%s status=%s company=%s)",
+                "[PAYMENT] ride {} corporate_member_id {} invalid for company {} (found={} status={} company={})",
                 ride_id,
                 stamped_member_id,
                 company_id,
@@ -412,7 +407,7 @@ async def settle_corporate(
         # defense-in-depth backstop for that gap, not the primary fix — fail
         # loudly instead of settling against a wallet that doesn't exist.
         logger.error(
-            "[PAYMENT] company %s has no wallet — cannot settle ride %s against it",
+            "[PAYMENT] company {} has no wallet — cannot settle ride {} against it",
             company_id,
             ride_id,
         )
@@ -481,7 +476,7 @@ async def settle_corporate(
             _cap_err_text = f"{_cap_err} {_detail}"
             if "allowance_cap_exceeded" in _cap_err_text:
                 logger.warning(
-                    "corporate allowance cap hit under contention for member %s ride %s — "
+                    "corporate allowance cap hit under contention for member {} ride {} — "
                     "routing fare to master wallet",
                     membership["id"],
                     ride_id,
@@ -497,7 +492,7 @@ async def settle_corporate(
                 # this ride within policy. Fail the same way the
                 # master-fallback debit's own floor breach already does.
                 logger.error(
-                    "[PAYMENT] company %s master wallet at floor — cannot cover allowance debit for ride %s: %s",
+                    "[PAYMENT] company {} master wallet at floor — cannot cover allowance debit for ride {}: {}",
                     company_id,
                     ride_id,
                     _cap_err,
@@ -539,21 +534,17 @@ async def settle_corporate(
                         notes=f"ride:{ride_id}:allowance_compensation",
                     )
                 except Exception as comp_err:
-                    logger.error(
-                        "[PAYMENT] Allowance compensation failed for ride %s — "
-                        "allowance %.2f was debited but master wallet was NOT; "
-                        "manual ledger fix required. comp_err=%s",
+                    logger.opt(exception=True).error(
+                        "[PAYMENT] Allowance compensation failed for ride {} — "
+                        "allowance {:.2f} was debited but master wallet was NOT; "
+                        "manual ledger fix required. comp_err={}",
                         ride_id,
                         allowance_debit,
                         comp_err,
-                        exc_info=True,
                     )
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
-            logger.error(
-                "[PAYMENT] Master wallet debit failed for ride %s: %s",
-                ride_id,
-                master_err,
-                exc_info=True,
+            logger.opt(exception=True).error(
+                "[PAYMENT] Master wallet debit failed for ride {}: {}", ride_id, master_err
             )
             return PaymentResult(
                 success=False,
@@ -589,11 +580,8 @@ async def settle_corporate(
                 amount=allowance_debit + master_debit,
             )
         except Exception:
-            logger.error(
-                "[PAYMENT] Failed to record section spend for ride=%s section=%s",
-                ride_id,
-                membership["section_id"],
-                exc_info=True,
+            logger.opt(exception=True).error(
+                "[PAYMENT] Failed to record section spend for ride={} section={}", ride_id, membership["section_id"]
             )
 
     # Audit-only: a company suspended/closed mid-ride is grandfathered — the
@@ -606,12 +594,11 @@ async def settle_corporate(
         company_row = await db_supabase.get_corporate_account_by_id(validated_id=company_id) or {}
         company_status = company_row.get("status")
     except Exception as _status_exc:
-        logger.error(
-            "[PAYMENT] could not read company status for audit flag ride=%s company=%s: %s",
+        logger.opt(exception=True).error(
+            "[PAYMENT] could not read company status for audit flag ride={} company={}: {}",
             ride_id,
             company_id,
             _status_exc,
-            exc_info=True,
         )
 
     # Audit-only, same pattern as company_inactive_during_ride above: a policy
@@ -639,12 +626,11 @@ async def settle_corporate(
                 _ride_dt = _ride_dt.replace(tzinfo=timezone.utc)
             policy_changed_since_booking = _policy_dt > _ride_dt
     except Exception as _policy_ts_exc:
-        logger.error(
-            "[PAYMENT] could not compare policy/ride timestamps for audit flag ride=%s company=%s: %s",
+        logger.opt(exception=True).error(
+            "[PAYMENT] could not compare policy/ride timestamps for audit flag ride={} company={}: {}",
             ride_id,
             company_id,
             _policy_ts_exc,
-            exc_info=True,
         )
 
     completion_ctx = {
@@ -697,7 +683,7 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
     """
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
-        logger.error("[PAYMENT] auto-settle: ride %s not found", ride_id)
+        logger.error("[PAYMENT] auto-settle: ride {} not found", ride_id)
         return None
     if not ride.get("guest_booking") or ride.get("payment_method") != "company_allowance":
         return None
@@ -730,7 +716,7 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
         # settle_corporate resets payment_status itself on its known failure
         # paths; an unexpected raise would strand the ride in 'processing' —
         # release the claim so the retry sweep can pick it up again.
-        logger.error("[PAYMENT] auto-settle crashed for guest ride %s", ride_id, exc_info=True)
+        logger.opt(exception=True).error("[PAYMENT] auto-settle crashed for guest ride {}", ride_id)
         await db_supabase.update_one(
             "rides",
             {"id": ride_id, "payment_status": "processing"},
@@ -743,7 +729,7 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
     )
     if not result.success:
         logger.error(
-            "[PAYMENT] auto-settle failed for guest ride %s: %s (status %s)",
+            "[PAYMENT] auto-settle failed for guest ride {}: {} (status {})",
             ride_id,
             result.error,
             result.status_code,
@@ -770,7 +756,7 @@ async def _fire_guest_purchase_conversion(ride: dict, ride_id: str, charged_amou
     try:
         await send_ride_purchase_for_ride(ride, ride.get("rider_id"), charged_amount)
     except Exception:
-        logger.error("meta: guest Purchase send failed for ride %s", ride_id, exc_info=True)
+        logger.opt(exception=True).error("meta: guest Purchase send failed for ride {}", ride_id)
 
 
 # ── Card (Stripe) settlement ─────────────────────────────────────────
@@ -810,7 +796,7 @@ async def _settle_against_hold(
         # payment-path anomaly we must surface, per CLAUDE.md. No exc_info — we
         # are not inside an except block; the Stripe message is in error_message.
         logger.error(
-            "[PAYMENT] capture of hold pi=%s failed for ride %s (%s) — falling back to fresh charge",
+            "[PAYMENT] capture of hold pi={} failed for ride {} ({}) — falling back to fresh charge",
             held_pi,
             ride_id,
             cap.error_message,
@@ -845,7 +831,7 @@ async def _settle_against_hold(
         # branch below — so flows don't wedge when Stripe isn't wired up.
         if app_config.ENV.lower() == "production":
             return await _refuse_unconfigured_settlement(ride_id, "capture")
-        logger.error("Stripe unconfigured — marking ride %s paid (held) without real capture", ride_id)
+        logger.error("Stripe unconfigured — marking ride {} paid (held) without real capture", ride_id)
         await db_supabase.update_ride(
             ride_id,
             {
@@ -881,8 +867,8 @@ async def _settle_against_hold(
             if tip_collected < 0:
                 tip_collected = Decimal("0")
             logger.error(
-                "[PAYMENT] over-buffer tip charge failed for ride %s (%s); captured %s, "
-                "tip collected %s, excess %s uncollected",
+                "[PAYMENT] over-buffer tip charge failed for ride {} ({}); captured {}, "
+                "tip collected {}, excess {} uncollected",
                 ride_id,
                 over.error_message,
                 _money_str(capture_amount),
@@ -911,13 +897,12 @@ async def _settle_against_hold(
             },
         )
     except Exception as db_err:
-        logger.error(
-            "[PAYMENT] Capture %s succeeded but ride %s DB update failed — "
-            "ride stuck in 'processing'; financial_events written for recovery. err=%s",
+        logger.opt(exception=True).error(
+            "[PAYMENT] Capture {} succeeded but ride {} DB update failed — "
+            "ride stuck in 'processing'; financial_events written for recovery. err={}",
             cap.payment_intent_id,
             ride_id,
             db_err,
-            exc_info=True,
         )
         return PaymentResult(
             success=False,
@@ -1065,13 +1050,12 @@ async def settle_card(
                 },
             )
         except Exception as db_err:
-            logger.error(
-                "[PAYMENT] Stripe charge %s confirmed but ride %s DB update failed — "
-                "ride stuck in 'processing'; financial_events written for recovery. err=%s",
+            logger.opt(exception=True).error(
+                "[PAYMENT] Stripe charge {} confirmed but ride {} DB update failed — "
+                "ride stuck in 'processing'; financial_events written for recovery. err={}",
                 outcome.payment_intent_id,
                 ride_id,
                 db_err,
-                exc_info=True,
             )
             return PaymentResult(
                 success=False,
@@ -1140,7 +1124,7 @@ async def settle_card(
     if outcome.status == "unconfigured":
         if app_config.ENV.lower() == "production":
             return await _refuse_unconfigured_settlement(ride_id, "charge")
-        logger.error("Stripe unconfigured — marking ride %s paid without real charge", ride_id)
+        logger.error("Stripe unconfigured — marking ride {} paid without real charge", ride_id)
         await db_supabase.update_ride(
             ride_id,
             {
@@ -1213,5 +1197,5 @@ async def send_ride_receipt(
 
         return await send_receipt_email(ride, rider or {}, driver_info, _f(tip_amount), recipient_email=recipient_email)
     except Exception as e:
-        logger.error(f"Receipt email error: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Receipt email error: {e}")
         return False

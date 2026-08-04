@@ -176,7 +176,7 @@ async def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> 
                 # thumbnail, never fail the whole authorized ride read (rider
                 # receipt / admin detail). The segmented geometry above already
                 # conveys the route; the signed image is best-effort.
-                logger.exception("route snapshot signing failed for ride_id=%s", ride.get("id"))
+                logger.exception("route snapshot signing failed for ride_id={}", ride.get("id"))
                 ride.pop("route_snapshot_url", None)
         else:
             ride.pop("route_snapshot_url", None)

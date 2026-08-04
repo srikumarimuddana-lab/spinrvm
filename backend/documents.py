@@ -343,7 +343,7 @@ def regenerate_signed_url(stored_url: str, expires_in: int = 3600) -> str:
         res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, expires_in)
         return _extract_signed_url(res)
     except Exception as exc:
-        logger.warning("regenerate_signed_url failed for key=%s: %s", storage_key, exc)
+        logger.warning("regenerate_signed_url failed for key={}: {}", storage_key, exc)
         return stored_url
 
 
@@ -941,10 +941,16 @@ async def upload_file(
     returns the public URL. The previous base64-in-DB approach caused
     2+ minute timeouts for large images.
     """
+    # The original filename is deliberately NOT logged. These are driver
+    # identity documents (licence, insurance, registration) and the uploaded
+    # name routinely carries the driver's name or licence number — the same
+    # reason `safe_name` below never echoes it back to the caller (12-8).
+    # The extension is the only part with diagnostic value here, since the
+    # next failure mode is the ALLOWED_EXTENSIONS check.
     logger.info(
-        "[upload] hit /api/v1/upload user=%s filename=%s content_type=%s",
+        "[upload] hit /api/v1/upload user={} ext={} content_type={}",
         (current_user or {}).get("id"),
-        getattr(file, "filename", None),
+        Path(getattr(file, "filename", None) or "").suffix.lower() or "none",
         getattr(file, "content_type", None),
     )
     try:
@@ -980,22 +986,24 @@ async def upload_file(
         safe_name = f"document_{upload_ts}{ext}"
 
         try:
-            logger.info("[upload] storage.upload begin key=%s size=%s", storage_key, size)
+            logger.info("[upload] storage.upload begin key={} size={}", storage_key, size)
             upload_res = supabase.storage.from_("driver-documents").upload(
                 file=content,
                 path=storage_key,
                 file_options={"content-type": content_type},
             )
-            logger.info("[upload] storage.upload done type=%s", type(upload_res).__name__)
+            logger.info("[upload] storage.upload done type={}", type(upload_res).__name__)
             signed_res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600)
-            logger.info(
-                "[upload] create_signed_url returned type=%s repr=%r",
-                type(signed_res).__name__,
-                signed_res,
-            )
+            # Type only — never the response body. `signed_res` contains the
+            # signed URL itself, a working hour-long credential for a driver's
+            # identity document; putting it in the log stream hands document
+            # access to anyone who can read logs. The type name is what this
+            # line is actually for (the extractor below has to cope with
+            # several Supabase client response shapes).
+            logger.info("[upload] create_signed_url returned type={}", type(signed_res).__name__)
             public_url = _extract_signed_url(signed_res)
         except Exception as e:
-            logger.exception("Supabase Storage upload failed: %s", e)
+            logger.exception("Supabase Storage upload failed: {}", e)
             raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e
 
         return {

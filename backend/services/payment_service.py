@@ -536,10 +536,15 @@ async def settle_corporate(
                 except Exception as comp_err:
                     logger.opt(exception=True).error(
                         "[PAYMENT] Allowance compensation failed for ride {} — "
-                        "allowance {:.2f} was debited but master wallet was NOT; "
+                        "allowance {} was debited but master wallet was NOT; "
                         "manual ledger fix required. comp_err={}",
                         ride_id,
-                        allowance_debit,
+                        # _f(), not "{:.2f}" — str.format on a Decimal uses the
+                        # ambient decimal context (ROUND_HALF_EVEN), not this
+                        # codebase's ROUND_HALF_UP. This figure is what an
+                        # on-call engineer reconciles the ledger against, so it
+                        # must round the same way the ledgered amount did.
+                        _f(allowance_debit),
                         comp_err,
                     )
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})

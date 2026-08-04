@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import io
 import re
+import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from loguru import logger
@@ -40,6 +42,48 @@ RIDER_PHONE = "+13065551234"
 def _boom(rider_email: str, rider_phone: str, amount: str) -> None:
     """A stand-in for a settlement helper called with real PII arguments."""
     raise ValueError("stripe unavailable")
+
+
+def test_loguru_logger_is_the_real_object_not_a_session_stub():
+    """Guard: three test modules replace loguru.logger with a MagicMock.
+
+    test_p3_loop_jitter_metrics.py, test_p3_ws_broadcast.py and
+    test_ws_health.py each run ``sys.modules["loguru"].logger = MagicMock()``
+    at import time, permanently. If that has happened before this module is
+    imported, every ``logger.add`` below is a no-op on a mock and the
+    assertions still pass having rendered nothing — the same silent-vacuity
+    trap test_sentry_frame_vars.py documents for sentry_sdk. Fail loudly.
+    """
+    assert not isinstance(logger, MagicMock)
+    assert callable(getattr(logger, "add", None))
+    assert callable(getattr(logger, "opt", None))
+
+
+@pytest.fixture(autouse=True)
+def _own_the_handler_set():
+    """Take exclusive control of loguru's global state for each test.
+
+    An additive `logger.add(...)` / `logger.remove(id)` is not enough. Other
+    modules mutate the same global logger from several directions —
+    test_log_guard.py's fixture calls a bare `logger.remove()` (drops every
+    handler) and `logger.configure(patcher=...)`, and three test modules
+    replace `loguru.logger` with a MagicMock at import time. An earlier version
+    of this file used the additive form: it passed alone and in several
+    subsets, failed in two full-suite runs, and passed in a third with no code
+    change. A test that exists to prove a PIPEDA control is in place must not
+    be the flakiest thing in the suite.
+
+    So: clear every handler and any inherited patcher, run with only our sink,
+    then restore a plain stderr handler (matching what test_log_guard.py
+    already leaves behind, so this is no more disruptive than the existing
+    convention).
+    """
+    logger.remove()
+    logger.configure(patcher=None)
+    yield
+    logger.remove()
+    logger.configure(patcher=None)
+    logger.add(sys.stderr, level="INFO")
 
 
 def _capture(**sink_kwargs) -> str:

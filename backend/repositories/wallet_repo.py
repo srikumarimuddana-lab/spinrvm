@@ -380,11 +380,11 @@ async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, 
                 )
                 if existing.data and existing.data[0].get("processed_at") is None:
                     logger.critical(
-                        "Stripe event %s is STUCK: claimed but never marked processed. Manual reconciliation required.",
+                        "Stripe event {} is STUCK: claimed but never marked processed. Manual reconciliation required.",
                         event_id,
                     )
                 else:
-                    logger.info("Stripe event %s already processed — deduplicating", event_id)
+                    logger.info("Stripe event {} already processed — deduplicating", event_id)
                 return False
             raise
 

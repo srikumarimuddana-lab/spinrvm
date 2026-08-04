@@ -310,6 +310,18 @@ class AppSettings(BaseModel):
     # config change here, not a code change.
     sos_paging_webhook_url: str = ""
     sos_paging_routing_key: str = ""
+    # ── Driver discreet SOS (ACTION_ITEMS.md B16) ─────────────────────────
+    # Rollout flag for the driver-side discreet SOS UX chosen by design
+    # sketch 011 ("Discreet Hold Shield"): longer hold, no red flash, no
+    # native modal — a silent alert a threatening passenger cannot see the
+    # driver send. Defaults OFF so the behaviour ships dark on a live-tested
+    # safety surface; flipping it back to false IS the rollback, no redeploy
+    # (60s settings TTL). Riders are unaffected either way — the shared
+    # SOSButton only enters discreet mode when a caller opts in, and only the
+    # driver home screen does. Exposed on the PUBLIC /settings projection
+    # because the driver app needs it before an SOS ever happens; it carries
+    # no secret, it is a boolean describing UI behaviour.
+    driver_sos_discreet_enabled: bool = False
     # Hours of app unreachability before the stale-intent reconciler flips
     # a driver's is_online=false (utils/stale_intent_reconciler.py,
     # migration 146). Range 1-48 enforced by the admin API + DB CHECK.

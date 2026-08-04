@@ -1390,6 +1390,48 @@ class TestSettingsEndpoints:
             result = asyncio.run(get_public_settings())
         assert "google_maps_api_key" in result
 
+    def test_public_settings_defaults_discreet_sos_off(self):
+        """ACTION_ITEMS.md B16: absent flag ⇒ False, so a settings outage (or a
+        pre-migration row) degrades the driver app to today's shared SOS UX
+        rather than to no SOS at all. Fail-safe direction matters here."""
+        from backend.routes.settings import get_public_settings
+
+        with patch("backend.routes.settings.get_app_settings", AsyncMock(return_value={})):
+            result = asyncio.run(get_public_settings())
+        assert result["driver_sos_discreet_enabled"] is False
+
+    def test_public_settings_exposes_discreet_sos_when_enabled(self):
+        """The driver app must be able to read the flag *before* an emergency —
+        fetching it mid-SOS would put a network round trip on the one path that
+        must not have one."""
+        from backend.routes.settings import get_public_settings
+
+        with patch(
+            "backend.routes.settings.get_app_settings",
+            AsyncMock(return_value={"driver_sos_discreet_enabled": True}),
+        ):
+            result = asyncio.run(get_public_settings())
+        assert result["driver_sos_discreet_enabled"] is True
+
+    def test_public_settings_leaks_no_sos_paging_credentials(self):
+        """The paging webhook/routing key are admin-only. They must never ride
+        along on the public projection the mobile apps fetch unauthenticated."""
+        from backend.routes.settings import get_public_settings
+
+        with patch(
+            "backend.routes.settings.get_app_settings",
+            AsyncMock(
+                return_value={
+                    "sos_paging_webhook_url": "https://events.pagerduty.com/v2/enqueue",
+                    "sos_paging_routing_key": "fake-test-routing-key-not-a-real-secret",
+                    "driver_sos_discreet_enabled": True,
+                }
+            ),
+        ):
+            result = asyncio.run(get_public_settings())
+        assert "sos_paging_webhook_url" not in result
+        assert "sos_paging_routing_key" not in result
+
     def test_get_legal_settings_with_content(self):
         from backend.routes.settings import get_legal_settings
 

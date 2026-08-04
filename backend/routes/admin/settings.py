@@ -221,6 +221,13 @@ class SettingsUpdateRequest(BaseModel):
     # credentials.
     sos_paging_webhook_url: Optional[str] = None
     sos_paging_routing_key: Optional[str] = None
+    # Driver discreet-SOS rollout flag (ACTION_ITEMS.md B16). Not a credential
+    # and not a data destination, so deliberately NOT in _SUPER_ADMIN_ONLY_FIELDS
+    # — it selects which SOS interaction the driver app renders, and ops needs
+    # to be able to switch it off fast if the discreet UX misbehaves in the
+    # field. Making the rollback super_admin-gated would slow down the one
+    # action you want instant on a safety surface.
+    driver_sos_discreet_enabled: Optional[bool] = None
     # Dispatch & matching — also configurable per service area (area overrides global).
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
     ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)

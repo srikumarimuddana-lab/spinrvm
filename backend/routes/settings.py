@@ -53,6 +53,14 @@ async def get_public_settings():
         # `/track/[token]`). Set via the admin Settings panel so the URL can
         # be rotated without a mobile rebuild. Empty string until configured.
         "track_base_url": settings.get("track_base_url", ""),
+        # Driver discreet-SOS rollout flag (ACTION_ITEMS.md B16). Public
+        # because the driver app must know before an emergency, not during
+        # one — fetching it mid-SOS would add a network round trip to the
+        # exact path that must not have one. Carries no secret: it is a
+        # boolean describing which SOS interaction the driver app renders.
+        # Absent/false ⇒ the app keeps today's shared (rider) behaviour, so
+        # a settings outage degrades to the current UX rather than to none.
+        "driver_sos_discreet_enabled": bool(settings.get("driver_sos_discreet_enabled", False)),
     }
 
 

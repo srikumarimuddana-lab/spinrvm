@@ -454,6 +454,18 @@ logger.add(
     level="INFO",
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {name}:{function}:{line} | {message}",
     serialize=True,  # This enables JSON formatting
+    # PIPEDA: loguru defaults to diagnose=True, which annotates every traceback
+    # frame with the *values* of the locals and call arguments in scope. On a
+    # settlement failure that prints things like
+    #     settle_fare("rider@example.com", Decimal("42.50"), "+13065551234")
+    #     └ <rider row with phone/email/address>
+    # straight into the log stream. utils/log_guard.py cannot catch it: the
+    # guard scrubs record["message"] and record["extra"], but the annotated
+    # frames are rendered by the sink from record["exception"], downstream of
+    # both. backtrace=True is kept — the stack itself is what makes an error
+    # actionable; it is the variable values that must not be logged.
+    backtrace=True,
+    diagnose=False,
 )
 
 # No file logging in production — Railway captures stdout/stderr and exposes

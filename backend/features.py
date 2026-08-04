@@ -147,7 +147,7 @@ async def calculate_airport_fee(
     # but a ride still shows airport_fee, the value is frozen on the ride
     # row from before the removal — historical rides don't get retro-fixed.
     logger.info(
-        "[AIRPORT_FEE] check pickup=%s dropoff=%s areas=%d",
+        "[AIRPORT_FEE] check pickup={} dropoff={} areas={}",
         _geohash(pickup_lat, pickup_lng),
         _geohash(dropoff_lat, dropoff_lng),
         len(areas),
@@ -186,10 +186,10 @@ async def calculate_airport_fee(
             lats = [p["lat"] for p in polygon]
             lngs = [p["lng"] for p in polygon]
             logger.info(
-                "[AIRPORT_FEE] applied $%.2f for zone %r (id=%s): "
-                "pickup_in=%s dropoff_in=%s stop_in=%s | "
-                "pickup=%s dropoff=%s | "
-                "polygon vertices=%d bbox lat=[%.5f,%.5f] lng=[%.5f,%.5f]",
+                "[AIRPORT_FEE] applied ${:.2f} for zone {!r} (id={}): "
+                "pickup_in={} dropoff_in={} stop_in={} | "
+                "pickup={} dropoff={} | "
+                "polygon vertices={} bbox lat=[{:.5f},{:.5f}] lng=[{:.5f},{:.5f}]",
                 fee,
                 area.get("name", "Airport"),
                 area.get("id"),
@@ -415,7 +415,7 @@ async def get_faqs(
             area = await resolve_service_area_for_point(float(lat), float(lng))
             area_id = area.get("id") if area else None
         except Exception:
-            logger.error("public faq service-area resolve failed", exc_info=True)
+            logger.opt(exception=True).error("public faq service-area resolve failed")
     scope = await resolve_area_scope(area_id)
     return [f for f in faqs if not f.get("service_area_ids") or (set(f["service_area_ids"]) & scope)]
 
@@ -1371,7 +1371,7 @@ async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str
                 logger.error(f"Expo push non-ok response: {result}")
             return False
     except Exception as e:
-        logger.error(f"Failed to send Expo push notification: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to send Expo push notification: {e}")
         return False
 
 
@@ -1511,10 +1511,10 @@ async def _deliver_push_now(
             if rows:
                 await db_supabase.delete_one("push_tokens", {"id": rows[0]["id"]})
         except Exception:
-            logger.error("Failed to purge stale FCM token", exc_info=True)
+            logger.opt(exception=True).error("Failed to purge stale FCM token")
         return False
     except Exception as e:
-        logger.error(f"Failed to send push notification to user {user_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to send push notification to user {user_id}: {e}")
         return False
 
 
@@ -1569,7 +1569,7 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
                 },
             )
         except Exception:
-            logger.error(f"push: failed to record in-app notification for user {user_id}", exc_info=True)
+            logger.opt(exception=True).error(f"push: failed to record in-app notification for user {user_id}")
 
     try:
         from .utils.background import spawn
@@ -1645,9 +1645,8 @@ async def send_push_notification(
                 )
                 return False
         except Exception:
-            logger.error(
-                f"push: preference lookup failed for user {user_id} — sending anyway (deliberate fail-open)",
-                exc_info=True,
+            logger.opt(exception=True).error(
+                f"push: preference lookup failed for user {user_id} — sending anyway (deliberate fail-open)"
             )
 
     # The whole immediate path (users lookup + token select + send) is guarded:
@@ -1681,10 +1680,7 @@ async def send_push_notification(
         if delivered:
             return True
     except Exception:
-        logger.error(
-            f"push: immediate send path errored for user {user_id} (priority={priority})",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"push: immediate send path errored for user {user_id} (priority={priority})")
         if not time_critical:
             # Informational push: keep the existing best-effort contract and let
             # the DB error surface to the caller instead of masking it.
@@ -1706,7 +1702,7 @@ async def send_push_notification(
             await enqueue_push(user_id, title, body, data, priority=priority, target_app=target_app)
             logger.warning(f"push: immediate send failed for user {user_id} — enqueued {priority} push for retry")
         except Exception:
-            logger.error("push_retry enqueue (fallback) failed", exc_info=True)
+            logger.opt(exception=True).error("push_retry enqueue (fallback) failed")
     return False
 
 
@@ -1801,10 +1797,7 @@ async def notify_safety_team(incident: dict) -> dict:
         )
         ws_ok = True
     except Exception:
-        logger.error(
-            f"[SAFETY] Admin WS broadcast failed for incident {incident_id}",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"[SAFETY] Admin WS broadcast failed for incident {incident_id}")
 
     # Email fan-out. Each recipient gets its own send_email call so
     # one bad address doesn't poison the rest.
@@ -1850,19 +1843,24 @@ async def notify_safety_team(incident: dict) -> dict:
                     if ok:
                         email_sent += 1
                 except Exception:
-                    logger.error(
-                        f"[SAFETY] send_email failed for incident {incident_id} to {addr}",
-                        exc_info=True,
+                    # Recipient #N, never the address — CLAUDE.md forbids email
+                    # addresses in logs, and `email_attempted` already
+                    # identifies which entry of `recipients` failed. (This was
+                    # an f-string, so unlike its neighbours it *was* reaching
+                    # the log stream; utils/log_guard.py was redacting it after
+                    # the fact. Fixing the call site is the point of the guard.)
+                    logger.opt(exception=True).error(
+                        "[SAFETY] send_email failed for incident {} (recipient #{} of {})",
+                        incident_id,
+                        email_attempted,
+                        len(recipients),
                     )
         else:
             logger.warning(
                 f"[SAFETY] No safety_alert_emails configured — email step skipped for incident {incident_id}"
             )
     except Exception:
-        logger.error(
-            f"[SAFETY] notify_safety_team email fan-out failed for incident {incident_id}",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"[SAFETY] notify_safety_team email fan-out failed for incident {incident_id}")
 
     return {"ws": ws_ok, "email_sent": email_sent, "email_attempted": email_attempted}
 

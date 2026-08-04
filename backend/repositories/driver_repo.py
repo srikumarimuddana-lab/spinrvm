@@ -101,7 +101,7 @@ async def get_service_area_for_point(lat: float, lng: float) -> Optional[Dict[st
     try:
         return await run_sync(_call)
     except Exception as exc:
-        logger.error(f"get_service_area_for_point failed: {exc}", exc_info=True)
+        logger.opt(exception=True).error(f"get_service_area_for_point failed: {exc}")
         return None
 
 
@@ -293,7 +293,7 @@ async def update_acceptance_rate(driver_id: str, accepted: bool) -> None:
             lambda: supabase.table("drivers").update({"acceptance_rate": new_rate}).eq("id", driver_id).execute()
         )
     except Exception as exc:
-        logger.error(f"update_acceptance_rate failed for {driver_id}: {exc}", exc_info=True)
+        logger.opt(exception=True).error(f"update_acceptance_rate failed for {driver_id}: {exc}")
 
 
 async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:

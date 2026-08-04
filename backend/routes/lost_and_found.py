@@ -78,12 +78,7 @@ async def _push_safe(user_id: str, title: str, body: str, data: dict, target_app
     try:
         await send_push_notification(user_id, title, body, data, target_app=target_app)
     except Exception:
-        logger.error(
-            "lost_and_found push failed user=%s target_app=%s",
-            user_id,
-            target_app,
-            exc_info=True,
-        )
+        logger.opt(exception=True).error("lost_and_found push failed user={} target_app={}", user_id, target_app)
 
 
 # ---------------------------------------------------------------------------

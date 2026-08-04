@@ -199,11 +199,8 @@ async def pay_driver_cancellation_fee(
                 },
             )
         except Exception:
-            logger.error(
-                "[CANCEL] audit_log write failed for cancellation_fee_charged ride=%s driver=%s",
-                ride_id,
-                driver_id,
-                exc_info=True,
+            logger.opt(exception=True).error(
+                "[CANCEL] audit_log write failed for cancellation_fee_charged ride={} driver={}", ride_id, driver_id
             )
 
         await send_push_notification(
@@ -214,8 +211,5 @@ async def pay_driver_cancellation_fee(
         )
         return True
     except Exception as fee_err:
-        logger.error(
-            f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}")
         return False

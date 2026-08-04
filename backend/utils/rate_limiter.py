@@ -80,7 +80,7 @@ def _is_security_scope(scope: str) -> bool:
 
 def _record_storage_error(scope: str, error: Exception, fail_closed: bool) -> None:
     policy = "fail_closed" if fail_closed else "fallback"
-    logger.error(f"Async rate-limit storage failed; policy={policy}; scope={scope}", exc_info=error)
+    logger.opt(exception=error).error(f"Async rate-limit storage failed; policy={policy}; scope={scope}")
     _metric_inc("spinr_rate_limit_storage_errors_total", {"policy": policy})
 
 
@@ -179,7 +179,7 @@ def get_client_identifier(request: Request) -> str:
         # Note: This is a best-effort attempt, body may already be consumed
         # For actual phone-based limiting, apply decorator directly with phone param
     except Exception:  # noqa: S110
-        logger.warning("rate_limiter: get_rate_limit_key: body parse failed; falling back to IP", exc_info=True)
+        logger.opt(exception=True).warning("rate_limiter: get_rate_limit_key: body parse failed; falling back to IP")
 
     # Fallback to the authoritative client IP (CF-Connecting-IP when present).
     return f"ip:{get_real_client_ip(request)}"

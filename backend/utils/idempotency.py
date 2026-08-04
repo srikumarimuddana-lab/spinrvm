@@ -78,7 +78,7 @@ async def read_cached_response(cache_key: str) -> Optional[dict]:
     try:
         raw = await redis_get(cache_key)
     except Exception as exc:
-        logger.error(f"[IDEM] Redis read failed for {cache_key}: {exc}", exc_info=True)
+        logger.opt(exception=True).error(f"[IDEM] Redis read failed for {cache_key}: {exc}")
         return None
     if not raw:
         return None
@@ -96,7 +96,7 @@ async def write_cached_response(cache_key: str, status_code: int, body: Any, ttl
         payload = _json.dumps({"status": status_code, "body": body}, default=str)
         await redis_set(cache_key, payload, ttl=ttl)
     except Exception as exc:
-        logger.error(f"[IDEM] Redis write failed for {cache_key}: {exc}", exc_info=True)
+        logger.opt(exception=True).error(f"[IDEM] Redis write failed for {cache_key}: {exc}")
 
 
 def _extract_user_id(request: Request, kwargs: dict) -> Optional[str]:

@@ -58,10 +58,7 @@ async def enqueue_push(
         )
         logger.info(f"push_retry: enqueued {priority} push for user {user_id!r}")
     except Exception:
-        logger.error(
-            f"push_retry: failed to enqueue push for user {user_id!r}",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"push_retry: failed to enqueue push for user {user_id!r}")
 
 
 async def push_retry_loop() -> None:
@@ -70,7 +67,7 @@ async def push_retry_loop() -> None:
         try:
             await _tick()
         except Exception:
-            logger.error("push_retry_loop tick failed", exc_info=True)
+            logger.opt(exception=True).error("push_retry_loop tick failed")
         await asyncio.sleep(_LOOP_INTERVAL)
 
 
@@ -94,7 +91,7 @@ async def _tick() -> None:
             )
         )
     except Exception:
-        logger.error("push_retry: failed to query pending rows", exc_info=True)
+        logger.opt(exception=True).error("push_retry: failed to query pending rows")
         return
 
     rows = resp.data or []
@@ -155,10 +152,7 @@ async def _process_row(row: dict) -> None:
         else:
             success = await _send_fcm_push(token, title, body, data, user_id)
     except Exception:
-        logger.error(
-            f"push_retry: unexpected error sending to user {user_id!r} (row {row_id})",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"push_retry: unexpected error sending to user {user_id!r} (row {row_id})")
         success = False
 
     if success:
@@ -171,10 +165,7 @@ async def _process_row(row: dict) -> None:
                 f"push_retry: delivered notification to user {user_id!r} (row {row_id}, attempt {attempts + 1})"
             )
         except Exception:
-            logger.error(
-                f"push_retry: failed to mark row {row_id} as sent",
-                exc_info=True,
-            )
+            logger.opt(exception=True).error(f"push_retry: failed to mark row {row_id} as sent")
         return
 
     # Delivery failed. The atomic claim already incremented attempts and
@@ -254,10 +245,7 @@ async def _send_fcm_push(
         logger.info(f"push_retry: FCM send OK for user {user_id!r}: {response} (dispatch={is_dispatch})")
         return True
     except Exception:
-        logger.error(
-            f"push_retry: FCM send failed for user {user_id!r}",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"push_retry: FCM send failed for user {user_id!r}")
         return False
 
 
@@ -285,7 +273,7 @@ async def _claim_row(row_id: str, observed_attempts: int, next_attempt_at: str) 
     try:
         return await run_sync(_fn)
     except Exception:
-        logger.error(f"push_retry: failed to claim row {row_id}", exc_info=True)
+        logger.opt(exception=True).error(f"push_retry: failed to claim row {row_id}")
         return False
 
 
@@ -294,4 +282,4 @@ async def _delete_row(row_id: str) -> None:
     try:
         await run_sync(lambda: supabase.table("push_retry_queue").delete().eq("id", row_id).execute())
     except Exception:
-        logger.error(f"push_retry: failed to delete row {row_id}", exc_info=True)
+        logger.opt(exception=True).error(f"push_retry: failed to delete row {row_id}")

@@ -107,9 +107,22 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
                 // refresh cookie is sent automatically — no need to check for
                 // a token in JS state.
                 await store.silentRefresh();
-                const newToken = useAuthStore.getState().token;
+                const refreshedStore = useAuthStore.getState();
+                const newToken = refreshedStore.token;
                 if (newToken) {
-                    const retryHeaders = { ...headers, Authorization: `Bearer ${newToken}` };
+                    // Rebuild BOTH auth headers from the refreshed store: the
+                    // refresh rotated the csrf_token cookie + value, so reusing
+                    // the stale X-CSRF-Token from `headers` sends the OLD token
+                    // alongside the NEW cookie and the backend double-submit
+                    // check rejects the retry with 403 "CSRF token invalid".
+                    // Same fix as companyApi.ts — see its matching comment.
+                    const retryHeaders: Record<string, string> = {
+                        ...headers,
+                        Authorization: `Bearer ${newToken}`,
+                    };
+                    if (!["GET", "HEAD", "OPTIONS"].includes(method) && refreshedStore.csrfToken) {
+                        retryHeaders["X-CSRF-Token"] = refreshedStore.csrfToken;
+                    }
                     const retryRes = await fetch(url, { ...options, headers: retryHeaders });
                     if (retryRes.ok) return retryRes.json() as T;
                     if (retryRes.status !== 401) {

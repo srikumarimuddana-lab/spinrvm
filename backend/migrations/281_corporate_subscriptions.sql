@@ -27,6 +27,17 @@
 --   active      subscription is live and Stripe is billing it
 --   past_due    most recent invoice failed; Stripe is retrying (dunning)
 --   cancelled   ended, either at-period-end or immediately
+--
+-- company_id is UUID, matching corporate_accounts.id and every other
+-- company_id in the schema (corporate_sections 206, corporate master
+-- wallet/allowances/policies 27). It was originally written as TEXT, which
+-- made the FK unimplementable (42804: "Key columns company_id and id are of
+-- incompatible types: text and uuid") and so this migration could never
+-- apply anywhere. Corrected in place rather than in a follow-up migration:
+-- the file has no CONCURRENTLY statement, so scripts/migrate.py runs it in a
+-- single transaction and the failure rolled the whole thing back — no
+-- database has it recorded in schema_migrations, and no follow-up could
+-- patch a table that was never created.
 
 CREATE TABLE IF NOT EXISTS public.corporate_subscription_plans (
     id              TEXT PRIMARY KEY,
@@ -41,7 +52,7 @@ CREATE TABLE IF NOT EXISTS public.corporate_subscription_plans (
 
 CREATE TABLE IF NOT EXISTS public.corporate_subscriptions (
     id                      TEXT PRIMARY KEY,
-    company_id              TEXT NOT NULL REFERENCES public.corporate_accounts(id),
+    company_id              UUID NOT NULL REFERENCES public.corporate_accounts(id),
     plan_id                 TEXT REFERENCES public.corporate_subscription_plans(id) ON DELETE SET NULL,
     plan_name               TEXT NOT NULL,
     price                   NUMERIC(10, 2) NOT NULL CHECK (price >= 0),

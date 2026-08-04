@@ -487,7 +487,15 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         present_cookies = [c for c in present_cookies if c]
 
         if not present_cookies or not csrf_header:
-            logger.warning("CSRF token missing: %s %s", request.method, path)
+            # loguru formats with str.format ({}), not %-style — a "%s" here is
+            # emitted literally and the arguments are silently dropped.
+            logger.warning(
+                "CSRF token missing: {} {} header={} cookies={}",
+                request.method,
+                path,
+                "present" if csrf_header else "absent",
+                "present" if present_cookies else "absent",
+            )
             return JSONResponse(
                 status_code=403,
                 content={"detail": "CSRF token missing"},
@@ -499,11 +507,16 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         # compare against each; the attacker can read none of them.
         header_bytes = csrf_header.encode()
         if not any(_hmac.compare_digest(c.encode(), header_bytes) for c in present_cookies):
+            # `cookies` is the count of CSRF cookies presented, not their values
+            # — the tokens are session credentials and must never reach a log
+            # sink. The count distinguishes "no cookie at all" from "sent the
+            # wrong one of two", which is what actually needs diagnosing here.
             logger.warning(
-                "CSRF token mismatch: %s %s origin=%s",
+                "CSRF token mismatch: {} {} origin={} cookies={}",
                 request.method,
                 path,
                 request.headers.get("origin"),
+                len(present_cookies),
             )
             return JSONResponse(
                 status_code=403,

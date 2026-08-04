@@ -153,6 +153,23 @@ function DriverDashboard() {
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
+  // Driver discreet-SOS rollout flag (ACTION_ITEMS.md B16), from the public
+  // /settings projection. Fetched once on mount — deliberately NOT at SOS
+  // time, since that would put a network round trip on the one path that must
+  // not have one. Defaults false, and a failed fetch leaves it false, so the
+  // fail-safe direction is "driver keeps the standard SOS button" rather than
+  // "driver gets no SOS".
+  const [discreetSosEnabled, setDiscreetSosEnabled] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api.get<{ driver_sos_discreet_enabled?: boolean }>('/settings')
+      .then((res: any) => {
+        if (!cancelled) setDiscreetSosEnabled(!!res?.data?.driver_sos_discreet_enabled);
+      })
+      .catch((e: any) => console.warn('[index] settings fetch failed:', e?.message ?? e));
+    return () => { cancelled = true; };
+  }, []);
+
   // Surge multiplier for the driver's service area — fetched on mount and
   // refreshed every 2 minutes (matching the surge engine interval).
   const [surgeMultiplier, setSurgeMultiplier] = useState<number>(1.0);
@@ -858,8 +875,16 @@ function DriverDashboard() {
         <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
           <SOSButton
             rideId={activeRide.ride.id}
+            discreet={discreetSosEnabled}
+            // Must NOT swallow the error. SOSButton decides between "Alert
+            // Sent" and its persistent "Not Sent — call 911" state purely on
+            // whether this promise rejects, so catching here made every
+            // failed driver SOS report success — the exact false
+            // confirmation the component was built to prevent. The rider
+            // path (rideStore.triggerEmergency) rethrows for this reason;
+            // this call site did not. Let it propagate.
             onTrigger={async (rideId, lat, lng) => {
-              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch (err) { console.error('[index]', err); }
+              await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
             }}
           />
         </View>

@@ -52,14 +52,24 @@ import httpx
 
 try:
     from ..settings_loader import get_app_settings
+    from .metrics import inc as _metric_inc
     from .pii import geohash
 except ImportError:  # pragma: no cover - exercised by `python -m` vs top-level
     from settings_loader import get_app_settings  # type: ignore
+    from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.pii import geohash  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT_SECONDS = 5.0
+
+# Counter name follows CLAUDE.md's `spinr_<domain>_<metric>_<unit>` convention
+# (domain=safety, counters end `_total`). The `disabled` outcome is the one
+# that matters operationally: paging ships dark, and without this counter the
+# dark state is invisible — the skip path only logs at DEBUG, which production
+# does not emit. An alert on `disabled` climbing while SOS volume is non-zero
+# is how you find out "we shipped dark and forgot" before an incident does.
+_PAGING_METRIC = "spinr_safety_sos_paging_total"
 
 
 class SosPagingConfig:
@@ -137,7 +147,9 @@ async def page_on_call(incident: Dict[str, Any]) -> bool:
     """POST one page for a safety incident. Returns True on a 2xx.
 
     Never raises. A False return means "logged and metered, carry on" —
-    identical contract to ``meta_capi.send_meta_event``. Single attempt, no
+    identical contract to ``meta_capi.send_meta_event``: every exit path
+    increments ``spinr_safety_sos_paging_total`` with an ``outcome`` label of
+    ``sent`` / ``failed`` / ``disabled``. Single attempt, no
     retry: paging is itself a best-effort notification layered on top of the
     already-persisted ``safety_incidents`` row and the WS/email/log channels
     in ``notify_safety_team``, so a slow retry loop here would only delay
@@ -151,6 +163,7 @@ async def page_on_call(incident: Dict[str, Any]) -> bool:
             "safety_paging: sos_paging_webhook_url not configured — skipping page for incident %s",
             incident.get("id"),
         )
+        _metric_inc(_PAGING_METRIC, {"outcome": "disabled"})
         return False
 
     incident_id = incident.get("id")
@@ -168,6 +181,7 @@ async def page_on_call(incident: Dict[str, Any]) -> bool:
                 response.status_code,
                 duration_ms,
             )
+            _metric_inc(_PAGING_METRIC, {"outcome": "sent"})
             return True
         logger.error(
             "safety_paging: page failed incident_id=%s status=%d body=%s",
@@ -175,6 +189,7 @@ async def page_on_call(incident: Dict[str, Any]) -> bool:
             response.status_code,
             response.text[:300],
         )
+        _metric_inc(_PAGING_METRIC, {"outcome": "failed"})
         return False
     except Exception as exc:  # httpx transport errors, DNS, TLS, timeouts
         logger.error(
@@ -184,4 +199,5 @@ async def page_on_call(incident: Dict[str, Any]) -> bool:
             exc,
             exc_info=True,
         )
+        _metric_inc(_PAGING_METRIC, {"outcome": "failed"})
         return False

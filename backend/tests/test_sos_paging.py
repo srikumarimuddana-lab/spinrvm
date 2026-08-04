@@ -302,3 +302,103 @@ async def test_paging_returning_false_does_not_block_sos_response():
     result = await _trigger_emergency(page_mock)
 
     assert result["success"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# spinr_safety_sos_paging_total — the counter that makes the dark state
+# visible. Without it the disabled branch only logs at DEBUG, which
+# production does not emit, so "we shipped dark and forgot" is undetectable.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _paging_counter(outcome: str) -> int:
+    """Current value of spinr_safety_sos_paging_total for one outcome label.
+
+    Reads through metrics.snapshot() rather than the private _counters dict,
+    mirroring test_async_limiter.py's idiom. Counters are process-global and
+    never reset, so every assertion below is a before/after delta.
+    """
+    import backend.utils.metrics as metrics
+
+    return metrics.snapshot()["counters"].get("spinr_safety_sos_paging_total", {}).get((("outcome", outcome),), 0)
+
+
+@pytest.mark.anyio
+async def test_metric_counts_disabled_when_not_configured():
+    import backend.utils.safety_paging as mod
+
+    before = _paging_counter("disabled")
+
+    with (
+        patch.object(mod, "get_app_settings", AsyncMock(return_value={})),
+        patch("httpx.AsyncClient") as mock_cls,
+    ):
+        await mod.page_on_call(_incident())
+
+    mock_cls.assert_not_called()
+    assert _paging_counter("disabled") == before + 1
+
+
+@pytest.mark.anyio
+async def test_metric_counts_sent_on_2xx():
+    import backend.utils.safety_paging as mod
+
+    before = _paging_counter("sent")
+    cm_mock, _ = _make_http_mocks(status_code=202)
+    settings = {
+        "sos_paging_webhook_url": _WEBHOOK_URL,
+        "sos_paging_routing_key": _ROUTING_KEY,
+    }
+
+    with (
+        patch.object(mod, "get_app_settings", AsyncMock(return_value=settings)),
+        patch("httpx.AsyncClient", return_value=cm_mock),
+    ):
+        assert await mod.page_on_call(_incident()) is True
+
+    assert _paging_counter("sent") == before + 1
+
+
+@pytest.mark.anyio
+async def test_metric_counts_failed_on_non_2xx():
+    import backend.utils.safety_paging as mod
+
+    before = _paging_counter("failed")
+    cm_mock, _ = _make_http_mocks(status_code=400)
+    settings = {
+        "sos_paging_webhook_url": _WEBHOOK_URL,
+        "sos_paging_routing_key": _ROUTING_KEY,
+    }
+
+    with (
+        patch.object(mod, "get_app_settings", AsyncMock(return_value=settings)),
+        patch("httpx.AsyncClient", return_value=cm_mock),
+    ):
+        assert await mod.page_on_call(_incident()) is False
+
+    assert _paging_counter("failed") == before + 1
+
+
+@pytest.mark.anyio
+async def test_metric_counts_failed_on_transport_exception():
+    """A timeout/DNS/TLS failure must land in `failed`, not vanish — this is
+    the case where paging is configured but the provider is unreachable, and
+    it must be distinguishable from `disabled`."""
+    import backend.utils.safety_paging as mod
+
+    before_failed = _paging_counter("failed")
+    before_disabled = _paging_counter("disabled")
+    cm_mock, _ = _make_http_mocks(post_side_effect=TimeoutError("provider unreachable"))
+    settings = {
+        "sos_paging_webhook_url": _WEBHOOK_URL,
+        "sos_paging_routing_key": _ROUTING_KEY,
+    }
+
+    with (
+        patch.object(mod, "get_app_settings", AsyncMock(return_value=settings)),
+        patch("httpx.AsyncClient", return_value=cm_mock),
+    ):
+        assert await mod.page_on_call(_incident()) is False
+
+    assert _paging_counter("failed") == before_failed + 1
+    assert _paging_counter("disabled") == before_disabled

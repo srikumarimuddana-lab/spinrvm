@@ -9,7 +9,10 @@ row-slot mechanics in ``sgi_form_filler.py`` so a future SGI form revision
 only touches the mapping, not the PDF-filling code.
 """
 
+import io
 import logging
+import re as _re
+import zipfile
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -415,5 +418,202 @@ async def download_sgi_supporting_documents(
             # unzipping; the ZIP's documents.csv remains the detailed record.
             "X-Documents-Listed": str(listed),
             "X-Documents-Included": str(included),
+        },
+    )
+
+
+# The one document SGI wants alongside a driver-eligibility filing. Narrower
+# than SGI_SUPPORTING_DOC_TYPES on purpose: the submission package is the
+# forms plus proof of criminal-record clearance, not the driver's whole file.
+SGI_PACKAGE_DOC_TYPE = "background_check"
+
+
+class SgiPackageRequest(BaseModel):
+    # `users.id`, same as SgiFormRequest.
+    driver_ids: list[str]
+    action: str = Field("add", pattern="^(add|remove|change)$")
+    reason: str = Field(..., min_length=10, max_length=200)
+
+
+def _safe_filename_part(value: str) -> str:
+    """Filename-safe slug for a driver name."""
+    return _re.sub(r"[^A-Za-z0-9]+", "_", (value or "").strip()).strip("_")[:60] or "driver"
+
+
+def _fill_both_forms(driver_rows: list[dict], action: str) -> dict[str, bytes]:
+    """Both SGI forms for these drivers, keyed by filename.
+
+    Chunked to each form's real row count (D00032 holds 10, D00033 holds 16),
+    mirroring what the Forms tab already does client-side — a selection larger
+    than one form's rows becomes consecutive documents rather than being
+    refused, since nothing stops an admin filing several per batch.
+    """
+    out: dict[str, bytes] = {}
+    specs = (
+        (
+            "driver_details",
+            "SGI_D00032_Driver_Details",
+            sgi_field_maps.driver_to_driver_details_row,
+            sgi_form_filler.fill_driver_details_form,
+        ),
+        (
+            "vehicle_details",
+            "SGI_D00033_Vehicle_Details",
+            sgi_field_maps.driver_to_vehicle_details_row,
+            sgi_form_filler.fill_vehicle_details_form,
+        ),
+    )
+    for form_type, base_name, row_mapper, filler in specs:
+        max_rows = sgi_form_filler.FORM_MAX_ROWS[form_type]
+        batches = [driver_rows[i : i + max_rows] for i in range(0, len(driver_rows), max_rows)]
+        for idx, batch in enumerate(batches, start=1):
+            rows = [row_mapper(d, action=action) for d in batch]
+            suffix = f"_{idx}" if len(batches) > 1 else ""
+            out[f"{base_name}{suffix}.pdf"] = filler(rows)
+    return out
+
+
+@router.post("/data-transfer/sgi-forms/package")
+@data_transfer_export_limit
+async def download_sgi_submission_package(
+    body: SgiPackageRequest,
+    request: Request = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """The complete SGI submission as one ZIP: both filled forms plus each
+    driver's criminal record check in whatever format they uploaded.
+
+    This is what actually gets emailed to SGI. The forms endpoint returns PDFs
+    with no evidence attached; the supporting-documents endpoint returns a
+    full data-transfer bundle (per-driver folders, CSVs, README) that is far
+    more than a filing needs and buries the two files that matter. Neither was
+    the thing an operator assembles by hand today.
+
+    Flat, predictably-named, nothing else in it:
+
+        SGI_D00032_Driver_Details.pdf
+        SGI_D00033_Vehicle_Details.pdf
+        criminal_record_checks/JaneDoe_background_check.pdf
+
+    JPEG and PDF checks are both included as-is — the file is not re-encoded,
+    because a regulator-facing document should be exactly what the driver
+    submitted.
+    """
+    if not body.driver_ids:
+        raise HTTPException(status_code=400, detail="No drivers selected")
+    if len(body.driver_ids) > MAX_DOCUMENT_BUNDLE_DRIVERS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(body.driver_ids)} drivers requested; the submission package is limited to "
+                f"{MAX_DOCUMENT_BUNDLE_DRIVERS} per download. Split the selection into smaller batches."
+            ),
+        )
+
+    driver_rows = await db_supabase.get_rows("drivers", {"user_id": {"$in": body.driver_ids}})
+    if not driver_rows:
+        raise HTTPException(status_code=404, detail="None of the requested drivers could be found")
+
+    out_of_scope = _out_of_scope_drivers(driver_rows)
+    if out_of_scope:
+        authorities = sorted({d["regulatory_authority"] for d in out_of_scope})
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(out_of_scope)} of the selected drivers are regulated by "
+                f"{', '.join(authorities)}, not SGI — they cannot be included in an SGI submission. "
+                "Remove these drivers from the selection."
+            ),
+        )
+
+    # Same vault decrypt as form generation: D00032 needs the real licence
+    # number, not the encrypted token.
+    driver_rows = [await _decrypt_driver_pii(d) for d in driver_rows]
+    driver_rows.sort(key=lambda d: (d.get("name") or "").lower())
+
+    try:
+        forms = _fill_both_forms(driver_rows, body.action)
+    except Exception as e:
+        logger.error("sgi package: form fill failed", exc_info=True)
+        observability.record_sgi_form_result("package", "failed")
+        raise HTTPException(status_code=502, detail="Could not generate the SGI forms") from e
+
+    bundles = await entity_export_service.gather_entity_bundles(
+        [("driver", uid) for uid in body.driver_ids],
+        doc_types=[SGI_PACKAGE_DOC_TYPE],
+        include_ride_gps=False,
+        doc_file_types=[SGI_PACKAGE_DOC_TYPE],
+    )
+
+    # users.id -> display name, for naming each check after its driver.
+    name_by_user_id = {d.get("user_id"): (d.get("name") or "") for d in driver_rows}
+
+    included: list[str] = []
+    missing: list[str] = []
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename, pdf_bytes in forms.items():
+            zf.writestr(filename, pdf_bytes)
+
+        for bundle in bundles:
+            driver_label = _safe_filename_part(name_by_user_id.get(bundle["entity_id"], "") or bundle["entity_id"])
+            checks = [d for d in bundle.get("documents", []) if d.get("_content")]
+            if not checks:
+                missing.append(driver_label)
+                continue
+            for n, doc in enumerate(checks, start=1):
+                key = doc.get("_storage_key") or ""
+                ext = key.rsplit(".", 1)[-1].lower() if "." in key else "bin"
+                suffix = f"_{n}" if len(checks) > 1 else ""
+                zf.writestr(
+                    f"criminal_record_checks/{driver_label}_background_check{suffix}.{ext}",
+                    doc["_content"],
+                )
+                included.append(driver_label)
+
+        if missing:
+            # Named inside the ZIP as well as in the response headers: the
+            # operator is about to email this to a regulator, and a driver
+            # with no clearance on file must not be discovered by SGI.
+            zf.writestr(
+                "MISSING_CRIMINAL_RECORD_CHECKS.txt",
+                "These drivers are on the attached SGI forms but have NO criminal record\n"
+                "check file in this package. Obtain their clearance before filing:\n\n"
+                + "\n".join(f"  - {name}" for name in sorted(missing))
+                + "\n",
+            )
+
+    if missing:
+        logger.error(
+            "sgi package: %s of %s driver(s) have no criminal record check file (admin=%s)",
+            len(missing),
+            len(bundles),
+            admin.get("id"),
+        )
+
+    await log_admin_action(
+        admin,
+        "sgi_submission_package_download",
+        "driver_documents",
+        None,
+        {
+            "driver_count": len(driver_rows),
+            "requested": len(body.driver_ids),
+            "action": body.action,
+            "forms": sorted(forms.keys()),
+            "checks_included": len(included),
+            "checks_missing": len(missing),
+            "reason": body.reason,
+        },
+    )
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="SGI_Submission_{stamp}.zip"',
+            "X-Checks-Included": str(len(included)),
+            "X-Checks-Missing": str(len(missing)),
         },
     )

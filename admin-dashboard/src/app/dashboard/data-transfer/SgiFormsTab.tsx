@@ -13,7 +13,7 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
 import {
-    downloadSgiSupportingDocuments,
+    downloadSgiSubmissionPackage,
     generateSgiForm,
     getSgiRemovalQueue,
     searchDataTransferEntities,
@@ -215,7 +215,11 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
      *  separate from form generation: an admin often files the forms and the
      *  evidence at different moments, and bundling raw documents into every
      *  form download would move far more PII than most generations need. */
-    const onDownloadDocuments = async () => {
+    /** Download the complete SGI filing: both forms plus each driver's
+     *  criminal record check, in one ZIP. Kept separate from "Generate &
+     *  download" because that produces forms alone, which is still the right
+     *  action when the evidence was filed previously. */
+    const onDownloadPackage = async () => {
         setDocsLoading(true);
         try {
             const resolved = await resolveDriverIds(selection, MAX_DOCUMENT_BUNDLE_DRIVERS);
@@ -226,40 +230,36 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
             if (resolved.truncated) {
                 toast({
                     title: "Selection truncated",
-                    description: `Only the first ${MAX_DOCUMENT_BUNDLE_DRIVERS} matching drivers are included — narrow the filter to download the rest separately.`,
+                    description: `Only the first ${MAX_DOCUMENT_BUNDLE_DRIVERS} matching drivers are included — narrow the filter to file the rest separately.`,
                 });
-            }
-            if (resolved.ids.length > MAX_DOCUMENT_BUNDLE_DRIVERS) {
-                toast({
-                    title: "Too many drivers",
-                    description: `${resolved.ids.length} selected; the document bundle is limited to ${MAX_DOCUMENT_BUNDLE_DRIVERS} per download. Narrow the selection.`,
-                    variant: "destructive",
-                });
-                return;
             }
 
-            const { blob, listed, included } = await downloadSgiSupportingDocuments(
+            const { blob, checksIncluded, checksMissing } = await downloadSgiSubmissionPackage(
                 resolved.ids,
                 docReason.trim(),
+                action,
             );
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-            triggerDownload(blob, `SGI_Supporting_Documents_${stamp}.zip`);
+            triggerDownload(blob, `SGI_Submission_${stamp}.zip`);
 
-            // A missing scan is stated outright rather than left for the admin
-            // to notice when the regulator asks for it.
-            if (included < listed) {
+            // A driver on the forms with no clearance attached must not reach
+            // SGI unnoticed — say it here as well as inside the ZIP.
+            if (checksMissing > 0) {
                 toast({
-                    title: `${included} of ${listed} document(s) included`,
+                    title: `${checksMissing} driver(s) have no criminal record check`,
                     description:
-                        "Some documents had no retrievable file — see file_export_status in documents.csv inside the ZIP.",
+                        "The forms are in the ZIP, but those drivers' checks are missing — see MISSING_CRIMINAL_RECORD_CHECKS.txt before filing.",
                     variant: "destructive",
                 });
             } else {
-                toast({ title: `${included} document(s) downloaded`, description: "Download starting…" });
+                toast({
+                    title: "Submission package ready",
+                    description: `Both forms and ${checksIncluded} criminal record check(s). Download starting…`,
+                });
             }
         } catch (e: any) {
             toast({
-                title: "Document download failed",
+                title: "Package download failed",
                 description: e?.message ?? "Unknown error",
                 variant: "destructive",
             });
@@ -438,12 +438,20 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                 SGI package from this tab. An SGI submission needs both. */}
             <div className="space-y-3 rounded-md border p-4">
                 <div>
-                    <h3 className="text-sm font-medium">Supporting documents</h3>
+                    <h3 className="text-sm font-medium">SGI submission package</h3>
                     <p className="text-sm text-muted-foreground">
-                        The forms above are the filled D00032/D00033 PDFs only. Download the selected drivers&rsquo;
-                        actual scans — licence, abstract, criminal record check, inspection, insurance — as a ZIP to
-                        file alongside them. Up to {MAX_DOCUMENT_BUNDLE_DRIVERS} drivers per download.
+                        One ZIP with everything SGI needs: the filled D00032 and D00033 PDFs, plus each selected
+                        driver&rsquo;s criminal record check (PDF or image, exactly as uploaded). Nothing else — no
+                        spreadsheets, no other document types. Up to {MAX_DOCUMENT_BUNDLE_DRIVERS} drivers per
+                        download.
                     </p>
+                    <pre className="mt-2 overflow-x-auto rounded bg-muted px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+{`SGI_Submission_20260805.zip
+├─ SGI_D00032_Driver_Details.pdf
+├─ SGI_D00033_Vehicle_Details.pdf
+└─ criminal_record_checks/
+   └─ Jane_Driver_background_check.pdf`}
+                    </pre>
                 </div>
 
                 <div className="space-y-1">
@@ -455,7 +463,7 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                         className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                         rows={2}
                         maxLength={DOC_REASON_MAX_LENGTH}
-                        placeholder="e.g. Q3 SGI driver eligibility submission"
+                        placeholder="e.g. Q3 SGI driver eligibility filing"
                         value={docReason}
                         onChange={(e) => setDocReason(e.target.value)}
                     />
@@ -467,11 +475,11 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
 
                 <Button
                     variant="outline"
-                    onClick={onDownloadDocuments}
+                    onClick={onDownloadPackage}
                     disabled={!hasExplicitSelection || !docReasonValid || docsLoading}
                 >
                     {docsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                    Download supporting documents (ZIP)
+                    Download SGI submission package (ZIP)
                 </Button>
                 {!hasExplicitSelection && (
                     <p className="text-xs text-muted-foreground">

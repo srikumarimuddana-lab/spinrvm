@@ -3,11 +3,79 @@
 // of the per-domain split — see lib/api/client.ts for the shared fetch
 // client this and every other domain module imports.
 
+import { useAuthStore } from "@/store/authStore";
+
 import { request } from "./client";
 
 /* ── Driver Document Verification ────────── */
 export const getDriverDocuments = (driverId: string) =>
     request<any[]>(`/api/admin/documents/drivers/${driverId}`);
+
+/* ── Saving a document to disk ─────────────── */
+
+const MIME_EXTENSIONS: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "application/pdf": "pdf",
+};
+
+/** Filename-safe slug: keeps letters/digits, collapses everything else to `_`. */
+function slugify(value: string): string {
+    return (value || "")
+        .trim()
+        .replace(/[^a-zA-Z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 60);
+}
+
+/**
+ * Download a driver document to disk.
+ *
+ * Goes through the backend's `/documents/{id}/view` rather than the stored
+ * `document_url`. Two reasons that matter here: the stored URL is a signed
+ * Supabase URL that expires (an hour after it was minted), and it can't
+ * carry the admin's auth header — the backend route streams the bytes with
+ * the service-role key, so it works regardless of the signature's age.
+ *
+ * A plain `<a download>` can't be used for the same reason: it issues an
+ * unauthenticated request. Hence fetch-to-blob, then save.
+ *
+ * The filename is built for the thing admins actually do with these —
+ * attaching them to an email to SGI — so it identifies the driver and the
+ * document type rather than being a bare UUID.
+ */
+export async function downloadDriverDocument(
+    documentId: string,
+    driverName: string,
+    documentType: string,
+): Promise<void> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = {};
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+
+    const res = await fetch(`/api/admin/documents/${documentId}/view`, { headers });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not download document (${res.status})`);
+    }
+    const blob = await res.blob();
+
+    const ext = MIME_EXTENSIONS[blob.type] || "bin";
+    const parts = [slugify(driverName), slugify(documentType)].filter(Boolean);
+    const filename = `${parts.join("_") || "document"}.${ext}`;
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
 
 export type RejectTemplate =
     | "blurry_image"

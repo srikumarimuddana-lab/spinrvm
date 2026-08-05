@@ -9,17 +9,20 @@ Document bytes are fetched too (self-export only lists document metadata).
 
 import asyncio
 import logging
+import re as _re
 from typing import Any, Optional
 
 try:
     from ... import db_supabase
     from ...documents import _extract_storage_key
     from ...routes.drivers._shared import _decrypt_driver_pii
+    from ...services.driver_import_service import DOCUMENT_REQUIREMENT_ALIASES
     from ...supabase_client import supabase
 except ImportError:
     import db_supabase
     from documents import _extract_storage_key
     from routes.drivers._shared import _decrypt_driver_pii
+    from services.driver_import_service import DOCUMENT_REQUIREMENT_ALIASES
     from supabase_client import supabase
 
 logger = logging.getLogger(__name__)
@@ -73,16 +76,54 @@ def _strip_ride_gps(ride: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in ride.items() if k not in _RIDE_GPS_FIELDS}
 
 
-def _wants_file(document_type: Optional[str], include_document_bytes: bool, doc_file_types: Optional[set]) -> bool:
+def _canonical_doc_type(value: Optional[str]) -> str:
+    """Canonical snake_case key for a document type.
+
+    ``driver_documents.document_type`` stores the requirement's DISPLAY NAME,
+    not its key -- ``documents.py`` inserts ``req.get("name")`` ("Background
+    Check", "Criminal Record Check"), while every selector in the product
+    (the Export tab's checkboxes, SGI_SUPPORTING_DOC_TYPES) is snake_case
+    ("background_check"). Comparing the two directly never matched, so
+    filtering by document type silently excluded EVERY document and produced
+    a bundle of CSVs with no files -- the reported bug.
+
+    Normalizes case and separators, then applies the import service's alias
+    map so a sheet that says "Criminal Record Check" lands on the same key as
+    an in-app upload. Reusing that map rather than copying it keeps one
+    definition of what counts as the same document.
+    """
+    slug = _re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
+    return DOCUMENT_REQUIREMENT_ALIASES.get(slug, slug)
+
+
+def _doc_type_matches(doc: dict[str, Any], wanted: set[str]) -> bool:
+    """Whether this document is one of the wanted types.
+
+    Checks ``requirement_key`` as well as ``document_type``: the key is the
+    canonical slug where it's populated, and the display name is all the
+    older rows have.
+    """
+    return bool(
+        {_canonical_doc_type(doc.get("document_type")), _canonical_doc_type(doc.get("requirement_key"))} & wanted
+    )
+
+
+def _wants_file(doc: dict[str, Any], include_document_bytes: bool, doc_file_types: Optional[set]) -> bool:
     """Whether this document's raw file belongs in the bundle.
 
     ``doc_file_types`` (when not None) is the per-document-type allowlist and
     takes precedence: only the types in it get their file, everything else is
     metadata only. ``None`` means "no per-type opinion" and falls back to the
     all-or-nothing ``include_document_bytes`` flag, which is what pre-existing
-    API callers send."""
+    API callers send.
+
+    Takes the whole row and reuses ``_doc_type_matches`` so it resolves types
+    exactly as the metadata filter above does. Matching on ``document_type``
+    alone here meant a row whose canonical key lives in ``requirement_key``
+    passed the filter (listed in the manifest) but was denied its file —
+    metadata present, scan missing, for no stated reason."""
     if doc_file_types is not None:
-        return document_type in doc_file_types
+        return _doc_type_matches(doc, doc_file_types)
     return include_document_bytes
 
 
@@ -160,7 +201,8 @@ async def gather_entity_bundle(
     # over-collection bug under PIPEDA data minimization. Reachable from the
     # UI by unticking every document type. `None` still means "no filter".
     if doc_types is not None:
-        documents = [d for d in documents if d.get("document_type") in doc_types]
+        wanted = {_canonical_doc_type(t) for t in doc_types}
+        documents = [d for d in documents if _doc_type_matches(d, wanted)]
 
     if not include_ride_gps:
         rides = [_strip_ride_gps(r) for r in rides]
@@ -177,11 +219,11 @@ async def gather_entity_bundle(
     # they produced byte-identical metadata-only ZIPs with no way to tell
     # them apart — the reported "export gives me metadata, not the document"
     # bug was the opt-out case, indistinguishable from a broken bucket.
-    file_types = set(doc_file_types) if doc_file_types is not None else None
+    file_types = {_canonical_doc_type(t) for t in doc_file_types} if doc_file_types is not None else None
     doc_payloads = []
     for doc in documents:
         storage_key = _extract_storage_key(doc.get("document_url") or "")
-        if not _wants_file(doc.get("document_type"), include_document_bytes, file_types):
+        if not _wants_file(doc, include_document_bytes, file_types):
             content, status = None, DOC_STATUS_EXCLUDED
         elif not storage_key:
             # An unparseable document_url is a data defect, not an opt-out:

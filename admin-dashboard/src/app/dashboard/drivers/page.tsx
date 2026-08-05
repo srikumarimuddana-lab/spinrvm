@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -1468,7 +1468,7 @@ export default function DriversPage() {
                                                             {expiryMissing && counts.pending === 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">Approved · expiry not recorded</Badge>}
                                                             {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Re-upload needed</Badge>}
                                                         </div>
-                                                        {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
+                                                        {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                         : <div className="bg-muted/20 border border-dashed rounded-xl p-6 text-center text-muted-foreground"><Image className="h-8 w-8 mx-auto mb-2 opacity-20" /><p className="text-sm">No {reqDoc.label} uploaded yet</p></div>}
                                                     </div>
                                                 );
@@ -1486,7 +1486,7 @@ export default function DriversPage() {
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">Other Documents</h4>
                                                             <Badge variant="outline" className="text-[10px]">{unmatched.length} uploaded</Badge>
                                                         </div>
-                                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                     </div>
                                                 );
                                             })()}
@@ -1495,7 +1495,7 @@ export default function DriversPage() {
                                         <div className="space-y-3">
                                             <p className="text-xs text-muted-foreground">No service area configured — showing all uploaded documents</p>
                                             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                                                {activeDocs.map(d => <DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}
+                                                {activeDocs.map(d => <DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}
                                             </div>
                                         </div>
                                     ) : (
@@ -2955,7 +2955,23 @@ function DocExpirySummaryCard({ label, summary }: { label: string; summary: DocS
     );
 }
 
-function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string | null; onPreview: (url: string) => void; onReview: (id: string, action: "approved" | "rejected") => void }) {
+function DocCard({ d, docBusy, driverName, onPreview, onReview }: { d: any; docBusy: string | null; driverName: string; onPreview: (url: string) => void; onReview: (id: string, action: "approved" | "rejected") => void }) {
+    const { toast } = useToast();
+    const [downloading, setDownloading] = useState(false);
+
+    const onDownload = async () => {
+        setDownloading(true);
+        try {
+            await downloadDriverDocument(d.id, driverName, d.document_type || "document");
+        } catch (e: any) {
+            // Surfaced, not swallowed: a document that won't download is the
+            // difference between filing a regulator submission and not.
+            toast({ title: "Download failed", description: e?.message ?? "Unknown error", variant: "destructive" });
+        } finally {
+            setDownloading(false);
+        }
+    };
+
     const exp = d.expiry_date || d.expires_at;
     const expired = exp && new Date(exp) < new Date();
     const isImage = d.document_url && /\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)/i.test(d.document_url);
@@ -2980,6 +2996,13 @@ function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string 
                     <Button variant="outline" size="xs" className="flex-1 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
                     <Button variant="outline" size="xs" className="flex-1 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
                 </div>
+                {/* Saving the file to disk had no affordance at all — the card
+                    could only preview, approve, or reject. Admins need the
+                    actual file to attach to a regulator email (e.g. sending a
+                    criminal record check to SGI). */}
+                <Button variant="outline" size="xs" className="w-full" disabled={!d.document_url || downloading} onClick={onDownload}>
+                    {downloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} Download file
+                </Button>
             </div>
         </div>
     );

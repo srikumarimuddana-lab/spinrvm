@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, FileText, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Download, FileText, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Select,
@@ -12,7 +12,14 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
-import { generateSgiForm, getSgiRemovalQueue, searchDataTransferEntities, type SgiFormType, type SgiRemovalQueueEntry } from "@/lib/api";
+import {
+    downloadSgiSupportingDocuments,
+    generateSgiForm,
+    getSgiRemovalQueue,
+    searchDataTransferEntities,
+    type SgiFormType,
+    type SgiRemovalQueueEntry,
+} from "@/lib/api";
 import { inferEntityType, type EntitySelectionState } from "@/components/data-transfer/useEntitySelection";
 
 // Matches sgi_form_filler.py's MAX_DRIVER_ROWS/MAX_VEHICLE_ROWS — the real
@@ -61,22 +68,35 @@ function triggerDownload(blob: Blob, filename: string) {
  * this filter" (rather than checking rows individually) made this tab show
  * 0 drivers selected and disabled Generate, even though a real selection
  * existed. Mirrors ExportTab.tsx's resolveSelection. */
-async function resolveDriverIds(selection: EntitySelectionState): Promise<{ ids: string[]; truncated: boolean }> {
+async function resolveDriverIds(
+    selection: EntitySelectionState,
+    // Callers cap at different sizes: the forms cap at a form's row count,
+    // the document bundle at MAX_DOCUMENT_BUNDLE_DRIVERS. Passing the form
+    // limit for a document download would silently fetch too few drivers.
+    pageSize: number = MAX_ROW_LIMIT,
+): Promise<{ ids: string[]; truncated: boolean }> {
     if (selection.selectAllMatching) {
         const result = await searchDataTransferEntities({
             ...selection.selectAllMatching,
             entityType: "driver",
             page: 1,
-            pageSize: MAX_ROW_LIMIT,
+            pageSize,
         });
         const ids = result.rows.filter((r) => inferEntityType(r) === "driver").map((r) => r.id);
-        return { ids, truncated: result.total_count > MAX_ROW_LIMIT };
+        return { ids, truncated: result.total_count > pageSize };
     }
     const ids = Array.from(selection.selectedRefs.values())
         .filter((r) => r.entity_type === "driver")
         .map((r) => r.entity_id);
     return { ids, truncated: false };
 }
+
+// Mirrors MAX_DOCUMENT_BUNDLE_DRIVERS in backend/routes/admin/sgi_forms.py —
+// checked client-side so an oversized selection is caught before the 422.
+const MAX_DOCUMENT_BUNDLE_DRIVERS = 25;
+// Mirrors SgiDocumentBundleRequest.reason's Field(min_length=10, max_length=200).
+const DOC_REASON_MIN_LENGTH = 10;
+const DOC_REASON_MAX_LENGTH = 200;
 
 export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) {
     const { toast } = useToast();
@@ -88,6 +108,8 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
     );
     const [action, setAction] = useState<"add" | "remove" | "change">("add");
     const [loading, setLoading] = useState(false);
+    const [docsLoading, setDocsLoading] = useState(false);
+    const [docReason, setDocReason] = useState("");
 
     // Drivers who deleted their account while filed with SGI. They stay listed
     // as active passenger-for-hire drivers until the removal forms are filed,
@@ -117,6 +139,8 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
     }, [loadQueue]);
 
     const hasExplicitSelection = selection.selectedRefs.size > 0 || selection.selectAllMatching !== null;
+    const docReasonValid =
+        docReason.trim().length >= DOC_REASON_MIN_LENGTH && docReason.length <= DOC_REASON_MAX_LENGTH;
     const selectedFormTypes = Array.from(formTypes);
 
     const toggleFormType = (formType: SgiFormType) => {
@@ -184,6 +208,63 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
             toast({ title: "Form generation failed", description: e?.message ?? "Unknown error", variant: "destructive" });
         } finally {
             setLoading(false);
+        }
+    };
+
+    /** Download the selected drivers' supporting scans as a ZIP. Deliberately
+     *  separate from form generation: an admin often files the forms and the
+     *  evidence at different moments, and bundling raw documents into every
+     *  form download would move far more PII than most generations need. */
+    const onDownloadDocuments = async () => {
+        setDocsLoading(true);
+        try {
+            const resolved = await resolveDriverIds(selection, MAX_DOCUMENT_BUNDLE_DRIVERS);
+            if (resolved.ids.length === 0) {
+                toast({ title: "No drivers selected", description: "Select at least one driver first." });
+                return;
+            }
+            if (resolved.truncated) {
+                toast({
+                    title: "Selection truncated",
+                    description: `Only the first ${MAX_DOCUMENT_BUNDLE_DRIVERS} matching drivers are included — narrow the filter to download the rest separately.`,
+                });
+            }
+            if (resolved.ids.length > MAX_DOCUMENT_BUNDLE_DRIVERS) {
+                toast({
+                    title: "Too many drivers",
+                    description: `${resolved.ids.length} selected; the document bundle is limited to ${MAX_DOCUMENT_BUNDLE_DRIVERS} per download. Narrow the selection.`,
+                    variant: "destructive",
+                });
+                return;
+            }
+
+            const { blob, listed, included } = await downloadSgiSupportingDocuments(
+                resolved.ids,
+                docReason.trim(),
+            );
+            const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+            triggerDownload(blob, `SGI_Supporting_Documents_${stamp}.zip`);
+
+            // A missing scan is stated outright rather than left for the admin
+            // to notice when the regulator asks for it.
+            if (included < listed) {
+                toast({
+                    title: `${included} of ${listed} document(s) included`,
+                    description:
+                        "Some documents had no retrievable file — see file_export_status in documents.csv inside the ZIP.",
+                    variant: "destructive",
+                });
+            } else {
+                toast({ title: `${included} document(s) downloaded`, description: "Download starting…" });
+            }
+        } catch (e: any) {
+            toast({
+                title: "Document download failed",
+                description: e?.message ?? "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setDocsLoading(false);
         }
     };
 
@@ -351,6 +432,58 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
                 Generate &amp; download
             </Button>
+
+            {/* The forms above are filled PDFs only — they never contained the
+                drivers' actual scans, so there was no way to assemble a full
+                SGI package from this tab. An SGI submission needs both. */}
+            <div className="space-y-3 rounded-md border p-4">
+                <div>
+                    <h3 className="text-sm font-medium">Supporting documents</h3>
+                    <p className="text-sm text-muted-foreground">
+                        The forms above are the filled D00032/D00033 PDFs only. Download the selected drivers&rsquo;
+                        actual scans — licence, abstract, criminal record check, inspection, insurance — as a ZIP to
+                        file alongside them. Up to {MAX_DOCUMENT_BUNDLE_DRIVERS} drivers per download.
+                    </p>
+                </div>
+
+                <div className="space-y-1">
+                    <label htmlFor="sgi-doc-reason" className="text-sm font-medium">
+                        Reason <span className="text-muted-foreground">(required)</span>
+                    </label>
+                    <textarea
+                        id="sgi-doc-reason"
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        rows={2}
+                        maxLength={DOC_REASON_MAX_LENGTH}
+                        placeholder="e.g. Q3 SGI driver eligibility submission"
+                        value={docReason}
+                        onChange={(e) => setDocReason(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                        {docReason.length}/{DOC_REASON_MAX_LENGTH} — kept in the audit trail with this download.
+                        Minimum {DOC_REASON_MIN_LENGTH} characters.
+                    </p>
+                </div>
+
+                <Button
+                    variant="outline"
+                    onClick={onDownloadDocuments}
+                    disabled={!hasExplicitSelection || !docReasonValid || docsLoading}
+                >
+                    {docsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    Download supporting documents (ZIP)
+                </Button>
+                {!hasExplicitSelection && (
+                    <p className="text-xs text-muted-foreground">
+                        Select drivers in Search &amp; Select to enable this.
+                    </p>
+                )}
+                {hasExplicitSelection && !docReasonValid && !docsLoading && (
+                    <p className="text-xs text-muted-foreground">
+                        Add a reason ({DOC_REASON_MIN_LENGTH}+ characters) to enable this.
+                    </p>
+                )}
+            </div>
         </div>
     );
 }

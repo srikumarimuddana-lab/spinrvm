@@ -13,21 +13,35 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...routes.drivers._shared import _decrypt_driver_pii
-    from ...services.data_transfer import observability, sgi_field_maps, sgi_form_filler
+    from ...services.data_transfer import (
+        bundle_zip_builder,
+        entity_export_service,
+        observability,
+        sgi_field_maps,
+        sgi_form_filler,
+    )
     from ...utils.audit_logger import log_admin_action
+    from ...utils.rate_limiter import data_transfer_export_limit
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from routes.drivers._shared import _decrypt_driver_pii
-    from services.data_transfer import observability, sgi_field_maps, sgi_form_filler
+    from services.data_transfer import (
+        bundle_zip_builder,
+        entity_export_service,
+        observability,
+        sgi_field_maps,
+        sgi_form_filler,
+    )
     from utils.audit_logger import log_admin_action
+    from utils.rate_limiter import data_transfer_export_limit
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +78,37 @@ class SgiFormRequest(BaseModel):
     # driver lookup below, which resolves via `drivers.user_id`.
     driver_ids: list[str]
     action: str = Field("add", pattern="^(add|remove|change)$")
+
+
+# The supporting evidence SGI expects alongside a D00032 submission. Narrower
+# than "every document type" on purpose: an SGI package needs proof of
+# eligibility, not the driver's whole file (PIPEDA data minimization, and the
+# same reasoning as the Export tab's per-type file selection).
+SGI_SUPPORTING_DOC_TYPES = [
+    "drivers_license",
+    "drivers_abstract",
+    "background_check",
+    "vehicle_inspection",
+    "insurance",
+]
+
+# A document bundle is far heavier than a filled form (raw scans for every
+# driver, vs. one PDF), and this endpoint returns it inline rather than
+# backgrounding it the way /data-transfer/export does. Cap it at a submission
+# batch's worth: D00032 holds 10 driver rows, D00033 holds 16, so 25 covers
+# the largest single filing with headroom without letting someone pull 100
+# drivers' scans through one request/response.
+MAX_DOCUMENT_BUNDLE_DRIVERS = 25
+
+
+class SgiDocumentBundleRequest(BaseModel):
+    # `users.id`, same as SgiFormRequest — see its comment.
+    driver_ids: list[str]
+    # Required for the same reason /data-transfer/export requires it (PIA
+    # recommendation R-C): this moves real drivers' identity documents, so
+    # there must be a contemporaneous record of why.
+    reason: str = Field(..., min_length=10, max_length=200)
+    doc_types: Optional[list[str]] = None
 
 
 @router.post("/data-transfer/sgi-forms/generate")
@@ -253,3 +298,122 @@ async def sgi_removal_queue(
             unresolvable,
         )
     return {"drivers": entries, "count": len(entries), "unresolvable": unresolvable}
+
+
+@router.post("/data-transfer/sgi-forms/documents")
+@data_transfer_export_limit
+async def download_sgi_supporting_documents(
+    body: SgiDocumentBundleRequest,
+    request: Request = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """ZIP of the selected drivers' supporting documents, for filing alongside
+    a D00032/D00033 submission.
+
+    The forms endpoint above returns only the filled PDF — it never touches
+    driver_documents — so there was no way to get a driver's actual scans out
+    of the SGI Compliance Forms tab at all. An SGI package needs both.
+
+    Reuses the Data Transfer export pipeline (entity_export_service +
+    bundle_zip_builder) rather than re-implementing document fetching: that
+    path already resolves storage keys across every stored URL shape, records
+    a per-document file_export_status so a missing scan is explained rather
+    than silently absent, and is the code that carries the module's test
+    coverage. Returned inline (not backgrounded like /data-transfer/export)
+    because MAX_DOCUMENT_BUNDLE_DRIVERS keeps it to a submission-sized batch.
+
+    Rate-limited with the export limiter — same data, same threat model.
+    SlowAPI requires a parameter named ``request`` typed as starlette
+    Request; do not remove it.
+    """
+    if not body.driver_ids:
+        raise HTTPException(status_code=400, detail="No drivers selected")
+    if len(body.driver_ids) > MAX_DOCUMENT_BUNDLE_DRIVERS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(body.driver_ids)} drivers requested; the document bundle is limited to "
+                f"{MAX_DOCUMENT_BUNDLE_DRIVERS} per download. Split the selection into smaller batches."
+            ),
+        )
+
+    driver_rows = await db_supabase.get_rows("drivers", {"user_id": {"$in": body.driver_ids}})
+    if not driver_rows:
+        raise HTTPException(status_code=404, detail="None of the requested drivers could be found")
+
+    # Same hard block as form generation: a non-SGI driver's documents must
+    # not be assembled into an SGI submission package either.
+    out_of_scope = _out_of_scope_drivers(driver_rows)
+    if out_of_scope:
+        authorities = sorted({d["regulatory_authority"] for d in out_of_scope})
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(out_of_scope)} of the selected drivers are regulated by "
+                f"{', '.join(authorities)}, not SGI — their documents cannot be bundled into an SGI "
+                "submission. Remove these drivers from the selection."
+            ),
+        )
+
+    doc_types = body.doc_types or SGI_SUPPORTING_DOC_TYPES
+    try:
+        bundles = await entity_export_service.gather_entity_bundles(
+            [("driver", uid) for uid in body.driver_ids],
+            doc_types=doc_types,
+            # An SGI submission is about driver eligibility, not trip
+            # history — exact pickup/dropoff coordinates have no business
+            # in this package.
+            include_ride_gps=False,
+            # Files, not just metadata rows: getting the scans out is the
+            # entire point of this endpoint.
+            doc_file_types=doc_types,
+        )
+    except Exception as e:
+        logger.error("sgi supporting documents: gather failed", exc_info=True)
+        raise HTTPException(status_code=503, detail="Could not read driver documents") from e
+
+    if not bundles:
+        raise HTTPException(status_code=404, detail="None of the requested drivers could be found")
+
+    zip_bytes = bundle_zip_builder.build_export_zip(bundles)
+
+    # Count what actually made it in, so the caller can be told plainly when a
+    # scan is missing instead of discovering an absent file later. Mirrors the
+    # ZIP's own README/file_export_status reporting.
+    included = sum(1 for b in bundles for d in b.get("documents", []) if d.get("_content_status") == "included")
+    listed = sum(len(b.get("documents", [])) for b in bundles)
+    if included < listed:
+        logger.error(
+            "sgi supporting documents: %s of %s document(s) had no retrievable file (admin=%s)",
+            listed - included,
+            listed,
+            admin.get("id"),
+        )
+
+    await log_admin_action(
+        admin,
+        "sgi_supporting_documents_download",
+        "driver_documents",
+        None,
+        {
+            "driver_count": len(bundles),
+            "requested": len(body.driver_ids),
+            "doc_types": doc_types,
+            "documents_listed": listed,
+            "documents_with_files": included,
+            "reason": body.reason,
+        },
+    )
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="SGI_Supporting_Documents_{stamp}.zip"',
+            # Lets the tab report "12 of 14 documents included" without
+            # unzipping; the ZIP's documents.csv remains the detailed record.
+            "X-Documents-Listed": str(listed),
+            "X-Documents-Included": str(included),
+        },
+    )

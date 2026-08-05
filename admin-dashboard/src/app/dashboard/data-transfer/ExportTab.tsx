@@ -104,6 +104,14 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
 
     const reasonValid = reason.trim().length >= REASON_MIN_LENGTH && reason.length <= REASON_MAX_LENGTH;
 
+    // Asking for document types but leaving "Document file contents" off is
+    // the single most confusing state on this tab: the ZIP is built, the
+    // documents are listed in documents.csv, and not one scan/image/PDF is
+    // in it. Admins reasonably read that as a broken export. The default
+    // stays OFF (PIPEDA data minimization, PIA R-B) — but it is no longer
+    // silent.
+    const metadataOnlyDocuments = format === "zip" && docTypes.size > 0 && !includeDocumentBytes;
+
     const toggleDocType = (docType: string) => {
         setDocTypes((prev) => {
             const next = new Set(prev);
@@ -166,7 +174,16 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             }
 
             const { download_url } = await regenerateDataTransferJobDownload(queued.job_id);
-            toast({ title: "Export ready", description: "Download starting…" });
+            toast({
+                title: "Export ready",
+                // Repeated at download time, not just next to the checkbox —
+                // the ZIP lands minutes later and the admin has usually
+                // scrolled away by then; without this, "no files in the ZIP"
+                // reads as a failed export.
+                description: metadataOnlyDocuments
+                    ? "Download starting… Note: document metadata only — no files (see README.txt in the ZIP)."
+                    : "Download starting…",
+            });
             if (typeof window !== "undefined") {
                 window.open(download_url, "_blank");
             }
@@ -212,6 +229,25 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
                             </label>
                         ))}
                     </div>
+                    {metadataOnlyDocuments && (
+                        <div
+                            role="status"
+                            className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
+                        >
+                            <span className="font-medium">
+                                This ZIP will contain document metadata only — no scans, images, or PDFs.
+                            </span>{" "}
+                            Turn on <span className="font-medium">&ldquo;Document file contents&rdquo;</span> under
+                            &ldquo;Data to include&rdquo; below to get the actual files.
+                            <button
+                                type="button"
+                                className="ml-2 underline underline-offset-2 hover:no-underline"
+                                onClick={() => setIncludeDocumentBytes(true)}
+                            >
+                                Include them
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
 

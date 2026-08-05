@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Download, Loader2, FileText } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,13 @@ import { Label } from "@/components/ui/label";
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+    DropdownMenu,
+    DropdownMenuCheckboxItem,
+    DropdownMenuContent,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
@@ -22,8 +29,88 @@ import {
     downloadInsuranceBillingKnightArcher,
     downloadInsuranceBillingSgi,
     downloadT4aFilerHandoff,
+    getServiceAreas,
     type ComplianceReportFormat,
 } from "@/lib/api";
+
+/** Service-area scope for a report, as a checkbox multi-select.
+ *
+ * Why every insurer/authority report needs one: the insurance rates are
+ * per-insurer and per-province (SGI is a Saskatchewan Crown insurer and does
+ * not operate elsewhere), and each airport authority bills only its own
+ * airport. Exporting every area at once invoices one party for another's
+ * trips — silently, since nothing about the resulting file looks wrong.
+ *
+ * Nothing selected means "all areas", which is both the historical behaviour
+ * and the safer default: an unscoped invoice is visibly too big, while an
+ * accidentally-empty one just looks like a quiet month.
+ *
+ * Selecting a city also covers its airport sub-area — the backend expands
+ * parents to children, because a ride picked up at the airport is recorded
+ * against the airport's own service area, not the city's. */
+function ServiceAreaScopeField({
+    idPrefix,
+    areas,
+    selected,
+    onChange,
+}: {
+    idPrefix: string;
+    areas: { id: string; name: string }[];
+    selected: string[];
+    onChange: (ids: string[]) => void;
+}) {
+    const label =
+        selected.length === 0
+            ? "All service areas"
+            : selected.length === 1
+              ? (areas.find((a) => a.id === selected[0])?.name ?? "1 selected")
+              : `${selected.length} selected`;
+
+    const toggle = (id: string) => {
+        onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+    };
+
+    return (
+        <div className="space-y-1.5">
+            <Label htmlFor={`${idPrefix}-areas`}>Service areas</Label>
+            <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                    <Button
+                        id={`${idPrefix}-areas`}
+                        variant="outline"
+                        className="w-56 justify-between font-normal"
+                        aria-label="Service areas"
+                    >
+                        <span className="truncate">{label}</span>
+                    </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56 max-h-72 overflow-y-auto">
+                    <DropdownMenuCheckboxItem
+                        checked={selected.length === 0}
+                        onCheckedChange={() => onChange([])}
+                        onSelect={(e) => e.preventDefault()}
+                    >
+                        All service areas
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
+                    {areas.map((a) => (
+                        <DropdownMenuCheckboxItem
+                            key={a.id}
+                            checked={selected.includes(a.id)}
+                            onCheckedChange={() => toggle(a.id)}
+                            onSelect={(e) => e.preventDefault()}
+                        >
+                            {a.name}
+                        </DropdownMenuCheckboxItem>
+                    ))}
+                </DropdownMenuContent>
+            </DropdownMenu>
+            <p className="text-[11px] text-muted-foreground w-56">
+                Selecting a city includes its airport zone.
+            </p>
+        </div>
+    );
+}
 
 /** Shared From/To date-range control for every date-ranged Compliance
  * report — replaces the old rolling-N-days shorthand dropdown. Defaults
@@ -107,6 +194,33 @@ export default function CompliancePage() {
     const [t4aLoading, setT4aLoading] = useState(false);
     const isSuperAdmin = useAuthStore((s) => s.user?.role === "super_admin");
 
+    // Service areas for the scope pickers. A failed load leaves the list
+    // empty, which degrades to "all areas" — the historical behaviour —
+    // rather than blocking the download entirely.
+    const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
+    useEffect(() => {
+        let cancelled = false;
+        getServiceAreas()
+            .then((rows: any[]) => {
+                if (cancelled) return;
+                setServiceAreas(
+                    (rows || [])
+                        .map((r) => ({ id: String(r.id), name: String(r.name ?? r.city ?? r.id) }))
+                        .sort((a, b) => a.name.localeCompare(b.name)),
+                );
+            })
+            .catch(() => {
+                /* non-fatal — see comment above */
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const [sgiAreas, setSgiAreas] = useState<string[]>([]);
+    const [kaAreas, setKaAreas] = useState<string[]>([]);
+    const [airportAreas, setAirportAreas] = useState<string[]>([]);
+
     const [sgiFrom, setSgiFrom] = useState(monthDefaults.from);
     const [sgiTo, setSgiTo] = useState(monthDefaults.to);
     const [sgiFormat, setSgiFormat] = useState<ComplianceReportFormat>("pdf");
@@ -169,7 +283,7 @@ export default function CompliancePage() {
     const onDownloadSgi = async () => {
         setSgiLoading(true);
         try {
-            const { blob, filename } = await downloadInsuranceBillingSgi(sgiFormat, sgiFrom, sgiTo);
+            const { blob, filename } = await downloadInsuranceBillingSgi(sgiFormat, sgiFrom, sgiTo, sgiAreas);
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -181,7 +295,7 @@ export default function CompliancePage() {
     const onDownloadKa = async () => {
         setKaLoading(true);
         try {
-            const { blob, filename } = await downloadInsuranceBillingKnightArcher(kaFormat, kaFrom, kaTo);
+            const { blob, filename } = await downloadInsuranceBillingKnightArcher(kaFormat, kaFrom, kaTo, kaAreas);
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -193,7 +307,7 @@ export default function CompliancePage() {
     const onDownloadAirport = async () => {
         setAirportLoading(true);
         try {
-            const { blob, filename } = await downloadAirportTrips(airportFormat, airportFrom, airportTo);
+            const { blob, filename } = await downloadAirportTrips(airportFormat, airportFrom, airportTo, airportAreas);
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -301,6 +415,12 @@ export default function CompliancePage() {
                                     onFromChange={setSgiFrom}
                                     onToChange={setSgiTo}
                                 />
+                                <ServiceAreaScopeField
+                                    idPrefix="sgi"
+                                    areas={serviceAreas}
+                                    selected={sgiAreas}
+                                    onChange={setSgiAreas}
+                                />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={sgiFormat} onValueChange={(v) => setSgiFormat(v as ComplianceReportFormat)}>
@@ -346,6 +466,12 @@ export default function CompliancePage() {
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
                                 <DateRangeFields idPrefix="ka" from={kaFrom} to={kaTo} onFromChange={setKaFrom} onToChange={setKaTo} />
+                                <ServiceAreaScopeField
+                                    idPrefix="ka"
+                                    areas={serviceAreas}
+                                    selected={kaAreas}
+                                    onChange={setKaAreas}
+                                />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>
                                     <Select value={kaFormat} onValueChange={(v) => setKaFormat(v as ComplianceReportFormat)}>
@@ -527,6 +653,12 @@ export default function CompliancePage() {
                                     to={airportTo}
                                     onFromChange={setAirportFrom}
                                     onToChange={setAirportTo}
+                                />
+                                <ServiceAreaScopeField
+                                    idPrefix="airport"
+                                    areas={serviceAreas}
+                                    selected={airportAreas}
+                                    onChange={setAirportAreas}
                                 />
                                 <div className="space-y-1.5">
                                     <Label>Format</Label>

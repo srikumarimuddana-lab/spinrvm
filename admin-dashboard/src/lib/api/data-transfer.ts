@@ -288,13 +288,21 @@ export async function downloadT4aFilerHandoff(
 
 /** SGI usage-based insurance billing — per-trip, per-phase insured km
  *  (Period 2+3) at SGI's contracted rate ($0.11/km, fixed server-side —
- *  no rate to enter). */
+ *  no rate to enter).
+ *
+ *  `serviceAreaIds` scopes the export. SGI is a Saskatchewan Crown insurer
+ *  and does not operate in other provinces, so once a second province is
+ *  live an unscoped export would invoice that province's kilometres to SGI.
+ *  Selecting a city automatically includes its airport sub-area server-side.
+ *  Omitting the arg means every area, which is the historical behaviour. */
 export async function downloadInsuranceBillingSgi(
     format: ComplianceReportFormat,
     dateFrom?: string,
     dateTo?: string,
+    serviceAreaIds?: string[],
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
+    if (serviceAreaIds?.length) sp.set("service_area_ids", serviceAreaIds.join(","));
     const blob = await downloadComplianceReport(
         `/api/admin/compliance/insurance-billing-sgi?${sp.toString()}`,
         "insurance_billing_sgi",
@@ -309,8 +317,10 @@ export async function downloadInsuranceBillingKnightArcher(
     format: ComplianceReportFormat,
     dateFrom?: string,
     dateTo?: string,
+    serviceAreaIds?: string[],
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
+    if (serviceAreaIds?.length) sp.set("service_area_ids", serviceAreaIds.join(","));
     const blob = await downloadComplianceReport(
         `/api/admin/compliance/insurance-billing-knight-archer?${sp.toString()}`,
         "insurance_billing_knight_archer",
@@ -324,8 +334,10 @@ export async function downloadAirportTrips(
     format: ComplianceReportFormat,
     dateFrom?: string,
     dateTo?: string,
+    serviceAreaIds?: string[],
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
+    if (serviceAreaIds?.length) sp.set("service_area_ids", serviceAreaIds.join(","));
     const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`, "airport_trips");
     return { blob, filename: `airport_trips.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }

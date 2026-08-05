@@ -96,20 +96,21 @@ async function pollJobUntilDone(jobId: string): Promise<{ status: "completed" | 
 export function ExportTab({ selection }: { selection: EntitySelectionState }) {
     const { toast } = useToast();
     const [format, setFormat] = useState<DataTransferExportFormat>("zip");
-    // Background Check is the default-checked document type; everything else
-    // starts unchecked. An admin exporting a full profile for another
-    // environment usually wants a specific, deliberate document set rather
-    // than everything by default -- Background Check is the one most
-    // consistently needed for a regulator/insurer-facing transfer.
-    const [docTypes, setDocTypes] = useState<Set<string>>(new Set(["background_check"]));
-    // Which of the checked document types have their actual file (scan/image/
-    // PDF) bundled, versus a metadata row only. Per-type rather than one
-    // global switch: an operator sending a background check to an insurer
-    // usually wants THAT file and nothing else's, and a global toggle forced
-    // them to choose between "no files" and "every file". Starts empty --
-    // files are opt-in (PIPEDA data minimization, PIA R-B), same posture as
-    // the old global default, just selectable per document.
-    const [docFileTypes, setDocFileTypes] = useState<Set<string>>(new Set());
+    // Every document type starts selected, metadata AND file, restoring the
+    // behavior PIA R-B specifies and its own implementation change-log
+    // recorded: "Both admin-dashboard Export-tab checkboxes default to
+    // checked (current full-fidelity behavior unchanged for anyone who
+    // doesn't touch them) ... opt-in-to-exclude, default unchanged."
+    //
+    // That default was silently inverted to unchecked by a56b59b -- a commit
+    // titled for an unrelated ADR-010 docs change, carrying no Change Impact
+    // entry -- which is why exports had been arriving with no scans in them
+    // and reading as a broken feature. This is a restoration of the approved
+    // design, not a loosening of it: the export is still opt-in-to-exclude,
+    // and the per-document grid below makes excluding far more precise than
+    // the single global toggle R-B originally shipped.
+    const [docTypes, setDocTypes] = useState<Set<string>>(new Set(DOC_TYPE_OPTIONS));
+    const [docFileTypes, setDocFileTypes] = useState<Set<string>>(new Set(DOC_TYPE_OPTIONS));
     const [reason, setReason] = useState("");
     // Default OFF (PIPEDA data-minimization) -- exact GPS traces are among
     // the most sensitive things this export can carry; an admin who
@@ -262,7 +263,7 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
                 <div className="space-y-2">
                     <div className="flex items-center gap-1.5">
                         <span className="text-sm font-medium">Documents to export</span>
-                        <Hint text="Pick each document type, then choose whether you need just its record (metadata) or the actual uploaded file. Files are opt-in per document for PIPEDA data minimization — export only the ones this transfer genuinely needs." />
+                        <Hint text="Everything is selected by default. Untick any document type you don't need, or untick just its File box to export the record without the uploaded scan — narrowing the export to what this transfer genuinely requires is the data-minimizing choice." />
                     </div>
 
                     <div className="overflow-x-auto rounded-md border">

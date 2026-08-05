@@ -94,7 +94,7 @@ class TestSaveFavoriteDuplicateCheckErrorHandling:
         fdb = _mock_fav_db(get_rows=AsyncMock(side_effect=RuntimeError("db down")))
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post("/api/v1/favorites", json=SAVE_PAYLOAD)
         assert r.status_code == 200
@@ -185,7 +185,7 @@ class TestSaveFavoriteFromRide:
         fdb = _mock_fav_db(find_one=AsyncMock(return_value=RIDE_ROW), get_rows=AsyncMock(return_value=[]))
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post("/api/v1/favorites/from-ride/ride_1", params={"name": "Commute"})
         assert r.status_code == 200
@@ -201,7 +201,7 @@ class TestSaveFavoriteFromRide:
         fdb = _mock_fav_db(find_one=AsyncMock(return_value=RIDE_ROW), get_rows=AsyncMock(return_value=[]))
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post("/api/v1/favorites/from-ride/ride_1")
         assert r.status_code == 200
@@ -215,7 +215,7 @@ class TestSaveFavoriteFromRide:
         fdb = _mock_fav_db(find_one=AsyncMock(return_value=sparse_ride), get_rows=AsyncMock(return_value=[]))
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post("/api/v1/favorites/from-ride/ride_2")
         assert r.status_code == 200

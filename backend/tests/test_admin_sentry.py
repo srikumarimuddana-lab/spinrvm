@@ -229,6 +229,29 @@ async def test_get_sentry_config_reports_enabled_surfaces():
 # ---------------------------------------------------------------------------
 
 
+async def _call_list_issues(**overrides):
+    """Invoke the endpoint directly with its real defaults filled in.
+
+    These tests call the route function rather than going through FastAPI, so
+    any parameter left unpassed keeps its ``Query(...)`` object as the value
+    instead of the default that object wraps. A ``Query`` instance is not
+    None and is truthy, so an omitted ``surface`` reached the
+    ``surface is not None`` guard and raised
+    "Surface 'annotation=Union[str, NoneType] ...' is not configured" —
+    a test artifact, not route behavior. Pass the defaults explicitly.
+    """
+    kwargs = {
+        "surface": None,
+        "status": "unresolved",
+        "query": None,
+        "stats_period": "14d",
+        "limit": sentry._DEFAULT_LIMIT,
+        "current_admin": ADMIN,
+    }
+    kwargs.update(overrides)
+    return await sentry.list_sentry_issues(**kwargs)
+
+
 @pytest.mark.anyio
 async def test_list_issues_not_configured_raises_503():
     with patch.object(sentry, "_is_configured", return_value=False):
@@ -248,7 +271,7 @@ async def test_list_issues_merges_and_sorts_by_last_seen():
         ),
         patch.object(sentry, "_fetch_project_issues", AsyncMock(side_effect=[[issue_b], [issue_r]])),
     ):
-        out = await sentry.list_sentry_issues(current_admin=ADMIN)
+        out = await _call_list_issues()
     assert out["count"] == 2
     # rider issue is newer -> sorts first
     assert out["issues"][0]["id"] == "r1"
@@ -264,7 +287,7 @@ async def test_list_issues_flags_truncated_when_page_full():
         patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
         patch.object(sentry, "_fetch_project_issues", AsyncMock(return_value=batch)),
     ):
-        out = await sentry.list_sentry_issues(limit=2, current_admin=ADMIN)
+        out = await _call_list_issues(limit=2)
     assert out["truncated"] is True
 
 

@@ -68,7 +68,7 @@ class TestDuplicateCheckExceptionSwallow:
         fdb = _mock_fav_db(get_rows=AsyncMock(side_effect=RuntimeError("db down")))
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post(
                 "/api/v1/favorites",
@@ -177,7 +177,7 @@ class TestSaveFavoriteFromRide:
         )
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post("/api/v1/favorites/from-ride/ride_1", params={"name": "Airport Trip"})
         assert r.status_code == 200
@@ -204,7 +204,7 @@ class TestSaveFavoriteFromRide:
         )
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post("/api/v1/favorites/from-ride/ride_2")
         assert r.status_code == 200
@@ -220,7 +220,7 @@ class TestSaveFavoriteFromRide:
         )
         with (
             patch("routes.favorites.db", fdb),
-            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None))),
+            patch("routes.favorites.verify_address_matches_coordinate", AsyncMock(return_value=(True, None, None))),
         ):
             r = client.post("/api/v1/favorites/from-ride/ride_3")
         assert r.status_code == 200

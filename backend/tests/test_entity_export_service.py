@@ -284,3 +284,100 @@ async def test_gather_entity_bundles_skips_a_failing_entity_and_keeps_the_rest(m
 
     assert len(bundles) == 1
     assert bundles[0]["entity_id"] == "u1"
+
+
+def _two_document_db(monkeypatch):
+    """A driver with a background check and a licence, both readable."""
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "drivers": [{"id": "drv1", "user_id": "u1"}],
+            "notification_preferences": [],
+            "rides": [],
+            "driver_documents": [
+                {
+                    "id": "doc-bg",
+                    "driver_id": "drv1",
+                    "document_type": "background_check",
+                    "document_url": "https://x.supabase.co/storage/v1/object/sign/driver-documents/bg.jpg",
+                },
+                {
+                    "id": "doc-dl",
+                    "driver_id": "drv1",
+                    "document_type": "drivers_license",
+                    "document_url": "https://x.supabase.co/storage/v1/object/sign/driver-documents/dl.jpg",
+                },
+            ],
+            "driver_insurance_periods": [],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+    _install_fake_storage(monkeypatch, {"bg.jpg": b"BGBYTES", "dl.jpg": b"DLBYTES"})
+
+
+@pytest.mark.anyio
+async def test_doc_file_types_bundles_only_the_selected_type_s_file(monkeypatch):
+    """The point of per-document selection: pull the background check's actual
+    scan while the licence stays a metadata row."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_file_types=["background_check"])
+
+    by_id = {d["id"]: d for d in bundle["documents"]}
+    assert by_id["doc-bg"]["_content"] == b"BGBYTES"
+    assert by_id["doc-bg"]["_content_status"] == svc.DOC_STATUS_INCLUDED
+    # Still listed, still full metadata — just no file.
+    assert by_id["doc-dl"]["_content"] is None
+    assert by_id["doc-dl"]["_content_status"] == svc.DOC_STATUS_EXCLUDED
+    assert by_id["doc-dl"]["document_type"] == "drivers_license"
+
+
+@pytest.mark.anyio
+async def test_empty_doc_file_types_is_metadata_only_not_everything(monkeypatch):
+    """An explicit empty list must mean "no files", NOT fall through to the
+    include_document_bytes=True default — otherwise a UI sending [] would
+    silently export every document's file."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", include_document_bytes=True, doc_file_types=[])
+
+    assert all(d["_content"] is None for d in bundle["documents"])
+    assert all(d["_content_status"] == svc.DOC_STATUS_EXCLUDED for d in bundle["documents"])
+
+
+@pytest.mark.anyio
+async def test_doc_file_types_overrides_include_document_bytes(monkeypatch):
+    """When both are supplied the per-type list wins — it is always the
+    narrower of the two, so this can only ever reduce what is exported."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle(
+        "driver", "u1", include_document_bytes=False, doc_file_types=["background_check"]
+    )
+
+    by_id = {d["id"]: d for d in bundle["documents"]}
+    assert by_id["doc-bg"]["_content"] == b"BGBYTES"
+    assert by_id["doc-dl"]["_content"] is None
+
+
+@pytest.mark.anyio
+async def test_doc_file_types_none_keeps_all_or_nothing_behavior(monkeypatch):
+    """Back-compat: API callers predating this field send no doc_file_types
+    and must keep getting every file when include_document_bytes is true."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", include_document_bytes=True)
+
+    assert all(d["_content"] is not None for d in bundle["documents"])
+
+
+@pytest.mark.anyio
+async def test_gather_entity_bundles_threads_doc_file_types_through(monkeypatch):
+    _two_document_db(monkeypatch)
+
+    bundles = await svc.gather_entity_bundles([("driver", "u1")], doc_file_types=["background_check"])
+
+    by_id = {d["id"]: d for d in bundles[0]["documents"]}
+    assert by_id["doc-bg"]["_content"] == b"BGBYTES"
+    assert by_id["doc-dl"]["_content"] is None

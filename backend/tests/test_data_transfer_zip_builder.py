@@ -109,10 +109,37 @@ def test_readme_explains_a_metadata_only_export_and_how_to_get_the_files():
         "_content_status": "excluded_by_request",
     }
     readme = _read(builder.build_export_zip([_bundle(documents=[doc])]), "README.txt")
-    assert "Document file contents" in readme
-    assert "1 document(s) are listed as metadata only" in readme
+    assert "all 1 document(s) are listed as metadata only" in readme
+    assert '"File" box' in readme
     # Must not promise files it did not write.
     assert "documents/<type>_<id>" not in readme
+
+
+def test_readme_mixed_selection_does_not_claim_files_were_disabled():
+    """A deliberate per-type selection (background check's file, licence
+    metadata only) is exactly what was asked for — saying "file contents were
+    not enabled" there would be plainly untrue."""
+    docs = [
+        {
+            "id": "d1",
+            "document_type": "background_check",
+            "_storage_key": "1.jpg",
+            "_content": b"x",
+            "_content_status": "included",
+        },
+        {
+            "id": "d2",
+            "document_type": "drivers_license",
+            "_storage_key": "2.jpg",
+            "_content": None,
+            "_content_status": "excluded_by_request",
+        },
+    ]
+    readme = _read(builder.build_export_zip([_bundle(documents=docs)]), "README.txt")
+    assert "1 of 2 document(s) are listed as metadata only" in readme
+    assert "all 1 document(s)" not in readme
+    # It DID write a file, so the documents/ line must be present.
+    assert "documents/<type>_<id>" in readme
 
 
 def test_readme_flags_unretrievable_documents_as_a_fault_not_a_setting():

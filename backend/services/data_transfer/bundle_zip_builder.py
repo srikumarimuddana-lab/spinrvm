@@ -125,14 +125,23 @@ def _build_readme(bundles: list[dict[str, Any]], generated_on: str) -> str:
     # The metadata-only case is the one that gets reported as a bug, so say
     # plainly why there are no files and how to get them — an operator should
     # never have to guess whether the export or the storage bucket is broken.
-    if excluded:
+    # Two distinct wordings: no files at all (probably not what they meant)
+    # versus a deliberate mixed selection (exactly what they asked for, and
+    # saying "file contents were not enabled" there would be simply untrue).
+    if excluded and not included:
         lines += [
             "",
-            f"NOTE: {excluded} document(s) are listed as metadata only, with NO file in this ZIP,",
-            'because "Document file contents" was not enabled for this export. That checkbox is',
-            "OFF by default for PIPEDA data minimization. To get the actual files (scans/images/PDFs),",
-            'run the export again with "Document file contents (not just metadata)" checked under',
-            '"Data to include".',
+            f"NOTE: all {excluded} document(s) are listed as metadata only, with NO file in this ZIP.",
+            'No document type had its "File" box ticked on the Export tab. Files are opt-in per',
+            "document type for PIPEDA data minimization. To get the actual files (scans/images/PDFs),",
+            'run the export again and tick "File" beside each document type you need.',
+        ]
+    elif excluded:
+        lines += [
+            "",
+            f"NOTE: {excluded} of {total_docs} document(s) are listed as metadata only, with NO file in",
+            'this ZIP — their "File" box was not ticked for this export. See file_export_status in',
+            "documents.csv for which ones, and re-run ticking those types if you need their files.",
         ]
     if unavailable:
         lines += [

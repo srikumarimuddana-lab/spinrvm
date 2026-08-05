@@ -193,9 +193,7 @@ def test_export_gate_consumes_approved_grant_and_proceeds(admin_client):
             "backend.routes.admin.data_transfer_export.admin_export_approvals.find_approved_grant",
             AsyncMock(return_value={"id": "req-approved", "status": "approved"}),
         ),
-        patch(
-            "backend.routes.admin.data_transfer_export.admin_export_approvals.consume", AsyncMock()
-        ) as consume,
+        patch("backend.routes.admin.data_transfer_export.admin_export_approvals.consume", AsyncMock()) as consume,
         patch("backend.db_supabase.insert_one", AsyncMock(return_value="job-1")),
         patch(
             "backend.services.data_transfer.entity_export_service.gather_entity_bundles",
@@ -300,3 +298,53 @@ class TestExportReasonField:
         table, job_record = mock_insert.await_args.args
         assert table == "data_transfer_export_jobs"
         assert job_record["reason"] == _VALID_BODY["reason"]
+
+
+def test_gate_params_bind_doc_file_types():
+    """Security-relevant: every field that changes what the bundle CONTAINS
+    must be part of the approval signature. Without doc_file_types in it, an
+    approval granted for a metadata-only export would also satisfy a re-run
+    that pulls the document files — widening what was approved."""
+    from backend.routes.admin.data_transfer_export import ExportRequest, _gate_params
+
+    base = {
+        "entities": [{"entity_type": "driver", "entity_id": "d1"}],
+        "reason": _VALID_REASON,
+        "format": "zip",
+    }
+    metadata_only = _gate_params(ExportRequest(**base, doc_file_types=[]))
+    with_files = _gate_params(ExportRequest(**base, doc_file_types=["background_check"]))
+
+    assert metadata_only != with_files
+    assert metadata_only["doc_file_types"] == []
+    assert with_files["doc_file_types"] == ["background_check"]
+
+
+def test_gate_params_doc_file_types_are_order_independent():
+    """Same selection in a different order must match an existing grant —
+    consistent with how entities/doc_types are already normalized."""
+    from backend.routes.admin.data_transfer_export import ExportRequest, _gate_params
+
+    base = {
+        "entities": [{"entity_type": "driver", "entity_id": "d1"}],
+        "reason": _VALID_REASON,
+        "format": "zip",
+    }
+    a = _gate_params(ExportRequest(**base, doc_file_types=["insurance", "background_check"]))
+    b = _gate_params(ExportRequest(**base, doc_file_types=["background_check", "insurance"]))
+
+    assert a == b
+
+
+def test_gate_params_distinguish_omitted_from_empty_doc_file_types():
+    """None (no per-type opinion, falls back to include_document_bytes) and []
+    (explicitly no files) mean different things and must not share a grant."""
+    from backend.routes.admin.data_transfer_export import ExportRequest, _gate_params
+
+    base = {
+        "entities": [{"entity_type": "driver", "entity_id": "d1"}],
+        "reason": _VALID_REASON,
+        "format": "zip",
+    }
+    assert _gate_params(ExportRequest(**base))["doc_file_types"] is None
+    assert _gate_params(ExportRequest(**base, doc_file_types=[]))["doc_file_types"] == []

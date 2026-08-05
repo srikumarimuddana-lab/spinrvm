@@ -80,12 +80,19 @@ export interface ExportApprovalRequiredResult {
     row_count: number;
 }
 export interface DataTransferExportScopeOptions {
+    /** Which document types appear in the bundle at all (as metadata rows).
+     * Omit for every type. */
     docTypes?: string[];
     // PIA recommendation R-B (ACTION_ITEMS.md B11) — default true (current
     // full-fidelity behavior) on both; the backend's ExportRequest defaults
     // match, so omitting these entirely is still safe/backward-compatible.
     includeRideGps?: boolean;
     includeDocumentBytes?: boolean;
+    /** Which document types have their actual FILE (scan/image/PDF) bundled,
+     * as opposed to a metadata row only. Overrides includeDocumentBytes on
+     * the backend when present; pass `[]` for metadata-only. Omit entirely to
+     * keep the older all-or-nothing includeDocumentBytes behavior. */
+    docFileTypes?: string[];
 }
 export const exportDataTransferEntities = (
     entities: DataTransferExportEntityRef[],
@@ -102,6 +109,10 @@ export const exportDataTransferEntities = (
             reason,
             include_ride_gps: options?.includeRideGps ?? true,
             include_document_bytes: options?.includeDocumentBytes ?? true,
+            // null (not undefined) so an explicit empty array survives
+            // JSON.stringify and reaches the backend as "metadata only"
+            // rather than being dropped from the payload entirely.
+            doc_file_types: options?.docFileTypes ?? null,
         }),
     });
 

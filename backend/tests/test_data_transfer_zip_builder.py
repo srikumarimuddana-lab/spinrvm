@@ -209,3 +209,22 @@ def test_raw_data_json_never_contains_the_private_content_key():
     raw = json.loads(zf.read(raw_name))
     assert "_content" not in raw["documents"][0]
     assert "_content" not in json.dumps(raw)  # belt-and-suspenders: no stray leak anywhere in the payload
+
+
+def test_zero_byte_document_is_never_reported_as_included():
+    """The manifest describes THIS archive: no file was written, so a payload
+    claiming "included" must be downgraded rather than trusted."""
+    doc = {
+        "id": "z1",
+        "document_type": "background_check",
+        "_storage_key": "z.jpg",
+        "_content": b"",
+        "_content_status": "included",
+    }
+    zip_bytes = builder.build_export_zip([_bundle(documents=[doc])])
+    zf = zipfile.ZipFile(BytesIO(zip_bytes))
+    assert [n for n in zf.namelist() if "/documents/" in n] == []
+    manifest = _read(zip_bytes, "documents.csv")
+    row = manifest.strip().splitlines()[-1]
+    assert "included" not in row
+    assert "unavailable" in row

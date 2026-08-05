@@ -57,6 +57,25 @@ The single global "Document file contents" checkbox is gone. The Export tab now 
 
 `doc_file_types` is recorded in the `log_admin_action` audit payload rather than on the job row: `data_transfer_export_jobs` has no column for it and adding one would need a migration for what is purely accountability metadata. Which document *files* left the system is exactly what an auditor asks about, so it is captured — just in the audit trail, not the job table. A follow-up could add a real column if the Jobs & History UI should display it.
 
+## 3c. Defects found in code review of this branch
+
+A review pass over the branch found four defects — three pre-existing on `main`, one introduced here. All four were reproduced with a probe script before fixing and now have regression tests.
+
+| # | Defect | Origin | Severity |
+|---|---|---|---|
+| 1 | `doc_types=[]` selected **every** document type instead of none | pre-existing (`if doc_types:` truthiness) | PIPEDA over-collection |
+| 2 | `_gate_params` collapsed `doc_types=[]` and `None` to the same signature | pre-existing | approval scope widening |
+| 3 | `write_json` serialized raw document bytes into the JSON export | pre-existing | PIPEDA — sensitive data leak |
+| 4 | A zero-byte document was reported `included` with no file in the ZIP | introduced by §3 | manifest contradicts archive |
+
+**1 — empty `doc_types` meant "all".** `if doc_types:` treats `[]` as falsy and skipped the filter entirely, returning every document type. The UI sends `[]` whenever fewer than all types are ticked, including zero — so an admin who deliberately unticked every document got all of them. Pre-existing on `main`, but §3b's checkbox grid makes "untick everything" a natural gesture, so it went from obscure to easy to hit. Fixed to `if doc_types is not None:`.
+
+**2 — the same `[]`/`None` collision in the approval gate.** Once `[]` and `None` mean opposite things, collapsing them in `_gate_params` lets an approval granted for a no-documents export satisfy an all-documents one — the exact hole §3b closed for `doc_file_types`, still open for `doc_types`. Fixed the same way.
+
+**3 — JSON export leaked document bytes.** `json.dumps(bundles, default=str)` does not skip `bytes`; it stringifies them, writing every scan into the JSON as a mangled `"b'\xff\xd8...'"` string. Reachable today by any API caller posting `format=json` — `include_document_bytes` defaults to `True` on the model. Not reachable from the UI (which sends `doc_file_types: []` for non-ZIP formats), which is why it went unnoticed. `write_json` now strips `_content` and reports `file_export_status`, mirroring the ZIP manifest.
+
+**4 — zero-byte documents.** `entity_export_service` classified on `content is not None` while the ZIP builder wrote files on truthiness, so a zero-byte object produced `file_export_status: included` with a blank `bundled_file` and no file in the archive — a manifest contradicting the thing it describes, which is precisely the bug class this whole change set exists to remove. Both sides now use one predicate (`_has_file`), the builder refuses to report `included` when it wrote nothing, and a zero-byte download is logged as an error and classified as a fetch failure.
+
 ## 4. Risk & impact on existing functionality
 
 **Blast radius: cross-surface (backend export + admin UI), but confined to the Data Transfer export/import path. No ride, dispatch, payment, wallet, auth, or insurance-period code touched. No DB schema or migration. No background-loop interaction.**
@@ -98,7 +117,9 @@ Copy is specific, non-technical, and actionable ("This ZIP will contain document
 | `backend/routes/admin/data_transfer_export.py` | `doc_file_types` field, bound into `_gate_params`, threaded to the job, recorded in the audit payload | Per-document-type file selection without letting an approval be reused to widen scope |
 | `admin-dashboard/src/lib/api/data-transfer.ts` | `docFileTypes` option, sent as `null` when absent | Let an explicit empty array reach the backend as "metadata only" |
 | `backend/tests/test_entity_export_service.py` | 5 new tests | Per-type selection, empty-list semantics, precedence, back-compat, batch threading |
-| `backend/tests/test_data_transfer_export_route.py` | 3 new tests | Approval-gate binding, order-independence, `None` vs `[]` |
+| `backend/tests/test_data_transfer_export_route.py` | 4 new tests | Approval-gate binding, order-independence, `None` vs `[]` for both `doc_file_types` and `doc_types` |
+| `backend/services/data_transfer/tabular_writer.py` | `_public_documents`; `write_json` strips `_content` | Review finding 3 — JSON export serialized raw document bytes |
+| `backend/tests/test_data_transfer_tabular_writer.py` | New file, 4 tests | No test file existed for this module; pins the byte-leak fix |
 
 ## 7. Before / after
 
@@ -156,6 +177,8 @@ Partial rollback is available without touching the backend: reverting `ExportTab
 - **No visual regression tooling exists for admin-dashboard**, so the new warning banner's appearance — including its dark-mode variant — was reasoned about against sibling components' Tailwind classes, not screenshotted or snapshot-tested. This is the standing gap already noted in CLAUDE.md release gate #6.
 - **No new frontend unit test** for the warning's render condition or the new checkbox grid; `metadataOnlyDocuments`, `toggleDocFileType`'s implication rules, and `toggleAllFiles` are covered by inspection and the production build only. `ExportTab.tsx` has no existing test file to extend. The backend equivalents of those semantics (empty list, precedence, back-compat) *are* covered.
 - **The dual-approval re-approval effect was reasoned about, not exercised.** `dual_approval_exports_enabled` is off by default, so no live grant is believed to be in flight — but this was not checked against the live `app_settings` value or the approvals queue.
+- **Known behavior left unchanged (not a fix, a note).** Ticking all six document types sends `doc_types: null`, which means "every type" — including any `document_type` value in the DB that isn't one of the six the UI lists (legacy or newer types). So "tick everything" can export more types than are shown on screen. Pre-existing, and narrowing it could silently drop legacy documents an operator expects, so it was deliberately not changed here. Worth a follow-up that sources the list from the DB rather than a frontend constant.
+- **`_storage_key` is still present in the JSON export** (as in the ZIP manifest). It is an opaque UUID filename in a private bucket, not a credential, and the ZIP import path depends on it — removing it from one format and not the other seemed worse than leaving both consistent. Flagged rather than changed.
 - **Import round-trip not executed end-to-end.** The `bundle_document_uploader` fallback is covered by existing tests passing plus the grep, not by an export→import cycle against two live environments.
 
 ## 10. Sign-off

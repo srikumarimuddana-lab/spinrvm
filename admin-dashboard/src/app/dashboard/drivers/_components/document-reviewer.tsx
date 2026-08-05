@@ -10,6 +10,7 @@ import {
     FileText,
     Calendar,
     ExternalLink,
+    Download,
     Bell,
     BellOff,
     AlertCircle,
@@ -28,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import {
+    downloadDriverDocument,
     getDriverDocuments,
     reviewDocument,
     type RejectTemplate,
@@ -95,8 +97,21 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
     const [template, setTemplate] = useState<RejectTemplate>("blurry_image");
     const [notify, setNotify] = useState(true);
     const reasonRef = useRef<HTMLTextAreaElement>(null);
+    const [downloading, setDownloading] = useState(false);
 
     const current = docs[index];
+
+    const handleDownload = async () => {
+        if (!current) return;
+        setDownloading(true);
+        try {
+            await downloadDriverDocument(current.id, driverName || "", current.document_type || "document");
+        } catch (e: any) {
+            toast({ title: "Download failed", description: e?.message ?? "Unknown error", variant: "destructive" });
+        } finally {
+            setDownloading(false);
+        }
+    };
     const needsExpiry = current ? docRequiresExpiry(current) : false;
 
     const resetDocState = useCallback(() => {
@@ -249,9 +264,22 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                             </div>
                         )}
                         {current.document_url && (
-                            <a href={current.document_url} target="_blank" rel="noreferrer" className="absolute top-3 right-3 bg-card/90 hover:bg-card border border-border rounded-lg px-2 py-1 text-xs font-medium flex items-center gap-1.5">
-                                <ExternalLink className="h-3.5 w-3.5" /> Open original
-                            </a>
+                            <div className="absolute top-3 right-3 flex items-center gap-1.5">
+                                {/* "Open original" only ever displayed the file.
+                                    Saving it to disk — to attach to a regulator
+                                    email — had no affordance here either. */}
+                                <button
+                                    type="button"
+                                    onClick={handleDownload}
+                                    disabled={downloading}
+                                    className="bg-card/90 hover:bg-card border border-border rounded-lg px-2 py-1 text-xs font-medium flex items-center gap-1.5 disabled:opacity-60"
+                                >
+                                    {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} Download
+                                </button>
+                                <a href={current.document_url} target="_blank" rel="noreferrer" className="bg-card/90 hover:bg-card border border-border rounded-lg px-2 py-1 text-xs font-medium flex items-center gap-1.5">
+                                    <ExternalLink className="h-3.5 w-3.5" /> Open original
+                                </a>
+                            </div>
                         )}
                     </div>
 

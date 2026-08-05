@@ -510,6 +510,16 @@ class TestCompanyEmailOtpErrorBranches:
             patch("backend.routes.auth.db_supabase.delete_many", delete_many),
             patch("backend.routes.auth.db_supabase.insert_one", AsyncMock(return_value=True)),
             patch("backend.routes.auth.send_transactional_email", AsyncMock(return_value=False)),
+            # Without a configured email provider the route takes its
+            # non-production bypass (fixed code "1234", deliver_via_email
+            # False) and never attempts delivery — so the 502-on-send-failure
+            # branch under test is unreachable. Configure a provider so the
+            # route actually tries to send. Patched at the routes.auth
+            # binding, per CLAUDE.md's patch-where-it's-used rule.
+            patch(
+                "backend.routes.auth.get_app_settings",
+                AsyncMock(return_value={"resend_api_key": "re_test_key"}),
+            ),
         ):
             with pytest.raises(HTTPException) as exc:
                 await send_company_email_otp(_request(), CompanyEmailOtpSendRequest(email="a@b.com"))

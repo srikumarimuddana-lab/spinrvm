@@ -35,9 +35,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from ..documents import _extract_signed_url
     from ..supabase_client import supabase
     from ..utils.driver_code import generate_driver_code
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
+    from documents import _extract_signed_url
     from supabase_client import supabase
     from utils.driver_code import generate_driver_code
 
@@ -270,16 +272,23 @@ def canonical_requirement_key(value: str) -> str:
 
 
 def storage_signed_url(storage_key: str) -> str:
+    """Signed URL for a just-uploaded import document.
+
+    Delegates to documents._extract_signed_url rather than re-deriving the
+    response shape locally. The local version only read ``res.data``, the
+    LEGACY shape — current supabase-py returns a plain dict, which has no
+    ``.data``, so this raised "create_signed_url returned no URL" on every
+    call and took the whole bulk import down with it at commit time.
+    documents.py had already been fixed for exactly this (see its docstring
+    on Railway 500s after supabase-py flipped the return type); the fix was
+    never propagated here. One implementation now, so the next shape change
+    is a one-line fix instead of a hunt.
+    """
     res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600)
-    data = getattr(res, "data", None)
-    if isinstance(data, dict):
-        url = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
-        if url:
-            return url
-    url = getattr(data, "signed_url", None) or getattr(data, "signedURL", None)
-    if not url:
-        raise RuntimeError(f"create_signed_url returned no URL for {storage_key}")
-    return url
+    try:
+        return _extract_signed_url(res)
+    except RuntimeError as e:
+        raise RuntimeError(f"create_signed_url returned no URL for {storage_key}: {e}") from e
 
 
 def encrypt_pii(value: str | None) -> str | None:

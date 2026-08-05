@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import unquote as _unquote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from loguru import logger
@@ -337,17 +338,53 @@ def _shape_of(res: Any) -> str:
     return type(res).__name__
 
 
-_STORAGE_KEY_RE = _re.compile(r"/storage/v1/object/(?:sign|public)/driver-documents/([^?#]+)")
+# ``authenticated`` belongs here alongside sign/public: Supabase serves
+# RLS-scoped objects from that path, and omitting it silently produced
+# "no storage key" for those rows.
+_STORAGE_KEY_RE = _re.compile(r"/storage/v1/object/(?:sign|public|authenticated)/driver-documents/([^?#]+)")
+
+# services/driver_import_service.py records documents as
+# ``storage://driver-documents/<key>`` while building an import plan. The
+# happy path overwrites that with a real signed URL at commit time, but any
+# row where that did not happen keeps the custom scheme — which no HTTP-URL
+# pattern will ever match, so the document silently exported as metadata
+# with no file.
+_STORAGE_SCHEME_RE = _re.compile(r"^storage://driver-documents/(.+)$")
 
 
 def _extract_storage_key(stored_url: str) -> Optional[str]:
-    """Extract the bare storage-object key from a Supabase Storage URL.
+    """Extract the bare storage-object key from a stored document URL.
 
-    Handles both signed and public URL shapes, regardless of which Supabase
-    project host they were originally generated for.
+    Handles every shape this codebase writes: signed, public, and
+    authenticated Supabase URLs (absolute or host-relative, any project
+    host), plus the ``storage://driver-documents/<key>`` scheme the bulk
+    driver import uses.
+
+    The returned key is percent-DECODED. Storage keys travel through the URL
+    percent-encoded, but ``storage.download()`` expects the raw key — feeding
+    it an encoded one 404s. Bulk-import keys are built from spreadsheet
+    values (``saskatoon-import/<batch>/<old_id>/<requirement>/...``), so a
+    space or ``#`` in a source cell is enough to trigger it.
     """
-    m = _STORAGE_KEY_RE.search(stored_url or "")
-    return m.group(1) if m else None
+    raw = (stored_url or "").strip()
+    if not raw:
+        return None
+
+    m = _STORAGE_SCHEME_RE.match(raw)
+    if m:
+        return _unquote(m.group(1))
+
+    m = _STORAGE_KEY_RE.search(raw)
+    if m:
+        return _unquote(m.group(1))
+
+    # A value with no scheme and no path structure is already a bare key
+    # (some callers store just the object name). Anything containing "://"
+    # is a URL we failed to parse — return None so the caller reports it
+    # rather than fabricating a key from a hostname.
+    if "://" not in raw and "/storage/v1/" not in raw:
+        return _unquote(raw)
+    return None
 
 
 def regenerate_signed_url(stored_url: str, expires_in: int = 3600) -> str:

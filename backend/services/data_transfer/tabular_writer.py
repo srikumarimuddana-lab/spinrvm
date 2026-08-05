@@ -58,8 +58,32 @@ def write_csv(bundles: list[dict[str, Any]]) -> bytes:
     return buf.getvalue().encode("utf-8-sig")
 
 
+# Underscore-prefixed keys the export service attaches to each document
+# payload for the ZIP builder's benefit. _content is raw document bytes.
+_INTERNAL_DOC_KEYS = ("_content", "_content_status")
+
+
+def _public_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Document rows with the raw bytes removed and the export outcome kept.
+
+    json.dumps(..., default=str) does NOT skip bytes — it stringifies them,
+    so an unfiltered dump wrote every document's raw scan into the JSON as
+    a mangled "b'\\xff\\xd8...'" string. Useless as data and a PIPEDA
+    problem: document bytes are among the most sensitive things this export
+    carries, and the JSON format is offered in the UI as a profile summary.
+    Mirrors bundle_zip_builder._document_manifest, minus the bundled_file
+    column (there is no archive to point into here)."""
+    rows = []
+    for doc in documents:
+        row = {k: v for k, v in doc.items() if k not in _INTERNAL_DOC_KEYS}
+        row["file_export_status"] = doc.get("_content_status") or ("included" if doc.get("_content") else "unavailable")
+        rows.append(row)
+    return rows
+
+
 def write_json(bundles: list[dict[str, Any]]) -> bytes:
-    return json.dumps(bundles, indent=2, default=str).encode("utf-8")
+    safe = [{**b, "documents": _public_documents(b.get("documents") or [])} for b in bundles]
+    return json.dumps(safe, indent=2, default=str).encode("utf-8")
 
 
 def write_excel(bundles: list[dict[str, Any]]) -> bytes:

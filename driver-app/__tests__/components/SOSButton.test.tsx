@@ -232,6 +232,36 @@ describe('SOSButton', () => {
     expect(queryByText(/Silent alert sent/i)).toBeNull();
   });
 
+  it('discreet button re-arms after the success toast clears', async () => {
+    // Regression pin for the blocker found in review. `setTriggered(true)` fires
+    // on success in both modes, but only the standard-mode Alert's "I'm OK"
+    // resets it. Discreet mode suppresses that Alert, so `triggered` stayed
+    // true forever — and `onPressIn` is `sending || triggered ? undefined : …`,
+    // which stripped the control of its handler. Combined with the toast
+    // auto-clearing at 8s, a driver who had just sent a silent SOS was left
+    // with a dead button, no 911 route, and no way to send a second alert.
+    const onTrigger = jest.fn().mockResolvedValue(undefined);
+    const { getByLabelText, queryByText } = render(
+      <SOSButton rideId="ride-1" onTrigger={onTrigger} discreet />,
+    );
+
+    await holdFor(getByLabelText('Emergency SOS'), HOLD_DISCREET_MS);
+    expect(onTrigger).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(9000);
+    });
+    expect(queryByText(/Silent alert sent/i)).toBeNull();
+
+    // Back to the idle label — the control is live again, matching what
+    // standard mode gets from "I'm OK".
+    const rearmed = getByLabelText('Emergency SOS');
+    await holdFor(rearmed, HOLD_DISCREET_MS);
+
+    expect(onTrigger).toHaveBeenCalledTimes(2);
+    expect(queryByText(/Silent alert sent/i)).toBeTruthy();
+  });
+
   it('discreet mode uses a short haptic, not the audible alarm pattern', async () => {
     const onTrigger = jest.fn().mockResolvedValue(undefined);
     const { getByLabelText } = render(

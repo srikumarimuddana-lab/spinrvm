@@ -86,9 +86,21 @@ What changes in discreet mode — and what must not:
 | Failure | native `Alert` | small dark toast that **persists** |
 
 Invariants the discreet path does **not** relax:
-- **911 stays one tap away.** Suppressing the `Alert` removes the "Call 911" button it carried,
-  so the toast is tappable and dials 911. A failure toast therefore never auto-dismisses —
-  auto-clearing it would leave a driver whose SOS failed with no route to 911 from that control.
+- **911 is one tap from the confirmation surface, and the control always re-arms.** Suppressing
+  the `Alert` removes the "Call 911" button it carried, so the discreet toast is tappable and
+  dials 911. Two consequences that are easy to get wrong, and both were:
+  - A **failure** toast never auto-dismisses. Auto-clearing it would leave a driver whose SOS
+    failed with no route to 911 from that control.
+  - A **success** toast does auto-clear (8 s), and when it does it must also reset `triggered`.
+    `triggered` disables the button outright, and standard mode only clears it from the success
+    `Alert`'s "I'm OK" — which discreet mode does not render. Without the reset the driver was
+    left with a dead control and no second-alert path. Pinned by
+    `driver-app/__tests__/components/SOSButton.test.tsx` ("re-arms after the success toast clears").
+
+  State the invariant precisely: 911 is one tap away *while a confirmation surface is up*, and once
+  that surface is gone the control is live again so another alert can be raised. It is **not**
+  true that 911 is permanently one tap from the idle button — in either mode. A persistent 911
+  affordance is the job of the Safety overlay (B17), which is not built.
 - **Never a false "sent".** Success is still reported only after a real backend 200.
 - **Failed state still persists** (amber button, tap to retry) until the backend confirms.
 - **The failed button styling is deliberately not muted.** By then the alert either sent or it

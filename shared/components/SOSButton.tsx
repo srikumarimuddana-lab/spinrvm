@@ -104,7 +104,17 @@ export function SOSButton({ rideId, onTrigger, size = 'small', discreet = false 
     // the backend actually confirms one. Auto-dismissing it would leave a
     // driver whose SOS failed with no way to reach 911 from this control.
     if (kind === 'sent') {
-      toastTimer.current = setTimeout(() => setToast(null), DISCREET_TOAST_MS);
+      toastTimer.current = setTimeout(() => {
+        setToast(null);
+        // Re-arm. `triggered` disables the button entirely (see onPressIn
+        // below), and standard mode clears it from the success Alert's
+        // "I'm OK". Discreet mode suppresses that Alert, so without this the
+        // flag stayed set forever: once the toast expired the driver was left
+        // with a dead control, no route to 911, and no way to raise a second
+        // alert until the screen remounted. Clearing it here restores parity
+        // with what "I'm OK" gives the standard path.
+        setTriggered(false);
+      }, DISCREET_TOAST_MS);
     }
   };
 

@@ -73,12 +73,26 @@ def _strip_ride_gps(ride: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in ride.items() if k not in _RIDE_GPS_FIELDS}
 
 
+def _wants_file(document_type: Optional[str], include_document_bytes: bool, doc_file_types: Optional[set]) -> bool:
+    """Whether this document's raw file belongs in the bundle.
+
+    ``doc_file_types`` (when not None) is the per-document-type allowlist and
+    takes precedence: only the types in it get their file, everything else is
+    metadata only. ``None`` means "no per-type opinion" and falls back to the
+    all-or-nothing ``include_document_bytes`` flag, which is what pre-existing
+    API callers send."""
+    if doc_file_types is not None:
+        return document_type in doc_file_types
+    return include_document_bytes
+
+
 async def gather_entity_bundle(
     entity_type: str,
     entity_id: str,
     doc_types: Optional[list[str]] = None,
     include_ride_gps: bool = True,
     include_document_bytes: bool = True,
+    doc_file_types: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Collect everything needed to reconstruct a user/driver in another environment.
 
@@ -93,6 +107,16 @@ async def gather_entity_bundle(
     document metadata are still included either way (only the specific
     high-sensitivity fields are dropped), so record counts and structure
     stay consistent regardless of these flags.
+
+    ``doc_file_types`` narrows document *files* to specific document types
+    while still listing every type selected by ``doc_types`` as metadata —
+    e.g. export the background check's actual scan but only the metadata row
+    for the driver's licence. It overrides ``include_document_bytes`` when
+    provided; ``None`` (the default) keeps the older all-or-nothing behavior
+    so existing API callers are unaffected. Narrowing files to the specific
+    types an operator actually needs is the data-minimizing choice, so this
+    is strictly a finer-grained version of the PIA R-B control, not a way
+    around it.
     """
     if entity_type not in ("driver", "rider"):
         raise ValueError(f"Unknown entity_type: {entity_type!r}")
@@ -147,10 +171,11 @@ async def gather_entity_bundle(
     # they produced byte-identical metadata-only ZIPs with no way to tell
     # them apart — the reported "export gives me metadata, not the document"
     # bug was the opt-out case, indistinguishable from a broken bucket.
+    file_types = set(doc_file_types) if doc_file_types is not None else None
     doc_payloads = []
     for doc in documents:
         storage_key = _extract_storage_key(doc.get("document_url") or "")
-        if not include_document_bytes:
+        if not _wants_file(doc.get("document_type"), include_document_bytes, file_types):
             content, status = None, DOC_STATUS_EXCLUDED
         elif not storage_key:
             # An unparseable document_url is a data defect, not an opt-out:
@@ -183,12 +208,16 @@ async def gather_entity_bundles(
     doc_types: Optional[list[str]] = None,
     include_ride_gps: bool = True,
     include_document_bytes: bool = True,
+    doc_file_types: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     """Batch gather for multi-entity export. A single entity failing to resolve
     does not abort the batch — it's reported by omission (caller can diff
     requested vs. returned entity_ids) so one bad row doesn't block the rest."""
     results = await asyncio.gather(
-        *(gather_entity_bundle(t, eid, doc_types, include_ride_gps, include_document_bytes) for t, eid in entities),
+        *(
+            gather_entity_bundle(t, eid, doc_types, include_ride_gps, include_document_bytes, doc_file_types)
+            for t, eid in entities
+        ),
         return_exceptions=True,
     )
     bundles = []

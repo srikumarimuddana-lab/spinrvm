@@ -33,12 +33,76 @@ def _entity_folder_name(bundle: dict[str, Any]) -> str:
     return f"{bundle['entity_type']}_{label}"
 
 
+# Only the raw bytes and the internal status marker are stripped from the
+# manifest. _storage_key deliberately STAYS: bundle_document_uploader.py
+# derives each document's file extension from it on import (a missing key
+# falls back to ".bin", which fails the ALLOWED_EXTENSIONS check and silently
+# skips every document), so it is part of the export/import contract, not a
+# leaked internal. The public bundled_file column below carries the same
+# extension for readers that shouldn't need to know about underscore keys.
+_INTERNAL_DOC_KEYS = ("_content", "_content_status")
+
+# Mirrors entity_export_service.DOC_STATUS_* — duplicated as literals rather
+# than imported so this module stays dependency-free and unit-testable
+# without the Supabase-backed service (see this file's tests).
+_STATUS_EXCLUDED = "excluded_by_request"
+_STATUS_INCLUDED = "included"
+_STATUS_UNAVAILABLE = "unavailable"
+
+
+def _document_file_path(doc: dict[str, Any]) -> str:
+    """Path (within the entity folder) this document's file is written to."""
+    key = doc.get("_storage_key") or doc.get("id", "unknown")
+    doc_type = doc.get("document_type", "document")
+    ext = key.rsplit(".", 1)[-1] if "." in key else "bin"
+    return f"documents/{doc_type}_{doc.get('id', '')}.{ext}"
+
+
+def _document_status(doc: dict[str, Any]) -> str:
+    """Why this document does or doesn't have a file in the bundle.
+
+    Falls back to inferring from _content for payloads built without an
+    explicit status (older callers and the pure-function unit tests), so a
+    missing status never reads as a successful include."""
+    status = doc.get("_content_status")
+    if status:
+        return str(status)
+    return _STATUS_INCLUDED if doc.get("_content") else _STATUS_UNAVAILABLE
+
+
 def _document_manifest(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Document rows without the raw bytes — safe to serialize as CSV/JSON."""
-    return [{k: v for k, v in d.items() if k not in ("_content",)} for d in documents]
+    """Document rows without the raw bytes — safe to serialize as CSV/JSON.
+
+    Drops the internal underscore-prefixed keys (raw bytes, source-environment
+    storage key) and replaces them with two columns an operator can act on:
+    ``file_export_status`` and, when a file was written, ``bundled_file`` —
+    the path to it inside this entity's folder."""
+    rows = []
+    for doc in documents:
+        status = _document_status(doc)
+        row = {k: v for k, v in doc.items() if k not in _INTERNAL_DOC_KEYS}
+        row["file_export_status"] = status
+        row["bundled_file"] = _document_file_path(doc) if doc.get("_content") else ""
+        rows.append(row)
+    return rows
+
+
+def _document_status_counts(bundles: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for bundle in bundles:
+        for doc in bundle.get("documents", []):
+            status = _document_status(doc)
+            counts[status] = counts.get(status, 0) + 1
+    return counts
 
 
 def _build_readme(bundles: list[dict[str, Any]], generated_on: str) -> str:
+    counts = _document_status_counts(bundles)
+    total_docs = sum(counts.values())
+    included = counts.get(_STATUS_INCLUDED, 0)
+    excluded = counts.get(_STATUS_EXCLUDED, 0)
+    unavailable = total_docs - included - excluded
+
     lines = [
         "Spinr Data Transfer Export",
         f"Generated: {generated_on}",
@@ -48,9 +112,40 @@ def _build_readme(bundles: list[dict[str, Any]], generated_on: str) -> str:
         "  user.csv, driver_profile.csv     Profile records",
         "  rides.csv                        Ride/trip history",
         "  driver_insurance_periods.csv     Regulatory insurance-period audit trail",
-        "  documents.csv                    Document metadata (see documents/ for files)",
-        "  documents/<original filename>    Document files in their original format",
+        "  documents.csv                    Document metadata, one row per document",
         "  raw_data.json                    The complete entity export in machine-readable JSON",
+    ]
+    if included:
+        lines.append("  documents/<type>_<id>.<ext>      Document files in their original format")
+    lines += [
+        "",
+        f"Documents: {total_docs} listed, {included} file(s) included in this ZIP.",
+    ]
+
+    # The metadata-only case is the one that gets reported as a bug, so say
+    # plainly why there are no files and how to get them — an operator should
+    # never have to guess whether the export or the storage bucket is broken.
+    if excluded:
+        lines += [
+            "",
+            f"NOTE: {excluded} document(s) are listed as metadata only, with NO file in this ZIP,",
+            'because "Document file contents" was not enabled for this export. That checkbox is',
+            "OFF by default for PIPEDA data minimization. To get the actual files (scans/images/PDFs),",
+            'run the export again with "Document file contents (not just metadata)" checked under',
+            '"Data to include".',
+        ]
+    if unavailable:
+        lines += [
+            "",
+            f"WARNING: {unavailable} document(s) were requested but could NOT be retrieved from storage.",
+            "See each row's file_export_status in documents.csv. This is a fault, not a setting —",
+            "report it rather than re-running the export.",
+        ]
+    lines += [
+        "",
+        "documents.csv columns:",
+        "  file_export_status   included | excluded_by_request | unavailable_*",
+        "  bundled_file         path to the file inside this entity's folder (blank if none)",
         "",
         "Import this ZIP via Admin > Data Transfer > Import on the target environment.",
     ]
@@ -75,14 +170,14 @@ def build_export_zip(bundles: list[dict[str, Any]]) -> bytes:
             )
             zf.writestr(f"{folder}/documents.csv", _rows_to_csv(_document_manifest(documents)))
 
+            # A document with no bytes is skipped here but never disappears:
+            # its documents.csv row carries file_export_status saying whether
+            # it was excluded by request or genuinely unavailable.
             for doc in documents:
                 content = doc.get("_content")
                 if not content:
                     continue
-                key = doc.get("_storage_key") or doc.get("id", "unknown")
-                doc_type = doc.get("document_type", "document")
-                ext = key.rsplit(".", 1)[-1] if "." in key else "bin"
-                zf.writestr(f"{folder}/documents/{doc_type}_{doc.get('id', '')}.{ext}", content)
+                zf.writestr(f"{folder}/{_document_file_path(doc)}", content)
 
             raw = {
                 "entity_type": bundle["entity_type"],

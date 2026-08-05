@@ -89,7 +89,13 @@ async def replay_documents(
         if not content:
             continue
 
-        ext = Path(doc.get("_storage_key") or "").suffix.lower() or ".bin"
+        # bundled_file (added alongside file_export_status in
+        # bundle_zip_builder) is the manifest's public pointer at the file
+        # inside the ZIP and carries the same extension; _storage_key is the
+        # original source, kept as the fallback so bundles exported before
+        # those columns existed still import. Either way an unresolvable
+        # extension lands on ".bin" and is rejected below rather than guessed.
+        ext = Path(doc.get("bundled_file") or doc.get("_storage_key") or "").suffix.lower() or ".bin"
         if ext not in ALLOWED_EXTENSIONS:
             logger.warning("data-transfer import: skipping document with disallowed extension %s", ext)
             continue

@@ -31,11 +31,30 @@ class EntityNotFoundError(Exception):
     pass
 
 
+# Per-document outcome recorded on every payload and surfaced in the ZIP's
+# documents.csv / raw_data.json. A document with no file in the bundle is
+# NEVER silently absent — the manifest always says which of these it was, so
+# "the admin opted out" can't be mistaken for "storage is broken" (they
+# previously produced an identical, unexplained metadata-only ZIP).
+DOC_STATUS_INCLUDED = "included"
+DOC_STATUS_EXCLUDED = "excluded_by_request"
+DOC_STATUS_NO_KEY = "unavailable_no_storage_key"
+DOC_STATUS_FETCH_FAILED = "unavailable_fetch_failed"
+
+
 async def _fetch_document_bytes(storage_key: str) -> Optional[bytes]:
     """Download a document's raw bytes. Returns None (not raised) on failure so a
     single unreadable document doesn't abort the whole bundle — the caller
-    records the miss in the bundle's manifest instead."""
+    records the miss in the bundle's manifest instead.
+
+    Logged at error, not warning: these bundles back regulatory/insurer-facing
+    transfers, so a document the operator asked for and did not get is
+    actionable, not a recoverable anomaly (CLAUDE.md "do not silently swallow
+    errors"). The bundle continues deliberately — aborting would lose the
+    other 99 entities over one bad object — and the miss is reported in the
+    manifest rather than dropped."""
     if not supabase:
+        logger.error("data-transfer export: no storage client; cannot fetch document key=%s", storage_key)
         return None
     loop = asyncio.get_running_loop()
     try:
@@ -43,7 +62,7 @@ async def _fetch_document_bytes(storage_key: str) -> Optional[bytes]:
             None, lambda: supabase.storage.from_(DOCUMENT_STORAGE_BUCKET).download(storage_key)
         )
     except Exception as exc:
-        logger.warning("data-transfer export: failed to fetch document key=%s: %s", storage_key, exc)
+        logger.error("data-transfer export: failed to fetch document key=%s: %s", storage_key, exc, exc_info=True)
         return None
 
 
@@ -118,17 +137,34 @@ async def gather_entity_bundle(
 
     # Attach raw bytes for each document that resolves to a storage key. A
     # document whose bytes can't be fetched still appears in the manifest
-    # (metadata intact) but with document_bytes=None — the ZIP builder skips
+    # (metadata intact) but with _content=None — the ZIP builder skips
     # writing a file for it and the import side must not assume every listed
-    # document has a payload. When include_document_bytes is False, every
-    # document is deliberately left content=None the same way a fetch
-    # failure would — the ZIP builder's existing "no payload" handling
-    # covers this without any new branch there.
+    # document has a payload.
+    #
+    # Each payload also carries _content_status explaining WHY there is or
+    # isn't a file. Opting out (include_document_bytes=False) and a genuine
+    # storage failure both leave _content=None, and until this was recorded
+    # they produced byte-identical metadata-only ZIPs with no way to tell
+    # them apart — the reported "export gives me metadata, not the document"
+    # bug was the opt-out case, indistinguishable from a broken bucket.
     doc_payloads = []
     for doc in documents:
         storage_key = _extract_storage_key(doc.get("document_url") or "")
-        content = await _fetch_document_bytes(storage_key) if (storage_key and include_document_bytes) else None
-        doc_payloads.append({**doc, "_storage_key": storage_key, "_content": content})
+        if not include_document_bytes:
+            content, status = None, DOC_STATUS_EXCLUDED
+        elif not storage_key:
+            # An unparseable document_url is a data defect, not an opt-out:
+            # the row claims a document exists but points nowhere we can read.
+            logger.error(
+                "data-transfer export: no storage key for document id=%s type=%s (document_url unparseable)",
+                doc.get("id"),
+                doc.get("document_type"),
+            )
+            content, status = None, DOC_STATUS_NO_KEY
+        else:
+            content = await _fetch_document_bytes(storage_key)
+            status = DOC_STATUS_INCLUDED if content is not None else DOC_STATUS_FETCH_FAILED
+        doc_payloads.append({**doc, "_storage_key": storage_key, "_content": content, "_content_status": status})
 
     return {
         "entity_type": entity_type,

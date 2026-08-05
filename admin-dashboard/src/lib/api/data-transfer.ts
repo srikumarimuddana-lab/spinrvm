@@ -210,6 +210,44 @@ export async function generateSgiForm(
     return res.blob();
 }
 
+export interface SgiSupportingDocumentsResult {
+    blob: Blob;
+    /** Documents listed in the bundle, and how many of those actually have a
+     *  file in it. Read from the response headers so the caller can say
+     *  "12 of 14 included" without unzipping; the ZIP's own documents.csv
+     *  carries the per-document reason. */
+    listed: number;
+    included: number;
+}
+
+/** ZIP of the selected drivers' supporting scans, for filing alongside a
+ *  D00032/D00033 submission. Binary response, so same manual authed-fetch
+ *  pattern as generateSgiForm above. */
+export async function downloadSgiSupportingDocuments(
+    driverIds: string[],
+    reason: string,
+    docTypes?: string[],
+): Promise<SgiSupportingDocumentsResult> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/documents", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds, reason, doc_types: docTypes ?? null }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not download documents (${res.status})`);
+    }
+    return {
+        blob: await res.blob(),
+        listed: Number(res.headers.get("X-Documents-Listed") ?? 0),
+        included: Number(res.headers.get("X-Documents-Included") ?? 0),
+    };
+}
+
 // ─── Compliance & Tax Reporting ────────────────────────────────────────
 
 export type ComplianceReportFormat = "pdf" | "csv" | "xlsx" | "docx";

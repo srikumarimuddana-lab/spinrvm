@@ -161,10 +161,56 @@ No data-level remediation is possible or needed: this change writes nothing to
 Spinr's database. The one external write (issue status in Sentry) is reversible
 in-product via the Reopen action, or directly in sentry.io.
 
+## 8b. Review-round fixes (2026-08-02)
+
+A pre-merge review of the branch found nine issues; all are fixed in the
+follow-up commit. Each is listed with what it risked, because several change
+behaviour rather than just adding code.
+
+| # | Issue | Fix | Risk if left |
+|---|---|---|---|
+| 1 | Two unit tests called the route functions directly, so FastAPI's `Query(...)` sentinel objects flowed in as real values and the surface guard rejected them | Route bodies extracted into plain-argument impls (`_sentry_config`, `_list_issues`, `_get_issue`, `_update_issue_status`); tests drive those | Test suite red; the two behaviours they cover (cross-project merge/sort, `truncated`) were effectively unverified |
+| 2 | `asyncio.gather` without `return_exceptions` inside `async with httpx.AsyncClient` | `return_exceptions=True` on both fan-outs; per-surface `errors[]` + `partial` in the response, 502 only when **every** surface fails | One typo'd `SENTRY_PROJECT_*` slug blanked the whole triage view, and the client closed under still-in-flight sibling requests |
+| 3 | Status-change wrote only an app log line | `log_admin_action(..., "sentry_issue_status_change", "sentry_issue", ...)` → `audit_logs` | Violates the observability convention (admin actions → audit table); no durable record of who closed which production issue |
+| 4 | All event tags relayed verbatim to the browser | `_TAG_ALLOWLIST` — allowlist, not denylist; everything else dropped | SDK-auto-attached `url` / `user` / `server_name` tags sit outside each surface's `beforeSend` scrubbing and could surface addresses and emails on an admin screen (PIPEDA) |
+| 5 | `issue_id` interpolated into the Sentry API path unvalidated | `_validate_issue_id()` — digits only, rejected before any upstream call | A value with `../` or `?` reshapes the request into a different Sentry endpoint |
+| 6 | Any issue in the whole Sentry org was readable **and resolvable** by id | `_resolve_surface()` 404s anything outside `SENTRY_PROJECT_*`; the status endpoint checks before the `PUT` | An org-shared Sentry account made this an org-wide read/write console, not a Spinr viewer |
+| 7 | `_ALLOWED_STATUSES`, the list guard, and its error message disagreed (`muted` accepted by one only) | Single `_ALLOWED_STATUSES` tuple used by both endpoints and both messages | `?status=muted` offered a filter the update endpoint can never set, and a rejected `is:muted` search surfaced as an opaque 502 |
+| 8 | No rate limit on a fan-out proxy | `@limiter.limit` — 60/min reads, 20/min writes | A dashboard tab in a reload loop could burn the Sentry org's API quota for everyone |
+| 9 | Frame context matched on `pair[0] == lineNo` even when `lineNo` is `None` | Guarded on `line_no is not None` | Minified JS frames could show an unrelated source line as the crash line |
+
+Two smaller ones alongside: handlers now declare `Depends(require_super_admin)`
+themselves (not only at the mount, matching `stripe_payout_sync`), and the
+frontend fetch uses a monotonic sequence token so a Refresh racing an in-flight
+filter change cannot land out of order.
+
+**User-experience effect of the review round:** the issues list can now render a
+yellow "Partial results — N surfaces failed to load" card above the list, and the
+all-clear empty state is suppressed while any surface failed. The detail dialog
+shows an explicit "Could not load the latest event" line instead of the
+ambiguous "No stacktrace on the latest event." Tag chips show fewer keys than
+before. No other visible change; the surface is not yet enabled in production
+(no `SENTRY_API_TOKEN` set), so nothing here is visible mid-session to a user.
+
 ## 9. Verification performed
 
-- [x] **Backend lint:** `ruff check` clean on `routes/admin/sentry.py`,
-      `routes/admin/__init__.py`, `core/config.py`, `tests/test_admin_sentry.py`.
+- [x] **Backend tests RUN and passing:** `pytest backend/tests/test_admin_sentry.py`
+      → **36 passed**. (Before the review round: 20 passed, 2 failed — see §8b #1.)
+      Fourteen tests were added covering the tag allowlist, issue-id validation,
+      out-of-project rejection, per-surface degradation, the all-surfaces 502,
+      the audit-log write, and the `lineNo=None` frame guard.
+- [x] **Production build RUN and passing:** `npm run build` in `admin-dashboard`
+      → exit 0, full route table emitted including `/dashboard/sentry-logs`.
+      `npx tsc --noEmit` reports no errors in any Sentry file (the errors it does
+      report are pre-existing, in unrelated `*.test.tsx` files). `npx eslint` on
+      the two changed frontend files: 0 errors, 2 warnings (both the pre-existing
+      `set-state-in-effect` pattern).
+- [x] **Route registration verified** by importing the app: all four
+      `/api/admin/sentry/*` routes register cleanly with the new rate-limit
+      decorators and `require_super_admin` handler dependencies.
+- [x] **Backend lint:** `ruff check` and `ruff format --check` clean on
+      `routes/admin/sentry.py`, `routes/admin/__init__.py`, `core/config.py`,
+      `tests/test_admin_sentry.py`.
 - [x] **Static parse check** of both new Python files.
 - [x] **Blast-radius greps performed** — listed explicitly in §4: consumers of
       `sidebar.tsx`, name collisions in the `lib/api.ts` barrel, pre-existing
@@ -184,18 +230,14 @@ in-product via the Reopen action, or directly in sentry.io.
 
 ### What was NOT verified — read this before merging
 
-- **No test was executed.** The sandbox has no network access to PyPI, so the
-  backend dependencies (`fastapi`, `httpx`, `pytest`) could not be installed and
-  `pytest backend/tests/test_admin_sentry.py` was **never run**. The tests were
-  written to mirror the existing `test_admin_monitoring_coverage.py` patterns
-  and are lint- and parse-clean, but their pass/fail status is **unknown** until
-  CI runs them.
-- **No production build was run.** `npm ci` fails in this sandbox (the npm
-  registry is blocked by the environment's network policy), so
-  `npm run build` and `tsc --noEmit` for `admin-dashboard` were **not run**.
-  Per `CLAUDE.md` this is exactly the gate that must not be silently skipped:
-  **someone must run `npm run build` before merging.** The frontend was instead
-  reviewed statically against the existing components' real export lists.
+- **The build ran against a hardlinked `node_modules`** copied from an existing
+  install in the same container, not a fresh `npm ci`. The compile is real, but
+  a dependency-resolution problem would not show up this way — CI's own install
+  is still the authority on that.
+- **Only `test_admin_sentry.py` was run**, not the full backend suite. The
+  change is additive to a new module plus one appended router mount, so the
+  blast radius on other tests is a mount-ordering change at most — but the
+  full-suite result comes from CI, not from here.
 - **Not exercised against a real Sentry org.** Every Sentry response shape here
   (issue fields, `entries[].type == "exception"`, frame `context` pairs) comes
   from the documented Sentry Web API, not from a live call. The first run against
@@ -215,6 +257,11 @@ in-product via the Reopen action, or directly in sentry.io.
       component touched and its one consumer.
 - [x] No silent behavior change to an already-shipped flow — the change is
       additive, and the only shared-file edit is one appended nav entry.
-- [ ] **Blocked on:** `npm run build` (admin-dashboard) and
-      `pytest backend/tests/test_admin_sentry.py` must both pass in CI before
-      this merges. Neither could run in the authoring environment.
+- [x] **Previously blocked on** `npm run build` (admin-dashboard) and
+      `pytest backend/tests/test_admin_sentry.py`. Both have now been run and
+      pass — see §9. The pytest run initially failed (2 of 22), which is what
+      surfaced fix #1 in §8b.
+- [x] Review-round fixes in §8b are each covered by a test or a build/lint run,
+      except the rate limits (#8), which are a slowapi decorator exercised only
+      by route registration — the limiter itself is covered by the repo's
+      existing rate-limiter tests.

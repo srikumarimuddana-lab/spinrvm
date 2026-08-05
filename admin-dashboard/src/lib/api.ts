@@ -7,6 +7,7 @@
 export { API_BASE, RateLimitError, request } from "./api/client";
 export {
     getDriverDocuments,
+    downloadDriverDocument,
     reviewDocument,
     adminUploadDriverDocument,
     getDriverNotes,

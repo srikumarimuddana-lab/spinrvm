@@ -153,7 +153,13 @@ async def gather_entity_bundle(
     else:
         rides = await db_supabase.get_rows("rides", {"rider_id": entity_id}, limit=500, order="created_at", desc=True)
 
-    if doc_types:
+    # `is not None`, not truthiness: an EMPTY list means "no document types
+    # selected" and must yield no documents. Treating [] as falsy (the
+    # previous behavior) skipped the filter entirely and returned EVERY
+    # document type -- the exact opposite of what was asked, and an
+    # over-collection bug under PIPEDA data minimization. Reachable from the
+    # UI by unticking every document type. `None` still means "no filter".
+    if doc_types is not None:
         documents = [d for d in documents if d.get("document_type") in doc_types]
 
     if not include_ride_gps:
@@ -188,7 +194,21 @@ async def gather_entity_bundle(
             content, status = None, DOC_STATUS_NO_KEY
         else:
             content = await _fetch_document_bytes(storage_key)
-            status = DOC_STATUS_INCLUDED if content is not None else DOC_STATUS_FETCH_FAILED
+            # Truthiness, not `is not None`: a zero-byte download is not a
+            # usable document, and the ZIP builder writes no file for it
+            # either. Calling it "included" would put a row in the manifest
+            # claiming a file that isn't in the bundle.
+            if content:
+                status = DOC_STATUS_INCLUDED
+            else:
+                if content is not None:
+                    logger.error(
+                        "data-transfer export: storage returned 0 bytes for document id=%s type=%s key=%s",
+                        doc.get("id"),
+                        doc.get("document_type"),
+                        storage_key,
+                    )
+                status = DOC_STATUS_FETCH_FAILED
         doc_payloads.append({**doc, "_storage_key": storage_key, "_content": content, "_content_status": status})
 
     return {

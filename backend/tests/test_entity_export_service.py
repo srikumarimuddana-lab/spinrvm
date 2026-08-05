@@ -381,3 +381,55 @@ async def test_gather_entity_bundles_threads_doc_file_types_through(monkeypatch)
     by_id = {d["id"]: d for d in bundles[0]["documents"]}
     assert by_id["doc-bg"]["_content"] == b"BGBYTES"
     assert by_id["doc-dl"]["_content"] is None
+
+
+@pytest.mark.anyio
+async def test_empty_doc_types_selects_no_documents(monkeypatch):
+    """Regression: `if doc_types:` treated [] as falsy and skipped the filter,
+    returning EVERY document type when the admin had deselected them all —
+    the opposite of the request, and over-collection under PIPEDA."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_types=[])
+
+    assert bundle["documents"] == []
+
+
+@pytest.mark.anyio
+async def test_none_doc_types_still_means_every_type(monkeypatch):
+    """The other half of the contract: None is "no filter", not "nothing"."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_types=None)
+
+    assert {d["document_type"] for d in bundle["documents"]} == {"background_check", "drivers_license"}
+
+
+@pytest.mark.anyio
+async def test_zero_byte_download_is_a_failure_not_an_include(monkeypatch):
+    """A 0-byte object produces no file in the ZIP, so it must not be
+    reported as included — the manifest would name a file that isn't there."""
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "drivers": [{"id": "drv1", "user_id": "u1"}],
+            "notification_preferences": [],
+            "rides": [],
+            "driver_documents": [
+                {
+                    "id": "doc-empty",
+                    "driver_id": "drv1",
+                    "document_type": "background_check",
+                    "document_url": "https://x.supabase.co/storage/v1/object/sign/driver-documents/empty.jpg",
+                }
+            ],
+            "driver_insurance_periods": [],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+    _install_fake_storage(monkeypatch, {"empty.jpg": b""})
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_file_types=["background_check"])
+
+    assert bundle["documents"][0]["_content_status"] == svc.DOC_STATUS_FETCH_FAILED

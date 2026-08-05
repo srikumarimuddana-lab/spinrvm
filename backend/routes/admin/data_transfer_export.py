@@ -122,7 +122,11 @@ def _gate_params(body: "ExportRequest") -> dict:
     safe direction to fail."""
     return {
         "entities": sorted([[e.entity_type, e.entity_id] for e in body.entities]),
-        "doc_types": sorted(body.doc_types) if body.doc_types else None,
+        # `is not None`, matching the export service: [] (no document types)
+        # and None (every document type) are opposite requests and must not
+        # collapse to the same signature, or an approval granted for a
+        # no-documents export would satisfy an all-documents one.
+        "doc_types": sorted(body.doc_types) if body.doc_types is not None else None,
         "format": body.format,
         "include_ride_gps": body.include_ride_gps,
         "include_document_bytes": body.include_document_bytes,

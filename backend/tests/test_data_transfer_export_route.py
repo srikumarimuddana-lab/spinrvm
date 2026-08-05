@@ -348,3 +348,19 @@ def test_gate_params_distinguish_omitted_from_empty_doc_file_types():
     }
     assert _gate_params(ExportRequest(**base))["doc_file_types"] is None
     assert _gate_params(ExportRequest(**base, doc_file_types=[]))["doc_file_types"] == []
+
+
+def test_gate_params_distinguish_empty_from_omitted_doc_types():
+    """[] (no document types) and None (every document type) are opposite
+    requests — collapsing them would let an approval granted for a
+    no-documents export satisfy an all-documents one."""
+    from backend.routes.admin.data_transfer_export import ExportRequest, _gate_params
+
+    base = {
+        "entities": [{"entity_type": "driver", "entity_id": "d1"}],
+        "reason": _VALID_REASON,
+        "format": "zip",
+    }
+    assert _gate_params(ExportRequest(**base, doc_types=None))["doc_types"] is None
+    assert _gate_params(ExportRequest(**base, doc_types=[]))["doc_types"] == []
+    assert _gate_params(ExportRequest(**base, doc_types=None)) != _gate_params(ExportRequest(**base, doc_types=[]))

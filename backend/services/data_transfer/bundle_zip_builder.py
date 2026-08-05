@@ -58,16 +58,32 @@ def _document_file_path(doc: dict[str, Any]) -> str:
     return f"documents/{doc_type}_{doc.get('id', '')}.{ext}"
 
 
+def _has_file(doc: dict[str, Any]) -> bool:
+    """Whether this document contributes an actual file to the ZIP.
+
+    Single source of truth for both the manifest and the write loop below —
+    if they used separate predicates they could disagree, and a manifest that
+    disagrees with the archive it describes is the whole class of bug this
+    module is trying to eliminate."""
+    return bool(doc.get("_content"))
+
+
 def _document_status(doc: dict[str, Any]) -> str:
     """Why this document does or doesn't have a file in the bundle.
 
     Falls back to inferring from _content for payloads built without an
     explicit status (older callers and the pure-function unit tests), so a
-    missing status never reads as a successful include."""
+    missing status never reads as a successful include.
+
+    A payload claiming "included" while carrying no usable bytes (e.g. a
+    zero-byte object) is downgraded rather than trusted: this manifest
+    describes THIS archive, and no file was written for it."""
     status = doc.get("_content_status")
-    if status:
+    if _has_file(doc):
+        return str(status) if status else _STATUS_INCLUDED
+    if status and str(status) != _STATUS_INCLUDED:
         return str(status)
-    return _STATUS_INCLUDED if doc.get("_content") else _STATUS_UNAVAILABLE
+    return _STATUS_UNAVAILABLE
 
 
 def _document_manifest(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -82,7 +98,7 @@ def _document_manifest(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         status = _document_status(doc)
         row = {k: v for k, v in doc.items() if k not in _INTERNAL_DOC_KEYS}
         row["file_export_status"] = status
-        row["bundled_file"] = _document_file_path(doc) if doc.get("_content") else ""
+        row["bundled_file"] = _document_file_path(doc) if _has_file(doc) else ""
         rows.append(row)
     return rows
 
@@ -183,10 +199,9 @@ def build_export_zip(bundles: list[dict[str, Any]]) -> bytes:
             # its documents.csv row carries file_export_status saying whether
             # it was excluded by request or genuinely unavailable.
             for doc in documents:
-                content = doc.get("_content")
-                if not content:
+                if not _has_file(doc):
                     continue
-                zf.writestr(f"{folder}/{_document_file_path(doc)}", content)
+                zf.writestr(f"{folder}/{_document_file_path(doc)}", doc["_content"])
 
             raw = {
                 "entity_type": bundle["entity_type"],

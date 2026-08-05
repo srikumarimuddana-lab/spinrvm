@@ -26,6 +26,8 @@ Two compounding causes:
 
 A genuine storage fault would have looked exactly the same as the reported case — this diagnosis is only possible now because the fix makes the two distinguishable.
 
+A follow-up round (same branch) replaced the global toggle entirely — see §3b. The operator's stated need was per-document control: *"if I need metadata I can checklist, if I want the image I should be able to select what document I can export."* One all-or-nothing switch forced a choice between no files and every file, which is both a worse workflow and a worse data-minimization posture than exporting only the one document an insurer actually asked for.
+
 ## 3. Fix / remediation
 
 Kept the privacy-preserving default OFF; removed the silence around it.
@@ -33,6 +35,27 @@ Kept the privacy-preserving default OFF; removed the silence around it.
 - **Backend**: every document payload now carries `_content_status` (`included` / `excluded_by_request` / `unavailable_no_storage_key` / `unavailable_fetch_failed`). Surfaced in `documents.csv` and `raw_data.json` as `file_export_status`, plus a `bundled_file` column pointing at the file inside the entity folder. `README.txt` now reports actual counts, explains the metadata-only case and how to re-run for files, flags unretrievable documents as a fault, and no longer lists a `documents/` section when it wrote no files.
 - **Frontend**: an inline amber warning appears whenever a ZIP export has document types checked but "Document file contents" off, with a one-click "Include them"; the "Export ready" toast repeats the caveat at download time.
 - **Observability**: storage fetch failures and unparseable `document_url`s moved from `logger.warning`+continue to `logger.error` (CLAUDE.md "do not silently swallow errors"). The bundle still continues rather than aborting — one bad object must not lose the other 99 entities — but the miss is now recorded in the manifest instead of dropped.
+
+## 3b. Follow-up: per-document-type file selection
+
+The single global "Document file contents" checkbox is gone. The Export tab now shows a table with one row per document type and two columns:
+
+| | Metadata (record only) | File (scan / image / PDF) |
+|---|---|---|
+| Driver's Licence | ☐ | ☐ |
+| Background / Criminal Record Check | ☑ | ☑ |
+| … | | |
+
+- Ticking **File** implies **Metadata** (no unreachable "file but not listed" state); unticking **Metadata** drops the file request too.
+- New `doc_file_types: Optional[list[str]]` on `ExportRequest`. `None` = no per-type opinion, falls back to the existing `include_document_bytes` (API back-compat). A list — **including an empty one** — takes precedence.
+- The empty-list case is the sharp edge: `[]` must mean "no files", not fall through to `include_document_bytes`'s default of `True`. The client sends `?? null` rather than leaving the key undefined so an explicit `[]` survives `JSON.stringify`. Covered by `test_empty_doc_file_types_is_metadata_only_not_everything`.
+- README wording is now conditional on the mix: "all N documents are metadata only" (no files ticked) vs. "N of M …" (deliberate partial selection). The earlier wording claimed file contents "was not enabled", which is false for a mixed selection and referenced a checkbox that no longer exists.
+
+**Security note — dual-approval gate.** `doc_file_types` is bound into `_gate_params`. Without it, an approval granted for a metadata-only export would also satisfy a re-run that pulls the document files, letting the second request widen what the first was approved for. Three tests cover the binding, order-independence, and the `None` vs `[]` distinction.
+
+**Consequence of that binding:** approval grants and pending requests created *before* this change have params without the `doc_file_types` key and will no longer match. Any in-flight export awaiting approval at deploy time needs re-requesting. This fails closed (re-approval required) rather than open, which is the correct direction, but it is a real operational effect — if the `dual_approval_exports_enabled` flag is on at deploy time, warn the approvals queue.
+
+`doc_file_types` is recorded in the `log_admin_action` audit payload rather than on the job row: `data_transfer_export_jobs` has no column for it and adding one would need a migration for what is purely accountability metadata. Which document *files* left the system is exactly what an auditor asks about, so it is captured — just in the audit trail, not the job table. A follow-up could add a real column if the Jobs & History UI should display it.
 
 ## 4. Risk & impact on existing functionality
 
@@ -71,7 +94,11 @@ Copy is specific, non-technical, and actionable ("This ZIP will contain document
 | `backend/services/data_transfer/bundle_zip_builder.py` | `file_export_status` + `bundled_file` manifest columns; conditional, count-reporting README; extracted `_document_file_path` | Make the bundle self-describing; stop promising files it did not write |
 | `backend/services/data_transfer/bundle_document_uploader.py` | Extension resolution prefers `bundled_file`, falls back to `_storage_key` | Harden the round-trip against the manifest shape change |
 | `admin-dashboard/src/app/dashboard/data-transfer/ExportTab.tsx` | `metadataOnlyDocuments` state warning + "Include them" action + toast caveat | Fix the actual reported confusion at the point of decision and again at download |
-| `backend/tests/test_data_transfer_zip_builder.py` | 5 new regression tests | Lock the opt-out/fault distinction and the `_storage_key` import contract |
+| `backend/tests/test_data_transfer_zip_builder.py` | 6 new regression tests | Lock the opt-out/fault distinction, the `_storage_key` import contract, and mixed-selection README wording |
+| `backend/routes/admin/data_transfer_export.py` | `doc_file_types` field, bound into `_gate_params`, threaded to the job, recorded in the audit payload | Per-document-type file selection without letting an approval be reused to widen scope |
+| `admin-dashboard/src/lib/api/data-transfer.ts` | `docFileTypes` option, sent as `null` when absent | Let an explicit empty array reach the backend as "metadata only" |
+| `backend/tests/test_entity_export_service.py` | 5 new tests | Per-type selection, empty-list semantics, precedence, back-compat, batch threading |
+| `backend/tests/test_data_transfer_export_route.py` | 3 new tests | Approval-gate binding, order-independence, `None` vs `[]` |
 
 ## 7. Before / after
 
@@ -114,7 +141,8 @@ Partial rollback is available without touching the backend: reverting `ExportTab
 
 ## 9. Verification performed
 
-- [x] **Automated tests run.** `pytest backend/tests/ -k "data_transfer or bundle or export or sgi or document"` → **440 passed, 1 skipped**. Includes 5 new unit tests in `test_data_transfer_zip_builder.py` covering: opt-out vs. fetch-failure distinguishability, README metadata-only explanation, README fault warning, manifest→file path resolution, and included-file counts.
+- [x] **Automated tests run.** `pytest backend/tests/ -k "data_transfer or bundle or export or sgi or document or approval"` → **463 passed, 1 skipped**. 14 new tests total: 6 in `test_data_transfer_zip_builder.py` (opt-out vs. fetch-failure distinguishability, metadata-only README, fault warning, manifest→file path resolution, included-file counts, mixed-selection wording), 5 in `test_entity_export_service.py` (per-type selection, empty-list semantics, precedence over `include_document_bytes`, `None` back-compat, batch threading), 3 in `test_data_transfer_export_route.py` (approval-gate binding, order-independence, `None` vs `[]`).
+- [x] **End-to-end bundle generated and inspected** for three selections (no files / all files / background-check-only) by driving `gather_entity_bundle` → `build_export_zip` with mocked storage, and unzipping the result. Confirmed the mixed case writes `documents/background_check_doc-bg.jpg`, lists the licence as `excluded_by_request` with a blank `bundled_file`, and produces the "1 of 2" README wording.
 - [x] **Real production build run** — `cd admin-dashboard && npm run build` (Next.js production build) exits 0. Not a dev server, not `tsc --noEmit` alone. `npx eslint ExportTab.tsx` clean. Admin-dashboard vitest suite: 160 passed / 20 files.
 - [x] **Backend lint/format** — `ruff format` applied to changed files; `ruff check` on the changed directory reports only 2 pre-existing errors on lines this change does not touch (`entity_import_service.py:141` F841, `entity_export_service.py:197` B905). Repo-wide `ruff check .` reports 35 pre-existing errors, so this is not a clean gate today — no new errors introduced.
 - [x] **Blast-radius grep performed** — searched all non-test Python for `_storage_key`, `_content_status`, `_document_manifest`, `documents.csv`, `raw_data.json`, `bundled_file`, `file_export_status`. This is what caught the `bundle_document_uploader.py` extension regression before it shipped (see §4).
@@ -126,7 +154,8 @@ Partial rollback is available without touching the backend: reverting `ExportTab
 - **Not tested against live Supabase.** No export was run end-to-end against a real `driver-documents` bucket. All backend verification is unit-level against constructed bundle dicts; `_fetch_document_bytes` and the storage download path were not exercised against real storage. Specifically, the `unavailable_fetch_failed` and `unavailable_no_storage_key` branches are covered at the ZIP-builder layer but their *triggering* in `entity_export_service` was not observed against a real bucket.
 - **The user's original failing export was not reproduced against their data.** The diagnosis (opt-out, not fault) is inferred from the code path and the default value, and is consistent with the report. If their `background_check` documents *also* have unreadable `document_url`s, that is a second, separate defect this change does not fix — but it now reports it: after this change their ZIP's `documents.csv` will say `excluded_by_request` (setting) or `unavailable_*` (fault), which settles it definitively on the next export.
 - **No visual regression tooling exists for admin-dashboard**, so the new warning banner's appearance — including its dark-mode variant — was reasoned about against sibling components' Tailwind classes, not screenshotted or snapshot-tested. This is the standing gap already noted in CLAUDE.md release gate #6.
-- **No new frontend unit test** for the warning's render condition; the `metadataOnlyDocuments` logic is covered by inspection and the production build only. `ExportTab.tsx` has no existing test file to extend.
+- **No new frontend unit test** for the warning's render condition or the new checkbox grid; `metadataOnlyDocuments`, `toggleDocFileType`'s implication rules, and `toggleAllFiles` are covered by inspection and the production build only. `ExportTab.tsx` has no existing test file to extend. The backend equivalents of those semantics (empty list, precedence, back-compat) *are* covered.
+- **The dual-approval re-approval effect was reasoned about, not exercised.** `dual_approval_exports_enabled` is off by default, so no live grant is believed to be in flight — but this was not checked against the live `app_settings` value or the approvals queue.
 - **Import round-trip not executed end-to-end.** The `bundle_document_uploader` fallback is covered by existing tests passing plus the grep, not by an export→import cycle against two live environments.
 
 ## 10. Sign-off

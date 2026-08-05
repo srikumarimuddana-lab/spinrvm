@@ -179,10 +179,14 @@ class TestInsuranceBillingDetailRows:
                 ]
             if table == "drivers":
                 return [{"id": "d1", "name": "Jane Doe", "first_name": "Jane", "last_name": "Doe"}]
+            if table == "rides":
+                return [{"id": "r1", "service_area_id": "sa1"}]
+            if table == "service_areas":
+                return [{"id": "sa1", "name": "Saskatoon"}]
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, grand_total_km, truncated, _groups = asyncio.run(
+            rows, grand_total_km, truncated, _groups, _unattributed = asyncio.run(
                 compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
             )
 
@@ -195,6 +199,7 @@ class TestInsuranceBillingDetailRows:
             {
                 "driver_name": "Jane Doe",
                 "trip_date": "2026-07-01 09:00 UTC",
+                "service_area": "Saskatoon",
                 "phase": "2 — En route to pickup (primary commercial)",
                 "phase_km": "1.500",
                 "rate_per_km": "$0.110",
@@ -251,7 +256,7 @@ class TestInsuranceBillingDetailRows:
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, grand_total_km, _truncated, groups = asyncio.run(
+            rows, grand_total_km, _truncated, groups, _unattributed = asyncio.run(
                 compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
             )
 
@@ -276,7 +281,7 @@ class TestInsuranceBillingDetailRows:
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, grand_total_km, truncated, groups = asyncio.run(
+            rows, grand_total_km, truncated, groups, _unattributed = asyncio.run(
                 compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"))
             )
 
@@ -340,3 +345,282 @@ class TestLogComplianceExport:
         with patch("backend.routes.admin.compliance.db_supabase.insert_one", AsyncMock(side_effect=insert_one_side)):
             # Must not raise.
             asyncio.run(compliance._log_compliance_export({"id": "admin1"}, "gst_pst_remittance", {}, 0))
+
+
+class TestServiceAreaScoping:
+    """Service-area scoping for the insurance-billing and airport-trip reports.
+
+    The reason this exists (Calgary gap 2.1): both rates are per-insurer and
+    per-province. SGI is a Saskatchewan Crown insurer and does not operate in
+    Alberta, so an unfiltered SGI export once Calgary is live would invoice a
+    second province's kilometres to an insurer that never covered them —
+    silently, with no error surface.
+    """
+
+    def test_selecting_a_city_includes_its_airport_sub_area(self):
+        """The one that is easy to get wrong.
+
+        Airport zones are their own service_areas rows linked by
+        parent_service_area_id (migration 08), and a ride picked up at the
+        airport resolves to the CHILD area — so rides.service_area_id holds
+        the airport's id, not the city's. Filtering on the city id alone would
+        drop every airport trip from the invoice.
+        """
+        queried_parent_filters = []
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_period_distances":
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r_city",
+                        "period": 2,
+                        "distance_km": 4.0,
+                        "started_at": "2026-07-01T09:00:00Z",
+                    },
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r_airport",
+                        "period": 3,
+                        "distance_km": 20.0,
+                        "started_at": "2026-07-01T10:00:00Z",
+                    },
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r_other",
+                        "period": 3,
+                        "distance_km": 99.0,
+                        "started_at": "2026-07-01T11:00:00Z",
+                    },
+                ]
+            if table == "rides":
+                return [
+                    {"id": "r_city", "service_area_id": "yyc"},
+                    {"id": "r_airport", "service_area_id": "yyc_airport"},
+                    {"id": "r_other", "service_area_id": "saskatoon"},
+                ]
+            if table == "service_areas":
+                if filters and "parent_service_area_id" in filters:
+                    queried_parent_filters.append(filters)
+                    return [{"id": "yyc_airport"}]
+                return [
+                    {"id": "yyc", "name": "Calgary"},
+                    {"id": "yyc_airport", "name": "Calgary Airport"},
+                    {"id": "saskatoon", "name": "Saskatoon"},
+                ]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe"}]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            rows, grand_total_km, _truncated, _groups, unattributed = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["yyc"])
+            )
+
+        # The child was resolved by querying on parent_service_area_id.
+        assert queried_parent_filters, "child sub-areas were never looked up"
+        # City trip + airport trip kept; the Saskatoon trip excluded.
+        assert grand_total_km == Decimal("24.0")
+        assert {r["service_area"] for r in rows} == {"Calgary", "Calgary Airport"}
+        assert unattributed == 0
+
+    def test_selecting_only_the_airport_does_not_pull_in_the_parent_city(self):
+        """ "Just the airport" is a legitimate scope — expansion is one-way."""
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_period_distances":
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r_city",
+                        "period": 2,
+                        "distance_km": 4.0,
+                        "started_at": "2026-07-01T09:00:00Z",
+                    },
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r_airport",
+                        "period": 3,
+                        "distance_km": 20.0,
+                        "started_at": "2026-07-01T10:00:00Z",
+                    },
+                ]
+            if table == "rides":
+                return [
+                    {"id": "r_city", "service_area_id": "yyc"},
+                    {"id": "r_airport", "service_area_id": "yyc_airport"},
+                ]
+            if table == "service_areas":
+                if filters and "parent_service_area_id" in filters:
+                    return []  # the airport has no children of its own
+                return [{"id": "yyc", "name": "Calgary"}, {"id": "yyc_airport", "name": "Calgary Airport"}]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe"}]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            rows, grand_total_km, _t, _g, _u = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["yyc_airport"])
+            )
+
+        assert grand_total_km == Decimal("20.0")
+        assert [r["service_area"] for r in rows] == ["Calgary Airport"]
+
+    def test_no_filter_returns_every_area_unchanged(self):
+        """Back-compat: the historical callers passed no scope and must keep
+        seeing every area."""
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_period_distances":
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r1",
+                        "period": 2,
+                        "distance_km": 4.0,
+                        "started_at": "2026-07-01T09:00:00Z",
+                    },
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r2",
+                        "period": 3,
+                        "distance_km": 6.0,
+                        "started_at": "2026-07-01T10:00:00Z",
+                    },
+                ]
+            if table == "rides":
+                return [{"id": "r1", "service_area_id": "yyc"}, {"id": "r2", "service_area_id": "saskatoon"}]
+            if table == "service_areas":
+                return [{"id": "yyc", "name": "Calgary"}, {"id": "saskatoon", "name": "Saskatoon"}]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe"}]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            _rows, grand_total_km, _t, _g, unattributed = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), None)
+            )
+
+        assert grand_total_km == Decimal("10.0")
+        assert unattributed == 0
+
+    def test_unattributable_rows_are_counted_not_silently_dropped(self):
+        """A billable row whose ride has no service_area_id cannot be scoped.
+        Excluding it is right; excluding it *quietly* is not — an insurer
+        reconciling a short invoice must be told kilometres were withheld."""
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_period_distances":
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r_ok",
+                        "period": 2,
+                        "distance_km": 4.0,
+                        "started_at": "2026-07-01T09:00:00Z",
+                    },
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r_orphan",
+                        "period": 3,
+                        "distance_km": 7.0,
+                        "started_at": "2026-07-01T10:00:00Z",
+                    },
+                ]
+            if table == "rides":
+                return [
+                    {"id": "r_ok", "service_area_id": "yyc"},
+                    {"id": "r_orphan", "service_area_id": None},
+                ]
+            if table == "service_areas":
+                if filters and "parent_service_area_id" in filters:
+                    return []
+                return [{"id": "yyc", "name": "Calgary"}]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe"}]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            _rows, grand_total_km, _t, _g, unattributed = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["yyc"])
+            )
+
+        assert grand_total_km == Decimal("4.0")
+        assert unattributed == 1
+
+    def test_expansion_failure_raises_rather_than_narrowing_the_report(self):
+        """If the child lookup fails we cannot know the scope is complete.
+        Returning a partial invoice is the failure this whole filter exists to
+        prevent, so it must raise instead."""
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "service_areas" and filters and "parent_service_area_id" in filters:
+                raise RuntimeError("postgrest down")
+            if table == "driver_period_distances":
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r1",
+                        "period": 2,
+                        "distance_km": 4.0,
+                        "started_at": "2026-07-01T09:00:00Z",
+                    },
+                ]
+            if table == "rides":
+                return [{"id": "r1", "service_area_id": "yyc"}]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            with pytest.raises(RuntimeError):
+                asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["yyc"]))
+
+    def test_airport_trips_scoped_to_selected_areas(self):
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "rides":
+                return [
+                    {
+                        "id": "r1",
+                        "rider_id": "u1",
+                        "driver_id": "d1",
+                        "service_area_id": "yyc_airport",
+                        "pickup_address": "Calgary International Airport",
+                        "dropoff_address": "17 Ave SW",
+                        "distance_km": 18.0,
+                        "ride_completed_at": "2026-07-02T08:00:00Z",
+                    },
+                    {
+                        "id": "r2",
+                        "rider_id": "u1",
+                        "driver_id": "d1",
+                        "service_area_id": "yxe_airport",
+                        "pickup_address": "Saskatoon Airport",
+                        "dropoff_address": "Broadway Ave",
+                        "distance_km": 9.0,
+                        "ride_completed_at": "2026-07-02T09:00:00Z",
+                    },
+                ]
+            if table == "service_areas":
+                if filters and "parent_service_area_id" in filters:
+                    return [{"id": "yyc_airport"}]
+                return [{"id": "yyc_airport", "name": "Calgary Airport"}]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe", "license_plate": "ABC123"}]
+            if table == "users":
+                return [{"id": "u1", "first_name": "Sam", "last_name": "Rider"}]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            rows, _truncated = asyncio.run(compliance._airport_trips_rows(_START, _END, ["yyc"]))
+
+        # Only the Calgary airport trip — one airport authority must never be
+        # handed another airport's trips.
+        assert len(rows) == 1
+        assert rows[0]["service_area"] == "Calgary Airport"
+
+    def test_parse_service_area_ids_treats_blank_as_no_filter(self):
+        """A cleared multi-select must mean "everything", not "nothing" — an
+        empty invoice is a far worse default than an unscoped one."""
+        assert compliance._parse_service_area_ids(None) is None
+        assert compliance._parse_service_area_ids("") is None
+        assert compliance._parse_service_area_ids(" , , ") is None
+        assert compliance._parse_service_area_ids("a, b ,c") == ["a", "b", "c"]

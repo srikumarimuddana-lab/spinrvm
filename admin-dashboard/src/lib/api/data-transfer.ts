@@ -248,6 +248,40 @@ export async function downloadSgiSupportingDocuments(
     };
 }
 
+export interface SgiPackageResult {
+    blob: Blob;
+    checksIncluded: number;
+    checksMissing: number;
+}
+
+/** The complete SGI submission: both filled forms plus each driver's criminal
+ *  record check, in one ZIP. Binary response, so same manual authed-fetch
+ *  pattern as generateSgiForm. */
+export async function downloadSgiSubmissionPackage(
+    driverIds: string[],
+    reason: string,
+    action: "add" | "remove" | "change" = "add",
+): Promise<SgiPackageResult> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/package", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds, reason, action }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not build the submission package (${res.status})`);
+    }
+    return {
+        blob: await res.blob(),
+        checksIncluded: Number(res.headers.get("X-Checks-Included") ?? 0),
+        checksMissing: Number(res.headers.get("X-Checks-Missing") ?? 0),
+    };
+}
+
 // ─── Compliance & Tax Reporting ────────────────────────────────────────
 
 export type ComplianceReportFormat = "pdf" | "csv" | "xlsx" | "docx";

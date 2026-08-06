@@ -1,10 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 
-const source = fs.readFileSync(
-  path.resolve(__dirname, '..', '..', 'app', 'driver', 'ride-detail.tsx'),
-  'utf8',
-);
+// CRLF→LF — see hooks/__tests__/onlineResync.test.ts. Windows checkouts are CRLF,
+// so a needle spanning a line break would match in CI and fail only on a dev machine.
+const source = fs
+  .readFileSync(path.resolve(__dirname, '..', '..', 'app', 'driver', 'ride-detail.tsx'), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 describe('driver ride detail route presentation contract', () => {
   it('draws the real actual route through the shared RouteLine + RoutePins', () => {

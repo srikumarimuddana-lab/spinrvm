@@ -24,6 +24,17 @@ jest.mock('../../config', () => ({
   API_URL: 'http://localhost:8000',
 }));
 
+// api/client imports config/spinr.config, which imports expo-constants. Without
+// this mock the suite fails to run outside an Expo app root with
+// "Cannot read properties of undefined (reading 'EXDevLauncher')" — which is how
+// this file sat broken and unnoticed while no jest project picked the directory
+// up. client.refresh.test.ts and client.sos.test.ts already mock it; this one
+// did not.
+jest.mock('../../config/spinr.config', () => ({
+  __esModule: true,
+  default: { backendUrl: 'http://localhost:8000' },
+}));
+
 jest.mock('../../services/firebase', () => ({
   auth: { currentUser: null, onAuthStateChanged: null },
   isFirebaseConfigured: false,

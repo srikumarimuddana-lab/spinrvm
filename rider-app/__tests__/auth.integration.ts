@@ -69,33 +69,29 @@ describe('HttpOnly Cookie Auth Integration', () => {
     })
   })
 
-  describe('token refresh', () => {
-    it('should handle 401 by triggering auto-refresh', async () => {
-      /**
-       * When apiClient receives 401:
-       * 1. Intercepts response
-       * 2. Calls /auth/refresh (browser auto-sends refresh_token cookie)
-       * 3. Backend issues new auth_token cookie
-       * 4. Retries original request with new token
-       *
-       * This is handled by apiClient.interceptors.response
-       */
-      expect(true).toBe(true) // This flow is tested in apiClient tests
-    })
-
-    it('should update token expiry on refresh', async () => {
-      const expiresIn = 900 // 15 minutes
-
-      useAuthStore.setState({
-        token: 'new-access-token',
-        tokenExpiresAt: Date.now() + expiresIn * 1000,
-      })
-
-      const state = useAuthStore.getState()
-      expect(state.token).toBe('new-access-token')
-      expect(state.tokenExpiresAt).toBeGreaterThan(Date.now())
-    })
-  })
+  // ── 'token refresh' block removed 2026-07-29 ──────────────────────────────
+  // It held two tests that could not fail if production code broke:
+  //
+  //   • 'should handle 401 by triggering auto-refresh' asserted `expect(true)
+  //     .toBe(true)` with a comment describing apiClient.interceptors.response —
+  //     the axios client that was dead code and has since been deleted.
+  //   • 'should update token expiry on refresh' called useAuthStore.setState with
+  //     `Date.now() + expiresIn * 1000` computed IN THE TEST, then asserted the
+  //     value it had just stored. It exercised no production arithmetic, which is
+  //     why it stayed green through the whole release where the real setTokens()
+  //     was producing NaN from a missing `expires_in`
+  //     (docs/change-log/2026-07-29-refresh-expires-in.md).
+  //
+  // Both flows now have tests that CAN fail:
+  //   • 401 → refresh → retry, and the G2 logout boundary:
+  //     rider-app/__tests__/api-client-401-refresh.test.ts and
+  //     shared/api/__tests__/client.refresh.test.ts
+  //   • setTokens expiry derivation, including the NaN regression:
+  //     driver-app/__tests__/store/authStore.tokenExpiry.test.ts
+  //
+  // Deleted rather than rewritten here because those files already cover it
+  // properly, and a placeholder that always passes is worse than no test — it
+  // reads as coverage.
 
   describe('logout flow', () => {
     it('should clear user and tokens on logout', async () => {

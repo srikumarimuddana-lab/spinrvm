@@ -251,7 +251,12 @@ jobs:
         working-directory: rider-app
         run: yarn tsc --noEmit
 
-      - name: Run rider app tests
+      # Also runs shared/**/__tests__ — rider-app/jest.config.js adds ../shared to
+      # `roots` (see the comment there). Until 2026-07-29 that directory was run by
+      # no job at all and two of its suites were silently failing, one of them
+      # pointing at a real driver-sign-out defect. If you touch shared/, THIS is
+      # the gate that covers it.
+      - name: Run rider app + shared tests
         working-directory: rider-app
         run: yarn test --ci --coverage --forceExit --reporters=default
 

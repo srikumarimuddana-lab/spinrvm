@@ -53,6 +53,29 @@ function isApiError(e: unknown): e is {
 // expose Blob/string, so we name the RN extension to avoid `as any`.
 type RNFormFile = { uri: string; name: string; type: string };
 
+// Every storage key holding session material. ONE list, because the two places
+// that wipe session state (clearAuthStorage and logout) had drifted apart and
+// both were missing the driver app's background-task keys:
+//
+//   • clearAuthStorage cleared 3 of 6 — it left BOTH access tokens behind.
+//   • logout cleared 4 of 6 — it left the background task's cached copy behind.
+//
+// The consequence was a live access token surviving sign-out. The driver app's
+// headless location task reads `bg_access_token` directly
+// (driver-app/utils/backgroundLocation.ts::getBackgroundAuthToken) and only
+// stopBackgroundLocation() ever deleted it — which runs solely from the
+// go-offline branch of toggleOnline. A driver who signed out WITHOUT first going
+// offline therefore kept uploading location for up to the token's remaining TTL,
+// on a session they had ended. Adding a key here now covers both paths.
+const AUTH_STORAGE_KEYS = [
+  'auth_token',              // legacy; setTokens deletes it, cleared here for old installs
+  'fg_access_token',         // foreground access token, read by the driver bg task
+  'bg_access_token',         // driver bg task's own cache of the above
+  'bg_access_token_expires', // …and its expiry
+  'refresh_token',
+  'token_expires_at',
+] as const;
+
 // Wipe every auth artifact from local storage. Called whenever initialize
 // lands in a "no valid session" state so stale refresh tokens from a past
 // session can never wedge the next cold start. Previously the Firebase
@@ -64,24 +87,10 @@ type RNFormFile = { uri: string; name: string; type: string };
 async function clearAuthStorage(): Promise<void> {
   try {
     if (Platform.OS === 'web') {
-      sessionStorage.removeItem('auth_token');
-      sessionStorage.removeItem('refresh_token');
-      sessionStorage.removeItem('token_expires_at');
+      for (const key of AUTH_STORAGE_KEYS) sessionStorage.removeItem(key);
       return;
     }
-    await SecureStore.deleteItemAsync('auth_token');
-    await SecureStore.deleteItemAsync('refresh_token');
-    await SecureStore.deleteItemAsync('token_expires_at');
-    // The docstring above promises "every auth artifact", and these four were
-    // missing. fg_access_token / bg_access_token* are live driver JWTs that the
-    // headless background-location task reads directly
-    // (driver-app/utils/backgroundLocation.ts getBackgroundAuthToken). Leaving
-    // them meant a session that ended by *expiry* — this path, which never runs
-    // the logout callbacks — kept uploading a signed-out driver's GPS for the
-    // rest of the cached token's life.
-    await SecureStore.deleteItemAsync('fg_access_token');
-    await SecureStore.deleteItemAsync('bg_access_token');
-    await SecureStore.deleteItemAsync('bg_access_token_expires');
+    for (const key of AUTH_STORAGE_KEYS) await SecureStore.deleteItemAsync(key);
     // Record the end of the session so the headless contexts can see it. They
     // have no access to this store, and cannot infer it from missing tokens —
     // see shared/auth/sessionMarker.ts.
@@ -195,8 +204,66 @@ export interface User {
 interface RefreshTokenResponse {
   token: string;
   refresh_token: string;
-  expires_in: number;
+  // Access-token lifetime in seconds. OPTIONAL on purpose: the backend's
+  // RefreshResponse did not carry this field until 2026-07-29, and an installed
+  // app can still be talking to a backend that predates that fix. Never assume
+  // it is present — derive via ttlSecondsFromRefreshResponse below.
+  expires_in?: number;
+  // ISO-8601 absolute expiry. Always sent; the fallback source for the TTL.
+  access_expires_at?: string;
   csrf_token?: string | null;
+}
+
+// Access-token lifetime, in seconds, used when the server's reported value is
+// missing or unusable. Mirrors the backend's ACCESS_TOKEN_EXPIRE_MINUTES (15)
+// and the `expires_in ?? 900` default the OTP screens already apply.
+const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 900;
+
+function _isUsableTtl(seconds: unknown): seconds is number {
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0;
+}
+
+/**
+ * Coerce a reported access-token lifetime into a usable positive seconds value.
+ *
+ * A non-finite value here cost drivers a release's worth of sign-outs:
+ * /auth/refresh omitted `expires_in`, so `Date.now() + expiresIn * 1000`
+ * evaluated to NaN. `tokenExpiresAt` then read as falsy, and
+ * ensureFreshToken()'s `!tokenExpiresAt` guard silently disabled the proactive
+ * 2-minute refresh for the rest of the session — every expiry became a reactive
+ * 401 burst. The driver app also persists this as SecureStore
+ * `token_expires_at`, which its headless location task parses to authorise
+ * batch uploads, so the string "NaN" disabled those too.
+ *
+ * Defaulting is safe in both directions: guessing too long costs one reactive
+ * 401 that the interceptor already recovers from; guessing too short costs one
+ * extra token rotation.
+ */
+function usableTtlSeconds(seconds: unknown): number {
+  return _isUsableTtl(seconds) ? seconds : DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
+}
+
+/**
+ * Seconds until the access token expires, from whichever field the server sent.
+ *
+ * `expires_in` is canonical. When it is absent, derive from the absolute
+ * `access_expires_at` timestamp rather than discarding real information and
+ * falling back to a guess.
+ */
+function ttlSecondsFromRefreshResponse(data: RefreshTokenResponse | undefined): number {
+  if (_isUsableTtl(data?.expires_in)) return data!.expires_in!;
+
+  const absolute = data?.access_expires_at;
+  if (absolute) {
+    const parsedMs = Date.parse(absolute);
+    if (Number.isFinite(parsedMs)) {
+      const seconds = Math.floor((parsedMs - Date.now()) / 1000);
+      // A non-positive result means the server's expiry is already in the past
+      // (clock skew, or a stale response) — not usable, fall through.
+      if (seconds > 0) return seconds;
+    }
+  }
+  return DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
 }
 
 // Payload accepted by POST /drivers/register — all fields are optional;
@@ -258,7 +325,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   // ── Token helpers ──────────────────────────────────────────────────────── //
 
   setTokens: async (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => {
-    const expiresAt = Date.now() + expiresIn * 1000;
+    // Guard the arithmetic at the ONE choke point that both sets tokenExpiresAt
+    // and persists token_expires_at, so no caller — present or future — can put
+    // a non-finite value into state or secure storage. See usableTtlSeconds for
+    // why this is worth a guard rather than trusting the caller.
+    const ttlSeconds = usableTtlSeconds(expiresIn);
+    if (ttlSeconds !== expiresIn) {
+      // Deliberately NOT __DEV__-gated: this means the server told us something
+      // unusable about a live session, and production silence is how the
+      // original bug survived a release. No token material in the message.
+      console.warn(
+        `[Auth] Unusable access-token TTL (${String(expiresIn)}) — defaulting to ${ttlSeconds}s. ` +
+          'Proactive refresh would have been disabled for this session.',
+      );
+    }
+    const expiresAt = Date.now() + ttlSeconds * 1000;
     setInMemoryToken(token);
     if (csrfToken !== undefined) setCsrfToken(csrfToken);
     // A live session exists again — clear the end-of-session marker before
@@ -314,8 +395,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const res = await api.post('/auth/refresh', { refresh_token: candidate });
-          const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as RefreshTokenResponse;
-          await get().setTokens(token, newRefresh, expires_in, csrf_token);
+          const data = res.data as RefreshTokenResponse;
+          const { token, refresh_token: newRefresh, csrf_token } = data;
+          await get().setTokens(token, newRefresh, ttlSecondsFromRefreshResponse(data), csrf_token);
           return true;
         } catch (e: unknown) {
           // The /auth/refresh path rejects with a raw fetch Response (HTTP
@@ -679,10 +761,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     setInMemoryToken(null);
     setCsrfToken(null);
-    await storage.deleteItem('auth_token');
-    await storage.deleteItem('fg_access_token');
-    await storage.deleteItem('refresh_token');
-    await storage.deleteItem('token_expires_at');
+    // Drive this from AUTH_STORAGE_KEYS, not a hand-written list — the previous
+    // hand-written one omitted the driver background task's cached access token,
+    // which then outlived the session it belonged to.
+    for (const key of AUTH_STORAGE_KEYS) await storage.deleteItem(key);
     // Positive evidence that this session ended, for the headless contexts that
     // cannot read this store (see shared/auth/sessionMarker.ts). Written before
     // the logout callbacks below so the driver-app teardown — and any headless

@@ -1,5 +1,22 @@
 module.exports = {
   preset: 'jest-expo',
+  // ── shared/ is tested from HERE ──────────────────────────────────────────
+  // Without this, jest's default root is <rootDir> only, and shared/**/__tests__
+  // was executed by NO project and NO CI job. Three auth suites
+  // (shared/api/__tests__/client.{refresh,sos,authHeader}.test.ts) plus
+  // shared/utils/__tests__/pii.test.ts sat there rotting; two of them were
+  // FAILING, and client.refresh.test.ts was pointing straight at a real
+  // driver-sign-out defect that then survived into production
+  // (docs/change-log/2026-07-29-concurrent-401-false-logout.md).
+  //
+  // rider-app is the host rather than driver-app because driver-app's
+  // moduleNameMapper redirects '^@shared/(.*)$' to its own __mocks__ directory —
+  // it MOCKS shared modules, so it cannot test the real ones. This config maps
+  // @shared to the real files (see moduleNameMapper below), and rider-app already
+  // hosted __tests__/api-client-401-refresh.test.ts, which tests
+  // shared/api/client.ts. Deliberately ONE owner: running shared tests from both
+  // apps would double-run them and split responsibility for keeping them green.
+  roots: ['<rootDir>', '<rootDir>/../shared'],
   setupFiles: ['./jest-setup-expo.js'],
   setupFilesAfterEnv: ['@testing-library/jest-native/extend-expect'],
   testPathIgnorePatterns: [

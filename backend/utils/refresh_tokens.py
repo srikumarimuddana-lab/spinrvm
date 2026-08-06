@@ -64,13 +64,59 @@ _REFRESH_TOKEN_BYTES = 48
 # phone can fire a refresh, lose the rotation response in a dead zone, and only
 # retry when the app is next foregrounded minutes later — still holding the
 # pre-rotation token. 60s classified that benign retry as theft and logged the
-# user out on EVERY device. 10 min covers the "lost response, app resumed
-# shortly after" case. The security cost is bounded: a genuinely stolen token
-# is already revoked, so a replay within the window yields NOTHING to the
+# user out on EVERY device. The security cost is bounded: a genuinely stolen
+# token is already revoked, so a replay within the window yields NOTHING to the
 # attacker (lookup still returns None) — only the all-device cascade/alert is
 # deferred until the window lapses, at which point a persistent replay still
 # escalates.
-REFRESH_REUSE_GRACE_SECONDS = 600
+#
+# 24h (was 600s) because a driver spends whole shifts in a moving vehicle on
+# patchy rural LTE. The realistic failure is: refresh fires, the rotation
+# response is lost in a dead zone, the backend has already rotated, and the phone
+# still holds the pre-rotation token until it is next foregrounded — which can be
+# hours later, at the end of a shift. Ten minutes classified that as theft and
+# logged the driver out of every device.
+#
+# A purely time-based widening would blind the detector for a day, so it is NOT
+# purely time-based: see _successor_is_live for the chain-depth condition, and
+# _audit_rotation_replay for the audit row that keeps the signal even when the
+# cascade is suppressed. Overridable at runtime via the app_settings key
+# `refresh_reuse_grace_seconds` so it can be dialled back without a redeploy.
+REFRESH_REUSE_GRACE_SECONDS = 86400
+
+# app_settings key that overrides the constant above at runtime.
+_GRACE_SETTING_KEY = "refresh_reuse_grace_seconds"
+
+
+async def _grace_seconds() -> int:
+    """Effective grace window: the app_settings override, else the constant.
+
+    Deliberately fail-soft to the constant — a settings-table hiccup must not
+    turn every rotation race into a mass logout. get_app_settings() caches
+    in-process, so this is not a DB round-trip per call.
+    """
+    try:
+        try:
+            from ..settings_loader import get_app_settings
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from settings_loader import get_app_settings  # type: ignore
+
+        settings_map = await get_app_settings()
+        raw = (settings_map or {}).get(_GRACE_SETTING_KEY)
+        if raw is None:
+            return REFRESH_REUSE_GRACE_SECONDS
+        value = int(raw)
+        # A non-positive override would disable the grace window entirely and
+        # resurrect the mass-logout incident; ignore it rather than obey it.
+        if value <= 0:
+            logger.warning(
+                f"refresh: ignoring non-positive {_GRACE_SETTING_KEY}={raw!r}; using {REFRESH_REUSE_GRACE_SECONDS}s"
+            )
+            return REFRESH_REUSE_GRACE_SECONDS
+        return value
+    except Exception as e:
+        logger.warning(f"refresh: could not read {_GRACE_SETTING_KEY} ({type(e).__name__}); using default")
+        return REFRESH_REUSE_GRACE_SECONDS
 
 
 def _parse_iso_dt(value) -> Optional[datetime]:
@@ -88,23 +134,107 @@ def _parse_iso_dt(value) -> Optional[datetime]:
     return None
 
 
-def _is_benign_rotation_replay(row: dict) -> bool:
+async def _successor_is_live(replaced_by: str) -> bool:
+    """True when the row this token was rotated into is still un-revoked.
+
+    This is the chain-DEPTH condition, and it is what makes a 24h grace window
+    safe rather than a 24h blind spot.
+
+    A lost-rotation-response race leaves the client exactly ONE step behind: it
+    holds T1, the server rotated T1→T2, and T2 is the live token. Replaying T1 is
+    benign.
+
+    If T2 is *also* revoked the chain has moved two or more steps — someone
+    completed a further rotation while this client was still holding T1. For a
+    single honest client that cannot happen: ``refreshTokens`` always re-reads the
+    freshest persisted token before retrying, and the driver app's background task
+    no longer refreshes at all (see driver-app/utils/backgroundLocation.ts
+    ``getBackgroundAuthToken`` — "The background task NEVER calls /auth/refresh
+    itself"). Two holders of one family is the theft signal, so escalate.
+
+    ⚠ This gate's correctness DEPENDS on there being exactly one refresh actor per
+    session. If a second concurrent refresher is ever reintroduced, a depth-2
+    replay becomes a legitimate outcome again and this condition turns into a
+    false-positive source — revisit it together with that change.
+
+    Fail-soft: an unreadable or missing successor returns True (benign). We would
+    rather miss one escalation than mass-logout a driver because of a DB hiccup;
+    the audit row is still written either way.
+    """
+    try:
+        successor = await db.find_one("refresh_tokens", {"id": replaced_by})
+    except Exception as e:
+        logger.warning(f"refresh: successor lookup failed for {replaced_by} ({type(e).__name__}); treating as benign")
+        return True
+    if not successor:
+        # Chain is broken (row purged by retention, or the chaining update failed
+        # — issue_refresh_token treats that as best-effort). Not evidence of theft.
+        return True
+    return not successor.get("revoked_at")
+
+
+async def _is_benign_rotation_replay(row: dict) -> bool:
     """True when a revoked-token replay is a normal rotation race, not theft.
 
-    Requires BOTH:
+    Requires ALL of:
       • ``replaced_by`` is set — the token was rotated forward by a successful
         refresh. A token revoked WITHOUT a replacement was killed by an explicit
         logout or a prior cascade, and replaying that is always a real signal.
-      • It was revoked within ``REFRESH_REUSE_GRACE_SECONDS`` — a stolen token
-        replayed well after the window still escalates.
+      • It was revoked within the effective grace window (see _grace_seconds) —
+        a stolen token replayed well after the window still escalates.
+      • The successor is still live (see _successor_is_live) — the client is
+        exactly one rotation behind, not two or more.
     """
-    if not row.get("replaced_by"):
+    replaced_by = row.get("replaced_by")
+    if not replaced_by:
         return False
     revoked_at = _parse_iso_dt(row.get("revoked_at"))
     if not revoked_at:
         return False
     age = (datetime.now(timezone.utc) - revoked_at).total_seconds()
-    return 0 <= age <= REFRESH_REUSE_GRACE_SECONDS
+    if not (0 <= age <= await _grace_seconds()):
+        return False
+    return await _successor_is_live(str(replaced_by))
+
+
+async def _audit_rotation_replay(row: dict) -> None:
+    """Record a benign-classified rotation replay.
+
+    The cascade is suppressed on this path, but the SIGNAL must not be. Before
+    this, the benign branch emitted only a logger.warning — no audit row, no
+    Sentry tag — so widening the window from 10 minutes to 24 hours would have
+    created a day-long hole in the forensic record. Security ops can now see
+    "this account had rotation replays" even when no account was ever locked,
+    which is the standing visibility that replaces the escalation we deferred.
+
+    Best-effort: never block or fail the auth path.
+    """
+    try:
+        await db.insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "action": "refresh_token_rotation_replay",
+                "entity_type": "user",
+                "entity_id": row.get("user_id") or "unknown",
+                "actor_id": "system:refresh_reuse_detector",
+                "details": json.dumps(
+                    {
+                        "replayed_row_id": row.get("id"),
+                        "audience": row.get("audience"),
+                        "replayed_user_agent": row.get("user_agent"),
+                        "replayed_ip": row.get("ip"),
+                        "original_revoked_at": row.get("revoked_at"),
+                        "replaced_by": row.get("replaced_by"),
+                        "classified": "benign_rotation_replay",
+                        "cascade_suppressed": True,
+                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ),
+            },
+        )
+    except Exception as e:
+        logger.error(f"refresh: rotation-replay audit insert failed (user={row.get('user_id')}): {e}")
 
 
 def _hash_refresh_token(raw: str) -> str:
@@ -208,13 +338,15 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
         # cascade for a benign rotation race inside the grace window; a real
         # theft replay (outside the window, or a non-rotated revocation) still
         # cascades. Either way the client gets a generic 401 (no oracle).
-        if _is_benign_rotation_replay(row):
+        if await _is_benign_rotation_replay(row):
             logger.warning(
                 "refresh: benign rotation replay within grace window — "
                 "returning 401 without cascade "
                 f"(row_id={row.get('id')} user_id={row.get('user_id')} "
                 f"audience={row.get('audience')})"
             )
+            # Suppress the cascade, NOT the signal.
+            await _audit_rotation_replay(row)
             return None
         await _handle_refresh_token_reuse(row)
         return None

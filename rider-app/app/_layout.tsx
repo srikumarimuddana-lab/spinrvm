@@ -25,6 +25,7 @@ const SPLASH_MIN_DISPLAY_MS = 1800;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
+import { logRocketNetworkConfig } from '@shared/services/logrocketSanitizer';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
@@ -289,7 +290,13 @@ function RootLayout() {
   useEffect(() => {
     if (!LogRocket) return;
     try {
-      LogRocket.init('gfuign/spinr');
+      // `network` is REQUIRED, not optional hardening: the SDK captures request and
+      // response bodies by default, and our API client uses fetch — so without
+      // these sanitizers every authenticated call (phone numbers, OTP codes, access
+      // AND refresh tokens, names, emails, addresses) was shipped whole to a
+      // third-party replay service. See shared/services/logrocketSanitizer.ts for
+      // the evidence and the default-deny policy. Never call init() without this.
+      LogRocket.init('gfuign/spinr', { network: logRocketNetworkConfig });
     } catch (e) {
       console.log('[LogRocket] init failed:', e);
     }

@@ -1550,6 +1550,14 @@ class RefreshRequest(BaseModel):
 class RefreshResponse(BaseModel):
     token: str
     refresh_token: str
+    # Access-token lifetime in SECONDS. Mirrors AuthResponse.expires_in so the
+    # login and refresh responses speak the same language. The mobile clients
+    # read this field (not access_expires_at) to schedule their proactive
+    # refresh — shared/store/authStore.ts::setTokens computes
+    # `Date.now() + expires_in * 1000`. Omitting it made that arithmetic NaN,
+    # which disabled proactive refresh for the rest of the session. Keep it in
+    # sync with access_expires_at below; they are two spellings of one fact.
+    expires_in: int
     access_expires_at: datetime
     refresh_expires_at: datetime
     csrf_token: Optional[str] = None
@@ -1684,6 +1692,7 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     return RefreshResponse(
         token=token,
         refresh_token=new_raw,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         csrf_token=csrf,

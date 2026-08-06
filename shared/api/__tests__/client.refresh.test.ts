@@ -200,16 +200,31 @@ describe('shared/api/client — token refresh mid-trip (P1-11 / E11)', () => {
       .mockResolvedValueOnce(make401Response()) // request B → 401
       .mockResolvedValue(makeOkResponse({ ok: true })); // retries → 200
 
-    const [reqA, reqB] = [api.get('/rides/active'), api.get('/rides/active')];
+    // .catch() attached SYNCHRONOUSLY, not via a later Promise.allSettled. The
+    // losing request rejects with its original 401 during the timer below, and an
+    // even briefly-unhandled rejection makes Node emit unhandledRejection, which
+    // fails this test for a reason that has nothing to do with what it asserts.
+    // That is how this test previously "failed" while the real defect it was
+    // pointing at (see below) went unnoticed.
+    const settledA = api.get('/rides/active').catch((e) => e);
+    const settledB = api.get('/rides/active').catch((e) => e);
 
     // Let both requests start and hit the 401 path before refresh resolves
     await new Promise((r) => setTimeout(r, 10));
     resolveRefresh(true);
 
-    await Promise.allSettled([reqA, reqB]);
+    await Promise.all([settledA, settledB]);
 
     // Refresh must only be called once, not once per 401
     expect(refreshCallback).toHaveBeenCalledTimes(1);
+
+    // …and the session must SURVIVE. This assertion was missing, which is why the
+    // test never caught the real bug: the second request skipped the refresh
+    // branch (_inflight401Retries already held "GET /rides/active"), left
+    // refreshAttempted false, and fell through to the G2 backstop, which signed
+    // the user out while this very refresh was succeeding. Fixed in
+    // docs/change-log/2026-07-29-concurrent-401-false-logout.md.
+    expect(mockLogout).not.toHaveBeenCalled();
   });
 });
 

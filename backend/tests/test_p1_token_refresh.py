@@ -219,6 +219,57 @@ class TestRefreshAccessToken:
             f"{settings.ACCESS_TOKEN_EXPIRE_MINUTES} min (the real JWT exp), not a legacy days TTL"
         )
 
+    async def test_response_includes_expires_in_seconds(self):
+        """Regression: the mobile clients read ``expires_in``, not ``access_expires_at``.
+
+        ``authStore.refreshTokens()`` destructures ``expires_in`` from this
+        response and ``setTokens()`` computes ``Date.now() + expires_in * 1000``.
+        The field was absent here (only on the login ``AuthResponse``), so the
+        arithmetic produced ``NaN`` on every refresh. ``tokenExpiresAt`` then
+        read as falsy, ``ensureFreshToken()`` bailed on its
+        ``!tokenExpiresAt`` guard, and the proactive 2-minute refresh was dead
+        for the rest of the session — every expiry became a reactive 401 burst.
+        The driver app also persists the value as ``token_expires_at``, which
+        its headless location task parses to authorise batch uploads, so the
+        ``"NaN"`` string silently disabled those too.
+
+        Fixing ``access_expires_at`` (see the test above) did not help: no
+        mobile client reads that field. This pins the one they do.
+        """
+        from backend.core.config import settings
+        from backend.routes import auth as auth_mod
+
+        with (
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=_user_row())),
+            patch.object(
+                auth_mod,
+                "issue_refresh_token",
+                AsyncMock(return_value=("new-raw", "hashed", datetime.now(timezone.utc) + timedelta(days=30))),
+            ),
+            patch.object(auth_mod, "create_jwt_token", return_value="access-tok"),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
+        ):
+
+            class _Body:
+                refresh_token = "old-raw"
+
+            result = await auth_mod.refresh_access_token(
+                request=_make_request(user_agent="UA", refresh_token="old-raw"), response=MagicMock(), body=_Body()
+            )
+
+        expected = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        assert result.expires_in == expected, (
+            f"expires_in must be the access-token TTL in seconds ({expected}); "
+            "the mobile clients compute tokenExpiresAt from this field and get NaN without it"
+        )
+        # Must agree with access_expires_at — two spellings of one fact must not drift.
+        skew = abs((result.access_expires_at - datetime.now(timezone.utc)).total_seconds() - result.expires_in)
+        assert skew < 5, (
+            f"expires_in ({result.expires_in}s) and access_expires_at "
+            f"({result.access_expires_at}) disagree by {skew:.1f}s"
+        )
+
     async def test_new_token_is_minted_with_replaces_reference(self):
         """The new refresh token must reference the old row (replaces=) so the
         old token is revoked on rotation and replay attacks are blocked."""

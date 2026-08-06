@@ -1,7 +1,12 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-const hookSource = readFileSync(resolve(__dirname, '..', 'useDriverDashboard.ts'), 'utf8');
+// CRLF→LF — see onlineResync.test.ts. Windows checkouts are CRLF, so a needle
+// spanning a line break would match in CI and fail only on a dev machine.
+const hookSource = readFileSync(resolve(__dirname, '..', 'useDriverDashboard.ts'), 'utf8').replace(
+  /\r\n/g,
+  '\n',
+);
 
 describe('Phase 1 (online-idle) durable location trail', () => {
   const idleBranch = hookSource.slice(

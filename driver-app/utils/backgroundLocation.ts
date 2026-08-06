@@ -116,6 +116,51 @@ type LocationTaskData = {
   locations: Location.LocationObject[];
 };
 
+// A persisted expiry that will not parse is an ANOMALY, not a normal "no token
+// yet" state, and it silently disables every headless upload for the rest of the
+// session. It is reported once per process: this function runs on every
+// background fire (~4s at TRIP_CADENCE), so reporting each occurrence would emit
+// ~15 events/min/driver — the same flood the deferred-upload catch below avoids.
+let _reportedUnparseableExpiry = false;
+
+function _reportUnparseableExpiry(key: string, raw: string): void {
+  if (_reportedUnparseableExpiry) return;
+  _reportedUnparseableExpiry = true;
+  // The raw value is an epoch-ms string or garbage — never a token, never PII.
+  console.warn(
+    `[BgLocation] Unparseable ${key} (${raw}) — headless uploads are deferred ` +
+      'until the foreground writes a valid expiry. Trip breadcrumbs are still ' +
+      'durable in SQLite.',
+  );
+  recordNonFatal(new Error(`BgLocation unparseable ${key}`), {
+    domain: 'drivers',
+    surface: 'driver-app',
+    bg_auth: 'unparseable_expiry',
+  });
+}
+
+/**
+ * Parse a persisted epoch-ms expiry, or null when it is unusable.
+ *
+ * `parseInt` returns NaN for a non-numeric string, and every comparison against
+ * NaN is false — so the original `Date.now() < parseInt(raw, 10) - 30_000` guard
+ * failed CLOSED and silently returned no token. That is exactly what happened
+ * when authStore persisted the string "NaN" (see
+ * docs/change-log/2026-07-29-refresh-expires-in.md): headless location-batch
+ * uploads stopped roughly 15 minutes after every login, for a whole release,
+ * with nothing in the logs. Billed distance and the SGI insurance-period audit
+ * are settled from those breadcrumbs.
+ */
+function _parseExpiryMs(raw: string | null, key: string): number | null {
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    _reportUnparseableExpiry(key, raw);
+    return null;
+  }
+  return parsed;
+}
+
 /**
  * Whether the session on this device has ended.
  *
@@ -157,6 +202,12 @@ export async function isSessionEnded(): Promise<boolean> {
  * foreground/background rotation race that triggered driver sign-outs —
  * especially right after ride completion when both contexts fire
  * concurrently during the completion burst.
+ *
+ * Returning null on an UNPARSEABLE expiry (rather than trying the token anyway)
+ * is deliberate: the durable outbox treats a deferral and a 401 identically, so
+ * deferring costs nothing extra, and the condition self-heals the moment the
+ * foreground next calls setTokens(). What is NOT acceptable is deferring in
+ * silence — see _parseExpiryMs.
  */
 export async function getBackgroundAuthToken(): Promise<string | null> {
   if (!API_URL) return null;
@@ -165,10 +216,12 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
   //    or a prior successful read below).
   try {
     const cached = await SecureStore.getItemAsync('bg_access_token');
-    const cachedExpiry = await SecureStore.getItemAsync('bg_access_token_expires');
-    if (cached && cachedExpiry) {
-      const expiresAt = parseInt(cachedExpiry, 10);
-      if (Date.now() < expiresAt - 60_000) {
+    const cachedExpiry = _parseExpiryMs(
+      await SecureStore.getItemAsync('bg_access_token_expires'),
+      'bg_access_token_expires',
+    );
+    if (cached && cachedExpiry !== null) {
+      if (Date.now() < cachedExpiry - 60_000) {
         return cached;
       }
     }
@@ -180,13 +233,17 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
   //    it on every setTokens() call (authStore.ts:245).
   try {
     const fgToken = await SecureStore.getItemAsync('fg_access_token');
-    const fgExpiry = await SecureStore.getItemAsync('token_expires_at');
-    if (fgToken && fgExpiry) {
-      const expiresAt = parseInt(fgExpiry, 10);
-      if (Date.now() < expiresAt - 30_000) {
-        // Cache it for subsequent background fires within this process
+    const fgExpiry = _parseExpiryMs(
+      await SecureStore.getItemAsync('token_expires_at'),
+      'token_expires_at',
+    );
+    if (fgToken && fgExpiry !== null) {
+      if (Date.now() < fgExpiry - 30_000) {
+        // Cache it for subsequent background fires within this process.
+        // Write the NORMALISED value, not the raw string, so a malformed-but-
+        // parseable input (" 123 ", "123abc") cannot propagate into the cache.
         await SecureStore.setItemAsync('bg_access_token', fgToken);
-        await SecureStore.setItemAsync('bg_access_token_expires', fgExpiry);
+        await SecureStore.setItemAsync('bg_access_token_expires', String(fgExpiry));
         return fgToken;
       }
     }
@@ -197,6 +254,11 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
   // 3. No valid token available — defer the upload. Points stay in SQLite
   //    and the foreground flushes them on resume or next interval.
   return null;
+}
+
+/** @internal Test-only — reset the once-per-process report latch. */
+export function _resetUnparseableExpiryReport(): void {
+  _reportedUnparseableExpiry = false;
 }
 
 export async function handleBackgroundLocationTask({ data, error }: { data?: LocationTaskData; error?: { message?: string } | null }): Promise<void> {

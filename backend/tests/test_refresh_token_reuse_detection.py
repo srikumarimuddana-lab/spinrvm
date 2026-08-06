@@ -26,6 +26,10 @@ import pytest
 # namespace-package submodule is not yet bound to `utils`).
 import utils.refresh_tokens  # noqa: F401
 
+# Distinguishes "caller omitted successor" from "caller passed None on purpose"
+# (None models a purged/broken rotation chain, which is a real case).
+_SENTINEL: dict = {"__sentinel__": True}
+
 
 def _revoked_row(audience: str = "rider", user_id: str = "user-rider-1") -> dict:
     return {
@@ -112,6 +116,30 @@ def _recently_revoked_rotated_row(**over) -> dict:
     return row
 
 
+def _find_one_router(primary: dict, successor: dict | None = _SENTINEL):
+    """db.find_one stub answering BOTH lookups lookup_refresh_token now makes.
+
+    1. ``{"token_hash": ...}`` → the replayed row.
+    2. ``{"id": row["replaced_by"]}`` → its successor, for the chain-depth check
+       in ``_successor_is_live``.
+
+    Before the chain-depth condition existed a single-value AsyncMock sufficed;
+    it now answers the successor lookup with the *replayed* row, whose revoked_at
+    is set, which reads as a depth-2 chain and escalates. Pass
+    ``successor=None`` to model a purged/broken chain, or a dict with
+    ``revoked_at`` set to model the depth-2 theft case.
+    """
+    if successor is _SENTINEL:
+        successor = {"id": "rtk-newer-002", "revoked_at": None}  # live successor
+
+    async def _find_one(table, query):
+        if "id" in query:
+            return successor
+        return primary
+
+    return AsyncMock(side_effect=_find_one)
+
+
 @pytest.mark.asyncio
 async def test_benign_rotation_replay_within_grace_does_not_cascade():
     """A just-rotated token replayed within the grace window (lost rotation
@@ -119,10 +147,12 @@ async def test_benign_rotation_replay_within_grace_does_not_cascade():
     the cascade. This is the regression for the mass-logout + perpetual-WS-
     reconnect incident."""
     cascade_mock = AsyncMock()
+    audit_mock = AsyncMock()
 
     with (
-        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=_recently_revoked_rotated_row())),
+        patch("utils.refresh_tokens.db.find_one", _find_one_router(_recently_revoked_rotated_row())),
         patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+        patch("utils.refresh_tokens._audit_rotation_replay", audit_mock),
     ):
         from utils.refresh_tokens import lookup_refresh_token
 
@@ -130,6 +160,9 @@ async def test_benign_rotation_replay_within_grace_does_not_cascade():
 
     assert result is None, "benign replay still returns None (no oracle), just no cascade"
     cascade_mock.assert_not_called()
+    # Cascade suppressed, signal NOT suppressed — otherwise a 24h grace window is
+    # a 24h hole in the forensic record.
+    audit_mock.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -143,14 +176,14 @@ async def test_rotation_replay_minutes_later_within_window_does_not_cascade():
     from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS
 
     # Half a window ago — comfortably inside the grace period.
-    revoked_at = datetime.now(timezone.utc) - timedelta(
-        seconds=REFRESH_REUSE_GRACE_SECONDS / 2
-    )
+    revoked_at = datetime.now(timezone.utc) - timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS / 2)
     row = _recently_revoked_rotated_row(revoked_at=revoked_at.isoformat())
     cascade_mock = AsyncMock()
 
     with (
-        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.find_one", _find_one_router(row)),
+        patch("utils.refresh_tokens._grace_seconds", AsyncMock(return_value=REFRESH_REUSE_GRACE_SECONDS)),
+        patch("utils.refresh_tokens._audit_rotation_replay", AsyncMock()),
         patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
     ):
         from utils.refresh_tokens import lookup_refresh_token
@@ -170,14 +203,15 @@ async def test_rotation_replay_past_grace_window_still_cascades():
 
     from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS
 
-    revoked_at = datetime.now(timezone.utc) - timedelta(
-        seconds=REFRESH_REUSE_GRACE_SECONDS + 120
-    )
+    revoked_at = datetime.now(timezone.utc) - timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS + 120)
     row = _recently_revoked_rotated_row(revoked_at=revoked_at.isoformat())
     cascade_mock = AsyncMock()
 
     with (
-        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        # Successor is LIVE, so this test isolates the time condition: past the
+        # window, a depth-1 replay escalates regardless of chain state.
+        patch("utils.refresh_tokens.db.find_one", _find_one_router(row)),
+        patch("utils.refresh_tokens._grace_seconds", AsyncMock(return_value=REFRESH_REUSE_GRACE_SECONDS)),
         patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
     ):
         from utils.refresh_tokens import lookup_refresh_token
@@ -206,6 +240,185 @@ async def test_recent_revocation_without_rotation_still_cascades():
 
     assert result is None
     cascade_mock.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chain-DEPTH condition — what makes a 24h grace window safe rather than blind
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_depth_two_replay_within_window_still_cascades():
+    """The live-theft case: an attacker steals a LIVE token and keeps refreshing.
+
+    T1 → T2 (attacker's first refresh) → T3 (second). The victim still holds T1
+    and replays it, which is the primary detection signal. A purely time-based
+    grace window would classify that as benign for a whole day and let the
+    attacker's chain live on while the victim silently re-authenticated.
+
+    Depth is the discriminator: a lost-rotation-response race leaves a client
+    exactly ONE step behind (successor live). Two or more steps means someone else
+    completed a rotation while this client held T1 — escalate.
+    """
+    cascade_mock = AsyncMock()
+    row = _recently_revoked_rotated_row()  # revoked seconds ago → inside any window
+
+    with (
+        # Successor T2 is ALSO revoked → the chain moved on to T3.
+        patch(
+            "utils.refresh_tokens.db.find_one",
+            _find_one_router(row, successor={"id": "rtk-newer-002", "revoked_at": "2026-04-01T00:00:05+00:00"}),
+        ),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("victim-replays-t1")
+
+    assert result is None
+    assert cascade_mock.call_count == 1, "a depth-2 replay is theft, not a rotation race"
+
+
+@pytest.mark.asyncio
+async def test_missing_successor_treated_as_benign():
+    """A purged or unchained successor is not evidence of theft.
+
+    issue_refresh_token's chaining update is explicitly best-effort, and retention
+    purges old rows, so a missing successor is expected. Fail SOFT — we would
+    rather miss one escalation than mass-logout a driver over a broken chain.
+    """
+    cascade_mock = AsyncMock()
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", _find_one_router(_recently_revoked_rotated_row(), successor=None)),
+        patch("utils.refresh_tokens._audit_rotation_replay", AsyncMock()),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("chain-purged")
+
+    assert result is None
+    cascade_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_successor_lookup_failure_treated_as_benign():
+    """A DB hiccup on the depth check must not escalate to a mass logout."""
+    cascade_mock = AsyncMock()
+    row = _recently_revoked_rotated_row()
+
+    async def _find_one(table, query):
+        if "id" in query:
+            raise RuntimeError("supabase unavailable")
+        return row
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(side_effect=_find_one)),
+        patch("utils.refresh_tokens._audit_rotation_replay", AsyncMock()),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("depth-check-broken")
+
+    assert result is None
+    cascade_mock.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Benign path still writes an audit row — the signal survives cascade suppression
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_benign_replay_writes_audit_row_with_production_schema():
+    insert_mock = AsyncMock()
+    row = _recently_revoked_rotated_row()
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", _find_one_router(row)),
+        patch("utils.refresh_tokens.db.insert_one", insert_mock),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", AsyncMock()),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        await lookup_refresh_token("rotated-raw")
+
+    insert_mock.assert_called_once()
+    table, payload = insert_mock.call_args.args
+    assert table == "audit_logs"
+    assert payload["action"] == "refresh_token_rotation_replay"
+    assert payload["entity_type"] == "user"
+    assert payload["entity_id"] == "user-rider-1"
+    assert payload["actor_id"] == "system:refresh_reuse_detector"
+
+    import json as _json
+
+    details = _json.loads(payload["details"])
+    assert details["classified"] == "benign_rotation_replay"
+    assert details["cascade_suppressed"] is True
+    assert details["replayed_row_id"] == "rtk-revoked-001"
+
+
+@pytest.mark.asyncio
+async def test_audit_insert_failure_does_not_break_the_auth_path():
+    """Best-effort: a failed audit write must not turn a 401 into a 500."""
+    with (
+        patch("utils.refresh_tokens.db.find_one", _find_one_router(_recently_revoked_rotated_row())),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=RuntimeError("audit table gone"))),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", AsyncMock()),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        assert await lookup_refresh_token("rotated-raw") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grace window is runtime-tunable via app_settings (rollback without redeploy)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_grace_window_override_from_app_settings_is_honoured():
+    """Dialling the window down via app_settings must take effect immediately —
+    that override IS the rollback plan for this change (gate #7)."""
+    from datetime import datetime, timedelta, timezone
+
+    cascade_mock = AsyncMock()
+    # Revoked 10 minutes ago: benign under the 24h default, theft under a 60s override.
+    revoked_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+    row = _recently_revoked_rotated_row(revoked_at=revoked_at.isoformat())
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", _find_one_router(row)),
+        patch("settings_loader.get_app_settings", AsyncMock(return_value={"refresh_reuse_grace_seconds": 60})),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        await lookup_refresh_token("older-than-override")
+
+    cascade_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_non_positive_grace_override_is_ignored():
+    """A 0 or negative override would disable the grace window entirely and
+    resurrect the mass-logout incident. Ignore it rather than obey it."""
+    from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS, _grace_seconds
+
+    for bad in (0, -1, "-30"):
+        with patch("settings_loader.get_app_settings", AsyncMock(return_value={"refresh_reuse_grace_seconds": bad})):
+            assert await _grace_seconds() == REFRESH_REUSE_GRACE_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_grace_falls_back_to_constant_when_settings_unavailable():
+    from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS, _grace_seconds
+
+    with patch("settings_loader.get_app_settings", AsyncMock(side_effect=RuntimeError("db down"))):
+        assert await _grace_seconds() == REFRESH_REUSE_GRACE_SECONDS
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -48,7 +48,20 @@ export function redactEmail(email: string | null | undefined): string {
  * Returns the form `"52.1,-106.6"`. Non-finite inputs are emitted as `"?"`.
  */
 export function redactCoords(lat: number, lng: number): string {
-  const fmt = (n: number): string =>
-    Number.isFinite(n) ? (Math.round(n * 10) / 10).toFixed(1) : '?';
+  const fmt = (n: number): string => {
+    if (!Number.isFinite(n)) return '?';
+    // Round half AWAY FROM ZERO, which a plain Math.round does not do:
+    // Math.round rounds half toward +Infinity, so Math.round(-1066.5) is -1066.
+    // `Math.round(n * 10) / 10` therefore redacted -106.65 to -106.6 while
+    // redacting +106.65 to +106.7 — a sign-dependent rule. Every Saskatchewan
+    // longitude is negative, so that asymmetry applied to essentially every
+    // coordinate this function exists to redact.
+    //
+    // Privacy is unaffected either way: one decimal place is ~11km whichever
+    // direction the half case breaks. This is about the rule being statable in
+    // one sentence and holding for both signs — which is what the test asserted
+    // all along, before anything ran it.
+    return ((Math.sign(n) * Math.round(Math.abs(n) * 10)) / 10).toFixed(1);
+  };
   return `${fmt(lat)},${fmt(lng)}`;
 }

@@ -822,17 +822,43 @@ const handleApiError = async (response: Response, method: string, url: string, r
   }
 
 
+  const refreshRetryKey = `${method} ${url}`;
+
+  // ── Guard: a refresh-retry for this exact request path is already running ──
+  // _inflight401Retries bounds refresh-retries to one per logical request path
+  // (see its declaration above). Skipping the second retry is correct — but
+  // skipping it must NOT mean falling through to the G2 backstop at the bottom
+  // of this function, which signs the user out for any 401 where no refresh was
+  // attempted. That turned a benign duplicate request into a hard sign-out
+  // *while the first request's refresh was succeeding*.
+  //
+  // The driver app trips this on essentially every resume: initialize(),
+  // refreshProfile() and the TanStack refetch-on-focus fire duplicate
+  // GET /auth/me and GET /drivers/me simultaneously, at exactly the moment the
+  // access token has gone stale. Riders rarely have two identical requests in
+  // flight at once, which is why this presented as a driver-only problem.
+  //
+  // Marking the refresh as attempted hands the logout decision to whoever owns
+  // the in-flight refresh (refreshTokens), which logs out on a definitive
+  // rejection and deliberately keeps the session on a transient one — so the
+  // session still dies when it should, exactly once, from one place. This
+  // request itself still rejects with its original 401, which its caller
+  // already handles.
+  if (response.status === 401 && !isSosUrl(url) && _inflight401Retries.has(refreshRetryKey)) {
+    refreshAttempted = true;
+  }
+
   // On 401, attempt a single silent token refresh then retry the original request.
   // SOS is exempt (see isSosUrl) — its backend route tolerates expired tokens,
   // so the refresh round-trip only adds failure modes during an emergency.
-  if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url) && !_inflight401Retries.has(`${method} ${url}`)) {
+  if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url) && !_inflight401Retries.has(refreshRetryKey)) {
     // Set before any await, so the fall-through to the G2 backstop below
     // always sees it — covers both the first-caller path and the
     // queued-subscriber path (a queued request whose shared refresh fails
     // rejects inside this try and would otherwise fall through to G2 and
     // get logged out).
     refreshAttempted = true;
-    const retryKey = `${method} ${url}`;
+    const retryKey = refreshRetryKey;
     _inflight401Retries.add(retryKey);
     try {
       if (_refreshPromise) {

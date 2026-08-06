@@ -97,10 +97,13 @@ import {
   stopGeofenceRecovery,
   stopBackgroundLocation,
   isSessionEnded,
+  getBackgroundAuthToken,
   _resetGeofenceDebounce,
+  _resetUnparseableExpiryReport,
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../backgroundLocation';
+import { recordNonFatal } from '../crashlytics';
 import * as TaskManager from 'expo-task-manager';
 import { tripLocationRecorder } from '../tripLocationRecorder';
 import { tripLocationOutbox as mockOutbox } from '../tripLocationOutbox';
@@ -733,6 +736,116 @@ describe('session gating', () => {
     await expect(stopBackgroundLocation()).resolves.toBeUndefined();
 
     const deleted = (SecureStore.deleteItemAsync as jest.Mock).mock.calls.map((c) => c[0]);
-    expect(deleted).toContain('bg_access_token');
+// ── getBackgroundAuthToken: a bad persisted expiry must never fail silently ──
+// The headless task authorises its location-batch uploads from a persisted
+// access token plus a persisted epoch-ms expiry. parseInt returns NaN for a
+// non-numeric string and every comparison against NaN is false, so the original
+// freshness guard failed CLOSED and returned no token — silently disabling every
+// headless upload for the rest of the session. That is exactly what happened
+// while authStore persisted the string "NaN" (root cause 1; see
+// docs/change-log/2026-07-29-refresh-expires-in.md). Billed distance and the SGI
+// insurance-period audit are settled from those breadcrumbs, so this failing
+// quietly is the worst possible shape for it.
+describe('getBackgroundAuthToken — unparseable persisted expiry', () => {
+  const mockGetItem = SecureStore.getItemAsync as jest.Mock;
+  const mockSetItem = SecureStore.setItemAsync as jest.Mock;
+  const mockRecordNonFatal = recordNonFatal as jest.Mock;
+  let warnSpy: jest.SpyInstance;
+
+  /** Drive SecureStore from a plain map for the duration of one test. */
+  const withStorage = (backing: Record<string, string | null>) => {
+    mockGetItem.mockImplementation((key: string) => Promise.resolve(backing[key] ?? null));
+  };
+
+  beforeEach(() => {
+    _resetUnparseableExpiryReport();
+    mockGetItem.mockReset();
+    mockSetItem.mockClear();
+    mockRecordNonFatal.mockClear();
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('returns the cached background token while its expiry is still fresh', async () => {
+    withStorage({
+      bg_access_token: 'cached-token',
+      bg_access_token_expires: String(Date.now() + 120_000),
+    });
+
+    await expect(getBackgroundAuthToken()).resolves.toBe('cached-token');
+    expect(mockRecordNonFatal).not.toHaveBeenCalled();
+  });
+
+  it('REGRESSION: reports rather than silently deferring when token_expires_at is "NaN"', async () => {
+    withStorage({
+      fg_access_token: 'foreground-token',
+      token_expires_at: 'NaN', // what authStore persisted before root cause 1 was fixed
+    });
+
+    // Still defers — the token's real freshness is unknown, and the durable
+    // SQLite outbox retries. What must NOT happen is deferring in silence.
+    await expect(getBackgroundAuthToken()).resolves.toBeNull();
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unparseable token_expires_at'));
+    expect(mockRecordNonFatal).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ domain: 'drivers', surface: 'driver-app', bg_auth: 'unparseable_expiry' }),
+    );
+  });
+
+  it('falls through to the foreground token when the CACHED expiry is unparseable', async () => {
+    withStorage({
+      bg_access_token: 'cached-token',
+      bg_access_token_expires: 'NaN',
+      fg_access_token: 'foreground-token',
+      token_expires_at: String(Date.now() + 120_000),
+    });
+
+    await expect(getBackgroundAuthToken()).resolves.toBe('foreground-token');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unparseable bg_access_token_expires'));
+  });
+
+  it('reports at most once per process — this runs every ~4s at trip cadence', async () => {
+    withStorage({ fg_access_token: 'foreground-token', token_expires_at: 'NaN' });
+
+    for (let i = 0; i < 5; i += 1) {
+      await getBackgroundAuthToken();
+    }
+
+    expect(mockRecordNonFatal).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('caches the NORMALISED expiry, so a messy-but-parseable value cannot propagate', async () => {
+    const expiry = Date.now() + 120_000;
+    withStorage({
+      fg_access_token: 'foreground-token',
+      token_expires_at: `${expiry}abc`, // parseInt tolerates this; the cache must not
+    });
+
+    await expect(getBackgroundAuthToken()).resolves.toBe('foreground-token');
+    expect(mockSetItem).toHaveBeenCalledWith('bg_access_token_expires', String(expiry));
+    expect(mockSetItem).not.toHaveBeenCalledWith('bg_access_token_expires', `${expiry}abc`);
+  });
+
+  it('stays quiet when there is simply no token — a signed-out driver is not an anomaly', async () => {
+    withStorage({});
+
+    await expect(getBackgroundAuthToken()).resolves.toBeNull();
+    expect(mockRecordNonFatal).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('defers without reporting when the foreground token is present but genuinely expired', async () => {
+    withStorage({
+      fg_access_token: 'foreground-token',
+      token_expires_at: String(Date.now() - 60_000),
+    });
+
+    await expect(getBackgroundAuthToken()).resolves.toBeNull();
+    expect(mockRecordNonFatal).not.toHaveBeenCalled();
   });
 });

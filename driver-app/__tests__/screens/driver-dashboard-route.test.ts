@@ -1,10 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 
-const source = fs.readFileSync(
-  path.resolve(__dirname, '..', '..', 'app', 'driver', '(tabs)', 'index.tsx'),
-  'utf8',
-);
+// CRLF→LF — see hooks/__tests__/onlineResync.test.ts. Windows checkouts are CRLF.
+// This file matters most: its toMatch regexes deliberately span lines. They happen
+// to be CRLF-safe today because [\s\S] and \s both match \r, but that is a property
+// of those particular patterns, not of the file — normalising removes the trap.
+const source = fs
+  .readFileSync(path.resolve(__dirname, '..', '..', 'app', 'driver', '(tabs)', 'index.tsx'), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 describe('driver dashboard route presentation contract', () => {
   it('does not reuse the pickup-to-dropoff route while navigating to pickup', () => {

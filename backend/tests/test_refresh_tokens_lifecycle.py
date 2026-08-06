@@ -63,11 +63,26 @@ def test_parse_iso_dt_unknown_type_returns_none():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_is_benign_rotation_replay_false_when_revoked_at_unparseable():
+@pytest.mark.asyncio
+async def test_is_benign_rotation_replay_false_when_revoked_at_unparseable():
+    # async since the chain-depth condition (_successor_is_live) needs a DB read.
     from utils.refresh_tokens import _is_benign_rotation_replay
 
     row = {"replaced_by": "rtk-2", "revoked_at": "not-a-timestamp"}
-    assert _is_benign_rotation_replay(row) is False
+    assert await _is_benign_rotation_replay(row) is False
+
+
+@pytest.mark.asyncio
+async def test_is_benign_rotation_replay_false_without_replaced_by():
+    """Short-circuits before any DB read — a token revoked without a replacement
+    (explicit logout, prior cascade) is never a rotation race."""
+    from utils.refresh_tokens import _is_benign_rotation_replay
+
+    find_one = AsyncMock()
+    with patch("utils.refresh_tokens.db.find_one", find_one):
+        row = {"replaced_by": None, "revoked_at": datetime.now(timezone.utc).isoformat()}
+        assert await _is_benign_rotation_replay(row) is False
+    find_one.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

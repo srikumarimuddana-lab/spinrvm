@@ -1,10 +1,16 @@
 import '../utils/backgroundLocation';
+import {
+  setBackgroundTripActive,
+  stopBackgroundLocation,
+  stopGeofenceRecovery,
+} from '../utils/backgroundLocation';
 import { registerDriverSessionTeardown } from '../utils/sessionTeardown';
 
 // Arm the sign-out location teardown at module scope, before any screen mounts:
 // the API client's 401 interceptor can trigger a logout before the dashboard
 // ever renders, and a hook-based registration would miss it.
 registerDriverSessionTeardown();
+
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -29,7 +35,8 @@ import { toastConfig } from '../components/toastConfig';
 const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { initMetaSdk } from '@shared/analytics/meta';
-import { useAuthStore } from '@shared/store/authStore';
+import { logRocketNetworkConfig } from '@shared/services/logrocketSanitizer';
+import { registerLogoutCallback, useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useDriverStore } from '../store/driverStore';
@@ -326,6 +333,35 @@ function RootLayout() {
     prevAuthTokenRef.current = authToken;
   }, [authToken]);
 
+  // ── Tear down native location tracking on sign-out ──
+  // Nothing connected sign-out to the native task before this. stopBackgroundLocation
+  // ran only from the go-offline branch of useDriverDashboard.toggleOnline, so a
+  // driver who signed out WITHOUT first going offline left behind: expo-location
+  // still delivering fixes into the durable SQLite outbox (location collected for a
+  // user who ended their session), the Android foreground-service notification still
+  // claiming "You're online and receiving ride requests", and an armed recovery
+  // geofence whose exit handler can headlessly RE-ARM tracking.
+  //
+  // Deliberately registerLogoutCallback and NOT an `authToken` transition effect
+  // like the one above: authToken also goes null on a TRANSIENT refresh failure
+  // (authStore sets sessionRecoverable and clears the token WITHOUT calling
+  // logout), and tearing down native tracking there would leave a driver who
+  // reconnects with no background tracking until they toggled offline and back on.
+  // This fires only on a deliberate sign-out.
+  //
+  // Each step is individually .catch()ed so one native failure cannot skip the
+  // others. _runLogoutCallbacks also wraps the whole callback, so a throw here can
+  // never block the user from signing out.
+  useEffect(() => {
+    return registerLogoutCallback(async () => {
+      // Clear the trip flag FIRST: a geofence wake that slips in between these
+      // calls must not re-arm at TRIP_CADENCE on a stale spinr_bg_trip_active.
+      await setBackgroundTripActive(false).catch(() => {});
+      await stopBackgroundLocation().catch(() => {});
+      await stopGeofenceRecovery().catch(() => {});
+    });
+  }, []);
+
   // ── LogRocket session recording ──
   // Guard against Expo Go — @logrocket/react-native ships a native module
   // that isn't linked there, so calling init would throw. Same gating
@@ -333,7 +369,14 @@ function RootLayout() {
   useEffect(() => {
     if (!LogRocket) return;
     try {
-      LogRocket.init('gfuign/spinr');
+      // `network` is REQUIRED, not optional hardening: the SDK captures request and
+      // response bodies by default, and our API client uses fetch — so without
+      // these sanitizers every authenticated call (phone numbers, OTP codes, access
+      // AND refresh tokens, names, emails, addresses, raw GPS traces) was shipped
+      // whole to a third-party replay service. See
+      // shared/services/logrocketSanitizer.ts for the evidence and the
+      // default-deny policy. Never call init() without this.
+      LogRocket.init('gfuign/spinr', { network: logRocketNetworkConfig });
     } catch (e) {
       console.log('[LogRocket] init failed:', e);
     }

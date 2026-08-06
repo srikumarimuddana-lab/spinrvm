@@ -173,3 +173,45 @@ async def test_accept_ride_counts_accept_and_observes_latency():
     # The sample must be the offered_at → now delta (~3s), not a wall-clock zero.
     last_sample_ms = cell["sum"] - (cell_before["sum"] if cell_before else 0.0)
     assert 2000.0 <= last_sample_ms <= 30000.0
+    # ADR-010 §2: the call site must pin the dispatch-specific layout so the
+    # 2000 ms SLA is an exact bucket bound. Asserted on the cell (not just the
+    # constant) because observe() pins layout from whatever the caller passed —
+    # a call site that forgot buckets= would still pass a constants-only test.
+    assert 2000 in cell["le"]
+
+
+def test_dispatch_buckets_add_exact_2000ms_sla_boundary():
+    """ADR-010 §2: the 2 s dispatch SLA must be a bucket bound, not interpolated.
+
+    DEFAULT_MS_BUCKETS jumps 1000 → 2500, so histogram_quantile() would decide a
+    2000 ms breach by interpolating across a 1.5 s-wide bucket.
+    """
+    assert 2000 in metrics.DISPATCH_MS_BUCKETS
+
+    # The shared default must stay untouched. observe() pins a metric's bucket
+    # layout on its first observation, so widening DEFAULT_MS_BUCKETS would
+    # silently invalidate every already-recorded series that uses it.
+    assert 2000 not in metrics.DEFAULT_MS_BUCKETS
+    assert metrics.DEFAULT_MS_BUCKETS == (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000)
+
+    # Strictly additive over the default, and monotonic (Prometheus requires
+    # ascending bounds for cumulative buckets to be meaningful).
+    assert set(metrics.DEFAULT_MS_BUCKETS) < set(metrics.DISPATCH_MS_BUCKETS)
+    assert list(metrics.DISPATCH_MS_BUCKETS) == sorted(metrics.DISPATCH_MS_BUCKETS)
+
+
+def test_dispatch_bucket_bound_renders_as_integral_le_label():
+    """The 2000 bound must reach exposition as le="2000", not le="2000.0".
+
+    Grafana alert expressions match on the label value, so a float-formatted
+    bound would silently fail to match the rule in ADR-010 §3.
+    """
+    name = "spinr_test_dispatch_bucket_render_ms"
+    metrics.observe(name, 1500.0, buckets=metrics.DISPATCH_MS_BUCKETS)
+
+    out = metrics.render_prometheus()
+    assert f'{name}_bucket{{le="2000"}}' in out
+    # 1500 ms is below the 2000 bound, so the cumulative bucket must count it.
+    assert f'{name}_bucket{{le="2000"}} 1' in out
+    # ...and above the 1000 bound, which must therefore still be zero.
+    assert f'{name}_bucket{{le="1000"}} 0' in out

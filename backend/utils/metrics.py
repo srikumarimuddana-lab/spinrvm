@@ -45,6 +45,32 @@ _histograms: Dict[str, Dict[Tuple[Tuple[str, str], ...], Dict[str, object]]] = {
 # CLAUDE.md (fare calc <300ms, WS fan-out <100ms, dispatch offer→accept <2s).
 DEFAULT_MS_BUCKETS: Tuple[float, ...] = (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000)
 
+# Dispatch offer→accept has a hard 2000 ms P95 SLA, which falls *inside* the
+# DEFAULT_MS_BUCKETS gap between 1000 and 2500. histogram_quantile() would then
+# linearly interpolate across that 1.5 s-wide bucket instead of reading a bound
+# that lines up with the SLA, so the alert threshold is only ever approximated.
+# Adding an explicit 2000 boundary makes the breach/no-breach decision exact.
+# See ADR-010 §2 ("One real (non-blocking) gap worth flagging").
+#
+# This is deliberately a separate tuple rather than a change to
+# DEFAULT_MS_BUCKETS: observe() pins a metric's bucket layout on its first
+# observation, so widening the shared default would silently invalidate every
+# already-recorded series that uses it.
+DISPATCH_MS_BUCKETS: Tuple[float, ...] = (
+    5,
+    10,
+    25,
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2000,
+    2500,
+    5000,
+    10000,
+)
+
 
 def _labels_to_key(labels: Dict[str, str] | None) -> Tuple[Tuple[str, str], ...]:
     if not labels:

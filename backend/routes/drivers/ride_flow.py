@@ -6,6 +6,7 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 
 from . import _deps
 from ._deps import (  # noqa: F401
+    DISPATCH_MS_BUCKETS,
     EVENT_START,
     EVENT_UPDATE,
     AccountDisabledException,
@@ -308,12 +309,15 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         # Offer-to-accept latency from the winner's own offer row (KPI:
         # P95 dispatch offer → accept < 2s). Direct-assignment rides have
         # no pending offer row — counter only, no duration sample.
+        # DISPATCH_MS_BUCKETS (not the shared default) so the 2000 ms SLA is an
+        # exact bucket boundary rather than an interpolation across 1000→2500.
         winner_rows = getattr(winner_res, "data", None) or []
         offered_at = parse_iso_utc(winner_rows[0].get("offered_at")) if winner_rows else None
         if offered_at:
             _metric_observe(
                 "spinr_dispatch_offer_to_accept_duration_ms",
                 (datetime.now(timezone.utc) - offered_at).total_seconds() * 1000.0,
+                buckets=DISPATCH_MS_BUCKETS,
             )
         losers = await db_supabase.run_sync(
             lambda: (

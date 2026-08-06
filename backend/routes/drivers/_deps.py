@@ -72,6 +72,7 @@ try:
         EVENT_UPDATE,
         send_live_activity_update,
     )
+    from ...utils.metrics import DISPATCH_MS_BUCKETS
     from ...utils.metrics import inc as _metric_inc
     from ...utils.metrics import observe as _metric_observe
     from ...utils.money import dollars_to_cents, to_decimal
@@ -123,6 +124,7 @@ except ImportError:
         EVENT_UPDATE,
         send_live_activity_update,
     )
+    from utils.metrics import DISPATCH_MS_BUCKETS  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal

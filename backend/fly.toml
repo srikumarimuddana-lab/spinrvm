@@ -8,9 +8,29 @@
 # URLs point at a stable DNS alias (e.g. redis.spinr.ca) so the backend can be
 # repointed without a redeploy. Only non-secret config lives in [env] below.
 #
-# UVICORN_WORKERS stays at 2: 4 workers on shared-cpu-1x/1gb is memory-tight, and
-# worker count is a capacity knob only — the 16 background loops are replay-safe
-# per process (atomic DB claims / idempotency keys / Redis leader locks).
+# UVICORN_WORKERS is 1, down from 2. Worker count is a capacity knob only — the
+# background loops are replay-safe per process (atomic DB claims / idempotency
+# keys / Redis leader locks) — but it is NOT metrics-neutral:
+#
+#   utils/metrics.py is per-process by design. With 2 forked workers behind one
+#   port, a scrape returns whichever worker answered, so Prometheus sees one
+#   series whose counters jump up and down, reads each drop as a counter reset,
+#   and rate()/histogram_quantile() return garbage. One worker per machine makes
+#   one scrape target equal one counter set — correct by construction, with no
+#   new dependency and no rewrite of metrics.py.
+#
+# The capacity cost is small here specifically because [[vm]] below is
+# shared-cpu-1x — a SINGLE vCPU. Two forked workers contend for one core, so for
+# an asyncio-bound app the throughput gain was marginal while memory doubled
+# (the same pressure that already forced 4 -> 2). Watch machine count and p95
+# latency after this ships; raise min_machines_running before raising workers,
+# since scaling horizontally keeps the metrics correct and scaling workers does
+# not.
+#
+# METRICS_PORT starts the private Prometheus listener (backend/metrics_server.py)
+# scraped by [metrics] below. Deliberately absent from [http_service], so
+# fly-proxy never routes it and it is reachable only over the private 6PN mesh.
+# The public :8000/metrics stays token-gated via METRICS_AUTH_TOKEN.
 app = "spinr-backend-yyz"
 primary_region = "yyz"
 kill_signal = "SIGINT"
@@ -23,8 +43,9 @@ kill_timeout = "30s"
   ENV = "production"
   PORT = "8000"
   SUPABASE_REGION = "ca-central-1"
-  UVICORN_WORKERS = "2"
+  UVICORN_WORKERS = "1"
   PYTHONUNBUFFERED = "1"
+  METRICS_PORT = "9091"
 
 [deploy]
   strategy = "rolling"
@@ -49,6 +70,17 @@ kill_timeout = "30s"
     method = "GET"
     timeout = "5s"
     path = "/health"
+
+# Fly's built-in Prometheus scrapes this every 15s into the managed TSDB behind
+# fly-metrics.net, so no agent and no external metrics vendor is needed. The
+# scraper cannot send an Authorization header, which is exactly why this points
+# at the private 9091 listener rather than the token-gated :8000/metrics.
+#
+# The port is intentionally NOT declared in [http_service] — that is what keeps
+# an unauthenticated endpoint off the public internet.
+[metrics]
+  port = 9091
+  path = "/metrics"
 
 [[vm]]
   size = "shared-cpu-1x"

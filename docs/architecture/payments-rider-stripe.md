@@ -283,6 +283,7 @@ PIPEDA account-deletion scrub, which is why `record_payment_event` stores only
 | Table | Migration | Shape |
 |---|---|---|
 | `wallet_transactions` | `19_wallet.sql` | Append-only; `type` CHECK over 9 values, `amount`, running `balance_after NUMERIC(12,2)`, `reference_id` |
+| `financial_event_entries` | `286_financial_event_entries.sql` | Double-entry legs for `financial_events`. `amount_cents` always positive; direction in `side` (debit/credit). Flag-gated, default off. |
 | `subscription_payments` | `151_subscription_payments_ledger.sql` | Subscription billing ledger |
 | `reconciliation_discrepancies` | `59_...sql` | Output of the daily reconcile |
 | `stripe_events` | `22_stripe_events.sql` | Webhook dedup — not a money ledger |
@@ -323,19 +324,23 @@ Redis `SET NX` gate for the wallet re-drive path (`:314`).
 
 Stated explicitly rather than left implied.
 
-1. **The ledger is single-entry, not double-entry.** `financial_events` is a signed
-   delta log with no balancing contra-account. You cannot prove the ledger nets to
-   zero against a cash account; the daily `stripe_reconcile_loop` is what
-   compensates. Adequate for tax/audit, insufficient for true accounting closure.
+1. ~~**The ledger is single-entry, not double-entry.**~~ **Addressed 2026-08-06 (flagged
+   off).** `financial_event_entries` (migration 286) adds balanced debit/credit legs as a
+   child table — deliberately not as extra rows in `financial_events`, because
+   `reconciliation._sum_financial_events` sums `delta_cents` and contra rows there would
+   cancel the daily Stripe reconciliation to zero. Legs are written only when the
+   `ledger_double_entry_enabled` app_settings flag is on; **default off, and the migration
+   has not been run against a live database yet.** Until then the effective state is still
+   single-entry. See `docs/change-log/2026-08-06-ledger-durability-double-entry.md`.
 
-2. **Ledger writes are best-effort and can silently under-report.**
-   `record_payment_event` is documented *"Never raises — logs and returns"*
-   (`payment_service.py:139`) and swallows the exception at `:173`. A failed
-   `financial_events` INSERT logs an error but the charge still completes and the
-   ride is still marked paid — so the 7-year tax ledger can under-report collected
-   revenue and GST. It does `logger.error`, so it is visible, but nothing blocks or
-   retries the write. This is in tension with CLAUDE.md's "do not silently swallow
-   errors" rule for payment paths.
+2. ~~**Ledger writes are best-effort and can silently under-report.**~~ **Addressed
+   2026-08-06 for the two `payment_service.py` writers.** The header insert now supplies a
+   client-generated PK and retries 3×, treats duplicate-key as success, and escalates to
+   Sentry (`spinr_alert=ledger_write_failed`) on exhaustion — while still never raising,
+   since the money has already moved. **Still outstanding for the other three writers:**
+   `routes/rides/cancellation.py:220` and `:491` (cancellation / notice-window fees) and the
+   webhook-side writer in `routes/webhooks.py` all retain the original
+   insert-and-swallow pattern.
 
 3. **Idempotency keys embed `amount_cents`.** A different tip yields a different key
    and therefore a genuinely new charge — correct for tip changes, but it means the

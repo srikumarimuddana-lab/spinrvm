@@ -191,6 +191,17 @@ class AppSettings(BaseModel):
     # return no driver positions at all. Riders still see availability counts
     # from /rides/estimate, which never carried coordinates.
     driver_map_show_locations: bool = True
+    # ── Double-entry ledger legs (migration 286) ─────────────────────────
+    # When on, every financial_events row also writes balanced debit/credit
+    # rows to financial_event_entries. Default OFF so the schema ships dark:
+    # flip it here (DB-backed app_settings, no redeploy) once the table is
+    # confirmed present in the target environment, and flip it back to stop
+    # all leg writes instantly if anything looks wrong.
+    #
+    # Turning it off is the rollback: financial_events — the tax record and
+    # the input to the daily Stripe reconciliation — is completely unaffected
+    # either way. Nothing reads the legs to make a money decision.
+    ledger_double_entry_enabled: bool = False
     # Grid cell for coarsening, in metres. 500m keeps the map useful at city
     # zoom ("cars are around me, roughly there") while destroying the
     # resolution needed to follow one vehicle. 0 would mean exact — deliberately

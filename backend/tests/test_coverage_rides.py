@@ -705,7 +705,10 @@ async def test_add_tip_duplicate():
 async def test_record_payment_event_success():
     from backend.services.payment_service import record_payment_event
 
-    with patch("backend.services.payment_service.db_supabase") as mock_db:
+    # Patch target is ledger_service, not payment_service: record_payment_event
+    # delegates the INSERT to services/ledger_service.py, so that is the module
+    # whose db_supabase binding actually issues the write.
+    with patch("backend.services.ledger_service.db_supabase") as mock_db:
         mock_db.insert_one = AsyncMock()
         await record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
     mock_db.insert_one.assert_called_once()
@@ -713,13 +716,23 @@ async def test_record_payment_event_success():
 
 @pytest.mark.anyio
 async def test_record_payment_event_swallows_error():
-    """Ledger write failure must not propagate."""
+    """Ledger write failure must not propagate — the charge already settled.
+
+    It is still retried and escalated (see test_ledger_service.py); what must
+    never happen is the exception reaching the settlement caller.
+    """
+    from backend.services import ledger_service
     from backend.services.payment_service import record_payment_event
 
-    with patch("backend.services.payment_service.db_supabase") as mock_db:
+    with (
+        patch("backend.services.ledger_service.db_supabase") as mock_db,
+        patch.object(ledger_service, "_INSERT_BACKOFF_SECONDS", (0, 0)),
+    ):
         mock_db.insert_one = AsyncMock(side_effect=Exception("DB error"))
         # Should not raise
         await record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
+
+    assert mock_db.insert_one.await_count == 3, "a lost ledger row must be retried, not dropped"
 
 
 # ── process_payment ────────────────────────────────────────────────────────────

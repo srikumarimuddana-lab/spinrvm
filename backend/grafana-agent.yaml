@@ -1,0 +1,67 @@
+# Grafana Agent / Prometheus agent-mode scrape config for the Spinr backend.
+#
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │ THIS FILE IS INERT. Nothing loads it today.                               │
+# │                                                                           │
+# │ It is committed so the agent config is reviewable in the repo and version-│
+# │ controlled alongside the metric names it scrapes. Deploying it requires an │
+# │ operator decision that is still OPEN — see docs/runbooks/metrics-alerting  │
+# │ .md §2 (colocated process vs standalone Fly app). Neither backend/fly.toml │
+# │ nor backend/Dockerfile has been modified.                                  │
+# └───────────────────────────────────────────────────────────────────────────┘
+#
+# Design per ADR-010 §1, option (b): a lightweight agent colocated with the app
+# scrapes localhost and *pushes* (remote_write) to a managed Prometheus-
+# compatible backend. Push rather than pull is the key property — a Fly machine
+# that scales down has already shipped its samples, instead of losing them to a
+# missed scrape. That is exactly the bursty traffic (surge, dispatch storms) we
+# most need visibility into.
+#
+# Requires NO application change: it scrapes the /metrics endpoint that already
+# exists, in the Prometheus text format render_prometheus() already emits, using
+# the METRICS_AUTH_TOKEN bearer auth already enforced.
+#
+# Secrets are referenced as environment variables and MUST NOT be inlined here.
+
+metrics:
+  global:
+    scrape_interval: 15s
+    external_labels:
+      # ADR-010 §4: every series must carry `provider` so Fly/Railway can be
+      # told apart. Loop-driven metrics run on BOTH providers by design and
+      # must never be summed across them — a healthy Fly loop would otherwise
+      # mask a dead Railway one. Set per deployment; do not template this from
+      # application code.
+      provider: fly
+      instance: ${FLY_ALLOC_ID:-unknown}
+      region: ${FLY_REGION:-yyz}
+
+    remote_write:
+      - url: ${GRAFANA_CLOUD_PROM_URL}
+        basic_auth:
+          username: ${GRAFANA_CLOUD_PROM_USER}
+          password: ${GRAFANA_CLOUD_PROM_API_KEY}
+
+  configs:
+    - name: spinr-backend
+      scrape_configs:
+        - job_name: spinr-backend
+          metrics_path: /metrics
+          scheme: http
+          # Colocated: always finds its own app on localhost, so there is no
+          # service-discovery problem and no Fly .internal DNS load-balancing
+          # to work around.
+          static_configs:
+            - targets: ["localhost:${PORT:-8000}"]
+
+          # /metrics fails closed in production when METRICS_AUTH_TOKEN is
+          # unset (returns 503), so this must be present or every scrape fails.
+          authorization:
+            type: Bearer
+            credentials: ${METRICS_AUTH_TOKEN}
+
+          # The endpoint refreshes Redis, dependency, and loop-heartbeat gauges
+          # on each scrape. Those are O(1) plus a 30s-cached dependency probe,
+          # but keep a timeout well under scrape_interval so a slow dependency
+          # degrades one scrape rather than stalling the agent.
+          scrape_timeout: 10s

@@ -572,6 +572,23 @@ async def lifespan(app: FastAPI):
 
     _spawn("loop_watchdog (5min)", _loop_watchdog)
 
+    # Private metrics listener for Fly's built-in Prometheus, which cannot send
+    # an auth header and so cannot scrape the token-gated public /metrics.
+    # Off unless METRICS_PORT is set, so dev/test/Railway are unchanged.
+    # Not registered with the loop watchdog: it is a server, not a periodic
+    # loop, so it has no heartbeat to go stale — its absence shows up as the
+    # scrape target going down, which is the signal that matters.
+    try:
+        from metrics_server import metrics_port, serve_metrics
+    except ImportError:  # pragma: no cover - `python -m backend.server` path
+        from backend.metrics_server import metrics_port, serve_metrics  # type: ignore
+
+    _metrics_port = metrics_port()
+    if _metrics_port:
+        _spawn(f"metrics_listener (:{_metrics_port})", lambda: serve_metrics(_metrics_port))
+    else:
+        logger.debug("METRICS_PORT unset — private metrics listener not started")
+
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were

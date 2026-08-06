@@ -10,6 +10,7 @@ resolve ("close") action.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -222,6 +223,79 @@ def test_is_configured_requires_token_org_and_project():
         assert sentry._is_configured() is False
 
 
+@pytest.mark.parametrize(
+    "requested,expected_stats,expected_term",
+    [
+        # Natively supported by the endpoint -> passed through as the sparkline.
+        ("24h", "24h", "lastSeen:-24h"),
+        ("14d", "14d", "lastSeen:-14d"),
+        # NOT supported as statsPeriod (hard 400 from Sentry). The sparkline is
+        # clamped and the real look-back moves into the search query, so the
+        # dashboard's 7d/30d/90d options work instead of 502-ing.
+        ("7d", "14d", "lastSeen:-7d"),
+        ("30d", "14d", "lastSeen:-30d"),
+        ("90d", "14d", "lastSeen:-90d"),
+        ("12w", "14d", "lastSeen:-12w"),
+        # Empty disables stats and applies no look-back filter.
+        ("", "", None),
+    ],
+)
+def test_period_params_clamps_stats_and_moves_lookback_to_query(requested, expected_stats, expected_term):
+    assert sentry._period_params(requested) == (expected_stats, expected_term)
+
+
+@pytest.mark.parametrize("bad", ["30", "d30", "30 days", "1y", "'; drop", "24h OR 1=1", "9999d"])
+def test_period_params_rejects_malformed_window(bad):
+    """Reject at our edge with a 400. Forwarding garbage makes Sentry 400, which
+    this module reports as a 502 that reads like an outage."""
+    with pytest.raises(HTTPException) as ei:
+        sentry._period_params(bad)
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_list_issues_sends_supported_stats_period_and_lookback_term():
+    """Regression for the production 502: stats_period=30d reached Sentry
+    verbatim and was rejected, because the endpoint only accepts 24h/14d/''."""
+    fetch = AsyncMock(return_value=[])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+    ):
+        out = await _call_list_issues(stats_period="30d")
+
+    call = fetch.await_args_list[0]
+    assert call.kwargs["stats_period"] == "14d"  # clamped to something Sentry accepts
+    assert call.kwargs["query"] == "is:unresolved lastSeen:-30d"
+    # The response still echoes what the operator asked for, not the clamp.
+    assert out["stats_period"] == "30d"
+
+
+@pytest.mark.anyio
+async def test_sentry_request_400_relays_sentry_detail():
+    """An opaque 502 is why the statsPeriod bug took a production log to find."""
+    client = MagicMock()
+    client.request = AsyncMock(return_value=_resp(400, {"detail": "Invalid statsPeriod"}))
+    with patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"):
+        with pytest.raises(HTTPException) as ei:
+            await sentry._sentry_request(client, "GET", "/x/")
+    assert ei.value.status_code == 502
+    assert "Invalid statsPeriod" in ei.value.detail
+
+
+@pytest.mark.anyio
+async def test_sentry_request_400_without_parseable_body_still_fails_cleanly():
+    client = MagicMock()
+    resp = _resp(400)
+    resp.json.side_effect = ValueError("no json")
+    client.request = AsyncMock(return_value=resp)
+    with patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"):
+        with pytest.raises(HTTPException) as ei:
+            await sentry._sentry_request(client, "GET", "/x/")
+    assert ei.value.status_code == 502
+
+
 def test_base_url_strips_trailing_slash():
     with patch.object(sentry.settings, "SENTRY_API_BASE_URL", "https://de.sentry.io/"):
         assert sentry._base_url() == "https://de.sentry.io"
@@ -399,6 +473,187 @@ async def test_list_issues_unknown_surface_raises_400():
         with pytest.raises(HTTPException) as ei:
             await _call_list_issues(surface="driver-app")
     assert ei.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# TAG MODE — one Sentry project, surfaces separated by the `surface` tag
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _tag_mode_settings(shared="spinr-all"):
+    """Patch settings into tag mode: SENTRY_PROJECT_ALL set, no per-surface slugs.
+
+    Patches the real settings rather than stubbing ``_surface_projects``, because
+    mode selection is the behaviour under test — stubbing the map would bypass it.
+    """
+    with (
+        patch.object(sentry.settings, "SENTRY_PROJECT_ALL", shared),
+        patch.object(sentry.settings, "SENTRY_PROJECT_BACKEND", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_RIDER", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_DRIVER", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_ADMIN", None),
+    ):
+        yield
+
+
+def test_tag_mode_off_when_any_per_surface_slug_is_set():
+    """SENTRY_PROJECT_ALL is additive: a per-surface slug must always win, or
+    adding it would silently rewrite an existing project-mode deployment."""
+    with (
+        patch.object(sentry.settings, "SENTRY_PROJECT_ALL", "spinr-all"),
+        patch.object(sentry.settings, "SENTRY_PROJECT_BACKEND", "spinr-backend"),
+        patch.object(sentry.settings, "SENTRY_PROJECT_RIDER", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_DRIVER", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_ADMIN", None),
+    ):
+        assert sentry._tag_mode() is False
+        assert sentry._surface_projects() == {"backend": "spinr-backend"}
+
+
+def test_tag_mode_maps_every_surface_to_the_shared_project():
+    with _tag_mode_settings():
+        assert sentry._tag_mode() is True
+        assert sentry._surface_projects() == {
+            "backend": "spinr-all",
+            "rider-app": "spinr-all",
+            "driver-app": "spinr-all",
+            "admin": "spinr-all",
+        }
+
+
+def test_tag_mode_targets_cover_every_surface_plus_untagged():
+    """The `!has:surface` leg is the point: without it, any event missing the
+    tag disappears from an error-triage screen instead of showing as unknown."""
+    with _tag_mode_settings():
+        targets = sentry._targets(None)
+    assert [t.surface for t in targets] == ["backend", "rider-app", "driver-app", "admin", "unknown"]
+    assert {t.project for t in targets} == {"spinr-all"}
+    assert targets[0].term == "surface:backend"
+    assert targets[-1].term == "!has:surface"
+
+
+def test_tag_mode_single_surface_target_is_one_query():
+    with _tag_mode_settings():
+        targets = sentry._targets("admin")
+        unknown = sentry._targets("unknown")
+    assert targets == [sentry._Target("admin", "spinr-all", "surface:admin")]
+    # "unknown" is a selectable bucket in tag mode, not a rejected surface.
+    assert unknown == [sentry._Target("unknown", "spinr-all", "!has:surface")]
+
+
+def test_tag_mode_rejects_surface_outside_the_known_set():
+    with _tag_mode_settings():
+        with pytest.raises(HTTPException) as ei:
+            sentry._targets("marketing-site")
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_list_issues_tag_mode_appends_surface_term_to_query():
+    """Each leg must narrow by tag, or all five legs return the same issues."""
+    fetch = AsyncMock(return_value=[])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        _tag_mode_settings(),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+    ):
+        await _call_list_issues(query="ValueError")
+
+    # `lastSeen:-14d` is the default look-back, applied as a search term rather
+    # than via statsPeriod — see _period_params.
+    sent = [c.kwargs["query"] for c in fetch.await_args_list]
+    assert sent == [
+        "is:unresolved lastSeen:-14d ValueError surface:backend",
+        "is:unresolved lastSeen:-14d ValueError surface:rider-app",
+        "is:unresolved lastSeen:-14d ValueError surface:driver-app",
+        "is:unresolved lastSeen:-14d ValueError surface:admin",
+        "is:unresolved lastSeen:-14d ValueError !has:surface",
+    ]
+    # Every leg hits the one shared project.
+    assert {c.args[2] for c in fetch.await_args_list} == {"spinr-all"}
+
+
+@pytest.mark.anyio
+async def test_list_issues_tag_mode_dedupes_issue_matching_two_surfaces():
+    """One Sentry issue groups by error signature, not by tag, so the same id
+    can answer two surface legs. It must appear once, labelled by the first
+    (stable, _SURFACE_SETTING-ordered) leg rather than twice."""
+    dup = {"id": "shared1", "surface": "backend", "last_seen": "2026-01-02T00:00:00Z"}
+    same_issue_other_leg = {"id": "shared1", "surface": "admin", "last_seen": "2026-01-02T00:00:00Z"}
+    only_admin = {"id": "a1", "surface": "admin", "last_seen": "2026-01-01T00:00:00Z"}
+    fetch = AsyncMock(side_effect=[[dup], [], [], [same_issue_other_leg, only_admin], []])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        _tag_mode_settings(),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+    ):
+        out = await _call_list_issues()
+
+    assert [i["id"] for i in out["issues"]] == ["shared1", "a1"]
+    assert out["count"] == 2
+    # First leg wins the label, so a refresh does not shuffle it.
+    assert out["issues"][0]["surface"] == "backend"
+
+
+@pytest.mark.anyio
+async def test_get_issue_tag_mode_takes_surface_from_event_tag():
+    """The project cannot identify the surface in tag mode; the event tag can."""
+    raw_issue = {"id": "1", "project": {"slug": "spinr-all"}, "metadata": {}}
+    event = {"id": "e1", "tags": [{"key": "surface", "value": "driver-app"}], "entries": []}
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        _tag_mode_settings(),
+        patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+        patch.object(
+            sentry,
+            "_sentry_request",
+            AsyncMock(side_effect=[_resp(200, raw_issue), _resp(200, event)]),
+        ),
+    ):
+        out = await sentry._get_issue("1")
+    assert out["surface"] == "driver-app"
+    assert out["project"] == "spinr-all"
+
+
+@pytest.mark.anyio
+async def test_get_issue_tag_mode_ignores_unrecognised_surface_tag():
+    """An arbitrary tag value must not reach the dashboard's surface badge."""
+    raw_issue = {"id": "1", "project": {"slug": "spinr-all"}, "metadata": {}}
+    event = {"id": "e1", "tags": [{"key": "surface", "value": "evil-surface"}], "entries": []}
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        _tag_mode_settings(),
+        patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+        patch.object(
+            sentry,
+            "_sentry_request",
+            AsyncMock(side_effect=[_resp(200, raw_issue), _resp(200, event)]),
+        ),
+    ):
+        out = await sentry._get_issue("1")
+    assert out["surface"] == "unknown"
+
+
+def test_resolve_surface_tag_mode_rejects_foreign_project():
+    """The org token can read any project; tag mode must still scope to ours."""
+    with _tag_mode_settings():
+        assert sentry._resolve_surface({"project": {"slug": "spinr-all"}}) == ("unknown", "spinr-all")
+        with pytest.raises(HTTPException) as ei:
+            sentry._resolve_surface({"project": {"slug": "someone-elses-project"}})
+    assert ei.value.status_code == 404
+
+
+def test_sentry_config_reports_mode():
+    with _tag_mode_settings():
+        with (
+            patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"),
+            patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+        ):
+            out = sentry._sentry_config()
+    assert out["mode"] == "tag"
+    assert all(s["enabled"] for s in out["surfaces"])
+    assert {s["project"] for s in out["surfaces"]} == {"spinr-all"}
 
 
 @pytest.mark.anyio

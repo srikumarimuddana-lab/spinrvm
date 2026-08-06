@@ -44,6 +44,13 @@ export interface SentryConfig {
     configured: boolean;
     org: string | null;
     base_url: string;
+    /**
+     * How the backend tells surfaces apart. "tag" = one shared Sentry project
+     * filtered by the `surface` tag (issues with no tag come back as the
+     * "unknown" surface); "project" = one Sentry project per surface. Advisory
+     * only — every other field means the same thing in both modes.
+     */
+    mode?: "tag" | "project";
     surfaces: SentrySurfaceConfig[];
 }
 

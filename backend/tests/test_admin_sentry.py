@@ -223,6 +223,79 @@ def test_is_configured_requires_token_org_and_project():
         assert sentry._is_configured() is False
 
 
+@pytest.mark.parametrize(
+    "requested,expected_stats,expected_term",
+    [
+        # Natively supported by the endpoint -> passed through as the sparkline.
+        ("24h", "24h", "lastSeen:-24h"),
+        ("14d", "14d", "lastSeen:-14d"),
+        # NOT supported as statsPeriod (hard 400 from Sentry). The sparkline is
+        # clamped and the real look-back moves into the search query, so the
+        # dashboard's 7d/30d/90d options work instead of 502-ing.
+        ("7d", "14d", "lastSeen:-7d"),
+        ("30d", "14d", "lastSeen:-30d"),
+        ("90d", "14d", "lastSeen:-90d"),
+        ("12w", "14d", "lastSeen:-12w"),
+        # Empty disables stats and applies no look-back filter.
+        ("", "", None),
+    ],
+)
+def test_period_params_clamps_stats_and_moves_lookback_to_query(requested, expected_stats, expected_term):
+    assert sentry._period_params(requested) == (expected_stats, expected_term)
+
+
+@pytest.mark.parametrize("bad", ["30", "d30", "30 days", "1y", "'; drop", "24h OR 1=1", "9999d"])
+def test_period_params_rejects_malformed_window(bad):
+    """Reject at our edge with a 400. Forwarding garbage makes Sentry 400, which
+    this module reports as a 502 that reads like an outage."""
+    with pytest.raises(HTTPException) as ei:
+        sentry._period_params(bad)
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_list_issues_sends_supported_stats_period_and_lookback_term():
+    """Regression for the production 502: stats_period=30d reached Sentry
+    verbatim and was rejected, because the endpoint only accepts 24h/14d/''."""
+    fetch = AsyncMock(return_value=[])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+    ):
+        out = await _call_list_issues(stats_period="30d")
+
+    call = fetch.await_args_list[0]
+    assert call.kwargs["stats_period"] == "14d"  # clamped to something Sentry accepts
+    assert call.kwargs["query"] == "is:unresolved lastSeen:-30d"
+    # The response still echoes what the operator asked for, not the clamp.
+    assert out["stats_period"] == "30d"
+
+
+@pytest.mark.anyio
+async def test_sentry_request_400_relays_sentry_detail():
+    """An opaque 502 is why the statsPeriod bug took a production log to find."""
+    client = MagicMock()
+    client.request = AsyncMock(return_value=_resp(400, {"detail": "Invalid statsPeriod"}))
+    with patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"):
+        with pytest.raises(HTTPException) as ei:
+            await sentry._sentry_request(client, "GET", "/x/")
+    assert ei.value.status_code == 502
+    assert "Invalid statsPeriod" in ei.value.detail
+
+
+@pytest.mark.anyio
+async def test_sentry_request_400_without_parseable_body_still_fails_cleanly():
+    client = MagicMock()
+    resp = _resp(400)
+    resp.json.side_effect = ValueError("no json")
+    client.request = AsyncMock(return_value=resp)
+    with patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"):
+        with pytest.raises(HTTPException) as ei:
+            await sentry._sentry_request(client, "GET", "/x/")
+    assert ei.value.status_code == 502
+
+
 def test_base_url_strips_trailing_slash():
     with patch.object(sentry.settings, "SENTRY_API_BASE_URL", "https://de.sentry.io/"):
         assert sentry._base_url() == "https://de.sentry.io"
@@ -487,13 +560,15 @@ async def test_list_issues_tag_mode_appends_surface_term_to_query():
     ):
         await _call_list_issues(query="ValueError")
 
+    # `lastSeen:-14d` is the default look-back, applied as a search term rather
+    # than via statsPeriod — see _period_params.
     sent = [c.kwargs["query"] for c in fetch.await_args_list]
     assert sent == [
-        "is:unresolved ValueError surface:backend",
-        "is:unresolved ValueError surface:rider-app",
-        "is:unresolved ValueError surface:driver-app",
-        "is:unresolved ValueError surface:admin",
-        "is:unresolved ValueError !has:surface",
+        "is:unresolved lastSeen:-14d ValueError surface:backend",
+        "is:unresolved lastSeen:-14d ValueError surface:rider-app",
+        "is:unresolved lastSeen:-14d ValueError surface:driver-app",
+        "is:unresolved lastSeen:-14d ValueError surface:admin",
+        "is:unresolved lastSeen:-14d ValueError !has:surface",
     ]
     # Every leg hits the one shared project.
     assert {c.args[2] for c in fetch.await_args_list} == {"spinr-all"}

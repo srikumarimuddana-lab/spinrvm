@@ -8,10 +8,19 @@ request hits Sentry live, and the dashboard's Refresh button simply re-calls
 these endpoints, so the data is always the current Sentry state.
 
 Config lives in ``core/config.py`` (SENTRY_API_TOKEN / SENTRY_ORG_SLUG /
-SENTRY_API_BASE_URL / SENTRY_PROJECT_*). When it's missing the read endpoints
-report ``configured: False`` (via /config) rather than pretending; the
-list/detail/resolve endpoints raise 503 so a misconfiguration surfaces loudly
-instead of silently returning nothing.
+SENTRY_API_BASE_URL / SENTRY_PROJECT_* / SENTRY_PROJECT_ALL). When it's missing
+the read endpoints report ``configured: False`` (via /config) rather than
+pretending; the list/detail/resolve endpoints raise 503 so a misconfiguration
+surfaces loudly instead of silently returning nothing.
+
+Two ways to tell the surfaces apart, chosen by config (see ``_targets``):
+  * PROJECT MODE — SENTRY_PROJECT_* give each surface its own Sentry project;
+    an issue's surface is implied by which project returned it.
+  * TAG MODE — SENTRY_PROJECT_ALL names one project every surface reports into,
+    and each leg of the fan-out narrows by the `surface` tag the SDKs set at
+    init. An extra `!has:surface` leg keeps untagged events visible instead of
+    dropping them. Per-surface slugs win when both are configured, so adding
+    SENTRY_PROJECT_ALL cannot change an existing project-mode deployment.
 
 Auth: mounted with ``Depends(require_super_admin)`` in routes/admin/__init__.py
 AND re-declared on every handler here, the same belt-and-braces posture as
@@ -31,7 +40,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -107,6 +117,18 @@ _DEFAULT_LIMIT = 25
 
 _HTTP_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 
+# Sentry's project-issues endpoint accepts ONLY these for `statsPeriod`, where it
+# sizes the per-issue stats sparkline: "can be one of '24h', '14d', and ''".
+# Anything else is a hard 400. The dashboard offers 24h/7d/14d/30d/90d, so three
+# of its five options used to fail — and because the 400 was mapped to a generic
+# 502, the UI reported "Sentry API failed for every configured surface", which
+# reads as an outage rather than an unsupported parameter.
+_SENTRY_STATS_PERIODS = ("", "24h", "14d")
+
+# Look-back windows accepted from the client. Sentry's relative-time suffixes:
+# m(inutes) h(ours) d(ays) w(eeks).
+_PERIOD_RE = re.compile(r"^\d{1,3}[mhdw]$")
+
 # Rate limits. This surface fans one request out to N Sentry projects, and the
 # dashboard re-fetches on every filter change — an abandoned tab in a reload
 # loop could otherwise burn the org's Sentry API quota for everyone. Reads are
@@ -115,14 +137,43 @@ _READ_RATE_LIMIT = "60/minute"
 _WRITE_RATE_LIMIT = "20/minute"
 
 
-def _surface_projects() -> Dict[str, str]:
-    """{surface: project_slug} for every surface whose project slug is set."""
+def _per_surface_projects() -> Dict[str, str]:
+    """{surface: project_slug} for every surface given its OWN project slug."""
     out: Dict[str, str] = {}
     for surface, attr in _SURFACE_SETTING:
         slug = getattr(settings, attr, None)
         if slug:
             out[surface] = slug
     return out
+
+
+def _shared_project() -> Optional[str]:
+    """The single project every surface reports into, or None (see TAG MODE)."""
+    slug = (settings.SENTRY_PROJECT_ALL or "").strip()
+    return slug or None
+
+
+def _tag_mode() -> bool:
+    """True when surfaces are told apart by the `surface` tag, not by project.
+
+    Per-surface slugs win: if anyone has wired even one SENTRY_PROJECT_*, that
+    is the more specific configuration and tag mode stays off. This makes
+    SENTRY_PROJECT_ALL purely additive — setting it can never change the
+    behaviour of an existing project-mode deployment.
+    """
+    return bool(_shared_project()) and not _per_surface_projects()
+
+
+def _surface_projects() -> Dict[str, str]:
+    """{surface: project_slug} for every surface the viewer can serve.
+
+    In tag mode every surface maps to the same shared project; they are
+    separated at query time by a `surface:<name>` search term instead.
+    """
+    shared = _shared_project()
+    if shared and not _per_surface_projects():
+        return {surface: shared for surface, _ in _SURFACE_SETTING}
+    return _per_surface_projects()
 
 
 def _is_configured() -> bool:
@@ -135,10 +186,91 @@ def _require_configured() -> None:
             status_code=503,
             detail=(
                 "Sentry API is not configured. Set SENTRY_API_TOKEN, "
-                "SENTRY_ORG_SLUG, and at least one SENTRY_PROJECT_* in the "
+                "SENTRY_ORG_SLUG, and either SENTRY_PROJECT_ALL (one project "
+                "for every surface) or at least one SENTRY_PROJECT_* in the "
                 "backend environment."
             ),
         )
+
+
+# Surface label for issues whose events carry no `surface` tag. Tag mode asks
+# for these explicitly (`!has:surface`) instead of letting them fall out of the
+# result: an error-triage screen that silently drops a whole class of events is
+# worse than one that shows them labelled "unknown".
+_UNKNOWN_SURFACE = "unknown"
+
+
+class _Target(NamedTuple):
+    """One leg of the fan-out: which project to ask, and what to call the answer.
+
+    ``term`` is an extra Sentry search term ANDed onto the status query. It is
+    None in project mode (the project itself identifies the surface) and
+    ``surface:<name>`` / ``!has:surface`` in tag mode.
+    """
+
+    surface: str
+    project: str
+    term: Optional[str]
+
+
+def _targets(surface: Optional[str]) -> List[_Target]:
+    """Build the fan-out plan for a list request.
+
+    Project mode issues one request per configured project and infers each
+    issue's surface from which project answered it. Tag mode issues one request
+    per surface against the single shared project, narrowed by `surface:<name>`
+    — so the label is something we asked for rather than something we guessed.
+
+    Raises 400 for a surface the current configuration cannot serve, rather
+    than silently returning an empty list.
+    """
+    shared = _shared_project()
+    if shared and not _per_surface_projects():
+        known = [s for s, _ in _SURFACE_SETTING]
+        if surface is not None:
+            # "unknown" is a real, selectable bucket in tag mode, not an error.
+            if surface == _UNKNOWN_SURFACE:
+                return [_Target(_UNKNOWN_SURFACE, shared, "!has:surface")]
+            if surface not in known:
+                raise HTTPException(status_code=400, detail=f"Surface '{surface}' is not configured")
+            return [_Target(surface, shared, f"surface:{surface}")]
+        return [_Target(s, shared, f"surface:{s}") for s in known] + [_Target(_UNKNOWN_SURFACE, shared, "!has:surface")]
+
+    # Project mode. Deliberately via _surface_projects(), which is identical to
+    # _per_surface_projects() on this branch (tag mode was ruled out above) and
+    # keeps one seam for callers and tests that stub the surface map.
+    projects = _surface_projects()
+    if surface is not None:
+        if surface not in projects:
+            raise HTTPException(status_code=400, detail=f"Surface '{surface}' is not configured")
+        return [_Target(surface, projects[surface], None)]
+    return [_Target(s, slug, None) for s, slug in projects.items()]
+
+
+def _period_params(stats_period: str) -> Tuple[str, Optional[str]]:
+    """Split a requested look-back into (statsPeriod, extra search term).
+
+    `statsPeriod` only sizes the stats sparkline and rejects anything outside
+    ``_SENTRY_STATS_PERIODS``. The real look-back filter is a `lastSeen:-<window>`
+    search term, which takes arbitrary windows ("lastSeen:-2d returns issues last
+    seen within the past two days"). So clamp the sparkline to a value Sentry
+    accepts and let the search do the filtering.
+
+    The alternative — restricting the dashboard to 24h/14d — would drop 30d/90d
+    triage, which is exactly the window where slow-burn issues become visible.
+    """
+    period = (stats_period or "").strip()
+    if not period:
+        return "", None
+    if not _PERIOD_RE.match(period):
+        # Reject here with a clear 400 rather than forwarding garbage and
+        # surfacing Sentry's rejection as a 502 that looks like an outage.
+        raise HTTPException(
+            status_code=400,
+            detail="stats_period must look like 24h, 7d, 30d, or 12w",
+        )
+    stats = period if period in _SENTRY_STATS_PERIODS else "14d"
+    return stats, f"lastSeen:-{period}"
 
 
 def _base_url() -> str:
@@ -187,6 +319,24 @@ async def _sentry_request(
         raise HTTPException(
             status_code=502,
             detail="Sentry rejected the API token (needs event:read + event:write). Check SENTRY_API_TOKEN scopes.",
+        )
+    if resp.status_code == 400:
+        # A 400 here is Sentry rejecting OUR request shape (an unsupported
+        # statsPeriod, an unparseable search term), not an outage. Its body is a
+        # parameter-validation message rather than issue content, so relaying a
+        # truncated `detail` is PII-safe and is the difference between a
+        # diagnosable error and an opaque "Sentry API failed for every surface".
+        detail = ""
+        try:
+            body = resp.json()
+            if isinstance(body, dict):
+                detail = str(body.get("detail") or body.get("error") or "")[:200]
+        except ValueError:
+            detail = ""
+        logger.error("[sentry] %s %s -> 400 %s", method, path, detail or "(no detail)")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Sentry rejected the request: {detail}" if detail else "Sentry API returned HTTP 400",
         )
     if resp.status_code >= 400:
         logger.error("[sentry] %s %s -> %s", method, path, resp.status_code)
@@ -307,6 +457,10 @@ def _sentry_config() -> Dict[str, Any]:
         "configured": _is_configured(),
         "org": settings.SENTRY_ORG_SLUG,
         "base_url": _base_url(),
+        # "tag" = one shared project, surfaces separated by the `surface` tag;
+        # "project" = one Sentry project per surface. Advisory for the UI —
+        # every other field means the same thing in both modes.
+        "mode": "tag" if _tag_mode() else "project",
         "surfaces": [
             {"surface": surface, "project": projects.get(surface), "enabled": surface in projects}
             for surface, _ in _SURFACE_SETTING
@@ -374,32 +528,41 @@ async def _list_issues(
     """
     _require_configured()
 
-    projects = _surface_projects()
-    if surface is not None:
-        if surface not in projects:
-            raise HTTPException(status_code=400, detail=f"Surface '{surface}' is not configured")
-        projects = {surface: projects[surface]}
+    targets = _targets(surface)
 
     status = (status or "unresolved").strip()
     if status not in _ALLOWED_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of: {_STATUSES_HELP}")
-    # Compose the Sentry search: `is:<status>` plus any extra caller terms.
-    full_query = f"is:{status}"
-    if query:
-        full_query = f"{full_query} {query.strip()}"
+    # The look-back is applied as a search term, not via statsPeriod — see
+    # _period_params for why. `stats_param` is only the sparkline window.
+    stats_param, period_term = _period_params(stats_period)
 
-    ordered = list(projects.items())
+    # Compose the Sentry search: `is:<status>` plus the look-back plus any extra
+    # caller terms.
+    base_query = f"is:{status}"
+    if period_term:
+        base_query = f"{base_query} {period_term}"
+    if query:
+        base_query = f"{base_query} {query.strip()}"
+
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         # return_exceptions=True is load-bearing, not defensive style. Without
-        # it the first failing project propagates immediately, the `async with`
+        # it the first failing leg propagates immediately, the `async with`
         # closes the client out from under its still-in-flight siblings, and
         # one typo'd SENTRY_PROJECT_* slug blanks the entire multi-surface
         # triage view. Degrade per surface instead: report what worked and say
         # loudly which surface failed and why.
         results = await asyncio.gather(
             *(
-                _fetch_project_issues(client, surf, slug, query=full_query, stats_period=stats_period, limit=limit)
-                for surf, slug in ordered
+                _fetch_project_issues(
+                    client,
+                    t.surface,
+                    t.project,
+                    query=f"{base_query} {t.term}" if t.term else base_query,
+                    stats_period=stats_param,
+                    limit=limit,
+                )
+                for t in targets
             ),
             return_exceptions=True,
         )
@@ -407,34 +570,56 @@ async def _list_issues(
     issues: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
     truncated = False
-    for (surf, slug), result in zip(ordered, results, strict=True):
+    for target, result in zip(targets, results, strict=True):
         if isinstance(result, BaseException):
-            logger.error("[sentry] listing project %s (%s) failed: %s", slug, surf, _error_detail(result))
-            errors.append({"surface": surf, "project": slug, "detail": _error_detail(result)})
+            logger.error(
+                "[sentry] listing project %s (%s) failed: %s",
+                target.project,
+                target.surface,
+                _error_detail(result),
+            )
+            errors.append({"surface": target.surface, "project": target.project, "detail": _error_detail(result)})
             continue
         issues.extend(result)
-        # A project that returned a full page may have more behind it — flag so
-        # a full list never silently reads as "everything".
+        # A leg that returned a full page may have more behind it — flag so a
+        # full list never silently reads as "everything".
         if len(result) >= limit:
             truncated = True
+
+    # In tag mode every leg queries the SAME project, so one issue can match two
+    # legs if its events carry more than one `surface` value (same error
+    # signature raised on two surfaces). Sentry groups by signature, not by tag,
+    # so that is a real possibility rather than a theoretical one. Keep the
+    # first match — legs run in _SURFACE_SETTING order, so the label is stable
+    # across refreshes rather than dependent on which request returned first.
+    deduped: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for issue in issues:
+        issue_id = issue.get("id")
+        if issue_id is not None:
+            if issue_id in seen_ids:
+                continue
+            seen_ids.add(issue_id)
+        deduped.append(issue)
+    issues = deduped
 
     # Every configured surface failed: there is nothing to show and pretending
     # otherwise ("0 issues, all clear") would be the worst possible outcome on
     # an error-triage screen. Surface it as an upstream failure.
-    if errors and not issues and len(errors) == len(ordered):
+    if errors and not issues and len(errors) == len(targets):
         raise HTTPException(
             status_code=502,
             detail="Sentry API failed for every configured surface: "
             + "; ".join(f"{e['surface']}: {e['detail']}" for e in errors),
         )
 
-    # Merge across projects newest-seen first so the combined view stays useful.
+    # Merge across legs newest-seen first so the combined view stays useful.
     issues.sort(key=lambda i: i.get("last_seen") or "", reverse=True)
 
     return {
         "issues": issues,
         "count": len(issues),
-        "surfaces": [surf for surf, _ in ordered],
+        "surfaces": [t.surface for t in targets],
         # Surfaces whose fetch failed. The dashboard warns on a non-empty list
         # so a partial view is never mistaken for a complete one.
         "errors": errors,
@@ -477,12 +662,30 @@ def _resolve_surface(raw_issue: Dict[str, Any]) -> Tuple[str, str]:
 
     The org token is org-scoped, so ``/organizations/{org}/issues/{id}/`` will
     happily return an issue from a project that has nothing to do with Spinr.
-    This viewer is defined by SENTRY_PROJECT_* — an id outside that set is out
-    of scope, and resolving it to ``surface: "unknown"`` would silently make
-    this a read/write console for the entire Sentry organization.
+    This viewer is defined by SENTRY_PROJECT_* / SENTRY_PROJECT_ALL — an id
+    outside that set is out of scope, and resolving it to ``surface: "unknown"``
+    would silently make this a read/write console for the entire Sentry
+    organization.
+
+    In tag mode the project no longer identifies the surface (every surface
+    shares one project), so the scope check still runs against that project but
+    the surface comes back as "unknown". ``_get_issue`` upgrades it from the
+    latest event's `surface` tag, which is the only authoritative source here;
+    the issues endpoint does not return per-issue tag values.
     """
-    slug_to_surface = {slug: surf for surf, slug in _surface_projects().items()}
     project_slug = (raw_issue.get("project") or {}).get("slug") or ""
+
+    shared = _shared_project()
+    if shared and not _per_surface_projects():
+        if project_slug != shared:
+            logger.warning("[sentry] issue in unconfigured project %r requested", project_slug)
+            raise HTTPException(
+                status_code=404,
+                detail="Sentry issue is not in a configured Spinr project",
+            )
+        return _UNKNOWN_SURFACE, project_slug
+
+    slug_to_surface = {slug: surf for surf, slug in _surface_projects().items()}
     surface = slug_to_surface.get(project_slug)
     if surface is None:
         logger.warning("[sentry] issue in unconfigured project %r requested", project_slug)
@@ -536,6 +739,15 @@ async def _get_issue(issue_id: str) -> Dict[str, Any]:
     # auto-attach `url` / `server_name` / user context that our beforeSend
     # scrubbers do not cover, and none of it belongs on an admin screen.
     shaped["tags"] = _filter_tags(event.get("tags"))
+    # Tag mode: the project could not tell us the surface, but the event can.
+    # Only trust a value we actually recognise — an arbitrary tag string would
+    # reach the dashboard's surface badge unvalidated.
+    if shaped.get("surface") == _UNKNOWN_SURFACE:
+        known = {s for s, _ in _SURFACE_SETTING}
+        for tag in shaped["tags"]:
+            if tag["key"] == "surface" and tag["value"] in known:
+                shaped["surface"] = tag["value"]
+                break
     shaped["event_error"] = None
     return shaped
 

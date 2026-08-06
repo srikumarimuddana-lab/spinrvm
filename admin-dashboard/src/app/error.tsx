@@ -1,11 +1,15 @@
 "use client";
 
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 import { Button } from "@/components/ui/button";
 
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
     console.error("Unhandled app error:", error);
+    // React error boundaries swallow the error after rendering the fallback —
+    // Sentry never sees it unless it is reported explicitly here.
+    Sentry.captureException(error);
   }, [error]);
 
   return (

@@ -10,6 +10,7 @@ resolve ("close") action.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -399,6 +400,185 @@ async def test_list_issues_unknown_surface_raises_400():
         with pytest.raises(HTTPException) as ei:
             await _call_list_issues(surface="driver-app")
     assert ei.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# TAG MODE — one Sentry project, surfaces separated by the `surface` tag
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _tag_mode_settings(shared="spinr-all"):
+    """Patch settings into tag mode: SENTRY_PROJECT_ALL set, no per-surface slugs.
+
+    Patches the real settings rather than stubbing ``_surface_projects``, because
+    mode selection is the behaviour under test — stubbing the map would bypass it.
+    """
+    with (
+        patch.object(sentry.settings, "SENTRY_PROJECT_ALL", shared),
+        patch.object(sentry.settings, "SENTRY_PROJECT_BACKEND", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_RIDER", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_DRIVER", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_ADMIN", None),
+    ):
+        yield
+
+
+def test_tag_mode_off_when_any_per_surface_slug_is_set():
+    """SENTRY_PROJECT_ALL is additive: a per-surface slug must always win, or
+    adding it would silently rewrite an existing project-mode deployment."""
+    with (
+        patch.object(sentry.settings, "SENTRY_PROJECT_ALL", "spinr-all"),
+        patch.object(sentry.settings, "SENTRY_PROJECT_BACKEND", "spinr-backend"),
+        patch.object(sentry.settings, "SENTRY_PROJECT_RIDER", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_DRIVER", None),
+        patch.object(sentry.settings, "SENTRY_PROJECT_ADMIN", None),
+    ):
+        assert sentry._tag_mode() is False
+        assert sentry._surface_projects() == {"backend": "spinr-backend"}
+
+
+def test_tag_mode_maps_every_surface_to_the_shared_project():
+    with _tag_mode_settings():
+        assert sentry._tag_mode() is True
+        assert sentry._surface_projects() == {
+            "backend": "spinr-all",
+            "rider-app": "spinr-all",
+            "driver-app": "spinr-all",
+            "admin": "spinr-all",
+        }
+
+
+def test_tag_mode_targets_cover_every_surface_plus_untagged():
+    """The `!has:surface` leg is the point: without it, any event missing the
+    tag disappears from an error-triage screen instead of showing as unknown."""
+    with _tag_mode_settings():
+        targets = sentry._targets(None)
+    assert [t.surface for t in targets] == ["backend", "rider-app", "driver-app", "admin", "unknown"]
+    assert {t.project for t in targets} == {"spinr-all"}
+    assert targets[0].term == "surface:backend"
+    assert targets[-1].term == "!has:surface"
+
+
+def test_tag_mode_single_surface_target_is_one_query():
+    with _tag_mode_settings():
+        targets = sentry._targets("admin")
+        unknown = sentry._targets("unknown")
+    assert targets == [sentry._Target("admin", "spinr-all", "surface:admin")]
+    # "unknown" is a selectable bucket in tag mode, not a rejected surface.
+    assert unknown == [sentry._Target("unknown", "spinr-all", "!has:surface")]
+
+
+def test_tag_mode_rejects_surface_outside_the_known_set():
+    with _tag_mode_settings():
+        with pytest.raises(HTTPException) as ei:
+            sentry._targets("marketing-site")
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_list_issues_tag_mode_appends_surface_term_to_query():
+    """Each leg must narrow by tag, or all five legs return the same issues."""
+    fetch = AsyncMock(return_value=[])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        _tag_mode_settings(),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+    ):
+        await _call_list_issues(query="ValueError")
+
+    sent = [c.kwargs["query"] for c in fetch.await_args_list]
+    assert sent == [
+        "is:unresolved ValueError surface:backend",
+        "is:unresolved ValueError surface:rider-app",
+        "is:unresolved ValueError surface:driver-app",
+        "is:unresolved ValueError surface:admin",
+        "is:unresolved ValueError !has:surface",
+    ]
+    # Every leg hits the one shared project.
+    assert {c.args[2] for c in fetch.await_args_list} == {"spinr-all"}
+
+
+@pytest.mark.anyio
+async def test_list_issues_tag_mode_dedupes_issue_matching_two_surfaces():
+    """One Sentry issue groups by error signature, not by tag, so the same id
+    can answer two surface legs. It must appear once, labelled by the first
+    (stable, _SURFACE_SETTING-ordered) leg rather than twice."""
+    dup = {"id": "shared1", "surface": "backend", "last_seen": "2026-01-02T00:00:00Z"}
+    same_issue_other_leg = {"id": "shared1", "surface": "admin", "last_seen": "2026-01-02T00:00:00Z"}
+    only_admin = {"id": "a1", "surface": "admin", "last_seen": "2026-01-01T00:00:00Z"}
+    fetch = AsyncMock(side_effect=[[dup], [], [], [same_issue_other_leg, only_admin], []])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        _tag_mode_settings(),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+    ):
+        out = await _call_list_issues()
+
+    assert [i["id"] for i in out["issues"]] == ["shared1", "a1"]
+    assert out["count"] == 2
+    # First leg wins the label, so a refresh does not shuffle it.
+    assert out["issues"][0]["surface"] == "backend"
+
+
+@pytest.mark.anyio
+async def test_get_issue_tag_mode_takes_surface_from_event_tag():
+    """The project cannot identify the surface in tag mode; the event tag can."""
+    raw_issue = {"id": "1", "project": {"slug": "spinr-all"}, "metadata": {}}
+    event = {"id": "e1", "tags": [{"key": "surface", "value": "driver-app"}], "entries": []}
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        _tag_mode_settings(),
+        patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+        patch.object(
+            sentry,
+            "_sentry_request",
+            AsyncMock(side_effect=[_resp(200, raw_issue), _resp(200, event)]),
+        ),
+    ):
+        out = await sentry._get_issue("1")
+    assert out["surface"] == "driver-app"
+    assert out["project"] == "spinr-all"
+
+
+@pytest.mark.anyio
+async def test_get_issue_tag_mode_ignores_unrecognised_surface_tag():
+    """An arbitrary tag value must not reach the dashboard's surface badge."""
+    raw_issue = {"id": "1", "project": {"slug": "spinr-all"}, "metadata": {}}
+    event = {"id": "e1", "tags": [{"key": "surface", "value": "evil-surface"}], "entries": []}
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        _tag_mode_settings(),
+        patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+        patch.object(
+            sentry,
+            "_sentry_request",
+            AsyncMock(side_effect=[_resp(200, raw_issue), _resp(200, event)]),
+        ),
+    ):
+        out = await sentry._get_issue("1")
+    assert out["surface"] == "unknown"
+
+
+def test_resolve_surface_tag_mode_rejects_foreign_project():
+    """The org token can read any project; tag mode must still scope to ours."""
+    with _tag_mode_settings():
+        assert sentry._resolve_surface({"project": {"slug": "spinr-all"}}) == ("unknown", "spinr-all")
+        with pytest.raises(HTTPException) as ei:
+            sentry._resolve_surface({"project": {"slug": "someone-elses-project"}})
+    assert ei.value.status_code == 404
+
+
+def test_sentry_config_reports_mode():
+    with _tag_mode_settings():
+        with (
+            patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"),
+            patch.object(sentry.settings, "SENTRY_ORG_SLUG", "spinr"),
+        ):
+            out = sentry._sentry_config()
+    assert out["mode"] == "tag"
+    assert all(s["enabled"] for s in out["surfaces"])
+    assert {s["project"] for s in out["surfaces"]} == {"spinr-all"}
 
 
 @pytest.mark.anyio

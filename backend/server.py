@@ -235,8 +235,13 @@ def _metrics_token() -> str:
     return os.getenv("METRICS_AUTH_TOKEN", "").strip()
 
 
-@app.get("/metrics")
-async def metrics(request: _Request) -> _MetricsResponse:
+def _require_metrics_auth(request: _Request, endpoint: str) -> None:
+    """Shared bearer gate for the operational endpoints (/metrics, /health/dependencies).
+
+    Extracted so both endpoints share one implementation: a second, hand-copied
+    fail-closed check is exactly the kind of thing that drifts and quietly
+    starts serving operational data to the internet.
+    """
     from fastapi import HTTPException
 
     _token = _metrics_token()
@@ -252,10 +257,39 @@ async def metrics(request: _Request) -> _MetricsResponse:
         # METRICS_AUTH_TOKEN to enable it. Non-production is unauthenticated by
         # design for local Prometheus.
         _logging.getLogger("spinr.metrics").error(
-            "/metrics requested in production without METRICS_AUTH_TOKEN set — refusing. "
+            f"{endpoint} requested in production without METRICS_AUTH_TOKEN set — refusing. "
             "Set METRICS_AUTH_TOKEN to enable scraping."
         )
         raise HTTPException(status_code=503, detail="Metrics endpoint not configured")
+
+
+@app.get("/health/dependencies")
+async def health_dependencies(request: _Request):
+    """Third-party dependency health for external probers and on-call triage.
+
+    Auth-gated behind the same token as /metrics, deliberately. Plain /health
+    stays open because platform liveness checks need it, but "which vendor is
+    down" is operational intelligence: an open endpoint announcing that Stripe
+    is unreachable tells an attacker exactly when payment retries are failing
+    and when to expect degraded fraud controls.
+
+    Returns 200 when serving (even if a dependency is degraded) and 503 when a
+    dependency is fully down, so a prober can alert on status code alone
+    without parsing the body.
+    """
+    from starlette.responses import JSONResponse
+
+    from utils.dependency_health import probe_dependencies
+
+    _require_metrics_auth(request, "/health/dependencies")
+
+    result = await probe_dependencies()
+    return JSONResponse(status_code=200 if result.get("healthy") else 503, content=result)
+
+
+@app.get("/metrics")
+async def metrics(request: _Request) -> _MetricsResponse:
+    _require_metrics_auth(request, "/metrics")
 
     from utils.loop_monitor import get_heartbeat_epochs
     from utils.metrics import render_prometheus, set_gauge
@@ -271,6 +305,21 @@ async def metrics(request: _Request) -> _MetricsResponse:
     # Evaluate per provider, never summed — every loop runs on BOTH Fly and
     # Railway by design (ADR-010 §4), so a healthy Fly loop would otherwise
     # mask a dead Railway one.
+    # Dependency health as gauges: 1 = serving, 0.5 = degraded, 0 = down or
+    # unconfigured. Uses the module's 30 s cache, so a 15 s scrape interval does
+    # not double the probe rate. probe_dependencies() never raises by contract.
+    try:
+        from utils.dependency_health import gauge_value, probe_dependencies
+
+        _dep_result = await probe_dependencies()
+        for _dep_name, _dep in (_dep_result.get("dependencies") or {}).items():
+            set_gauge("spinr_dependency_up", gauge_value(_dep.get("status", "")), {"dependency": _dep_name})
+    except Exception:
+        _logging.getLogger("spinr.metrics").error(
+            "Failed to export dependency gauges; serving remaining metrics",
+            exc_info=True,
+        )
+
     try:
         for _loop_name, _epoch in get_heartbeat_epochs().items():
             set_gauge("spinr_loop_heartbeat_timestamp_seconds", _epoch, {"loop": _loop_name})

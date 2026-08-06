@@ -21,11 +21,13 @@ try:
     from . import db_supabase
     from .core.config import settings
     from .utils.error_handling import DatabaseError, ServiceUnavailableException
+    from .utils.metrics import inc as _metric_inc
     from .utils.redis_client import redis_get
 except ImportError:
     import db_supabase
     from core.config import settings
     from utils.error_handling import DatabaseError, ServiceUnavailableException
+    from utils.metrics import inc as _metric_inc
     from utils.redis_client import redis_get
 
 db = db_supabase  # legacy alias
@@ -113,14 +115,21 @@ def create_jwt_token(
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+# Detail strings raised by verify_jwt_token. Named so callers can classify the
+# rejection reason without re-parsing prose (the client-facing message is always
+# the static "Invalid token" — see C4 in get_current_user).
+JWT_DETAIL_EXPIRED = "Token has expired"
+JWT_DETAIL_INVALID = "Invalid token"
+
+
 def verify_jwt_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM], options={"verify_aud": False})
         return payload
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired") from None
+        raise HTTPException(status_code=401, detail=JWT_DETAIL_EXPIRED) from None
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token") from None
+        raise HTTPException(status_code=401, detail=JWT_DETAIL_INVALID) from None
 
 
 # ── Account-deletion (PIPEDA) auth guard ────────────────────────────────────
@@ -434,14 +443,41 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     # Fallback: existing JWT behavior
     try:
         payload = verify_jwt_token(token)
-    except Exception as e:
+    except HTTPException as e:
+        # A rejected token is an EXPECTED outcome of the token lifecycle, not an
+        # actionable failure — so it must not reach Sentry. server.py bridges
+        # loguru into Sentry at ERROR (`logger.add(_loguru_sentry_sink,
+        # level="ERROR")`), so the previous `logger.error` here minted a Sentry
+        # event every time a 15-min rider/driver token or a 1-hr admin token
+        # aged out mid-session. That is the design working: the client silently
+        # refreshes and retries (rider/driver Axios interceptor;
+        # admin-dashboard/src/lib/api/client.ts), the user never sees it, and
+        # nothing is broken. The noise buried real auth defects.
+        # CLAUDE.md observability: security-relevant events → info log;
+        # degraded-but-recovered → metric, never Sentry.
+        #   expired → info    (routine, self-healing via refresh)
+        #   invalid → warning (bad signature / malformed — worth eyeballing,
+        #                      still not Sentry-worthy: scanners and tokens
+        #                      minted under a rotated secret both land here)
         # Never log the signing secret, even partially — it's a credential.
-        logger.error(f"JWT verification failed: {e}")
+        expired = e.detail == JWT_DETAIL_EXPIRED
+        _metric_inc("spinr_auth_token_rejected_total", {"reason": "expired" if expired else "invalid"})
+        if expired:
+            logger.info(f"JWT rejected: {JWT_DETAIL_EXPIRED} — client should refresh")
+        else:
+            logger.warning(f"JWT rejected: {e.detail}")
         # Static client message (C4): interpolating the PyJWT reason lets an
         # attacker fingerprint which claim failed (alg/aud/exp/sig). The real
         # cause is in the server log above; the client only learns the token is
         # invalid — matching every other auth path.
-        raise HTTPException(status_code=401, detail="Invalid token") from e
+        raise HTTPException(status_code=401, detail=JWT_DETAIL_INVALID) from e
+    except Exception as e:
+        # NOT one of verify_jwt_token's two deliberate 401s — this is a genuine
+        # defect (malformed JWT_SECRET, PyJWT internal error) and every request
+        # is failing auth because of it. Keep it at ERROR so it pages via Sentry.
+        logger.error(f"Unexpected error verifying JWT: {type(e).__name__}: {e}")
+        _metric_inc("spinr_auth_token_rejected_total", {"reason": "error"})
+        raise HTTPException(status_code=401, detail=JWT_DETAIL_INVALID) from e
 
     # A reactivation token is single-purpose (POST /auth/reactivate); it must
     # never authenticate normal API access.

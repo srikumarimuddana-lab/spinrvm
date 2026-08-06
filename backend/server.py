@@ -257,8 +257,33 @@ async def metrics(request: _Request) -> _MetricsResponse:
         )
         raise HTTPException(status_code=503, detail="Metrics endpoint not configured")
 
+    from utils.loop_monitor import get_heartbeat_epochs
     from utils.metrics import render_prometheus, set_gauge
     from utils.redis_client import get_redis_stats
+
+    # Background-loop liveness as a gauge, refreshed at scrape time (same
+    # pattern as the Redis gauges below).  ADR-010 §3 wants this as a second,
+    # independent stall-detection path alongside the in-app loop_watchdog:
+    # the watchdog posts to ALERT_WEBHOOK_URL and does not depend on the
+    # metrics pipeline, while this gives dashboard visibility and survives the
+    # watchdog itself dying.  Alert as:
+    #   time() - spinr_loop_heartbeat_timestamp_seconds > 2 * expected_interval
+    # Evaluate per provider, never summed — every loop runs on BOTH Fly and
+    # Railway by design (ADR-010 §4), so a healthy Fly loop would otherwise
+    # mask a dead Railway one.
+    try:
+        for _loop_name, _epoch in get_heartbeat_epochs().items():
+            set_gauge("spinr_loop_heartbeat_timestamp_seconds", _epoch, {"loop": _loop_name})
+    except Exception:
+        # Never let loop bookkeeping break a scrape — the counters below are
+        # still worth serving even if heartbeat state is unreadable. Logged at
+        # error (not swallowed) per CLAUDE.md: this is in-memory dict work under
+        # a lock, so a failure here means something genuinely unexpected and
+        # must not be silent just because the scrape survived it.
+        _logging.getLogger("spinr.metrics").error(
+            "Failed to export loop heartbeat gauges; serving remaining metrics",
+            exc_info=True,
+        )
 
     # Refresh Redis gauges on each scrape. INFO is O(1) on Redis so
     # this is cheap; exposing them as gauges lets the Prometheus

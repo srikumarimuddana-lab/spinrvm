@@ -35,12 +35,35 @@ LOOP_THRESHOLDS: Dict[str, float] = {
 
 _lock = threading.Lock()
 _heartbeats: Dict[str, float] = {}  # loop_name → monotonic timestamp of last tick
+# loop_name → wall-clock (epoch) timestamp of last tick.  Kept in parallel with
+# _heartbeats rather than replacing it: staleness detection must stay on
+# time.monotonic() (immune to NTP steps and DST), but a Prometheus gauge has to
+# be comparable to PromQL's time(), which is epoch seconds.  A monotonic value
+# exported as a timestamp would be meaningless — on Linux it counts from boot,
+# so `time() - gauge` would read as ~56 years of staleness.
+_wall_heartbeats: Dict[str, float] = {}
 
 
 def record_heartbeat(loop_name: str) -> None:
     """Record a successful tick for the named loop.  Thread-safe; O(1)."""
     with _lock:
         _heartbeats[loop_name] = time.monotonic()
+        _wall_heartbeats[loop_name] = time.time()
+
+
+def get_heartbeat_epochs() -> Dict[str, float]:
+    """Return {loop_name: epoch seconds of last tick} for metrics exposition.
+
+    Only loops that have actually ticked appear.  Never-ticked loops are
+    deliberately omitted rather than exported as 0: a 0 gauge reads as
+    "last ticked at the Unix epoch", i.e. permanently stale, which would
+    false-alarm at startup for loops that legitimately wait for their first
+    window (``stripe_reconcile`` sleeps until 02:00 UTC).  An absent series is
+    the honest representation, and PromQL's ``absent()`` covers the
+    never-started case explicitly if an alert needs it.
+    """
+    with _lock:
+        return dict(_wall_heartbeats)
 
 
 def get_loop_status(registered_names: Optional[list] = None) -> Dict[str, object]:

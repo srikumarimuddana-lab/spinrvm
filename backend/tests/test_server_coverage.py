@@ -162,9 +162,9 @@ class TestMetricsRedisGauges:
         with (
             patch("backend.server._metrics_token", return_value=""),
             patch("backend.server.settings.ENV", "development"),
-            patch("utils.redis_client.get_redis_stats", AsyncMock(return_value=stats), create=True),
+            patch("utils.scrape_gauges.get_redis_stats", AsyncMock(return_value=stats), create=True),
             patch(
-                "utils.metrics.set_gauge",
+                "utils.scrape_gauges.set_gauge",
                 side_effect=lambda name, val, *a, **k: gauges.update({name: val}),
                 create=True,
             ),
@@ -185,9 +185,9 @@ class TestMetricsRedisGauges:
         with (
             patch("backend.server._metrics_token", return_value=""),
             patch("backend.server.settings.ENV", "development"),
-            patch("utils.redis_client.get_redis_stats", AsyncMock(return_value=stats), create=True),
+            patch("utils.scrape_gauges.get_redis_stats", AsyncMock(return_value=stats), create=True),
             patch(
-                "utils.metrics.set_gauge",
+                "utils.scrape_gauges.set_gauge",
                 side_effect=lambda name, val, *a, **k: gauges.update({name: val}),
                 create=True,
             ),
@@ -202,9 +202,9 @@ class TestMetricsRedisGauges:
         with (
             patch("backend.server._metrics_token", return_value=""),
             patch("backend.server.settings.ENV", "development"),
-            patch("utils.redis_client.get_redis_stats", AsyncMock(side_effect=RuntimeError("redis down")), create=True),
+            patch("utils.scrape_gauges.get_redis_stats", AsyncMock(side_effect=RuntimeError("redis down")), create=True),
             patch(
-                "utils.metrics.set_gauge",
+                "utils.scrape_gauges.set_gauge",
                 side_effect=lambda name, val, *a, **k: gauges.update({name: val}),
                 create=True,
             ),
@@ -217,7 +217,7 @@ class TestMetricsRedisGauges:
     async def test_query_param_token_accepted_when_no_auth_header(self):
         with (
             patch("backend.server._metrics_token", return_value="secret"),
-            patch("utils.redis_client.get_redis_stats", AsyncMock(return_value={"connected": False}), create=True),
+            patch("utils.scrape_gauges.get_redis_stats", AsyncMock(return_value={"connected": False}), create=True),
             patch("utils.metrics.render_prometheus", return_value="# ok", create=True),
         ):
             resp = await server.metrics(_req(query={"token": "secret"}))

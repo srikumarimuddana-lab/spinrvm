@@ -291,76 +291,13 @@ async def health_dependencies(request: _Request):
 async def metrics(request: _Request) -> _MetricsResponse:
     _require_metrics_auth(request, "/metrics")
 
-    from utils.loop_monitor import get_heartbeat_epochs
-    from utils.metrics import render_prometheus, set_gauge
-    from utils.redis_client import get_redis_stats
+    from utils.metrics import render_prometheus
+    from utils.scrape_gauges import refresh_all
 
-    # Background-loop liveness as a gauge, refreshed at scrape time (same
-    # pattern as the Redis gauges below).  ADR-010 §3 wants this as a second,
-    # independent stall-detection path alongside the in-app loop_watchdog:
-    # the watchdog posts to ALERT_WEBHOOK_URL and does not depend on the
-    # metrics pipeline, while this gives dashboard visibility and survives the
-    # watchdog itself dying.  Alert as:
-    #   time() - spinr_loop_heartbeat_timestamp_seconds > 2 * expected_interval
-    # Evaluate per provider, never summed — every loop runs on BOTH Fly and
-    # Railway by design (ADR-010 §4), so a healthy Fly loop would otherwise
-    # mask a dead Railway one.
-    # Dependency health as gauges: 1 = serving, 0.5 = degraded, 0 = down or
-    # unconfigured. Uses the module's 30 s cache, so a 15 s scrape interval does
-    # not double the probe rate. probe_dependencies() never raises by contract.
-    try:
-        from utils.dependency_health import gauge_value, probe_dependencies
-
-        _dep_result = await probe_dependencies()
-        for _dep_name, _dep in (_dep_result.get("dependencies") or {}).items():
-            set_gauge("spinr_dependency_up", gauge_value(_dep.get("status", "")), {"dependency": _dep_name})
-    except Exception:
-        _logging.getLogger("spinr.metrics").error(
-            "Failed to export dependency gauges; serving remaining metrics",
-            exc_info=True,
-        )
-
-    try:
-        for _loop_name, _epoch in get_heartbeat_epochs().items():
-            set_gauge("spinr_loop_heartbeat_timestamp_seconds", _epoch, {"loop": _loop_name})
-    except Exception:
-        # Never let loop bookkeeping break a scrape — the counters below are
-        # still worth serving even if heartbeat state is unreadable. Logged at
-        # error (not swallowed) per CLAUDE.md: this is in-memory dict work under
-        # a lock, so a failure here means something genuinely unexpected and
-        # must not be silent just because the scrape survived it.
-        _logging.getLogger("spinr.metrics").error(
-            "Failed to export loop heartbeat gauges; serving remaining metrics",
-            exc_info=True,
-        )
-
-    # Refresh Redis gauges on each scrape. INFO is O(1) on Redis so
-    # this is cheap; exposing them as gauges lets the Prometheus
-    # server compute rates (eviction rate, hit rate) server-side.
-    try:
-        rs = await get_redis_stats()
-        if rs.get("connected"):
-            set_gauge("spinr_redis_used_memory_bytes", rs.get("used_memory_bytes") or 0)
-            set_gauge("spinr_redis_maxmemory_bytes", rs.get("maxmemory_bytes") or 0)
-            if rs.get("used_memory_percent") is not None:
-                set_gauge("spinr_redis_used_memory_percent", rs["used_memory_percent"])
-            set_gauge("spinr_redis_total_keys", rs.get("total_keys") or 0)
-            set_gauge("spinr_redis_connected_clients", rs.get("connected_clients") or 0)
-            set_gauge("spinr_redis_uptime_seconds", rs.get("uptime_seconds") or 0)
-            # Counter-like values from INFO stats. Exposed as gauges
-            # here because Prometheus can compute rate() on either;
-            # keeping them gauges avoids lying about reset semantics.
-            set_gauge("spinr_redis_keyspace_hits", rs.get("keyspace_hits_total") or 0)
-            set_gauge("spinr_redis_keyspace_misses", rs.get("keyspace_misses_total") or 0)
-            set_gauge("spinr_redis_evicted_keys", rs.get("evicted_keys_total") or 0)
-            set_gauge("spinr_redis_expired_keys", rs.get("expired_keys_total") or 0)
-            set_gauge("spinr_redis_connected", 1)
-        else:
-            set_gauge("spinr_redis_connected", 0)
-    except Exception:
-        # Never let a metrics scrape blow up — return whatever counters
-        # have been recorded so far.
-        set_gauge("spinr_redis_connected", 0)
+    # Point-in-time gauges (dependency health, loop heartbeats, Redis) are
+    # refreshed here rather than on a timer. Shared with the private metrics
+    # listener so both endpoints report identical freshness. Never raises.
+    await refresh_all()
 
     return _MetricsResponse(
         content=render_prometheus(),

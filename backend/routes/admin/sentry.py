@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import httpx
@@ -115,6 +116,18 @@ _MAX_LIMIT = 100
 _DEFAULT_LIMIT = 25
 
 _HTTP_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+
+# Sentry's project-issues endpoint accepts ONLY these for `statsPeriod`, where it
+# sizes the per-issue stats sparkline: "can be one of '24h', '14d', and ''".
+# Anything else is a hard 400. The dashboard offers 24h/7d/14d/30d/90d, so three
+# of its five options used to fail — and because the 400 was mapped to a generic
+# 502, the UI reported "Sentry API failed for every configured surface", which
+# reads as an outage rather than an unsupported parameter.
+_SENTRY_STATS_PERIODS = ("", "24h", "14d")
+
+# Look-back windows accepted from the client. Sentry's relative-time suffixes:
+# m(inutes) h(ours) d(ays) w(eeks).
+_PERIOD_RE = re.compile(r"^\d{1,3}[mhdw]$")
 
 # Rate limits. This surface fans one request out to N Sentry projects, and the
 # dashboard re-fetches on every filter change — an abandoned tab in a reload
@@ -234,6 +247,32 @@ def _targets(surface: Optional[str]) -> List[_Target]:
     return [_Target(s, slug, None) for s, slug in projects.items()]
 
 
+def _period_params(stats_period: str) -> Tuple[str, Optional[str]]:
+    """Split a requested look-back into (statsPeriod, extra search term).
+
+    `statsPeriod` only sizes the stats sparkline and rejects anything outside
+    ``_SENTRY_STATS_PERIODS``. The real look-back filter is a `lastSeen:-<window>`
+    search term, which takes arbitrary windows ("lastSeen:-2d returns issues last
+    seen within the past two days"). So clamp the sparkline to a value Sentry
+    accepts and let the search do the filtering.
+
+    The alternative — restricting the dashboard to 24h/14d — would drop 30d/90d
+    triage, which is exactly the window where slow-burn issues become visible.
+    """
+    period = (stats_period or "").strip()
+    if not period:
+        return "", None
+    if not _PERIOD_RE.match(period):
+        # Reject here with a clear 400 rather than forwarding garbage and
+        # surfacing Sentry's rejection as a 502 that looks like an outage.
+        raise HTTPException(
+            status_code=400,
+            detail="stats_period must look like 24h, 7d, 30d, or 12w",
+        )
+    stats = period if period in _SENTRY_STATS_PERIODS else "14d"
+    return stats, f"lastSeen:-{period}"
+
+
 def _base_url() -> str:
     return (settings.SENTRY_API_BASE_URL or "https://sentry.io").rstrip("/")
 
@@ -280,6 +319,24 @@ async def _sentry_request(
         raise HTTPException(
             status_code=502,
             detail="Sentry rejected the API token (needs event:read + event:write). Check SENTRY_API_TOKEN scopes.",
+        )
+    if resp.status_code == 400:
+        # A 400 here is Sentry rejecting OUR request shape (an unsupported
+        # statsPeriod, an unparseable search term), not an outage. Its body is a
+        # parameter-validation message rather than issue content, so relaying a
+        # truncated `detail` is PII-safe and is the difference between a
+        # diagnosable error and an opaque "Sentry API failed for every surface".
+        detail = ""
+        try:
+            body = resp.json()
+            if isinstance(body, dict):
+                detail = str(body.get("detail") or body.get("error") or "")[:200]
+        except ValueError:
+            detail = ""
+        logger.error("[sentry] %s %s -> 400 %s", method, path, detail or "(no detail)")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Sentry rejected the request: {detail}" if detail else "Sentry API returned HTTP 400",
         )
     if resp.status_code >= 400:
         logger.error("[sentry] %s %s -> %s", method, path, resp.status_code)
@@ -476,8 +533,15 @@ async def _list_issues(
     status = (status or "unresolved").strip()
     if status not in _ALLOWED_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of: {_STATUSES_HELP}")
-    # Compose the Sentry search: `is:<status>` plus any extra caller terms.
+    # The look-back is applied as a search term, not via statsPeriod — see
+    # _period_params for why. `stats_param` is only the sparkline window.
+    stats_param, period_term = _period_params(stats_period)
+
+    # Compose the Sentry search: `is:<status>` plus the look-back plus any extra
+    # caller terms.
     base_query = f"is:{status}"
+    if period_term:
+        base_query = f"{base_query} {period_term}"
     if query:
         base_query = f"{base_query} {query.strip()}"
 
@@ -495,7 +559,7 @@ async def _list_issues(
                     t.surface,
                     t.project,
                     query=f"{base_query} {t.term}" if t.term else base_query,
-                    stats_period=stats_period,
+                    stats_period=stats_param,
                     limit=limit,
                 )
                 for t in targets

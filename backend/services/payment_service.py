@@ -15,13 +15,13 @@ from loguru import logger
 
 try:
     from .. import db_supabase
-    from ..services import corporate_allowance_service, corporate_wallet_service
+    from ..services import corporate_allowance_service, corporate_wallet_service, ledger_service
     from ..services.corporate_policy_service import evaluate_policy
     from ..socket_manager import manager
     from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride
 except ImportError:
     import db_supabase  # type: ignore
-    from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from services import corporate_allowance_service, corporate_wallet_service, ledger_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
     from socket_manager import manager  # type: ignore
     from utils.stripe_charge import cancel_authorization, capture_ride, charge_ride  # type: ignore
@@ -136,7 +136,14 @@ async def record_payment_event(
     """Append a stripe_charge row to the financial_events ledger.
 
     Called BEFORE the ride DB update so a recovery record always exists even
-    if the ride row stays stuck in 'processing'. Never raises — logs and returns.
+    if the ride row stays stuck in 'processing'. Never raises — the charge has
+    already settled by this point, so failing the request would report an error
+    for money that did move.
+
+    The write is retried and, on exhaustion, escalated to Sentry
+    (``spinr_alert=ledger_write_failed``) rather than only logged — see
+    services/ledger_service.py. Double-entry legs are attached when the
+    ``ledger_double_entry_enabled`` app_settings flag is on.
     """
     meta: Dict[str, Any] = {"source": "process_payment"}
     if ride:
@@ -157,23 +164,25 @@ async def record_payment_event(
                 "dropoff_address": area_only(ride.get("dropoff_address")) or "",
             }
         )
-    try:
-        await db_supabase.insert_one(
-            "financial_events",
-            {
-                "event_type": "stripe_charge",
-                "user_id": user_id,
-                "ride_id": ride_id,
-                "delta_cents": amount_cents,
-                "ref": payment_intent_id,
-                "metadata": meta,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
+    # Double-entry legs need the fare decomposed into driver / tax / platform.
+    # Without the ride row we cannot split it, so the header is written alone.
+    legs = None
+    if ride:
+        legs = ledger_service.build_charge_legs(
+            total_cents=amount_cents,
+            driver_cents=ledger_service.to_cents(ride.get("driver_earnings")),
+            tax_cents=ledger_service.to_cents(ride.get("tax_amount")),
         )
-    except Exception as ledger_err:
-        logger.opt(exception=True).error(
-            "[PAYMENT] financial_events write failed for ride {} pi={}: {}", ride_id, payment_intent_id, ledger_err
-        )
+
+    await ledger_service.record_event(
+        event_type="stripe_charge",
+        user_id=user_id,
+        ride_id=ride_id,
+        delta_cents=amount_cents,
+        ref=payment_intent_id,
+        metadata=meta,
+        legs=legs,
+    )
 
 
 async def record_refund_event(
@@ -195,16 +204,18 @@ async def record_refund_event(
     ``delta_cents`` is NEGATIVE (money leaving). Never raises.
     """
     meta: Dict[str, Any] = {"source": "charge.refunded", "driver_pay_absorbed_by_platform": True}
+    tax_reversed = Decimal("0")
     if ride:
         total = _round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))
         tax_total = _round(_d(ride.get("tax_amount") or 0))
         refund_d = _round(_d(refund_cents) / Decimal("100"))
         frac = min(refund_d / total, Decimal("1")) if total > Decimal("0") else Decimal("1")
+        tax_reversed = _round(tax_total * frac)
         meta.update(
             {
                 "refund_amount": str(refund_d),
                 # Rider-side GST/PST reversed by this refund (remittance nets it out).
-                "tax_reversed": str(_round(tax_total * frac)),
+                "tax_reversed": str(tax_reversed),
                 "tax_breakdown": ride.get("tax_breakdown") or {},
                 "driver_id": ride.get("driver_id") or "",
                 # Driver keeps this — recorded so T4A/reconciliation can see the
@@ -212,26 +223,23 @@ async def record_refund_event(
                 "driver_earnings_retained": str(_round(_d(ride.get("driver_earnings") or 0))),
             }
         )
-    try:
-        await db_supabase.insert_one(
-            "financial_events",
-            {
-                "event_type": "stripe_refund",
-                "user_id": user_id,
-                "ride_id": ride_id,
-                "delta_cents": -abs(int(refund_cents)),
-                "ref": payment_intent_id,
-                "metadata": meta,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-    except Exception as ledger_err:
-        logger.opt(exception=True).error(
-            "[PAYMENT] refund financial_events write failed for ride {} pi={}: {}",
-            ride_id,
-            payment_intent_id,
-            ledger_err,
-        )
+    # Legs mirror the charge. driver_payable is untouched by design — the driver
+    # keeps their pay and the platform absorbs it (see docstring), so that
+    # amount rides inside the platform_revenue debit.
+    legs = ledger_service.build_refund_legs(
+        refund_cents=abs(int(refund_cents)),
+        tax_reversed_cents=ledger_service.to_cents(tax_reversed),
+    )
+
+    await ledger_service.record_event(
+        event_type="stripe_refund",
+        user_id=user_id,
+        ride_id=ride_id,
+        delta_cents=-abs(int(refund_cents)),
+        ref=payment_intent_id,
+        metadata=meta,
+        legs=legs,
+    )
 
 
 # ── Wallet settlement ───────────────────────────────────────────────

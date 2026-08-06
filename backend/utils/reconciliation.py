@@ -100,6 +100,55 @@ async def _run_reconciliation(date) -> None:  # noqa: ANN001
     else:
         logger.info(f"reconciliation: {date} OK — within threshold")
 
+    await _check_entry_balance(date)
+
+
+async def _check_entry_balance(date) -> None:  # noqa: ANN001
+    """Alert on any double-entry journal whose legs do not net to zero.
+
+    Reads the financial_event_entries_unbalanced view (migration 286), which is
+    expected to be permanently empty. A row means a leg builder produced a
+    lopsided entry or a partial leg write survived — an accounting defect, so
+    it is logged at error even though no rider is affected.
+
+    Never raises: this is an observability check bolted onto the end of the
+    reconciliation run and must not mask the Stripe-vs-ledger result above. The
+    table is absent until migration 286 is applied, which is not an error.
+    """
+    try:
+        from db_supabase import run_sync  # type: ignore
+        from supabase_client import supabase  # type: ignore
+    except ImportError:
+        from ..db_supabase import run_sync  # type: ignore
+        from ..supabase_client import supabase  # type: ignore
+
+    day_start = datetime(date.year, date.month, date.day, tzinfo=timezone.utc).isoformat()
+    day_end = (datetime(date.year, date.month, date.day, tzinfo=timezone.utc) + timedelta(days=1)).isoformat()
+
+    try:
+        rows = await run_sync(
+            lambda: (
+                supabase.table("financial_event_entries_unbalanced")
+                .select("event_id,debit_cents,credit_cents,imbalance_cents")
+                .gte("created_at", day_start)
+                .lt("created_at", day_end)
+                .execute()
+            )
+        )
+    except Exception:
+        logger.info(f"reconciliation: entry-balance check unavailable for {date} (migration 286 not applied?)")
+        return
+
+    unbalanced = rows.data or []
+    if not unbalanced:
+        logger.info(f"reconciliation: {date} double-entry legs balanced")
+        return
+
+    logger.error(
+        f"reconciliation ALERT: {date} {len(unbalanced)} unbalanced ledger "
+        f"entries — event_ids={[r.get('event_id') for r in unbalanced[:10]]}"
+    )
+
 
 async def _sum_stripe_intents(date) -> int:  # noqa: ANN001
     """Return total succeeded PaymentIntent amount in cents for the given UTC date."""

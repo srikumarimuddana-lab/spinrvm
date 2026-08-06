@@ -187,12 +187,14 @@ Three independent levers, none requiring a deploy:
 - [x] **Targeted re-run after the final refactors** (batched leg insert + distinct alert tags):
       `test_ledger_service.py`, `test_coverage_rides.py`, `test_refund_ledger.py` —
       **189 passed**.
-- [ ] **Full backend suite (~9,987 tests) — NOT completed at commit time.** A run against an
-      earlier revision of this change reached 33% (3,313 passed) with one failure, which was the
-      `test_coverage_rides.py` patch-target regression noted above and is now fixed. The final
-      run against the committed code was still in progress when the change was committed. The
-      targeted runs below (189 tests spanning every file that references the changed functions)
-      all pass. **Anyone merging this should confirm a clean full-suite run first.**
+- [x] **Full backend suite — clean against the exact committed tree.**
+      `pytest backend/tests` → **9,979 passed, 8 skipped, 1 xfailed, 0 failed** (exit 0, 7m55s).
+      Two earlier full runs informed this: one against a pre-fix revision surfaced the
+      `test_coverage_rides.py` patch-target regression noted above (since fixed); a second, run
+      before the final leg-batching and alert-tag refactors, was also clean at 9,979 passed. The
+      run recorded here post-dates every change in this diff.
+      *Note: the commit message was written before this run finished and therefore states the
+      suite was incomplete — this entry supersedes it.*
 - [x] **Blast-radius grep performed.** `grep -rn "financial_events" backend/ --include=*.py`
       (all 8 non-test consumers enumerated in §4), plus the `financial_events_no_mutate` trigger
       and migration-216 delete path.

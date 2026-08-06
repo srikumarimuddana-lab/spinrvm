@@ -4,66 +4,12 @@
  * Set NEXT_PUBLIC_SENTRY_DSN in Vercel / CI environment variables.
  */
 import * as Sentry from '@sentry/nextjs';
+import { scrubEvent as beforeSend } from './sentry.scrub';
 
-/** Scrub PII fields from Sentry events before they leave the browser (F-44/PIPEDA). */
-function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
-  // Strip request headers that may carry auth tokens or cookies
-  if (event.request?.headers) {
-    const safe: Record<string, string> = {};
-    const allow = new Set(['content-type', 'accept', 'user-agent']);
-    for (const [k, v] of Object.entries(event.request.headers)) {
-      safe[k] = allow.has(k.toLowerCase()) ? (v as string) : '[Filtered]';
-    }
-    event.request.headers = safe;
-  }
-
-  // Scrub cookies entirely
-  if (event.request?.cookies) {
-    event.request.cookies = { _filtered: '[Filtered]' };
-  }
-
-  // Remove URL query strings (may contain phone, email, or token params)
-  if (event.request?.query_string) {
-    event.request.query_string = '[Filtered]';
-  }
-
-  // Scrub dynamic entity IDs from URL paths (PIPEDA — A-PE-P1-3).
-  // e.g. /dashboard/drivers/abc123ef → /dashboard/drivers/[id]
-  if (event.request?.url) {
-    event.request.url = event.request.url.replace(/\/[a-f0-9-]{8,}/gi, '/[id]');
-  }
-
-  // Strip known PII keys from all extra/contexts
-  const PII_KEYS = new Set([
-    'email', 'phone', 'phone_number', 'address', 'lat', 'lng',
-    'latitude', 'longitude', 'token', 'password', 'authorization',
-    'full_name', 'first_name', 'last_name',
-    'driver_id', 'rider_id', 'ride_id',
-  ]);
-
-  function scrubObj(obj: Record<string, unknown>): void {
-    for (const key of Object.keys(obj)) {
-      if (PII_KEYS.has(key.toLowerCase())) {
-        obj[key] = '[Filtered]';
-      } else if (obj[key] && typeof obj[key] === 'object') {
-        scrubObj(obj[key] as Record<string, unknown>);
-      }
-    }
-  }
-
-  if (event.extra) scrubObj(event.extra as Record<string, unknown>);
-  if (event.contexts) scrubObj(event.contexts as unknown as Record<string, unknown>);
-  if (event.user) {
-    // Retain only the non-PII user identifier
-    event.user = { id: event.user.id };
-  }
-
-  return event;
-}
-
-// [22-2] PIPEDA data residency: Sentry has no Canadian region.
-// Use the EU-region DSN (sentry.io → Settings → Data Storage → EU) as the
-// closest compliant option. EU DSN host pattern: o<org>.ingest.de.sentry.io
+// [22-2] PIPEDA data residency: Sentry has no Canadian region. EU
+// (o<org>.ingest.de.sentry.io) is the closest compliant option and remains the
+// target. Spinr currently ingests to the US region as an accepted risk — see
+// sentry.server.config.ts and docs/change-log/2026-08-05-sentry-us-region-accepted.md.
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 

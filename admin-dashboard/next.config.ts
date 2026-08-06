@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 import { TRACK_CSP } from "./src/lib/track-host";
 
 // Fail fast on Vercel production if the API URL is missing — prevents silent
@@ -114,4 +115,24 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Sentry build integration. Required by @sentry/nextjs v9+ to wire the
+// instrumentation hooks into the build; without it src/instrumentation*.ts are
+// not registered and no events are captured.
+//
+// Source-map upload is OPTIONAL here and is skipped when SENTRY_AUTH_TOKEN is
+// absent from the build environment — the build still succeeds, stack traces
+// are just minified. Set SENTRY_AUTH_TOKEN + SENTRY_ORG + SENTRY_PROJECT in
+// Vercel to get readable frames. These are BUILD-time vars and are unrelated to
+// the runtime NEXT_PUBLIC_SENTRY_DSN / SENTRY_DSN.
+//
+// tunnelRoute is deliberately NOT enabled: it mounts a proxy route on the admin
+// domain, which src/middleware.ts would subject to admin auth and the IP
+// allowlist. The CSP already permits direct ingestion (connect-src 'self' https:).
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  // Keep build logs quiet locally, verbose in CI where the output is the record.
+  silent: !process.env.CI,
+  widenClientFileUpload: true,
+  telemetry: false,
+});

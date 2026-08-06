@@ -2,6 +2,10 @@
 
 _Load when working on: fare calculation, surge, Stripe, wallets, corporate billing, driver payouts, tips, receipts._
 
+> **Architecture diagram:** `docs/architecture/payments-rider-stripe.md` — end-to-end rider
+> payment flow (booking hold → settlement → webhooks), the three idempotency layers, the
+> `financial_events` ledger schema, the async/background-loop model, and known gaps.
+
 ## Key files
 
 - `backend/services/fare_service.py` — fare calculation entry point
@@ -52,11 +56,36 @@ See CLAUDE.md for the auto-mode tier table. Additional payment rules:
 - Surge never applies retroactively — it's locked at fare estimate time
 - `SURGE_CAP = 2.5` is the auto cap; manual admin override up to 10× requires documented justification
 
+## Ledger
+
+- `financial_events` (migration `58`) is the append-only money ledger: signed `delta_cents`
+  (positive = in, negative = out), `ref` = Stripe PaymentIntent ID, 7-year CRA/SK retention.
+  Written by `payment_service.record_payment_event()` / `record_refund_event()`.
+- **Single-entry, not double-entry** — no balancing contra-account. The daily
+  `stripe_reconcile_loop` is what catches drift.
+- Ledger writes are deliberately **best-effort** (`record_payment_event` never raises) and are
+  issued *before* the ride update so a recovery record survives a stuck `processing` row.
+- Wallet money moves through `wallet_transactions` (migration `19`, carries running
+  `balance_after`); corporate through `corporate_wallet_apply_delta`.
+
 ## Stripe
 
-- **Idempotency:** every webhook handler calls `claim_stripe_event(event_id)` first. Silently skip if already claimed.
+- **Idempotency — three layers**, not just the webhook one:
+  1. **Stripe SDK** — every mutating call in `utils/stripe_charge.py` passes an
+     `idempotency_key` (`ride-auth-*`, `ride-charge-*`, `ride-capture-*`, `ride-cancelauth-*`,
+     `{fee_type}-*`). Note the keys embed `amount_cents`, so a changed amount is a *new* charge.
+  2. **Webhook** — every handler calls `claim_stripe_event(event_id)` first. Silently skip if
+     already claimed. On handler failure call `unclaim_stripe_event` or Stripe's retry is
+     deduped away and the event is lost.
+  3. **DB** — conditional `payment_status` claim (`pending|failed → processing`) in
+     `routes/rides/payments.py`; zero rows means another request owns the settlement.
+- **Async:** the Stripe SDK is synchronous — every call is wrapped in `asyncio.to_thread()`.
+  The settlement charge is awaited inline in the handler, not queued.
 - **Keys:** live keys are in the `app_settings` Supabase table, not `.env`. Fetch via `get_setting('stripe_secret_key')` — cached for 5 min.
-- **3DS flow:** captured via PaymentIntent `requires_action` status. Rider must complete before fare settles.
+- **3DS flow:** differs by session. *On-session* (booking, add-card, payment sheet) returns
+  `200` + `client_secret` so the app can run the challenge. *Off-session* (end-of-ride
+  settlement) has no challenge path — `requires_action` returns **402
+  `authentication_required`** and the rider must change card.
 - **Disputes:** write-through to `disputes` table on `charge.dispute.created`. Support triages.
 - **Refunds:** always via Stripe API, never direct DB manipulation of wallet balance.
 - **Test mode:** non-production envs must use `sk_test_*`. Pre-commit hook blocks `sk_live_*` in diffs.

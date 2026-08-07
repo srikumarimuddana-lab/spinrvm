@@ -48,11 +48,20 @@ loguru logger.
 - `test_loguru_call_conventions.py` (the test that failed) + `test_ledger_projection.py` +
   `test_replay_safety_payment_loops.py` + `test_log_guard.py` — **65 passed**.
 - `ruff check` / `ruff format --check` — clean.
-- **Full backend suite re-run: IN FLIGHT at the time of this commit.** Stated as such
-  rather than asserted — that overstatement is the exact thing `12568ad` corrected and this
-  document exists to close. The fix is pushed ahead of the result because the remote
-  currently carries the failing code, so shipping it is strictly an improvement; the
-  re-run result is appended to this file in a follow-up commit.
+- **Full backend suite re-run against the fixed tree — CLEAN:**
+
+  ```
+  10015 passed, 8 skipped, 1 xfailed, 20 warnings in 623.26s (0:10:23)
+  SUITE_EXIT=0
+  ```
+
+  Zero failures, zero errors. The count is 10,015 vs the failing run's 10,014+1 because the
+  previously-failing convention test now passes. This result post-dates every change on the
+  branch, including the loguru fix itself.
+
+  (The fix commit was pushed while this run was in flight, and said so rather than claiming
+  green — the remote carried the failing code until then, so shipping ahead of the result
+  was strictly an improvement. This paragraph is the promised follow-up.)
 
 ## Why this wasn't caught earlier
 

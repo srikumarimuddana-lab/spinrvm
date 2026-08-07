@@ -60,13 +60,25 @@ See CLAUDE.md for the auto-mode tier table. Additional payment rules:
 
 - `financial_events` (migration `58`) is the append-only money ledger: signed `delta_cents`
   (positive = in, negative = out), `ref` = Stripe PaymentIntent ID, 7-year CRA/SK retention.
-  Written by `payment_service.record_payment_event()` / `record_refund_event()`.
-- **Single-entry, not double-entry** — no balancing contra-account. The daily
-  `stripe_reconcile_loop` is what catches drift.
-- Ledger writes are deliberately **best-effort** (`record_payment_event` never raises) and are
-  issued *before* the ride update so a recovery record survives a stuck `processing` row.
+  ALL writers route through `ledger_service.record_event` (client-supplied PK, 3 retries,
+  duplicate-key = success, Sentry `spinr_alert=ledger_write_failed` on exhaustion, never
+  raises) — the header is issued *before* the ride update so a recovery record survives a
+  stuck `processing` row.
+- **Double-entry legs** live in `financial_event_entries` (migration `286`) and have exactly
+  ONE writer: the `ledger_projection` background loop (15 min, migration-287 work queue,
+  backfills history). Never write legs from a request path. Flag: `ledger_double_entry_enabled`
+  (default off; requires migrations 286+287 applied first).
+- **Atomic settle** (`ledger_atomic_settle_enabled`, default off, migration `288`): card
+  settlement finalizes paid-flip + header in one transaction via `settle_ride_card_payment`,
+  with automatic legacy fallback when the function is absent. The RPC never writes legs; the
+  projection never reads this flag.
+- The daily reconciliation is the drift control: Stripe-vs-DB sum, unbalanced-legs view, and
+  a leg-completeness check (headers >24 h without legs while the flag is on).
 - Wallet money moves through `wallet_transactions` (migration `19`, carries running
   `balance_after`); corporate through `corporate_wallet_apply_delta`.
+- `financial_events` DELETE is legal only inside `purge_pii_retention` Step H via the
+  transaction-local GUC `spinr.financial_events.allow_delete` (migration `289`); UPDATE is
+  always blocked.
 
 ## Stripe
 

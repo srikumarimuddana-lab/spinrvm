@@ -247,7 +247,8 @@ its own replay-safety mechanism.
 |---|---|---|---|
 | `payment_retry_loop` | 300 s + jitter ±10% | `utils/payment_retry.py:617` | Redis lock, TTL = interval × 1.5 (`:630`) |
 | `stripe_reconcile_loop` | Daily 02:00 UTC (`_RUN_HOUR_UTC = 2`, `:100`) | `utils/stripe_reconcile.py:726` | Redis `SET NX` leader lock, 23 h TTL (`:99`, `:741`) |
-| `reconciliation_loop` | Daily 02:00 UTC | `utils/reconciliation.py` | Leader lock |
+| `reconciliation_loop` | Daily 02:00 UTC | `utils/reconciliation.py` | Leader lock; also checks leg balance + leg completeness (both never-raise) |
+| `ledger_projection_loop` | 900 s + jitter ±10% | `utils/ledger_projection.py` | UNIQUE(event_id, account, side) + whole-batch insert (23505 = written); Redis lock is a throttle only. No-op unless `ledger_double_entry_enabled`. |
 | Corporate auto-top-up | periodic | `lifespan.py:283` | Idempotency key per top-up |
 | Stale intent reconciler | 900 s + jitter ±60 s (`:68`, `:253`) | `utils/stale_intent_reconciler.py` | Idempotent by construction |
 
@@ -283,7 +284,7 @@ PIPEDA account-deletion scrub, which is why `record_payment_event` stores only
 | Table | Migration | Shape |
 |---|---|---|
 | `wallet_transactions` | `19_wallet.sql` | Append-only; `type` CHECK over 9 values, `amount`, running `balance_after NUMERIC(12,2)`, `reference_id` |
-| `financial_event_entries` | `286_financial_event_entries.sql` | Double-entry legs for `financial_events`. `amount_cents` always positive; direction in `side` (debit/credit). Flag-gated, default off. |
+| `financial_event_entries` | `286_financial_event_entries.sql` | Double-entry legs for `financial_events`. `amount_cents` always positive; direction in `side` (debit/credit). **Single writer: the `ledger_projection` loop** derives legs from headers ≥30 min old via the migration-287 anti-join RPC (backfills all history). Flag-gated, default off. |
 | `subscription_payments` | `151_subscription_payments_ledger.sql` | Subscription billing ledger |
 | `reconciliation_discrepancies` | `59_...sql` | Output of the daily reconcile |
 | `stripe_events` | `22_stripe_events.sql` | Webhook dedup — not a money ledger |
@@ -324,23 +325,30 @@ Redis `SET NX` gate for the wallet re-drive path (`:314`).
 
 Stated explicitly rather than left implied.
 
-1. ~~**The ledger is single-entry, not double-entry.**~~ **Addressed 2026-08-06 (flagged
-   off).** `financial_event_entries` (migration 286) adds balanced debit/credit legs as a
+1. ~~**The ledger is single-entry, not double-entry.**~~ **Addressed 2026-08-06/07 (flagged
+   off).** `financial_event_entries` (migration 286) holds balanced debit/credit legs as a
    child table — deliberately not as extra rows in `financial_events`, because
    `reconciliation._sum_financial_events` sums `delta_cents` and contra rows there would
-   cancel the daily Stripe reconciliation to zero. Legs are written only when the
-   `ledger_double_entry_enabled` app_settings flag is on; **default off, and the migration
-   has not been run against a live database yet.** Until then the effective state is still
-   single-entry. See `docs/change-log/2026-08-06-ledger-durability-double-entry.md`.
+   cancel the daily Stripe reconciliation to zero. As of 2026-08-07 legs are derived
+   **asynchronously by the `ledger_projection` loop** (single writer; migration-287 work
+   queue; backfills all history; undecomposable events booked whole to `platform_revenue`
+   with `spinr_alert=ledger_legs_degraded`). Gated on `ledger_double_entry_enabled`;
+   **default off, and migrations 286/287 have not been run against a live database yet** —
+   until then the effective state is still single-entry. Standing limitation either way:
+   `platform_revenue` is the plug, so a mis-stated `driver_earnings` books silently into it;
+   Stripe reconciliation, not the trial balance, catches that class.
 
-2. ~~**Ledger writes are best-effort and can silently under-report.**~~ **Addressed
-   2026-08-06 for the two `payment_service.py` writers.** The header insert now supplies a
-   client-generated PK and retries 3×, treats duplicate-key as success, and escalates to
-   Sentry (`spinr_alert=ledger_write_failed`) on exhaustion — while still never raising,
-   since the money has already moved. **Still outstanding for the other three writers:**
-   `routes/rides/cancellation.py:220` and `:491` (cancellation / notice-window fees) and the
-   webhook-side writer in `routes/webhooks.py` all retain the original
-   insert-and-swallow pattern.
+2. ~~**Ledger writes are best-effort and can silently under-report.**~~ **Fully addressed
+   2026-08-07.** All writers now route through `ledger_service.record_event` (client-
+   generated PK, 3 retries, duplicate-key = success, `spinr_alert=ledger_write_failed` on
+   exhaustion, never raises): the two `payment_service.py` writers (2026-08-06), and the two
+   cancellation-fee writers in `routes/rides/cancellation.py` (2026-08-07 — a recheck showed
+   `routes/webhooks.py` was already routed via `record_payment_event`, so the earlier "three
+   writers outstanding" was two). Additionally, behind `ledger_atomic_settle_enabled`
+   (default off, migration 288), card settlement can finalize the paid-flip **and** the
+   header in one Postgres transaction (`settle_ride_card_payment`), closing the remaining
+   process-death window between the Stripe capture and the DB writes; absent function or
+   flag falls back to the legacy two-write path.
 
 3. **Idempotency keys embed `amount_cents`.** A different tip yields a different key
    and therefore a genuinely new charge — correct for tip changes, but it means the
@@ -359,10 +367,23 @@ Stated explicitly rather than left implied.
    in-app challenge path is unreachable, and a rider whose card requires SCA at
    settlement must change card rather than authenticate.
 
-5. **`.claude/context/domain-payments.md` never mentions `financial_events`.** The
-   payments domain context documents webhook idempotency but not the ledger, and not
-   the SDK-level idempotency keys. Cross-referenced from this document as of
-   2026-08-06.
+5. ~~**`.claude/context/domain-payments.md` never mentions `financial_events`.**~~
+   **Addressed 2026-08-06** — the domain context now carries a Ledger section, the three
+   idempotency layers, and a pointer here.
+
+6. **The daily reconciliation crashed on month-end** (`datetime(y, m, day + 1)` →
+   `ValueError` on the last day of every month, ~12 skipped runs/year masked as a
+   transient DB error). **Fixed 2026-08-07** with `timedelta(days=1)` + a parametrized
+   boundary regression test.
+
+7. **The 7-year DSAR hard delete was structurally impossible** — migration 58's
+   append-only trigger raised on the very DELETE that `purge_pii_retention` Step H runs,
+   and its handler only catches FK violations, so the whole purge aborted. **Fixed
+   2026-08-07** (migration 289: transaction-local `spinr.financial_events.allow_delete`
+   gate, the migration-56 pattern). **Still open, dormant until ~2033:** Step B's
+   `DELETE FROM rides` at 7 years will FK-violate against retained
+   `financial_events.ride_id` rows (NO ACTION, no handler) and abort the purge — needs
+   its own design (NULL-first vs `ON DELETE SET NULL`).
 
 ---
 

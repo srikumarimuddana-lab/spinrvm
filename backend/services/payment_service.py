@@ -124,6 +124,34 @@ class PaymentResult:
 # ── Ledger ───────────────────────────────────────────────────────────
 
 
+def _charge_event_metadata(ride: dict | None, tip_amount: Decimal | None) -> Dict[str, Any]:
+    """Metadata for a stripe_charge ledger header.
+
+    Shared by record_payment_event (legacy two-write path) and the atomic
+    settle RPC path so both write byte-identical metadata.
+    """
+    meta: Dict[str, Any] = {"source": "process_payment"}
+    if ride:
+        fare = _round(_d(ride.get("total_fare", 0)))
+        meta.update(
+            {
+                "fare_amount": str(fare),
+                "tip_amount": str(_round(_d(tip_amount))) if tip_amount else "0.00",
+                "driver_id": ride.get("driver_id") or "",
+                "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
+                "payment_method": ride.get("payment_method") or "card",
+                # PIPEDA data minimization: financial_events is a 7-year
+                # tax/audit ledger that outlives the account-deletion scrub, so
+                # only the city-level area may be retained here — the exact
+                # address stays on the ride row under its own retention policy.
+                # Keys keep the legacy *_address names for reader compatibility.
+                "pickup_address": area_only(ride.get("pickup_address")) or "",
+                "dropoff_address": area_only(ride.get("dropoff_address")) or "",
+            }
+        )
+    return meta
+
+
 async def record_payment_event(
     ride_id: str,
     user_id: str,
@@ -146,25 +174,7 @@ async def record_payment_event(
     ledger_projection background loop derives them from the ride row once
     the ``ledger_double_entry_enabled`` app_settings flag is on.
     """
-    meta: Dict[str, Any] = {"source": "process_payment"}
-    if ride:
-        fare = _round(_d(ride.get("total_fare", 0)))
-        meta.update(
-            {
-                "fare_amount": str(fare),
-                "tip_amount": str(_round(_d(tip_amount))) if tip_amount else "0.00",
-                "driver_id": ride.get("driver_id") or "",
-                "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
-                "payment_method": ride.get("payment_method") or "card",
-                # PIPEDA data minimization: financial_events is a 7-year
-                # tax/audit ledger that outlives the account-deletion scrub, so
-                # only the city-level area may be retained here — the exact
-                # address stays on the ride row under its own retention policy.
-                # Keys keep the legacy *_address names for reader compatibility.
-                "pickup_address": area_only(ride.get("pickup_address")) or "",
-                "dropoff_address": area_only(ride.get("dropoff_address")) or "",
-            }
-        )
+    meta = _charge_event_metadata(ride, tip_amount)
     # No legs= here by design: double-entry legs are derived asynchronously by
     # the ledger_projection loop (single-writer invariant — only the projection
     # writes financial_event_entries). It decomposes from the ride row AFTER
@@ -765,6 +775,191 @@ async def _fire_guest_purchase_conversion(ride: dict, ride_id: str, charged_amou
 # ── Card (Stripe) settlement ─────────────────────────────────────────
 
 
+async def _atomic_settle_enabled() -> bool:
+    """Read the ledger_atomic_settle_enabled flag. Off on any read failure."""
+    # Lazy dual import: the module-level except-branch import list is managed
+    # by a formatter hook that strips additions — see the settings_loader
+    # pattern used across routes/. Cost after first import is a dict lookup.
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        cfg = await get_app_settings()
+        return bool(cfg.get("ledger_atomic_settle_enabled", False))
+    except Exception as err:
+        logger.warning("[PAYMENT] could not read ledger_atomic_settle_enabled, assuming off: {}", err)
+        return False
+
+
+async def _finalize_card_settlement(
+    *,
+    ride: dict,
+    ride_id: str,
+    rider_id: str,
+    settled_amount: Decimal,
+    payment_intent_id: str,
+    tip_collected: Decimal,
+    auth_status: Optional[str] = None,
+    extra_ride_fields: Optional[Dict[str, Any]] = None,
+) -> "PaymentResult":
+    """Post-charge finalizer shared by the capture-hold and fresh-charge paths.
+
+    Guarantees exactly ONE financial_events header per settlement:
+
+    - Flag off → the legacy sequence, unchanged: record_payment_event (durable
+      header) then update_ride to paid.
+    - Flag on → settle_ride_card_payment RPC commits the paid flip AND the
+      header in one transaction; record_payment_event and the money
+      update_ride are both skipped. Display-only fields (card repoint,
+      released-hold marker) follow best-effort — losing them cannot lose
+      money, and the paid ride is already out of payment_retry's scan set.
+    - RPC absent (migration 288 not applied) → legacy sequence + a distinct
+      atomic_settle_fallback warning.
+    - Ambiguous transport error (cannot know whether the RPC committed) →
+      re-read the ride: paid means it committed (the same transaction wrote
+      the header — verified by ref as defence-in-depth); not paid means
+      nothing committed and the legacy sequence runs. A RETRY of the RPC is
+      never attempted here: each attempt carries a fresh event id, so the
+      cross-attempt duplicate-header guard is the RPC's paid-gate, NOT
+      ON CONFLICT(id) — do not "simplify" this into a retry loop.
+    """
+    try:
+        from ..repositories import ledger_repo
+    except ImportError:
+        from repositories import ledger_repo  # type: ignore
+
+    amount_cents = int(_round(settled_amount * Decimal("100")))
+    use_rpc = await _atomic_settle_enabled()
+    legacy_reason: Optional[str] = None
+
+    if use_rpc:
+        event_id = str(uuid.uuid4())
+        try:
+            rpc_result = await ledger_repo.settle_ride_card_payment(
+                ride_id=ride_id,
+                event_id=event_id,
+                user_id=rider_id,
+                amount_cents=amount_cents,
+                payment_intent_id=payment_intent_id,
+                tip_amount=_round(tip_collected),
+                metadata=_charge_event_metadata(ride, tip_collected),
+                auth_status=auth_status,
+            )
+        except ledger_repo.SettleRpcUnavailable as err:
+            logger.warning(
+                "[PAYMENT] atomic_settle_fallback: RPC unavailable for ride {} — using legacy path ({})",
+                ride_id,
+                err,
+            )
+            legacy_reason = "rpc_unavailable"
+        except Exception as err:
+            # Ambiguous: the transaction may or may not have committed.
+            logger.error("[PAYMENT] atomic settle ambiguous error for ride {} — re-reading state: {}", ride_id, err)
+            fresh = None
+            try:
+                fresh = await db_supabase.get_ride(ride_id)
+            except Exception:
+                logger.opt(exception=True).error("[PAYMENT] state re-read failed for ride {}", ride_id)
+            if fresh is None:
+                # Ambiguous RPC AND unverifiable state: if the RPC committed,
+                # running the legacy sequence now would write a SECOND header
+                # (fresh event id — the paid-gate lives in the RPC, not in
+                # record_payment_event). Surface the stuck state instead;
+                # payment_retry + daily reconciliation own the recovery.
+                return PaymentResult(
+                    success=False,
+                    error="Payment was captured but confirmation failed. Do not retry — our team has been notified.",
+                    status_code=503,
+                )
+            if fresh.get("payment_status") == "paid":
+                # Committed. The header rode the same transaction; verify by
+                # ref purely as defence-in-depth and repair if impossible-missing.
+                try:
+                    rows = await db_supabase.get_rows("financial_events", {"ref": payment_intent_id}, limit=1)
+                except Exception:
+                    rows = [{}]  # unverifiable — do NOT double-write on a guess
+                if not rows:
+                    await record_payment_event(
+                        ride_id=ride_id,
+                        user_id=rider_id,
+                        amount_cents=amount_cents,
+                        payment_intent_id=payment_intent_id,
+                        ride=ride,
+                        tip_amount=tip_collected,
+                    )
+                await _send_payment_completed_ws(ride_id, rider_id, settled_amount)
+                return PaymentResult(success=True, charged_amount=_money_str(settled_amount))
+            # Nothing committed — run the full legacy sequence.
+            legacy_reason = "rpc_ambiguous_not_committed"
+        else:
+            if rpc_result is None:
+                # Ride already paid (concurrent settle or replay): no money
+                # moved now, no receipt/WS re-send.
+                return PaymentResult(success=True, already_paid=True, charged_amount=_money_str(settled_amount))
+            if extra_ride_fields:
+                # Display-only follow-up (card repoint / cleared brand cache).
+                try:
+                    await db_supabase.update_ride(ride_id, dict(extra_ride_fields))
+                except Exception:
+                    logger.opt(exception=True).error(
+                        "[PAYMENT] display-field follow-up failed for ride {} (money already settled)",
+                        ride_id,
+                    )
+            await _send_payment_completed_ws(ride_id, rider_id, settled_amount)
+            return PaymentResult(success=True, charged_amount=_money_str(settled_amount))
+    if legacy_reason:
+        logger.warning("[PAYMENT] settling ride {} via legacy two-write path ({})", ride_id, legacy_reason)
+
+    # Legacy two-write sequence (also the flag-off path) — behavior unchanged.
+    await record_payment_event(
+        ride_id=ride_id,
+        user_id=rider_id,
+        amount_cents=amount_cents,
+        payment_intent_id=payment_intent_id,
+        ride=ride,
+        tip_amount=tip_collected,
+    )
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                "payment_status": "paid",
+                "payment_intent_id": payment_intent_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                **({"auth_status": auth_status} if auth_status else {}),
+                **(extra_ride_fields or {}),
+                **_tip_ride_update(ride, tip_collected),
+            },
+        )
+    except Exception as db_err:
+        logger.opt(exception=True).error(
+            "[PAYMENT] Charge {} succeeded but ride {} DB update failed — "
+            "ride stuck in 'processing'; financial_events written for recovery. err={}",
+            payment_intent_id,
+            ride_id,
+            db_err,
+        )
+        return PaymentResult(
+            success=False,
+            error="Payment was captured but confirmation failed. Do not retry — our team has been notified.",
+            status_code=503,
+        )
+    await _send_payment_completed_ws(ride_id, rider_id, settled_amount)
+    return PaymentResult(success=True, charged_amount=_money_str(settled_amount))
+
+
+async def _send_payment_completed_ws(ride_id: str, rider_id: str, settled_amount: Decimal) -> None:
+    await manager.send_personal_message(
+        {
+            "type": "payment_completed",
+            "ride_id": ride_id,
+            "charged_amount": _money_str(settled_amount),
+        },
+        f"rider_{rider_id}",
+    )
+
+
 async def _settle_against_hold(
     ride: dict,
     ride_id: str,
@@ -880,47 +1075,15 @@ async def _settle_against_hold(
             )
 
     settled_amount = _round(capture_amount + extra_charged)
-    await record_payment_event(
-        ride_id=ride_id,
-        user_id=rider_id,
-        amount_cents=int(_round(settled_amount * Decimal("100"))),
-        payment_intent_id=cap.payment_intent_id,
+    return await _finalize_card_settlement(
         ride=ride,
-        tip_amount=tip_collected,
+        ride_id=ride_id,
+        rider_id=rider_id,
+        settled_amount=settled_amount,
+        payment_intent_id=cap.payment_intent_id,
+        tip_collected=tip_collected,
+        auth_status="captured",
     )
-    try:
-        await db_supabase.update_ride(
-            ride_id,
-            {
-                "payment_status": "paid",
-                "payment_intent_id": cap.payment_intent_id,
-                "auth_status": "captured",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                **_tip_ride_update(ride, tip_collected),
-            },
-        )
-    except Exception as db_err:
-        logger.opt(exception=True).error(
-            "[PAYMENT] Capture {} succeeded but ride {} DB update failed — "
-            "ride stuck in 'processing'; financial_events written for recovery. err={}",
-            cap.payment_intent_id,
-            ride_id,
-            db_err,
-        )
-        return PaymentResult(
-            success=False,
-            error="Payment was captured but confirmation failed. Do not retry — our team has been notified.",
-            status_code=503,
-        )
-    await manager.send_personal_message(
-        {
-            "type": "payment_completed",
-            "ride_id": ride_id,
-            "charged_amount": _money_str(settled_amount),
-        },
-        f"rider_{rider_id}",
-    )
-    return PaymentResult(success=True, charged_amount=_money_str(settled_amount))
 
 
 async def settle_card(
@@ -1021,59 +1184,27 @@ async def settle_card(
             override_hold_released = await cancel_authorization(
                 ride_id=ride_id, payment_intent_id=override_hold_pi_to_release
             )
-        await record_payment_event(
-            ride_id=ride_id,
-            user_id=rider_id,
-            amount_cents=int(_round(total_charge * Decimal("100"))),
-            payment_intent_id=outcome.payment_intent_id,
+        return await _finalize_card_settlement(
             ride=ride,
-            tip_amount=tip_amount,
+            ride_id=ride_id,
+            rider_id=rider_id,
+            settled_amount=total_charge,
+            payment_intent_id=outcome.payment_intent_id,
+            tip_collected=tip_amount,
+            # Record the old hold as released only when Stripe confirmed the
+            # cancel, so auth_status reflects reality.
+            auth_status="released" if override_hold_released else None,
+            # Re-point the ride to the card actually charged so a later
+            # retry/receipt reflects the new card, not the rejected one. Also
+            # clear the cached brand/last4 from the old (declined) card so the
+            # admin ride-detail resolver re-derives them from the new
+            # PaymentIntent instead of showing the rejected card.
+            extra_ride_fields=(
+                {"payment_method_id": payment_method_id, "card_brand": None, "card_last4": None}
+                if payment_method_id_override
+                else None
+            ),
         )
-        try:
-            await db_supabase.update_ride(
-                ride_id,
-                {
-                    "payment_status": "paid",
-                    "payment_intent_id": outcome.payment_intent_id,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    # Re-point the ride to the card actually charged so a later
-                    # retry/receipt reflects the new card, not the rejected one.
-                    # Also clear the cached card brand/last4 from the old (declined)
-                    # card so the admin ride-detail resolver re-derives them from
-                    # the new PaymentIntent instead of showing the rejected card.
-                    **(
-                        {"payment_method_id": payment_method_id, "card_brand": None, "card_last4": None}
-                        if payment_method_id_override
-                        else {}
-                    ),
-                    # Record the old hold as released only when Stripe confirmed the
-                    # cancel, so auth_status reflects reality.
-                    **({"auth_status": "released"} if override_hold_released else {}),
-                    **_tip_ride_update(ride, tip_amount),
-                },
-            )
-        except Exception as db_err:
-            logger.opt(exception=True).error(
-                "[PAYMENT] Stripe charge {} confirmed but ride {} DB update failed — "
-                "ride stuck in 'processing'; financial_events written for recovery. err={}",
-                outcome.payment_intent_id,
-                ride_id,
-                db_err,
-            )
-            return PaymentResult(
-                success=False,
-                error="Payment was captured but confirmation failed. Do not retry — our team has been notified.",
-                status_code=503,
-            )
-        await manager.send_personal_message(
-            {
-                "type": "payment_completed",
-                "ride_id": ride_id,
-                "charged_amount": _money_str(total_charge),
-            },
-            f"rider_{rider_id}",
-        )
-        return PaymentResult(success=True, charged_amount=_money_str(total_charge))
 
     if outcome.status == "requires_action":
         await db_supabase.update_ride(

@@ -75,6 +75,14 @@ Pure `CREATE OR REPLACE` both ways: re-apply 58's trigger body and 285's purge b
 - `pglast` (real Postgres parser): 7 statements, all accepted.
 - **Scripted verbatim-diff against 285's function body** — 29 changed lines, all of them the Step H gate or comment rewraps; zero unintended executable changes.
 - Reviewed against `backend/migrations/CLAUDE.md` (append-only, reversible-on-paper, SECURITY DEFINER + pinned search_path preserved) and the 56/285 GUC pattern.
+- CI **"Migration safety check" failed on first push** and was fixed, not bypassed by
+  reflex: the gate flags any new migration that redefines an existing `CREATE OR REPLACE`
+  target. Both targets here genuinely cannot be renamed — migration 58 already bound
+  `financial_events_no_mutate` to `_financial_events_immutable` (renaming needs a
+  DROP/CREATE TRIGGER, opening a window where the table is mutable), and
+  `utils/retention_purge.py` invokes `purge_pii_retention` by name over RPC. The
+  `-- migration-override-ok:` annotation the gate itself offers is therefore the correct
+  resolution, with both justifications written into the migration header.
 
 ## 10. What was NOT verified
 

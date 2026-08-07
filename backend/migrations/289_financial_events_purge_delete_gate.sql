@@ -41,6 +41,22 @@
 --      (unconditional RAISE) via CREATE OR REPLACE.
 --   2. Re-apply migration 285's purge_pii_retention definition verbatim.
 --   Both are pure CREATE OR REPLACE — no data or schema to unwind.
+--
+-- migration-override-ok: intentionally redefines TWO existing objects, and
+-- neither can be renamed away.
+--   * _financial_events_immutable (last defined in 58_financial_events.sql) —
+--     migration 58 already bound trigger financial_events_no_mutate to this
+--     exact name. Renaming would need a DROP TRIGGER + CREATE TRIGGER, which
+--     opens a window where financial_events is mutable; CREATE OR REPLACE
+--     swaps the body atomically under the existing binding.
+--   * purge_pii_retention (last defined in 285_retention_purge_compliance_
+--     export_events.sql; also 51/56/57/67/216/228) — a plpgsql function's body
+--     can only be changed by redefining it, this is its 17th definition by
+--     design, and utils/retention_purge.py calls it BY NAME via RPC, so a
+--     rename would silently orphan the caller. The body here is a verbatim
+--     copy of 285's with the Step H gate added; a scripted diff against 285 is
+--     recorded in docs/change-log/2026-08-07-dsar-purge-delete-gate.md and
+--     shows the gate as the only executable change.
 
 -- ── 1. Trigger function: gate DELETE behind the transaction-local GUC ──
 

@@ -239,7 +239,7 @@ async def project_pending_legs(limit: int = _BATCH_LIMIT) -> Dict[str, int]:
         except Exception:
             # Per-item isolation: one bad row never stops the batch.
             stats["failed"] += 1
-            logger.error("[LEDGER-PROJ] projection raised for event {}", event.get("id"), exc_info=True)
+            logger.opt(exception=True).error("[LEDGER-PROJ] projection raised for event {}", event.get("id"))
 
     if stats["projected"] or stats["degraded"] or stats["failed"]:
         logger.info(
@@ -259,7 +259,7 @@ async def ledger_projection_loop() -> None:
             if acquired:
                 await project_pending_legs()
         except Exception:
-            logger.error("ledger_projection_loop: tick raised", exc_info=True)
+            logger.opt(exception=True).error("ledger_projection_loop: tick raised")
         # Heartbeat on both the acquired and lock-skipped paths so follower
         # replicas still look alive to the watchdog.
         _record_heartbeat(_LOOP_NAME)

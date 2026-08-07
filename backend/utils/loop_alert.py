@@ -52,8 +52,17 @@ async def check_and_alert(
         if info["status"] != "stale":
             continue
 
-        last_sent = _last_alerted.get(name, 0.0)
-        if now - last_sent < COOLDOWN_SECONDS:
+        # "Never alerted" must be an explicit None, NOT a 0.0 default.
+        # time.monotonic() counts from an arbitrary origin that is near zero
+        # early in a process's life, so `now - 0.0 < COOLDOWN_SECONDS` is true
+        # for the first COOLDOWN_SECONDS (1 h) of uptime — which silently
+        # suppressed EVERY stale-loop alert for the first hour after each
+        # deploy, restart, or Fly machine wake. That is the window where a loop
+        # is most likely to fail to start at all, and this is the only alerting
+        # path live in production, so the outage it exists to report was exactly
+        # the one it could not report.
+        last_sent = _last_alerted.get(name)
+        if last_sent is not None and now - last_sent < COOLDOWN_SECONDS:
             continue  # already alerted recently
 
         elapsed = info.get("seconds_since_tick")

@@ -36,6 +36,10 @@
 -- own design (NULL ride_id first vs ON DELETE SET NULL); tracked in the
 -- change log for this migration.
 --
+-- Rollback: re-apply migration 58's _financial_events_immutable() body and
+-- migration 285's purge_pii_retention body, both via CREATE OR REPLACE — no
+-- data or schema to unwind.
+--
 -- Rollback plan:
 --   1. Re-apply migration 58's _financial_events_immutable() body
 --      (unconditional RAISE) via CREATE OR REPLACE.

@@ -26,6 +26,8 @@
 --     30 minutes is generous headroom over that write gap (milliseconds in
 --     practice, but crash-recovery paths can stretch it).
 --
+-- Rollback: DROP FUNCTION IF EXISTS financial_events_missing_legs(int);
+--
 -- Rollback plan:
 --   DROP FUNCTION IF EXISTS financial_events_missing_legs(int);
 --   Nothing else references it; the projection loop degrades to a logged

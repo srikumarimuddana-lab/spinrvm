@@ -388,6 +388,40 @@ async def test_sum_financial_events_returns_zero_when_no_rows():
     assert total == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run_date", "expected_end"),
+    [
+        (date(2026, 1, 31), "2026-02-01"),  # 31-day month → next month
+        (date(2026, 2, 28), "2026-03-01"),  # non-leap February
+        (date(2028, 2, 29), "2028-03-01"),  # leap-day
+        (date(2026, 12, 31), "2027-01-01"),  # year boundary
+        (date(2026, 4, 30), "2026-05-01"),  # 30-day month
+    ],
+)
+async def test_sum_financial_events_month_end_boundary(run_date, expected_end):
+    """Regression: datetime(y, m, day + 1) raised ValueError on the last day of
+    every month, killing the whole reconciliation tick ~12 nights a year. The
+    window must roll into the next month/year via timedelta instead."""
+    mock_client = MagicMock()
+    rows = mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value.lt.return_value.execute.return_value
+    rows.data = [{"delta_cents": 100}]
+
+    with (
+        patch("db_supabase.run_sync", AsyncMock(side_effect=_passthrough_run_sync)),
+        patch("supabase_client.supabase", mock_client),
+    ):
+        from utils.reconciliation import _sum_financial_events
+
+        total = await _sum_financial_events(run_date, "stripe_charge")
+
+    assert total == 100
+    gte_call = mock_client.table.return_value.select.return_value.eq.return_value.gte
+    lt_call = gte_call.return_value.lt
+    assert gte_call.call_args.args == ("created_at", f"{run_date.isoformat()}T00:00:00+00:00")
+    assert lt_call.call_args.args == ("created_at", f"{expected_end}T00:00:00+00:00")
+
+
 # ── _record_discrepancy ──────────────────────────────────────────────────
 
 

@@ -200,8 +200,13 @@ async def _sum_financial_events(date, event_type: str) -> int:  # noqa: ANN001
         from ..db_supabase import run_sync  # type: ignore
         from ..supabase_client import supabase  # type: ignore
 
-    day_start = datetime(date.year, date.month, date.day, tzinfo=timezone.utc).isoformat()
-    day_end = datetime(date.year, date.month, date.day + 1, tzinfo=timezone.utc).isoformat()
+    # timedelta, not day + 1: datetime(y, m, 31 + 1) raises "day is out of
+    # range for month" on the last day of every month, which killed the whole
+    # reconciliation tick ~12 nights a year (same boundary handling as the
+    # epoch+86400 form in _sum_stripe_intents).
+    day_start_dt = datetime(date.year, date.month, date.day, tzinfo=timezone.utc)
+    day_start = day_start_dt.isoformat()
+    day_end = (day_start_dt + timedelta(days=1)).isoformat()
 
     rows = await run_sync(
         lambda: (

@@ -211,10 +211,13 @@ def _is_duplicate_key(exc: Exception) -> bool:
 # Alert tags, most to least severe. Kept distinct so on-call can route them
 # differently: a lost header is a hole in the 7-year tax record, whereas lost or
 # unbalanced legs are a defect in the accounting overlay with the tax record
-# still intact.
+# still intact. LEGS_DEGRADED means the projection could not decompose an event
+# (missing ride, inconsistent amounts) and booked it whole to platform_revenue —
+# balanced and truthful at the money-in level, but the split is lost.
 ALERT_HEADER_LOST = "ledger_write_failed"
 ALERT_LEGS_LOST = "ledger_legs_lost"
 ALERT_LEGS_UNBALANCED = "ledger_legs_unbalanced"
+ALERT_LEGS_DEGRADED = "ledger_legs_degraded"
 
 
 def _escalate(message: str, context: Dict[str, Any], alert: str = ALERT_HEADER_LOST) -> None:
@@ -333,25 +336,36 @@ async def record_event(
         return None
 
     if legs:
-        await _write_legs(event_id, legs, ride_id=ride_id, event_type=event_type)
+        await write_legs(event_id, legs, ride_id=ride_id, event_type=event_type)
 
     return event_id
 
 
-async def _write_legs(
+async def write_legs(
     event_id: str,
     legs: Sequence[Leg],
     *,
     ride_id: Optional[str],
     event_type: str,
-) -> None:
-    """Validate and insert the double-entry legs. Flag-gated, never raises.
+    check_flag: bool = True,
+) -> bool:
+    """Validate and insert the double-entry legs. Never raises.
+
+    Returns True when the legs are durably present (written now, or already
+    there from an earlier attempt), False when they were skipped or lost.
+
+    ``check_flag=True`` (default) gates on the ``ledger_double_entry_enabled``
+    app setting — the right behavior for request-path callers. The projection
+    loop passes ``check_flag=False`` because it checks the flag ONCE per tick
+    before fetching its batch; re-reading per event would only add settings
+    churn and a mid-batch flag flip would leave a partially-projected batch
+    either way (harmless — the next tick picks up the remainder).
 
     A leg failure does NOT invalidate the header: the header is the tax record
     and is already durable. Missing legs surface via the reconciliation loop.
     """
-    if not await double_entry_enabled():
-        return
+    if check_flag and not await double_entry_enabled():
+        return False
     try:
         assert_balanced(legs)
     except UnbalancedLedgerError as err:
@@ -367,7 +381,7 @@ async def _write_legs(
             {"event_id": event_id, "ride_id": ride_id, "event_type": event_type, "error": str(err)},
             alert=ALERT_LEGS_UNBALANCED,
         )
-        return
+        return False
 
     now = datetime.now(timezone.utc).isoformat()
     rows = [
@@ -396,3 +410,4 @@ async def _write_legs(
             {"event_id": event_id, "ride_id": ride_id, "event_type": event_type, "leg_count": len(rows)},
             alert=ALERT_LEGS_LOST,
         )
+    return ok

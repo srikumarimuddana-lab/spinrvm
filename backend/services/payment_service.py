@@ -142,8 +142,9 @@ async def record_payment_event(
 
     The write is retried and, on exhaustion, escalated to Sentry
     (``spinr_alert=ledger_write_failed``) rather than only logged — see
-    services/ledger_service.py. Double-entry legs are attached when the
-    ``ledger_double_entry_enabled`` app_settings flag is on.
+    services/ledger_service.py. Double-entry legs are NOT written here: the
+    ledger_projection background loop derives them from the ride row once
+    the ``ledger_double_entry_enabled`` app_settings flag is on.
     """
     meta: Dict[str, Any] = {"source": "process_payment"}
     if ride:
@@ -164,16 +165,11 @@ async def record_payment_event(
                 "dropoff_address": area_only(ride.get("dropoff_address")) or "",
             }
         )
-    # Double-entry legs need the fare decomposed into driver / tax / platform.
-    # Without the ride row we cannot split it, so the header is written alone.
-    legs = None
-    if ride:
-        legs = ledger_service.build_charge_legs(
-            total_cents=amount_cents,
-            driver_cents=ledger_service.to_cents(ride.get("driver_earnings")),
-            tax_cents=ledger_service.to_cents(ride.get("tax_amount")),
-        )
-
+    # No legs= here by design: double-entry legs are derived asynchronously by
+    # the ledger_projection loop (single-writer invariant — only the projection
+    # writes financial_event_entries). It decomposes from the ride row AFTER
+    # the tip delta lands on rides.driver_earnings; splitting inline here would
+    # race that write and book the tip into platform_revenue.
     await ledger_service.record_event(
         event_type="stripe_charge",
         user_id=user_id,
@@ -181,7 +177,6 @@ async def record_payment_event(
         delta_cents=amount_cents,
         ref=payment_intent_id,
         metadata=meta,
-        legs=legs,
     )
 
 
@@ -223,14 +218,10 @@ async def record_refund_event(
                 "driver_earnings_retained": str(_round(_d(ride.get("driver_earnings") or 0))),
             }
         )
-    # Legs mirror the charge. driver_payable is untouched by design — the driver
-    # keeps their pay and the platform absorbs it (see docstring), so that
-    # amount rides inside the platform_revenue debit.
-    legs = ledger_service.build_refund_legs(
-        refund_cents=abs(int(refund_cents)),
-        tax_reversed_cents=ledger_service.to_cents(tax_reversed),
-    )
-
+    # No legs= here by design — the ledger_projection loop derives them from
+    # metadata.tax_reversed (written above), keeping financial_event_entries
+    # single-writer. driver_payable stays untouched either way: the driver
+    # keeps their pay on a refund and the platform absorbs it (see docstring).
     await ledger_service.record_event(
         event_type="stripe_refund",
         user_id=user_id,
@@ -238,7 +229,6 @@ async def record_refund_event(
         delta_cents=-abs(int(refund_cents)),
         ref=payment_intent_id,
         metadata=meta,
-        legs=legs,
     )
 
 

@@ -101,6 +101,60 @@ async def _run_reconciliation(date) -> None:  # noqa: ANN001
         logger.info(f"reconciliation: {date} OK — within threshold")
 
     await _check_entry_balance(date)
+    await _check_leg_completeness()
+
+
+async def _check_leg_completeness() -> None:
+    """Alert when projectable headers have gone >24h without double-entry legs.
+
+    The unbalanced-view check below can only see legs that EXIST; a header the
+    projection loop never managed to decompose is invisible to it. This uses
+    the projection's own work-queue RPC (migration 287) — anything still in
+    that queue past 24h means the loop is dead, wedged, or consistently
+    failing, which the 15-minute cadence should never allow.
+
+    Skips silently when double-entry is off (queue is expected to grow) or the
+    RPC is absent (migration 287 not applied). Never raises.
+    """
+    try:
+        from services.ledger_service import double_entry_enabled  # type: ignore
+    except ImportError:
+        from ..services.ledger_service import double_entry_enabled  # type: ignore
+
+    try:
+        from db_supabase import rpc  # type: ignore
+    except ImportError:
+        from ..db_supabase import rpc  # type: ignore
+
+    try:
+        if not await double_entry_enabled():
+            return
+        rows = await rpc("financial_events_missing_legs", {"p_limit": 500}) or []
+    except Exception:
+        logger.info("reconciliation: leg-completeness check unavailable (migration 287 not applied?)")
+        return
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    stale = []
+    for r in rows:
+        created = r.get("created_at")
+        try:
+            created_dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            stale.append(r)  # unparseable age — surface it rather than hide it
+            continue
+        if created_dt < cutoff:
+            stale.append(r)
+
+    if not stale:
+        logger.info("reconciliation: double-entry leg projection current (queue <24h)")
+        return
+
+    logger.error(
+        f"reconciliation ALERT: {len(stale)} financial_events headers >24h old "
+        f"with no double-entry legs — projection loop dead or failing. "
+        f"event_ids={[r.get('id') for r in stale[:10]]}"
+    )
 
 
 async def _check_entry_balance(date) -> None:  # noqa: ANN001

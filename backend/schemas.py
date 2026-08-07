@@ -202,6 +202,16 @@ class AppSettings(BaseModel):
     # the input to the daily Stripe reconciliation — is completely unaffected
     # either way. Nothing reads the legs to make a money decision.
     ledger_double_entry_enabled: bool = False
+    # ── Atomic card settlement (migration 288) ──────────────────────────
+    # When on, settle_card finalizes via the settle_ride_card_payment RPC:
+    # rides.payment_status flip + financial_events header in ONE Postgres
+    # transaction, closing the process-death window between them. Default
+    # OFF; requires migration 288 applied first (absent function → automatic
+    # fallback to the legacy two-write path, logged at warning). Flipping it
+    # back off is the rollback — rows written by either path are identical
+    # to every reader. Independent of ledger_double_entry_enabled: the RPC
+    # never writes legs and the projection never reads this flag.
+    ledger_atomic_settle_enabled: bool = False
     # Grid cell for coarsening, in metres. 500m keeps the map useful at city
     # zoom ("cars are around me, roughly there") while destroying the
     # resolution needed to follow one vehicle. 0 would mean exact — deliberately

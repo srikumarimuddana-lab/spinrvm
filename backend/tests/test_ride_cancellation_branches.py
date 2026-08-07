@@ -204,9 +204,7 @@ async def test_wallet_fee_partial_collection_is_logged_not_fatal():
             "backend.routes.rides.cancellation._deps.calculate_cancellation_fee",
             return_value=(Decimal("3.00"), Decimal("2.00")),
         ),
-        patch(
-            "backend.routes.rides.cancellation._deps.pay_driver_cancellation_fee", AsyncMock()
-        ) as mock_pay_driver,
+        patch("backend.routes.rides.cancellation._deps.pay_driver_cancellation_fee", AsyncMock()) as mock_pay_driver,
         patch("backend.routes.rides.cancellation._deps.record_period_transition", AsyncMock()),
         patch("backend.routes.rides.cancellation._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
@@ -461,6 +459,10 @@ async def test_cancel_scheduled_charges_notice_window_fee_when_enabled():
             "backend.routes.rides.cancellation._deps.db_supabase.get_user_by_id",
             AsyncMock(return_value={"stripe_customer_id": "cus_notice", "default_payment_method": "pm_notice"}),
         ),
+        patch(
+            "backend.routes.rides.cancellation._deps.record_ledger_event",
+            AsyncMock(return_value="evt_notice_1"),
+        ) as ledger_mock,
     ):
         mock_supabase.get_rows = AsyncMock(return_value=[scheduled])
         mock_supabase.update_one = AsyncMock(return_value=scheduled)
@@ -474,6 +476,15 @@ async def test_cancel_scheduled_charges_notice_window_fee_when_enabled():
     charge_mock.assert_awaited_once()
     assert charge_mock.await_args.kwargs["amount"] == Decimal("3.00")
     assert charge_mock.await_args.kwargs["fee_type"] == "scheduled_cancel_notice_fee"
+    # The succeeded charge must leave a ledger trail via the durable writer
+    # (previously this write escaped the test's mocks into the real
+    # ledger binding — now asserted explicitly).
+    ledger_mock.assert_awaited_once()
+    lk = ledger_mock.call_args.kwargs
+    assert lk["event_type"] == "stripe_charge"
+    assert lk["delta_cents"] == 300
+    assert lk["ref"] == "pi_notice_1"
+    assert lk["metadata"] == {"source": "scheduled_cancel_notice_fee"}
 
 
 async def test_cancel_scheduled_no_fee_charge_attempted_when_flag_disabled():

@@ -85,7 +85,10 @@ stats = await project_pending_legs()            # background, every 15 min
 - Affected battery (`test_ledger_service`, `test_ledger_projection`, `test_ledger_pii`, `test_refund_ledger`, `test_coverage_rides`, `test_process_payment_card`, `test_settle_card_capture`, `test_reconciliation`, `test_replay_safety_payment_loops`, `test_core_lifespan_coverage`) — **282 passed**.
 - `ruff check` + `ruff format` clean on every touched file.
 - Grep confirmed no test or prod caller references the removed `_write_legs` name; no lifespan test pins the loop list.
-- Full backend suite before push.
+- Full backend suite (~10k tests): **started before the push, still running when the
+  branch was pushed** (feature branch, not a merge). Result recorded in a follow-up
+  commit — see `docs/change-log/2026-08-07-full-suite-result.md`. Targeted batteries
+  for this change were green before commit (listed above).
 
 ## 10. What was NOT verified
 

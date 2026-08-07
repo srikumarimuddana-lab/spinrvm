@@ -76,7 +76,10 @@ await _deps.record_ledger_event(
 - Targeted: `test_cancellation_fee_card_charge.py` + `test_ride_cancellation_branches.py` + `test_ledger_service.py` — 39 passed; remaining cancellation files (`test_c2_driver_cancel_atomic.py`, `test_e2e_cancellation.py`, `test_preauth_release_on_cancel.py`, `test_scheduled_cancel_notice_fee.py`) — 41 passed.
 - `ruff check` / `format --check` clean on all four files.
 - Blast-radius grep: `financial_events` across backend/ re-run; confirmed webhooks.py has zero direct writes (routes via `record_payment_event`); the only remaining direct `insert_one("financial_events", ...)` callers are now inside `ledger_service` itself.
-- Full backend suite before push.
+- Full backend suite (~10k tests): **started before the push, still running when the
+  branch was pushed** (feature branch, not a merge). Result recorded in a follow-up
+  commit — see `docs/change-log/2026-08-07-full-suite-result.md`. Targeted batteries
+  for this change were green before commit (listed above).
 
 ## 10. What was NOT verified
 

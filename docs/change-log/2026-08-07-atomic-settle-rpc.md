@@ -79,7 +79,10 @@ result = await ledger_repo.settle_ride_card_payment(
 - New `test_atomic_settle.py` — 12 passed, covering the full flag matrix, all four ambiguous-error outcomes, and wrapper error translation. The wrapper test **caught a real bug pre-commit**: `run_sync` was wrapping `SettleRpcUnavailable` into `DatabaseError`, which would have turned every missing-function fallback into an ambiguous-error path.
 - Settle battery (`test_atomic_settle`, `test_settle_card_capture`, `test_process_payment_card`, `test_coverage_payments`, `test_coverage_rides`, `test_ledger_service`, `test_ledger_projection`, `test_payment_retry`, `test_stripe_charge_coverage`) — **339 passed**.
 - `ruff check` / `format --check` clean.
-- Full backend suite before push.
+- Full backend suite (~10k tests): **started before the push, still running when the
+  branch was pushed** (feature branch, not a merge). Result recorded in a follow-up
+  commit — see `docs/change-log/2026-08-07-full-suite-result.md`. Targeted batteries
+  for this change were green before commit (listed above).
 
 ## 10. What was NOT verified
 

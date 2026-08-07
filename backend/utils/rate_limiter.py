@@ -128,6 +128,41 @@ def _extract_unverified_user_id(request: Request) -> str | None:
     return str(uid) if uid is not None else None
 
 
+def get_user_or_ip_key(request: Request) -> str:
+    """Key rate limiting by authenticated user, falling back to IP.
+
+    Mobile carriers put hundreds of subscribers behind one carrier-grade NAT
+    egress IP. Under IP keying every rider on a given carrier in a given city
+    shares ONE bucket, so a burst of legitimate users 429s itself: 5 bookings
+    per minute across an entire carrier, and — worse — an SOS that can be
+    refused because unrelated strangers on the same egress IP happened to tap
+    ride actions. That is a correctness bug on a safety surface, not a tuning
+    nit.
+
+    Keying on the user makes the limit mean what its name says: N per minute
+    *per user*. It is also strictly harder to evade than IP keying, which an
+    abuser defeats for free by rotating through a proxy pool.
+
+    Safety of the unverified decode: see `_extract_unverified_user_id`. On
+    these routes `Depends(get_current_user)` resolves BEFORE the limiter-wrapped
+    handler body, so a forged token 401s regardless — the worst a bad token can
+    do is land in a throwaway bucket for a request that then fails auth.
+
+    Anonymous requests (no bearer token) keep IP keying, which is the only
+    identity available for them.
+
+    Kill switch: set ``RATE_LIMIT_USER_KEYING=off`` to revert to pure IP keying
+    without a code deploy (``fly secrets set`` rolls machines with the new
+    value). See docs/runbooks/capacity-scaling.md §3.
+    """
+    if os.environ.get("RATE_LIMIT_USER_KEYING", "on").strip().lower() in ("off", "0", "false", "no"):
+        return f"ip:{get_real_client_ip(request)}"
+    user_id = _extract_unverified_user_id(request)
+    if user_id:
+        return f"user:{user_id}"
+    return f"ip:{get_real_client_ip(request)}"
+
+
 def get_ai_chat_key(request: Request) -> str:
     """Key AI-chat rate limiting by user, not IP (ACTION_ITEMS.md AI1).
 
@@ -274,8 +309,11 @@ otp_rate_limit = default_limiter.limit("3/minute")
 # Login endpoints - moderately restrictive
 login_rate_limit = default_limiter.limit("5/minute")
 
-# General API endpoints - more permissive
-api_rate_limit = default_limiter.limit("30/minute")
+# General API endpoints - more permissive. Keyed per user (get_user_or_ip_key),
+# not per IP: carrier-grade NAT put a whole carrier's riders in one bucket.
+# The limit is unchanged because 30/minute is generous *per user* — and the
+# limiter scope includes the URL path, so each route gets its own bucket.
+api_rate_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)
 
 # Ride creation - prevent spam ride requests (max 5 per minute per user)
 ride_request_limit = default_limiter.limit("5/minute")
@@ -283,8 +321,10 @@ ride_request_limit = default_limiter.limit("5/minute")
 # Ride cancellation - max 10 per hour per user (prevents cancellation farming)
 cancel_ride_limit = default_limiter.limit("10/hour")
 
-# Ride read endpoints — generous ceiling covers 3 s polling without churn
-ride_read_limit = default_limiter.limit("120/minute")
+# Ride read endpoints — generous ceiling covers 3 s polling without churn.
+# Per-user keyed: under IP keying a carrier NAT's riders shared this bucket, so
+# ~6 simultaneously-polling riders on one carrier exhausted it between them.
+ride_read_limit = default_limiter.limit("120/minute", key_func=get_user_or_ip_key)
 
 # Corporate guest bookings: each one fires 2-3 customer SMS, so this is an
 # SMS-cost/abuse bound as much as a booking bound. 30/hour comfortably covers

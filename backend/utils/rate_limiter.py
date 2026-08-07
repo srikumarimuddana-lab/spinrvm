@@ -316,10 +316,10 @@ login_rate_limit = default_limiter.limit("5/minute")
 api_rate_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)
 
 # Ride creation - prevent spam ride requests (max 5 per minute per user)
-ride_request_limit = default_limiter.limit("5/minute")
+ride_request_limit = default_limiter.limit("5/minute", key_func=get_user_or_ip_key)
 
 # Ride cancellation - max 10 per hour per user (prevents cancellation farming)
-cancel_ride_limit = default_limiter.limit("10/hour")
+cancel_ride_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
 
 # Ride read endpoints — generous ceiling covers 3 s polling without churn.
 # Per-user keyed: under IP keying a carrier NAT's riders shared this bucket, so
@@ -344,10 +344,10 @@ promo_validate_limit = default_limiter.limit("10/minute")
 location_update_limit = default_limiter.limit("60/minute")
 
 # Payment actions (tip, process-payment) — sensitive financial ops, tight limit
-payment_action_limit = default_limiter.limit("5/minute")
+payment_action_limit = default_limiter.limit("5/minute", key_func=get_user_or_ip_key)
 
 # Ride rating — once per completed ride, extra friction prevents spam
-ride_rating_limit = default_limiter.limit("5/hour")
+ride_rating_limit = default_limiter.limit("5/hour", key_func=get_user_or_ip_key)
 
 # Data export (DSAR) — each call fans out 6 DB reads, builds a ZIP, uploads to
 # Storage, and sends an email. Tight cap prevents storage fill / SES exhaustion.
@@ -433,10 +433,16 @@ admin_statement_download_limit = default_limiter.limit("60/hour")
 ai_chat_limit = default_limiter.limit("10/minute", key_func=get_ai_chat_key)
 
 # In-ride messaging — generous but bounded to prevent SMS relay abuse
-ride_message_limit = default_limiter.limit("30/minute")
+ride_message_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)
 
-# Ride state transitions (start, complete, emergency) — ride lifecycle ops
-ride_action_limit = default_limiter.limit("20/minute")
+# Ride state transitions (start, complete, emergency) — ride lifecycle ops.
+# Per-user keyed, and this one is a safety fix as much as a capacity one: it
+# guards POST /rides/{id}/emergency (routes/rides/safety.py:38), so under IP
+# keying an SOS could be refused because unrelated strangers behind the same
+# carrier NAT had spent the bucket on ordinary ride actions. Note the SOS route
+# uses get_current_user_allow_expired; _extract_unverified_user_id ignores
+# expiry too, so an expired-but-valid token still keys to its real user.
+ride_action_limit = default_limiter.limit("20/minute", key_func=get_user_or_ip_key)
 
 # Document uploads - restrictive to prevent abuse
 document_upload_limit = default_limiter.limit("5/minute")

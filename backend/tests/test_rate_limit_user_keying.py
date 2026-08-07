@@ -165,6 +165,47 @@ async def test_one_rider_exhausting_the_limit_does_not_block_their_neighbour():
 
 
 @pytest.mark.asyncio
+async def test_sos_is_not_blocked_by_a_stranger_on_the_same_carrier_ip():
+    """Safety case. ride_action_limit guards POST /rides/{id}/emergency
+    (routes/rides/safety.py:38). Under IP keying, riders who had spent the
+    bucket on ordinary ride actions could exhaust it for an unrelated rider
+    behind the same carrier NAT — whose SOS then 429'd. It must not."""
+    from limits.aio.storage import MemoryStorage
+
+    from utils.async_limiter import AsyncLimiter
+
+    limiter = AsyncLimiter(key_func=get_user_or_ip_key, storage=MemoryStorage())
+    served = []
+
+    @limiter.limit("1/minute", key_func=get_user_or_ip_key)
+    async def _emergency(request: Request):
+        served.append(request)
+        return "sos-dispatched"
+
+    # A different rider on the same carrier IP burns the bucket first.
+    await _emergency(_fake_request(user_id="noisy_rider", ip=CARRIER_NAT_IP))
+    assert len(served) == 1
+
+    # The rider in actual distress must still get through.
+    await _emergency(_fake_request(user_id="rider_in_distress", ip=CARRIER_NAT_IP))
+    assert len(served) == 2
+
+
+def test_expired_token_still_keys_to_its_user():
+    """The SOS route uses get_current_user_allow_expired, so a token that
+    expired mid-trip still identifies the caller. The key func must agree —
+    it decodes without verifying signature OR expiry — otherwise a rider whose
+    token lapsed mid-ride would silently fall back into the shared carrier-IP
+    bucket at exactly the moment they need the limit to be theirs alone."""
+    expired = jwt.encode(
+        {"user_id": "rider_expired", "exp": 1000000000},  # 2001
+        "irrelevant-test-secret",
+        algorithm="HS256",
+    )
+    assert get_user_or_ip_key(_fake_request(raw_auth=f"Bearer {expired}")) == "user:rider_expired"
+
+
+@pytest.mark.asyncio
 async def test_one_rider_cannot_evade_the_limit_by_changing_ip():
     """The limit must still bind: rotating IPs is the classic evasion that
     IP keying invited, and user keying closes it rather than widening it."""

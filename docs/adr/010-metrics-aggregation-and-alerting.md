@@ -36,8 +36,12 @@ fix there). Real call sites already emit SLA-relevant series:
 Meanwhile `CLAUDE.md` publishes hard P95 SLA targets (dispatch offer → driver
 notification < 2 s, fare estimate < 300 ms, WS fan-out < 100 ms) and KPI
 targets (match rate ≥ 85%, payment success ≥ 99%). **None of these can be
-computed today.** Backend runs on Fly.io (autoscaled, `min_machines_running=2`,
-scales up under load) with Railway as a parallel deploy target per
+computed today.** Backend runs on Fly.io (a pool of 8 machines with
+`min_machines_running=2`; the 6 suspended ones are resumed by Fly's proxy when
+running machines exceed `soft_limit` — see `docs/runbooks/capacity-scaling.md`.
+Note: when this ADR was written the fleet was a fixed 2 machines with no
+elasticity at all, and this paragraph's original "autoscaled, scales up under
+load" description was inaccurate) with Railway as a parallel deploy target per
 [ADR-007](007-fly-primary-railway-standby.md). Each replica's counters live
 and die with that process — there is no server-side view that sums them, so
 every SLA/KPI number in `CLAUDE.md` today is **aspirational, not measured**.

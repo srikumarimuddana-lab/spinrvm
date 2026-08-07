@@ -18,7 +18,10 @@ api-spinr.spinr.ca                 redis.spinr.ca
 
 ## Requirements
 
-- Fly.io app deployed in `yyz` from `backend/fly.toml`, 2 warm machines.
+- Fly.io app deployed in `yyz` from `backend/fly.toml`: a pool of 8 machines, of
+  which 2 stay warm (`min_machines_running = 2`) and 6 sit suspended as burst
+  capacity. Fly's proxy resumes suspended machines when running machines exceed
+  `soft_limit` (750 connections). See `docs/runbooks/capacity-scaling.md`.
 - Railway backend deployed in the Canadian region (existing).
 - Supabase remains the shared durable store with `SUPABASE_REGION=ca-central-1`.
 - One Redis reachable from both providers via the `redis.spinr.ca` alias, used for
@@ -107,14 +110,21 @@ Create a deploy token for CI and store it as the `FLY_API_TOKEN` GitHub secret:
 fly tokens create deploy -a spinr-backend-yyz
 ```
 
-Deploy and keep two Machines warm in Toronto:
+Deploy and provision the machine pool in Toronto. `scale count` sets the *pool*
+size, not the running count — `fly.toml`'s `min_machines_running = 2` plus
+`auto_stop_machines = "suspend"` means Fly keeps 2 warm and suspends the other 6
+until a burst wakes them:
 
 ```powershell
 fly deploy --config fly.toml
-fly scale count 2 --region yyz
+fly scale count 8 --region yyz
 fly status
 fly checks list
 ```
+
+`fly status` after settling should show 2 machines `started` and 6 `suspended`.
+Seeing all 8 `started` outside a burst means autostop is not taking effect —
+check `auto_stop_machines` in `backend/fly.toml`.
 
 Smoke-test Fly directly before any DNS change:
 
@@ -186,6 +196,19 @@ degrade to per-machine behavior.
    test webhook (processes exactly once — idempotent).
 6. Watch Fly logs, Railway logs, Redis metrics, Supabase errors, and Sentry for at
    least one traffic peak.
+
+> **Capacity asymmetry — read before failing over during a traffic peak.**
+> Fly is provisioned for burst: 8 machines (2 warm + 6 suspended), 750/1000
+> connections each, roughly 6,000 concurrent users. Railway runs
+> `numReplicas: 1` (`railway.json`) with no autoscaling and no equivalent
+> connection headroom. Failing over during a burst therefore lands
+> burst-sized traffic on a single, much smaller instance.
+>
+> Worse today: Railway's `deploy-backend.yml` is blocked by a GitHub
+> Environment protection rule, so the standby has been silently drifting from
+> `main` (ACTION_ITEMS C5). Verify what commit Railway is actually running
+> before treating it as a viable target, and expect to scale Railway up
+> manually as part of the cutover, not after it.
 
 ## Fail back to Railway
 

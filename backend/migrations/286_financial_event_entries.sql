@@ -20,6 +20,10 @@
 -- much moved, external ref) and financial_event_entries holds the balanced
 -- DEBIT/CREDIT legs (which internal accounts moved).
 --
+-- Rollback: set app_settings.ledger_double_entry_enabled = false; if the table
+-- must go, DROP VIEW financial_event_entries_unbalanced; DROP TABLE
+-- financial_event_entries; DROP FUNCTION _financial_event_entries_immutable().
+--
 -- Rollback plan (no second deploy needed — writes are behind the
 -- `ledger_double_entry_enabled` app_settings flag, default false):
 --   1. Set app_settings.ledger_double_entry_enabled = false  (stops all writes)

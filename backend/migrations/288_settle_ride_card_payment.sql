@@ -23,6 +23,10 @@
 -- (e.g. lost response). Do not "simplify" one away — they cover different
 -- replays.
 --
+-- Rollback: set app_settings.ledger_atomic_settle_enabled = false; if the
+-- function must go, DROP FUNCTION IF EXISTS settle_ride_card_payment(text,
+-- uuid, text, bigint, text, numeric, jsonb, text);
+--
 -- Rollback plan (no second deploy):
 --   1. app_settings.ledger_atomic_settle_enabled = false  (callers fall back
 --      to the legacy two-write path immediately; this function goes unused)

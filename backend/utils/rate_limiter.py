@@ -340,8 +340,12 @@ promo_available_limit = default_limiter.limit("20/minute")
 # Promo brute-force guard - max 10 per minute
 promo_validate_limit = default_limiter.limit("10/minute")
 
-# Location updates - allow frequent updates for drivers
-location_update_limit = default_limiter.limit("60/minute")
+# Location updates - allow frequent updates for drivers. Applied to
+# POST /drivers/location-batch (routes/drivers/location.py). This limiter was
+# defined but decorated NOTHING until 2026-08-07, leaving the driver GPS
+# ingestion path entirely unlimited. Per-user keyed so one runaway device
+# cannot spend the budget of other drivers behind the same carrier NAT.
+location_update_limit = default_limiter.limit("60/minute", key_func=get_user_or_ip_key)
 
 # Payment actions (tip, process-payment) — sensitive financial ops, tight limit
 payment_action_limit = default_limiter.limit("5/minute", key_func=get_user_or_ip_key)

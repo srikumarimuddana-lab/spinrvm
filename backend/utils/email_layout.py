@@ -30,10 +30,10 @@ import html
 from typing import Iterable, NamedTuple, Optional, Sequence, Tuple
 
 try:
-    from ..core.config import settings as _cfg
+    from ..utils.company_details import CompanyDetails, load_company_details
     from ..utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE
 except ImportError:  # pragma: no cover - direct module imports in tests
-    from core.config import settings as _cfg  # type: ignore
+    from utils.company_details import CompanyDetails, load_company_details  # type: ignore
     from utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE  # type: ignore
 
 # --- Brand tokens -----------------------------------------------------------
@@ -69,16 +69,6 @@ class RenderedEmail(NamedTuple):
     text: str
 
 
-def logo_url() -> str:
-    """Absolute URL of the Spinr mark served by ``routes/branding.py``.
-
-    Absolute because an email is read outside any origin — a relative path
-    resolves against the mail client, not the API.
-    """
-    base = (_cfg.PUBLIC_API_BASE_URL or "").rstrip("/")
-    return f"{base}/api/v1/branding/spinr-logo.png"
-
-
 def _esc(value: object) -> str:
     """Escape a caller-supplied value for HTML interpolation.
 
@@ -87,13 +77,15 @@ def _esc(value: object) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
 
 
-def _header_html(subtitle: Optional[str]) -> str:
+def _header_html(company: CompanyDetails, subtitle: Optional[str]) -> str:
     """Brand band with the logo.
 
     Many clients (Outlook, and Gmail before the sender is trusted) block remote
     images by default. The ``alt`` text is therefore styled to render as a white
     bold wordmark at logo size, so a blocked image degrades to something that
-    still reads as Spinr branding rather than a broken-image icon.
+    still reads as branding rather than a broken-image icon — and it carries the
+    configured company name, so a rebrand does not leave "Spinr" behind in the
+    one place nobody thinks to look.
     """
     sub = (
         f'<p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:14px;">{_esc(subtitle)}</p>'
@@ -102,7 +94,7 @@ def _header_html(subtitle: Optional[str]) -> str:
     )
     return f"""
         <tr><td style="background:{BRAND_RED};padding:28px 24px;text-align:center;">
-          <img src="{logo_url()}" alt="Spinr" width="{_LOGO_WIDTH_PX}"
+          <img src="{_esc(company.logo_url)}" alt="{_esc(company.name)}" width="{_LOGO_WIDTH_PX}"
                style="display:inline-block;border:0;outline:none;text-decoration:none;
                       width:{_LOGO_WIDTH_PX}px;max-width:100%;height:auto;
                       color:#ffffff;font-size:28px;font-weight:800;letter-spacing:-0.5px;"/>
@@ -157,12 +149,12 @@ def _body_html(
     return "".join(parts)
 
 
-def _footer_html() -> str:
-    """Company identity, reusing the constants the report PDFs already share."""
+def _footer_html(company: CompanyDetails) -> str:
+    """Company identity, from the admin Settings page (see company_details)."""
     return f"""
         <tr><td style="padding:28px 24px 24px;text-align:center;border-top:1px solid {BORDER};">
-          <p style="color:{MUTED};font-size:12px;margin:24px 0 0;">{_esc(COMPANY_LINE)}</p>
-          <p style="color:{MUTED};font-size:11px;margin:4px 0 0;">{_esc(COMPANY_CONTACT_LINE)}</p>
+          <p style="color:{MUTED};font-size:12px;margin:24px 0 0;">{_esc(company.identity_line)}</p>
+          <p style="color:{MUTED};font-size:11px;margin:4px 0 0;">{_esc(company.contact_line)}</p>
         </td></tr>"""
 
 
@@ -177,7 +169,7 @@ def _preheader_html(preheader: Optional[str]) -> str:
     return f'<div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">{_esc(preheader)}</div>'
 
 
-def render_email(
+async def render_email(
     *,
     heading: Optional[str] = None,
     paragraphs: Iterable[str] = (),
@@ -186,8 +178,15 @@ def render_email(
     cta: Optional[Tuple[str, str]] = None,
     footnote: Optional[str] = None,
     preheader: Optional[str] = None,
+    company: Optional[CompanyDetails] = None,
 ) -> RenderedEmail:
     """Render one branded email in HTML and plain text.
+
+    Async because the logo and the footer's company identity come from the
+    admin Settings page, not from constants. Loading them here rather than
+    asking each call site to pass them is deliberate: a caller that forgot
+    would silently ship a stale footer, and there is no compiler or reviewer
+    that catches a missing keyword argument with a sensible default.
 
     Args:
         heading: Bold line under the header, e.g. "Your documents expire soon".
@@ -197,6 +196,9 @@ def render_email(
         cta: Optional ``(label, url)`` for a single call-to-action button.
         footnote: Optional small print below the body.
         preheader: Optional inbox preview text; falls back to the first paragraph.
+        company: Pre-loaded identity, when the caller already resolved it (e.g.
+            to interpolate the support address into its copy). Skips a second
+            settings read; ``get_app_settings`` caches for 60 s either way.
 
     Returns:
         A :class:`RenderedEmail` — pass ``.html`` and ``.text`` straight to
@@ -204,6 +206,7 @@ def render_email(
 
     Every value is HTML-escaped; callers pass raw text, never markup.
     """
+    details = company if company is not None else await load_company_details()
     paras = [p for p in paragraphs if p]
     preview = preheader or (paras[0] if paras else heading)
 
@@ -215,9 +218,9 @@ def render_email(
     <table width="100%" cellpadding="0" cellspacing="0" role="presentation"
            style="max-width:{_MAX_WIDTH_PX}px;margin:20px auto;background:{SURFACE};
                   border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
-{_header_html(subtitle)}
+{_header_html(details, subtitle)}
 {_body_html(greeting, heading, paras, cta, footnote)}
-{_footer_html()}
+{_footer_html(details)}
     </table>
 </body>
 </html>
@@ -231,6 +234,7 @@ def render_email(
             greeting=greeting,
             cta=cta,
             footnote=footnote,
+            company=details,
         ),
     )
 
@@ -242,12 +246,17 @@ def render_text(
     greeting: Optional[str] = None,
     cta: Optional[Tuple[str, str]] = None,
     footnote: Optional[str] = None,
+    company: Optional[CompanyDetails] = None,
 ) -> str:
     """Plain-text alternative for the same content.
 
     Not a stripped-HTML afterthought: it is what recipients on text-only
     clients, screen readers, and blocked-image views actually read, and its
     presence materially improves inbox placement.
+
+    Stays synchronous: ``render_email`` passes the identity it already loaded.
+    Called directly without ``company``, it falls back to the static constants
+    rather than reaching for settings from a sync context.
     """
     lines: list[str] = []
     if greeting:
@@ -267,6 +276,10 @@ def render_text(
         lines.append(footnote)
         lines.append("")
     lines.append("--")
-    lines.append(COMPANY_LINE)
-    lines.append(COMPANY_CONTACT_LINE)
+    if company is not None:
+        lines.append(company.identity_line)
+        lines.append(company.contact_line)
+    else:
+        lines.append(COMPANY_LINE)
+        lines.append(COMPANY_CONTACT_LINE)
     return "\n".join(lines).strip() + "\n"

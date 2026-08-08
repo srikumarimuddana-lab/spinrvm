@@ -4207,6 +4207,12 @@ Remaining, roughly in order of user impact:
   rather than `fcm_token_rider`. Works today only because registration still
   mirrors both (`routes/notifications.py:329-336`); breaks silently if that
   mirroring is ever removed.
+- [ ] **N16. Consolidate the two copies of the company-address assembly** —
+  `utils/company_details.py` and `utils/marketing_email.py` both carry
+  `_coalesce` / `_postal_address`. Deliberately not merged: marketing's copy
+  sits on a CASL consent-critical path and produces a legally-required footer,
+  so touching it needs its own review rather than being folded into an
+  unrelated change.
 - [ ] **N11. Retrofit existing emails onto the shared layout** — the ride
   receipt and Spinr Pass invoice are near-duplicate one-off templates using
   `#ee2b2b` and a text wordmark; corporate OTP, admin broadcast and the DSAR
@@ -4214,7 +4220,10 @@ Remaining, roughly in order of user impact:
   and signup ops are plain text only. Deliberately deferred: it changes mail
   people already receive, so it needs a snapshot test pinning current output
   **first**, then a feature flag. The receipt also sends `html` only, with no
-  plain-text alternative.
+  plain-text alternative. **Now also a consistency gap**: emails on the shared
+  layout take their company name/address from the admin Settings page, while
+  the receipt and invoice keep hardcoded footers — so once an admin edits those
+  settings, two Spinr emails can legitimately show different company details.
 - [ ] **N12. No visual/snapshot regression tooling for email** — standing gap.
   `tests/test_email_layout.py` asserts the logo URL, brand colour and footer
   lines are present, but nothing catches a layout that renders badly in Gmail,

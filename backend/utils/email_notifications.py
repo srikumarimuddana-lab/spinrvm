@@ -102,7 +102,13 @@ async def _email_opt_in(user_id: str) -> bool:
     return _DEFAULT_EMAIL_ENABLED if value is None else bool(value)
 
 
-async def _resolve_recipient(user_id: str) -> Optional[dict[str, Any]]:
+async def resolve_recipient(user_id: str) -> Optional[dict[str, Any]]:
+    """Load the ``users`` row for a recipient, or None if it cannot be read.
+
+    Public because callers that want to personalise copy (a first-name
+    greeting) need the row *before* rendering. Pass what you get back as
+    ``send_lifecycle_email(user=...)`` so the lookup happens once.
+    """
     try:
         return await db_supabase.get_user_by_id(user_id)
     except Exception as exc:
@@ -159,7 +165,7 @@ async def send_lifecycle_email(
             logger.info("email policy: suppressed by kill switch (%s) for user %s", context, user_id)
             return False
 
-        recipient = user if user is not None else await _resolve_recipient(user_id)
+        recipient = user if user is not None else await resolve_recipient(user_id)
         if not can_email(recipient):
             # Not an error: a driver who never finished profile setup has no
             # address on file. Logged at info so the absence is visible without

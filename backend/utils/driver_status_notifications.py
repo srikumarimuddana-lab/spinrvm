@@ -111,6 +111,36 @@ _STATUS_COPY: dict[str, tuple[str, str]] = {
 # ban reason is not vetted customer-facing text.
 _REASON_STATUSES = frozenset({"suspended", "rejected"})
 
+# ── Email channel ────────────────────────────────────────────────────────────
+# Statuses that ALSO get an email, on top of the push and the in-app inbox row.
+#
+# These are the transitions a driver needs to be able to find again later — an
+# approval, and the three states where they can no longer earn. Push is lossy
+# (uninstalled app, revoked token, stale FCM registration) and transient; an
+# account decision that changes someone's ability to work should not depend on
+# a notification tray.
+#
+# `needs_review` is deliberately excluded. It fires on every driver-triggered
+# vehicle edit and document re-upload, so emailing it would turn routine
+# self-service into inbox noise — and the push already covers the one thing
+# that matters, that they've been taken offline.
+EMAIL_STATUSES = frozenset({"active", "rejected", "suspended", "banned"})
+
+# What the driver should actually DO next. This is the reason the email exists
+# rather than being a copy of the push: a notification tray has no room for it.
+_EMAIL_NEXT_STEPS: dict[str, str] = {
+    "active": "Open the Spinr driver app, tap Go Online, and you'll start receiving ride offers.",
+    "rejected": (
+        "Open the Spinr driver app to review your documents and submit them again. "
+        "If you think this decision is wrong, contact support@spinr.ca."
+    ),
+    "suspended": (
+        "You won't be able to go online while your account is suspended. "
+        "Contact support@spinr.ca if you have questions or want to appeal."
+    ),
+    "banned": "Contact support@spinr.ca if you'd like more information about this decision.",
+}
+
 
 def _with_reason(status: str, body: str, reason: str | None) -> str:
     if status in _REASON_STATUSES and reason:
@@ -138,6 +168,34 @@ def _build(status: str, copy: tuple[str, str], reason: str | None, data_type: st
         "body": _with_reason(status, body, reason),
         "data": {"type": data_type, "new_status": status},
         "priority": ACCOUNT_PRIORITY if status in BLOCKING_STATUSES else NORMAL_PRIORITY,
+        # Present only for statuses in EMAIL_STATUSES; None means push-only.
+        # Derived from the same `copy` tuple as the push so the two channels
+        # cannot drift into saying different things about the same event.
+        "email": _email_payload(status, title, body, reason, data_type),
+    }
+
+
+def _email_payload(
+    status: str,
+    title: str,
+    body: str,
+    reason: str | None,
+    data_type: str,
+) -> dict[str, Any] | None:
+    """Email fields for a lifecycle notice, or None when the status is push-only."""
+    if status not in EMAIL_STATUSES:
+        return None
+    paragraphs = [_with_reason(status, body, reason)]
+    next_step = _EMAIL_NEXT_STEPS.get(status)
+    if next_step:
+        paragraphs.append(next_step)
+    return {
+        # Subject mirrors the push title, so a driver who sees both recognises
+        # them as the same notice rather than two separate events.
+        "subject": title,
+        "heading": title,
+        "paragraphs": paragraphs,
+        "email_type": data_type,
     }
 
 
@@ -162,17 +220,77 @@ def status_message(status: str, reason: str | None = None) -> dict[str, Any] | N
     return _build(status, copy, reason, f"driver_status_{status}")
 
 
+async def _send_status_email(
+    driver: dict[str, Any],
+    message: dict[str, Any],
+    context: str,
+) -> None:
+    """Fan the same notice out to email. Never raises, never blocks the push.
+
+    TRANSACTIONAL class: an account decision that stops someone earning is not
+    something they may opt out of receiving.
+
+    The blanket except is deliberate and belongs *here* rather than being
+    delegated to `send_lifecycle_email`'s own guard. Email is the secondary
+    channel; nothing it can do — a failed recipient lookup, a rendering error,
+    an import problem — may cost the driver the push. Making the guarantee
+    local means it holds no matter how the downstream module changes.
+    """
+    payload = message.get("email")
+    if not payload:
+        return
+    try:
+        try:
+            from ..utils.email_layout import render_email
+            from ..utils.email_notifications import EmailClass, resolve_recipient, send_lifecycle_email
+        except ImportError:  # pragma: no cover - direct module imports in tests
+            from utils.email_layout import render_email  # type: ignore
+            from utils.email_notifications import (  # type: ignore
+                EmailClass,
+                resolve_recipient,
+                send_lifecycle_email,
+            )
+
+        user = await resolve_recipient(driver["user_id"])
+        first_name = ((user or {}).get("first_name") or "").strip()
+        await send_lifecycle_email(
+            user_id=driver["user_id"],
+            user=user,
+            subject=payload["subject"],
+            rendered=render_email(
+                greeting=f"Hi {first_name}," if first_name else None,
+                heading=payload["heading"],
+                paragraphs=payload["paragraphs"],
+            ),
+            email_type=payload["email_type"],
+            email_class=EmailClass.TRANSACTIONAL,
+            context=context,
+        )
+    except Exception as exc:
+        logger.warning(
+            "driver status email failed (%s) for driver %s: %s",
+            context,
+            driver.get("id"),
+            exc,
+        )
+
+
 async def notify_driver_status_change(
     driver: dict[str, Any],
     message: dict[str, Any] | None,
     context: str,
 ) -> bool:
-    """Send a lifecycle push. Returns True if it was delivered.
+    """Send a lifecycle notice. Returns True if the PUSH was delivered.
+
+    Push is the primary channel and the return value; statuses in
+    `EMAIL_STATUSES` additionally get an email, whose outcome deliberately does
+    not affect the return value — callers use it to decide whether the driver
+    was reached on their device, and an email that failed does not change that.
 
     Best-effort by contract: every caller has already committed the status
-    change before reaching here, so a push failure must not propagate and undo
-    the admin action or the driver's own profile save. Logged at warning rather
-    than error because the state change succeeded and
+    change before reaching here, so a delivery failure must not propagate and
+    undo the admin action or the driver's own profile save. Logged at warning
+    rather than error because the state change succeeded and
     `send_push_notification` writes the in-app inbox row regardless of whether
     device delivery worked — the driver still sees it next time they open the app.
     """
@@ -182,6 +300,10 @@ async def notify_driver_status_change(
         from ..features import send_push_notification
     except ImportError:
         from features import send_push_notification  # type: ignore
+
+    # Secondary channel, guarded inside — cannot throw past here.
+    await _send_status_email(driver, message, context)
+
     try:
         return bool(
             await send_push_notification(

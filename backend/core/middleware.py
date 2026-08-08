@@ -94,6 +94,11 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # with no App Check header. It is authorised instead by a short-TTL,
     # ride+driver-bound HMAC token in the query string (routes/offer_card.py).
     "/api/v1/offer-cards/",
+    # Email logo: mail clients (and Gmail's image proxy) fetch the branded-email
+    # header image with no App Check header. Unlike the offer card there is no
+    # token, because there is nothing to authorise — it is a single public brand
+    # asset with no PII and no per-user dimension (routes/branding.py).
+    "/api/v1/branding/",
     # Stripe embedded onboarding: the driver app loads these inside a WebView
     # (Stripe's connect.js page + its same-origin fetchClientSecret POST), which
     # cannot attach the app's X-Firebase-AppCheck header. Alternative auth holds:

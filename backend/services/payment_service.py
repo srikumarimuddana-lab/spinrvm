@@ -898,7 +898,7 @@ async def _finalize_card_settlement(
                 # bridge: the rider is told "our team has been notified", so
                 # on-call needs a taggable signal for THIS class rather than
                 # having to grep message text.
-                ledger_service._escalate(
+                ledger_service.escalate(
                     "SETTLEMENT STUCK — atomic RPC ambiguous and ride state unreadable",
                     {
                         "ride_id": ride_id,

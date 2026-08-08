@@ -224,7 +224,7 @@ async def test_ambiguous_error_unverifiable_returns_503_never_double_writes():
         patch.object(ps, "record_payment_event", AsyncMock()) as rec,
         patch.object(ps.db_supabase, "update_ride", AsyncMock()) as upd,
         patch.object(ps.manager, "send_personal_message", AsyncMock()) as ws,
-        patch.object(ls, "_escalate") as escalate,
+        patch.object(ls, "escalate") as escalate,
     ):
         result = await _finalize()
 

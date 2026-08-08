@@ -199,7 +199,7 @@ async def test_exhausted_retries_escalate_but_never_raise():
     with (
         patch.object(ls.db_supabase, "insert_one", side_effect=always_fail),
         patch.object(ls, "_INSERT_BACKOFF_SECONDS", (0, 0)),
-        patch.object(ls, "_escalate") as escalate,
+        patch.object(ls, "escalate") as escalate,
     ):
         event_id = await ls.record_event(
             event_type="stripe_charge", user_id="u1", ride_id="r1", delta_cents=2000, ref="pi_x"
@@ -224,7 +224,7 @@ async def test_escalation_context_carries_no_pii():
     with (
         patch.object(ls.db_supabase, "insert_one", side_effect=always_fail),
         patch.object(ls, "_INSERT_BACKOFF_SECONDS", (0, 0)),
-        patch.object(ls, "_escalate") as escalate,
+        patch.object(ls, "escalate") as escalate,
     ):
         await ls.record_event(
             event_type="stripe_charge",
@@ -323,7 +323,7 @@ async def test_unbalanced_legs_are_skipped_not_half_written():
         patch.object(ls.db_supabase, "insert_one", side_effect=cap_one),
         patch.object(ls.db_supabase, "insert_many", side_effect=cap_many),
         patch.object(ls, "double_entry_enabled", AsyncMock(return_value=True)),
-        patch.object(ls, "_escalate") as escalate,
+        patch.object(ls, "escalate") as escalate,
     ):
         await ls.record_event(
             event_type="stripe_charge",
@@ -356,7 +356,7 @@ async def test_header_still_written_when_legs_fail():
         patch.object(ls.db_supabase, "insert_many", side_effect=fail_many),
         patch.object(ls, "double_entry_enabled", AsyncMock(return_value=True)),
         patch.object(ls, "_INSERT_BACKOFF_SECONDS", (0, 0)),
-        patch.object(ls, "_escalate") as escalate,
+        patch.object(ls, "escalate") as escalate,
     ):
         event_id = await ls.record_event(
             event_type="stripe_charge",

@@ -244,8 +244,14 @@ ALERT_LEGS_DEGRADED = "ledger_legs_degraded"
 ALERT_SETTLEMENT_UNVERIFIABLE = "settlement_state_unverifiable"
 
 
-def _escalate(message: str, context: Dict[str, Any], alert: str = ALERT_HEADER_LOST) -> None:
+def escalate(message: str, context: Dict[str, Any], alert: str = ALERT_HEADER_LOST) -> None:
     """Tagged Sentry event so an alert rule can page on ledger loss.
+
+    Public (was ``_escalate``): utils/ledger_projection.py and
+    services/payment_service.py both raise their own tagged alerts through it,
+    so the underscore was advertising a privacy this function does not have.
+    The ``alert`` tag is caller-supplied precisely so other payment-domain
+    modules can route their own classes — it is not ledger-internal.
 
     No-op when SENTRY_DSN is unset. PIPEDA: context carries IDs and amounts
     only — never names, phone numbers, emails, or coordinates.
@@ -347,7 +353,7 @@ async def record_event(
         "financial_events", header, what=f"financial_events {event_type} ride={ride_id} ref={ref}"
     )
     if not ok:
-        _escalate(
+        escalate(
             "LEDGER WRITE FAILED — financial_events row lost",
             {
                 "event_type": event_type,
@@ -400,7 +406,7 @@ async def write_legs(
             event_type,
             err,
         )
-        _escalate(
+        escalate(
             "LEDGER LEGS UNBALANCED — legs skipped",
             {"event_id": event_id, "ride_id": ride_id, "event_type": event_type, "error": str(err)},
             alert=ALERT_LEGS_UNBALANCED,
@@ -429,7 +435,7 @@ async def write_legs(
         # The header (the tax record) is already durable, so this is a
         # completeness gap in the accounting overlay, not lost money. The
         # unbalanced-entries view stays clean because nothing was written.
-        _escalate(
+        escalate(
             "LEDGER LEGS LOST — header written without double-entry legs",
             {"event_id": event_id, "ride_id": ride_id, "event_type": event_type, "leg_count": len(rows)},
             alert=ALERT_LEGS_LOST,

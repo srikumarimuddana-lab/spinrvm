@@ -4150,30 +4150,38 @@ four tiers, the silent document-approval reactivation (D5), the verify/unverify
 policy bypass (D7/D8), the expiry-suspension priority tier (D13), and
 `email_enabled` becoming a real preference for OPTIONAL-class mail (X1)._
 
+_Also closed by the rider follow-up (`utils/rider_emails.py`, change log
+`docs/change-log/2026-08-08-rider-lifecycle-emails.md`): welcome email (R4),
+email-address-change security notice to the old address (R7), account-deletion
+confirmation (R9), no-show fee receipt (R21), corporate guest receipt (R26,
+formerly N2), refund (R29), wallet top-up (R30), and telling the blocked rider
+when payment retries are exhausted (R32, formerly N4)._
+
 Remaining, roughly in order of user impact:
 
 - [ ] **N1. Rider DSAR export assembles no data and sends no email (R10)** —
-  `POST /users/data-export` (`routes/users.py:124`) inserts a
+  `POST /users/data-export` (`routes/users.py:152`) inserts a
   `data_export_requests` row with a 30-day SLA and stops. Nothing builds the
   export, nothing emails it, and the admin status-change endpoint
   (`routes/admin/users.py:486`) notifies nobody either. A working export exists
   driver-side (`routes/drivers/tax_exports.py:668`, handles rider-only
   accounts at `:721`) but the rider app never calls it. **This is a PIPEDA
   access-right obligation, not a nice-to-have** — own change, own review.
-- [ ] **N2. Corporate guest rides get no receipt (R26)** —
-  `auto_settle_guest_corporate` (`services/payment_service.py:679`, called from
-  `routes/drivers/ride_complete.py:747`) settles the ride but never calls
-  `send_ride_receipt`. A completed, charged ride with no receipt; GST/PST
-  line-item disclosure never reaches the payer.
+  Now the largest open item in this group.
+- [x] ~~**N2. Corporate guest rides get no receipt (R26)**~~ — done: the
+  receipt hook now sits beside the Meta conversion hook in
+  `auto_settle_guest_corporate`, gated on `not already_paid` so a replayed
+  settlement does not re-send. A phone-only guest still has no email on file
+  and is skipped silently.
 - [ ] **N3. Two push call sites pass the wrong ID and are silently dropped (X6)**
   — `utils/payment_retry.py:183` passes `drivers.id` and `:412` passes
   `ride["driver_id"]` where `user_id` is required; `features.py:1659` then finds
   no user and drops the push at `:1661`. Every "Payout failed" notice from
   `retry_stuck_payouts` is lost. Same defect shape at
   `routes/admin/vehicle_fleet.py:541`, which passes `fcm_token`.
-- [ ] **N4. Rider blocked from booking is never told (R32)** — payment retries
-  exhausted (`utils/payment_retry.py:142`) notifies **admins only**. The rider
-  discovers it as a booking failure with no explanation.
+- [x] ~~**N4. Rider blocked from booking is never told (R32)**~~ — done:
+  `_alert_admins_payment_exhausted` now emails the rider first, before the
+  admin WS broadcast and pushes, and is self-swallowing so those still fire.
 - [ ] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
   (D29)** — `routes/rides/cancellation.py:356`. A driver en route to pickup
   with a backgrounded app is not notified.
@@ -4211,11 +4219,28 @@ Remaining, roughly in order of user impact:
   `tests/test_email_layout.py` asserts the logo URL, brand colour and footer
   lines are present, but nothing catches a layout that renders badly in Gmail,
   Apple Mail or Outlook. Client rendering is verified by hand or not at all.
-- [ ] **N13. Rider-side lifecycle emails** — welcome (R4), email verification
-  (R5), email-address-change confirmation (R7, a security gap: no notice to the
-  old or new address), account-deletion confirmation (R9), refund (R29), wallet
-  top-up (R30), no-show fee (R21). The infrastructure now exists; only the
-  wiring and copy are missing.
+- [x] ~~**N13. Rider-side lifecycle emails**~~ — done for welcome (R4),
+  email-address-change security notice (R7), account-deletion confirmation
+  (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
+  `utils/rider_emails.py` and go through the policy layer, so the
+  `lifecycle_emails_enabled` kill switch covers them.
+- [ ] **N14. Rider email addresses are never verified (R5)** — `email_verified`
+  is written `false` at `routes/users.py` and nothing ever flips it for a
+  rider; the only `verify-email-otp` endpoint (`routes/auth.py:744`) belongs to
+  the corporate business portal. The welcome email is now a *de facto*
+  deliverability signal — a hard bounce lands the address on the suppression
+  list — but that is not a verification flow, and nothing surfaces the
+  difference to the rider or to support.
+- [ ] **N15. Remaining silent rider surfaces** — grouped rather than split,
+  since they share one cause (no notification call of any kind at the site):
+  rider-initiated ride completion sends the rider nothing while the
+  driver-initiated path does (R19, `routes/rides/lifecycle.py:126`); wallet
+  debits/credits, promos and loyalty tier changes have zero notification calls
+  (R31/R33/R34); scheduled rides have one reminder tier and no booking
+  confirmation (R35/R37); rider SOS sends the rider no confirmation that help
+  was alerted (R38); corporate allowance reset and exhaustion are silent, with
+  exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
+  "new device signed in" alert (R8).
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

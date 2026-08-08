@@ -11,7 +11,11 @@ The short answer at audit time was no. Push carried nearly everything (~97 call
 sites); email existed for 14 flows, only one of which was a rider lifecycle
 event (the ride receipt). No Spinr email contained the Spinr logo.
 
-Part C records what has since been fixed.
+Part C records what has since been fixed — the driver surface first, then the
+rider surface. Part D is what remains open.
+
+**The tables below show the state after those fixes**, so a ✅ in the Email
+column may be new. Anything still ❌ is a real, current gap.
 
 ## How to read this
 
@@ -118,22 +122,25 @@ declared in `NOTIFICATION_DEEPLINKS` but never emitted.
 |---|---|---|---|---|
 | R1 | OTP send | `routes/auth.py:449` | — | ❌ (SMS, correct) |
 | R2 | OTP verify → new account created | `routes/auth.py:1087` | ❌ | ❌ |
-| R3 | Profile creation (where email is collected) | `routes/users.py:57` | ❌ | ❌ |
-| R4 | Welcome email | — | ❌ | ❌ |
+| R3 | Profile creation (where email is collected) | `routes/users.py:69` | ❌ | ✅ |
+| R4 | Welcome email | `routes/users.py:139` | ❌ | ✅ |
 | R5 | Email verification | — | ❌ | ❌ |
-| R6 | Profile change | `routes/users.py:57` | ❌ | ❌ |
-| R7 | **Email-address change** | `routes/users.py:99` | ❌ | ❌ |
+| R6 | Profile change | `routes/users.py:69` | ❌ | ❌ |
+| R7 | **Email-address change** | `routes/users.py:143` | ❌ | ✅ |
 | R8 | New-device login / logout-all | `routes/auth.py:1792` | ❌ | ❌ |
-| R9 | Account deletion request (PIPEDA) | `routes/users.py:297` | ❌ | ❌ |
-| R10 | **Rider DSAR data export** | `routes/users.py:124` | ❌ | ❌ |
+| R9 | Account deletion request (PIPEDA) | `routes/users.py:297` | ❌ | ✅ |
+| R10 | **Rider DSAR data export** | `routes/users.py:152` | ❌ | ❌ |
 | R11 | Admin changes rider account status | `routes/admin/users.py:302` | ✅ | ❌ |
 
-R5: `users.email_verified` is set `false` and never verified for riders — the
-`verify-email-otp` endpoint belongs to the corporate portal, not the rider app.
-R7 is a security gap: the address can be changed with no confirmation to either
-the old or the new address. R10 records a request with a 30-day SLA but never
-assembles data or sends anything; the working export exists driver-side
-(`routes/drivers/tax_exports.py:668`) but the rider app does not call it.
+R2 is account *creation* at OTP verify, before an email address exists — R3/R4
+is the first point a rider is reachable, and that is where the welcome now
+fires. R5 remains open: `users.email_verified` is set `false` and never
+verified for riders, because the `verify-email-otp` endpoint belongs to the
+corporate portal, not the rider app. R6 (name/gender edits) stays silent by
+design; only an address change is security-relevant. R10 still records a
+request with a 30-day SLA and never assembles data or sends anything — the
+working export exists driver-side (`routes/drivers/tax_exports.py:668`) but the
+rider app does not call it.
 
 ### B2. Ride lifecycle
 
@@ -148,7 +155,7 @@ assembles data or sends anything; the working export exists driver-side
 | R18 | Ride completed (driver taps) | `routes/drivers/ride_complete.py:895` | ✅ | ❌ |
 | R19 | **Ride completed (rider taps)** | `routes/rides/lifecycle.py:126` | ❌ | ❌ |
 | R20 | Ride cancelled by driver | `routes/drivers/ride_cancel.py:174` | ✅ | ❌ |
-| R21 | No-show fee charged | `routes/drivers/ride_cancel.py:383` | ✅ | ❌ |
+| R21 | No-show fee charged | `routes/drivers/ride_cancel.py:383` | ✅ | ✅ |
 | R22 | Auto-cancel, no drivers found | `routes/rides/matching.py:1347` | ✅ | ❌ |
 | R23 | Driver chat message | `routes/rides/chat.py:176` | ✅ | ❌ |
 | R24 | "Rate your trip" prompt | `routes/rides/rating.py:126` | ❌ | ❌ |
@@ -162,25 +169,30 @@ nothing, while the driver-initiated one does.
 | # | Scenario | Where | Push | Email |
 |---|---|---|---|---|
 | R25 | **Ride receipt** | `utils/email_receipt.py:442` | ❌ | ✅ |
-| R26 | **Corporate guest ride receipt** | `services/payment_service.py:679` | ❌ | ❌ |
+| R26 | **Corporate guest ride receipt** | `services/payment_service.py:745` | ❌ | ✅ |
 | R27 | Card declined at settlement | `services/payment_service.py:1108` | ✅ | ❌ |
 | R28 | Stripe `payment_intent.payment_failed` | `routes/webhooks.py:911` | ✅ | ❌ |
-| R29 | Refund processed | `routes/webhooks.py:1070` | ✅ | ❌ |
-| R30 | Wallet top-up | `routes/webhooks.py:727` | ✅ | ❌ |
+| R29 | Refund processed | `routes/webhooks.py:1078` | ✅ | ✅ |
+| R30 | Wallet top-up | `routes/webhooks.py:736` | ✅ | ✅ |
 | R31 | Wallet debits / credits generally | `routes/wallet.py` | ❌ | ❌ |
-| R32 | **Retries exhausted → rider blocked from booking** | `utils/payment_retry.py:142` | ⚠️ | ❌ |
+| R32 | **Retries exhausted → rider blocked from booking** | `utils/payment_retry.py:130` | ⚠️ | ✅ |
 | R33 | Promo applied / expiring / earned | `routes/promotions.py` | ❌ | ❌ |
 | R34 | Loyalty tier change | `routes/loyalty.py` | ❌ | ❌ |
 
-R25 is the only rider lifecycle email in the product. It is sent at
-**settlement**, not at completion, and carries HTML + a PDF + an optional route
-PNG. GST and PST appear as separate line items (`utils/email_receipt.py:132-151`,
-driven by the persisted `ride.tax_breakdown`), satisfying the receipt
-requirement in CLAUDE.md.
+R25 is sent at **settlement**, not at completion, and carries HTML + a PDF +
+an optional route PNG. GST and PST appear as separate line items
+(`utils/email_receipt.py:132-151`, driven by the persisted `ride.tax_breakdown`),
+satisfying the receipt requirement in CLAUDE.md.
 
-R26: `auto_settle_guest_corporate` settles the ride but never calls
-`send_ride_receipt`, so corporate guest rides produce no receipt at all.
-R32 notifies **admins only** — the blocked rider is never told why booking fails.
+R26 previously produced no receipt at all: a guest never calls
+`/process-payment`, so `auto_settle_guest_corporate` was the only settlement
+path with no receipt hook. A phone-only guest still has no email on file and is
+skipped silently.
+
+R27/R28 stay push-only deliberately — a declined card is a prompt to act inside
+the app, and the rider is mid-session when it fires. R32 is what matters after
+that: when retries are finally exhausted the rider is blocked from booking, and
+that notice used to reach **admins only**.
 
 ### B4. Scheduled rides, safety, corporate
 
@@ -206,6 +218,8 @@ who triggered it gets no confirmation. R44 surfaces only as a 4xx at booking tim
 
 ## Part C — Fixed in the 2026-08-08 branch
 
+**Driver:**
+
 | ID | Was | Now |
 |---|---|---|
 | D5 | Document approval silent, even when it reactivated the driver | Push + email via the shared policy |
@@ -213,12 +227,39 @@ who triggered it gets no confirmation. R44 surfaces only as a 4xx at booking tim
 | D10–D13 | Document expiry push-only, all four tiers | Push + email, inside the existing replay claim |
 | D13 | Suspension push on the default tier — an opted-out driver got nothing | `account` tier |
 | D15–D18 | Approval/rejection/suspension/ban push-only | Push + email |
+
+**Rider:**
+
+| ID | Was | Now |
+|---|---|---|
+| R4 | No welcome email; nothing ever confirmed the address on file worked | Welcome on first profile completion |
+| R7 | Address could be changed with no notice to either side — a silent account-takeover vector | Security notice to the **old** address |
+| R9 | Deletion request confirmed nothing, and the account locks immediately so the in-app text can't be re-read | Written confirmation incl. the 7-year retention carve-out and purge date |
+| R21 | No-show fee push-only — the most disputable charge with no written record | Push + email |
+| R26 | Corporate guest rides settled with **no receipt at all** | Receipt, same guard as the Meta conversion hook |
+| R29 | Refund push-only | Push + email |
+| R30 | Wallet top-up push-only | Push + email, gated on the credit not being a dedup hit |
+| R32 | Retries exhausted notified **admins only**; the blocked rider was told nothing | Rider email + the existing admin alerts |
+
+**Cross-cutting:**
+
+| ID | Was | Now |
+|---|---|---|
 | X1 | `notification_preferences.email_enabled` read by nothing | Honoured for OPTIONAL-class mail |
 | Branding | No email contained the Spinr logo | `utils/email_layout.py` + `routes/branding.py` |
 
-New modules: `utils/email_layout.py` (branded HTML + plain-text), 
-`utils/email_notifications.py` (channel policy), `routes/branding.py` (logo URL).
-Kill switch: `app_settings.lifecycle_emails_enabled` (migration 286).
+New modules: `utils/email_layout.py` (branded HTML + plain-text),
+`utils/email_notifications.py` (channel policy), `utils/rider_emails.py` (rider
+copy), `routes/branding.py` (logo URL).
+Kill switch: `app_settings.lifecycle_emails_enabled` (migration 286) — covers
+every email routed through the policy layer, which is all of the above except
+R26 (that reuses the pre-existing receipt pipeline).
+
+**Every new email is TRANSACTIONAL** — a financial record, a security notice, or
+a regulatory confirmation. Under CASL those are implied-consent messages a
+preference toggle must not suppress. That means the `OPTIONAL` class still has
+**no production caller**: it is wired and tested, but nothing ships as
+suppressible yet. Digests and reminders are its intended first users.
 
 ---
 
@@ -233,8 +274,14 @@ Not addressed in the 2026-08-08 branch. Tracked in `ACTION_ITEMS.md`.
 | X4 | `utils/receipt_email.py` is dead code with hardcoded `_GST_RATE=0.05` / `_PST_RATE=0.06` instead of reading the service area — will silently mis-tax if wired up. Confusingly named against the live `utils/email_receipt.py` |
 | X5 | Most rider pushes omit `target_app="rider"`, falling back to the legacy `users.fcm_token` column (`features.py:1664`) |
 | X6 | Two push call sites pass the wrong ID type and are silently dropped: `utils/payment_retry.py:183,412` passes `drivers.id`/`ride.driver_id` where `user_id` is required; `routes/admin/vehicle_fleet.py:541` passes `fcm_token` |
+| R5 | Rider email addresses are never verified — `email_verified` is written `false` and nothing ever flips it. The welcome email is now a *de facto* deliverability check, but not a verification flow |
+| R8 | No "new device signed in" alert on login or logout-all |
 | R10 | Rider DSAR export assembles no data and sends no email — a PIPEDA obligation |
-| R26 | Corporate guest rides settle with no receipt |
+| R19 | Rider-initiated ride completion sends the rider nothing, unlike the driver-initiated path |
+| R31/R33/R34 | Wallet debits, promos and loyalty tier changes have zero notification calls of any kind |
+| R35 | Scheduled rides have one reminder tier (T-10 min) and no booking confirmation |
+| R38 | Rider SOS sends the rider no confirmation that help was alerted |
+| R43/R44 | Corporate allowance reset and exhaustion are silent; exhaustion surfaces only as a 4xx at booking |
 | D24 | Stripe Connect KYC blocking payouts notifies nobody |
 | D29 | Rider-cancels-assigned-ride reaches the driver by WebSocket only |
 | D21 | Auto-reactivation after `suspended_until` lapses is silent |

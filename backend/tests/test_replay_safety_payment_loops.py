@@ -419,7 +419,7 @@ def test_projection_duplicate_batch_insert_is_treated_as_written():
 
     with (
         patch.object(ls.db_supabase, "insert_many", side_effect=dup_insert),
-        patch.object(ls, "_escalate") as escalate,
+        patch.object(ls, "escalate") as escalate,
     ):
         ok = asyncio.run(ls.write_legs("evt_dup", legs, ride_id="ride_1", event_type="stripe_charge", check_flag=False))
 

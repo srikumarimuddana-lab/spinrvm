@@ -299,7 +299,7 @@ async def test_tick_degraded_event_still_written_and_escalated():
         patch.object(lp.db_supabase, "rpc", AsyncMock(return_value=[ev])),
         patch.object(lp.db_supabase, "get_rows", AsyncMock(return_value=[])),
         patch.object(lp.ledger_service, "write_legs", AsyncMock(return_value=True)) as write_mock,
-        patch.object(lp.ledger_service, "_escalate") as escalate,
+        patch.object(lp.ledger_service, "escalate") as escalate,
     ):
         stats = await lp.project_pending_legs()
 

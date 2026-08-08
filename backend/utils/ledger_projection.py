@@ -254,7 +254,7 @@ async def project_pending_legs(limit: int = _BATCH_LIMIT) -> Dict[str, int]:
                     event.get("event_type"),
                     reason,
                 )
-                ledger_service._escalate(
+                ledger_service.escalate(
                     "LEDGER LEGS DEGRADED — booked whole to platform_revenue",
                     {
                         "event_id": event.get("id"),

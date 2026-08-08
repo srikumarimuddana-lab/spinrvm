@@ -81,6 +81,7 @@ try:
         paid_referral_earnings,
         resolve_referral_terms,
     )
+    from ...utils.rider_emails import send_no_show_fee_email
     from ...utils.stripe_charge import cancel_authorization
     from ...utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
@@ -132,6 +133,7 @@ except ImportError:
         paid_referral_earnings,
         resolve_referral_terms,
     )
+    from utils.rider_emails import send_no_show_fee_email  # noqa: F401
     from utils.stripe_charge import cancel_authorization  # type: ignore
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 

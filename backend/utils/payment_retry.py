@@ -47,6 +47,7 @@ try:
     from .datetime_utils import parse_iso_utc
     from .money import dollars_to_cents
     from .redis_client import redis_set_nx
+    from .rider_emails import send_payment_blocked_email
 except ImportError:
     from db import db
     from features import send_push_notification
@@ -56,6 +57,7 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.money import dollars_to_cents
     from utils.redis_client import redis_set_nx
+    from utils.rider_emails import send_payment_blocked_email
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +118,22 @@ def _invoice_claim_is_stale(sentinel: str) -> bool:
 
 
 async def _alert_admins_payment_exhausted(ride: dict) -> None:
-    """Notify admins when a ride's payment retries are exhausted."""
+    """Notify admins — and the rider — when a ride's payment retries are exhausted.
+
+    The rider half was missing entirely: this fired an admin WS broadcast and an
+    admin push, and the rider whose account had just been blocked from booking
+    was told nothing. They then hit a booking failure with no explanation and
+    nothing to act on.
+    """
     ride_id = ride.get("id", "")
     rider_id = ride.get("rider_id", "")
     total_fare = ride.get("total_fare", 0)
+
+    # First, because it is the only notice that reaches the person actually
+    # affected. Self-swallowing; the retry-exhaustion state is already written,
+    # and the admin alerts below must fire regardless.
+    if rider_id:
+        await send_payment_blocked_email(rider_id, total_fare, ride=ride)
 
     try:
         await manager.broadcast_to_admins(

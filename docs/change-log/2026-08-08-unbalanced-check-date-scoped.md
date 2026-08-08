@@ -204,4 +204,17 @@ migration 290's rollback) and neither touches a row.
 
 ## 11. Full suite result
 
-Recorded after the run completed — see the commit that fills in this section.
+`pytest backend/tests` run to completion **before** the push.
+
+```
+10050 passed, 8 skipped, 1 xfailed, 20 warnings in 631.76s (0:10:31)
+```
+
+Exit code 0, zero `FAILED`/`ERROR` lines. Baseline before this change was
+**10,035 passed**, so the delta is **+15** against 14 hand-written tests. The extra
+one is not a mystery and is worth recording: `test_migration_concurrently_splitting.py::test_no_prose_or_body_fragment_leaks_out`
+is parameterized over every migration containing `CONCURRENTLY`, so migration 292
+enrolled itself in the gate that checks `scripts/migrate.py` can split the file into
+statements without handing Postgres a fragment of prose. Migration 293 has no
+`CONCURRENTLY` and adds no case. (An unexplained delta would have meant a
+pre-existing test changed state; this one is fully attributed.)

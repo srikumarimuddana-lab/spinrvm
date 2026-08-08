@@ -33,6 +33,17 @@ _DISCREPANCY_THRESHOLD_CENTS = 1  # $0.01 — alert on any cent-level drift
 # the TTL is just defensive cleanup.
 _LOCK_TTL_SECONDS = 25 * 60 * 60
 
+# Double-entry leg projection progress marker (see _check_leg_completeness).
+# Holds the event id at the head of the projection's work queue as of the last
+# daily run; an unchanged head 24 h later means the loop has stopped draining.
+_QUEUE_HEAD_KEY = "spinr:ledger:projection:queue_head"
+# 8 days: long enough to survive a missed run or two, short enough that a
+# genuinely abandoned marker does not linger forever.
+_QUEUE_HEAD_TTL_SECONDS = 8 * 24 * 60 * 60
+# Matches the RPC's own LIMIT clamp (migration 287). Only the head row drives
+# the alert; the rest is sampled purely to report queue depth.
+_QUEUE_SAMPLE_LIMIT = 500
+
 
 async def reconciliation_loop() -> None:
     """Entry point spawned by lifespan.py. Runs indefinitely."""
@@ -105,17 +116,35 @@ async def _run_reconciliation(date) -> None:  # noqa: ANN001
 
 
 async def _check_leg_completeness() -> None:
-    """Alert when projectable headers have gone >24h without double-entry legs.
+    """Alert when the double-entry leg projection has stopped making progress.
 
     The unbalanced-view check below can only see legs that EXIST; a header the
     projection loop never managed to decompose is invisible to it. This uses
-    the projection's own work-queue RPC (migration 287) — anything still in
-    that queue past 24h means the loop is dead, wedged, or consistently
-    failing, which the 15-minute cadence should never allow.
+    the projection's own work-queue RPC (migration 287) as the signal.
+
+    It deliberately does NOT alert on queue depth or on absolute row age. Both
+    look alarming during the intended initial backfill: the moment
+    ``ledger_double_entry_enabled`` first turns on, EVERY historical header is
+    leg-less and older than any age threshold, so a depth/age rule would fire
+    at ERROR every night for the whole drain — training on-call to ignore the
+    one alert that is supposed to mean "the projection is dead", during the
+    exact window when the feature is newest.
+
+    What actually distinguishes "backfilling" from "dead" is movement. The
+    queue is drained oldest-first, so a live loop advances its head every tick
+    (200 rows / 15 min). We store the head's event id between daily runs and
+    alert only when it has not moved. Nothing can legitimately pin the head:
+    an event that cannot be decomposed is booked DEGRADED rather than skipped,
+    precisely so it leaves the queue (see utils/ledger_projection.py).
 
     Skips silently when double-entry is off (queue is expected to grow) or the
     RPC is absent (migration 287 not applied). Never raises.
     """
+    # Lazy dual imports: a formatter hook rewrites this module's top-level
+    # `except ImportError` list and strips additions (observed three times on
+    # this branch), which would leave these names undefined under top-level
+    # execution. Function-body imports are immune, and are already this
+    # module's dominant idiom — see _check_entry_balance / _sum_financial_events.
     try:
         from services.ledger_service import double_entry_enabled  # type: ignore
     except ImportError:
@@ -127,33 +156,51 @@ async def _check_leg_completeness() -> None:
         from ..db_supabase import rpc  # type: ignore
 
     try:
+        from utils.redis_client import redis_delete, redis_get, redis_set  # type: ignore
+    except ImportError:
+        from .redis_client import redis_delete, redis_get, redis_set  # type: ignore
+
+    try:
         if not await double_entry_enabled():
             return
-        rows = await rpc("financial_events_missing_legs", {"p_limit": 500}) or []
+        rows = await rpc("financial_events_missing_legs", {"p_limit": _QUEUE_SAMPLE_LIMIT}) or []
     except Exception:
         logger.info("reconciliation: leg-completeness check unavailable (migration 287 not applied?)")
         return
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    stale = []
-    for r in rows:
-        created = r.get("created_at")
-        try:
-            created_dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
-        except (TypeError, ValueError):
-            stale.append(r)  # unparseable age — surface it rather than hide it
-            continue
-        if created_dt < cutoff:
-            stale.append(r)
+    if not rows:
+        await redis_delete(_QUEUE_HEAD_KEY)
+        logger.info("reconciliation: double-entry leg projection current (work queue empty)")
+        return
 
-    if not stale:
-        logger.info("reconciliation: double-entry leg projection current (queue <24h)")
+    # The RPC orders by created_at, so row 0 is the head of the drain.
+    head = rows[0]
+    head_id = str(head.get("id") or "")
+    # Depth is capped by the RPC's own LIMIT, so report it as "at least".
+    depth = f"{len(rows)}+" if len(rows) >= _QUEUE_SAMPLE_LIMIT else str(len(rows))
+
+    previous = await redis_get(_QUEUE_HEAD_KEY)
+    await redis_set(_QUEUE_HEAD_KEY, head_id, _QUEUE_HEAD_TTL_SECONDS)
+
+    if previous is None:
+        # First observation, or the marker expired / was lost with an
+        # in-process Redis fallback across a restart. One run's blind spot;
+        # hard loop death is separately covered by the lifespan watchdog
+        # ("ledger_projection (15min)" in _WATCHDOG_LOOP_NAMES).
+        logger.info(
+            f"reconciliation: leg projection queue depth {depth}, head {head_id} "
+            "— no prior marker, progress judged from the next run"
+        )
+        return
+
+    if previous != head_id:
+        logger.info(f"reconciliation: leg projection advancing (queue depth {depth}, head {previous} -> {head_id})")
         return
 
     logger.error(
-        f"reconciliation ALERT: {len(stale)} financial_events headers >24h old "
-        f"with no double-entry legs — projection loop dead or failing. "
-        f"event_ids={[r.get('id') for r in stale[:10]]}"
+        f"reconciliation ALERT: double-entry leg projection has made NO progress "
+        f"in 24h — work-queue head still {head_id} (created {head.get('created_at')}), "
+        f"queue depth {depth}. The loop is dead, wedged, or failing every leg write."
     )
 
 

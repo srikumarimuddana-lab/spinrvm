@@ -290,13 +290,13 @@ Not addressed in the 2026-08-08 branch. Tracked in `ACTION_ITEMS.md`.
 
 | Requirement | Status |
 |---|---|
-| Logo in emails | ✅ for anything using `utils/email_layout.py`, from the bundled asset or an admin-set `company_logo_url`. The receipt and Spinr Pass invoice still render the wordmark as `<h1>Spinr</h1>` text |
-| Company name / address / contact | ✅ from the admin Settings page via `utils/company_details.py`, falling back to `report_branding`'s constants when unset. Report PDFs and the live receipt still use their own hardcoded footers, so the two can legitimately differ once an admin edits the settings — a known, chosen inconsistency until the N11 retrofit |
-| Brand red | New emails use `#FF3B30` per `.claude/context/brand-spinr.md`. The receipt, Spinr Pass invoice and report PDFs still use `#ee2b2b` — deliberately unchanged rather than restyled under people already receiving them |
-| Shared shell | ✅ for new emails. Corporate OTP, admin broadcast and the DSAR link are still bare `<p>`/`<div>`; statements, corporate low-balance, KYB decisions and signup ops are still plain text only |
-| Plain-text alternative | ✅ for new emails. The receipt still sends HTML only |
+| Logo in emails | ✅ everywhere, from the bundled asset or an admin-set `company_logo_url` — including the ride receipt and Spinr Pass invoice, retrofitted behind `branded_receipt_enabled` |
+| Company name / address / contact | ✅ from the admin Settings page via `utils/company_details.py`, falling back to `report_branding`'s constants when unset. Covers every email **and** the receipt/invoice PDF attachments. Report PDFs (SGI, airport, compliance) still use their own constants deliberately |
+| Brand red | `#FF3B30` per `.claude/context/brand-spinr.md` across every email including the retrofitted receipt and invoice. Report PDFs keep `#ee2b2b` (ADR-008) |
+| Shared shell | ✅ for new emails plus the receipt and invoice. Still outstanding: corporate OTP, admin broadcast and the DSAR link are bare `<p>`/`<div>`; statements, corporate low-balance, KYB decisions and signup ops are plain text only |
+| Plain-text alternative | ✅ for new emails and the receipt (which carries the same GST/PST breakdown). The invoice email is still HTML-only |
 | Typography | Plus Jakarta Sans leads a system stack. Webfonts are unreliable in email (Outlook ignores `@font-face`), so this degrades by design |
-| Test coverage | ✅ `tests/test_email_layout.py` — the first tests in the repo to assert anything about email appearance. The receipt template is still unpinned |
+| Test coverage | ✅ `tests/test_email_layout.py` and `tests/test_receipt_shell_snapshot.py` — the receipt's shell and content are now both pinned, and a test proves the retrofit changed only the wrapper |
 
 **Standing gap:** there is no automated visual or snapshot regression tooling
 for email in this repo. Client rendering (Gmail, Apple Mail, Outlook) is

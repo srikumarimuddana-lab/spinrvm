@@ -1041,6 +1041,24 @@ export default function SettingsPage() {
                                     Does not affect report PDFs.
                                 </p>
                             </div>
+                            <div className="space-y-2 sm:col-span-2">
+                                <div className="flex items-center justify-between gap-4">
+                                    <Label htmlFor="branded_receipt_enabled">
+                                        Branded receipts &amp; invoices
+                                    </Label>
+                                    <Switch
+                                        id="branded_receipt_enabled"
+                                        checked={settings.branded_receipt_enabled !== false}
+                                        onCheckedChange={(v) => update("branded_receipt_enabled", v)}
+                                    />
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Renders ride receipts and Spinr Pass invoices with the logo and
+                                    company details above. Turn off to go back to the older plain
+                                    layout if something looks wrong in a real inbox — fare lines,
+                                    GST/PST and totals are unaffected either way.
+                                </p>
+                            </div>
                         </CardContent>
                     </Card>
 

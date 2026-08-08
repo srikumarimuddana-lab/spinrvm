@@ -4213,17 +4213,25 @@ Remaining, roughly in order of user impact:
   sits on a CASL consent-critical path and produces a legally-required footer,
   so touching it needs its own review rather than being folded into an
   unrelated change.
-- [ ] **N11. Retrofit existing emails onto the shared layout** — the ride
-  receipt and Spinr Pass invoice are near-duplicate one-off templates using
-  `#ee2b2b` and a text wordmark; corporate OTP, admin broadcast and the DSAR
-  link are bare `<p>`/`<div>`; statements, corporate low-balance, KYB decisions
-  and signup ops are plain text only. Deliberately deferred: it changes mail
-  people already receive, so it needs a snapshot test pinning current output
-  **first**, then a feature flag. The receipt also sends `html` only, with no
-  plain-text alternative. **Now also a consistency gap**: emails on the shared
-  layout take their company name/address from the admin Settings page, while
-  the receipt and invoice keep hardcoded footers — so once an admin edits those
-  settings, two Spinr emails can legitimately show different company details.
+- [x] ~~**N11. Retrofit the ride receipt and Spinr Pass invoice**~~ — done:
+  both now use the shared header/footer, the real logo, `#FF3B30`, and the
+  company name and address from the admin Settings page, in the email **and**
+  in the attached PDFs. The receipt gained a plain-text alternative carrying
+  the same GST/PST breakdown. Behind `branded_receipt_enabled` (migration
+  288, defaults on); the pre-retrofit shell is kept verbatim and pinned by
+  `tests/test_receipt_shell_snapshot.py`. See
+  `docs/change-log/2026-08-08-receipt-invoice-branding-retrofit.md`.
+- [ ] **N11b. Remaining un-retrofitted emails** — corporate OTP
+  (`routes/auth.py`), admin broadcast (`routes/admin/messaging.py`) and the
+  DSAR link (`routes/drivers/tax_exports.py`) are bare `<p>`/`<div>`;
+  driver statements, corporate low-balance, KYB decisions and corporate
+  signup ops are plain text only. Lower stakes than the receipt — none is a
+  tax document — but they are the last emails that look nothing like Spinr.
+  The invoice email is also still HTML-only, with no text alternative.
+- [ ] **N11c. Delete the pre-retrofit receipt/invoice shell and its flag** —
+  once the branded version has been seen in real inboxes. Two shells and a
+  switch are a real carrying cost; both `_LEGACY_*` constants are commented
+  to say so.
 - [ ] **N12. No visual/snapshot regression tooling for email** — standing gap.
   `tests/test_email_layout.py` asserts the logo URL, brand colour and footer
   lines are present, but nothing catches a layout that renders badly in Gmail,

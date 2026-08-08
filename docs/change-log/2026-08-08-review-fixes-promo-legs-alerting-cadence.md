@@ -238,4 +238,16 @@ its own in 8 days.
 
 ## 11. Full suite result
 
-Recorded after the run completed — see the commit that adds this section's numbers.
+`pytest backend/tests` run to completion **before** the push (the branch's earlier
+lesson: on a branch adding new modules, the suite has to gate the push, not trail
+it — see `2026-08-07-full-suite-result.md`).
+
+```
+10035 passed, 8 skipped, 1 xfailed, 20 warnings in 527.72s (0:08:47)
+```
+
+Exit code 0, zero `FAILED`/`ERROR` lines. Baseline on this branch before these three
+fixes was **10,019 passed** — the delta of exactly **+16** is the 16 tests added here
+(5 in `test_ledger_service.py`, 3 in `test_ledger_projection.py`, 1 in
+`test_replay_safety_payment_loops.py`, 7 in `test_reconciliation.py`), with no
+pre-existing test changing state.

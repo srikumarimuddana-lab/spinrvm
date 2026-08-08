@@ -414,3 +414,73 @@ def test_charge_metadata_empty_without_ride():
     from backend.services.payment_service import _charge_event_metadata
 
     assert _charge_event_metadata(None, None) == {"source": "process_payment"}
+
+
+# ── Unconfigured client ──────────────────────────────────────────────
+#
+# db_supabase.insert_one / insert_many return None / [] WITHOUT raising when
+# the Supabase client was never initialised. The retry loop's `await
+# do_insert(); return True` therefore reported the 7-year tax-ledger row as
+# durably written when nothing reached a database — a silent no-op that
+# produces no exception to log and no alert to page on.
+
+
+def _no_client():
+    """Patch the binding the writer actually reads (see _client_unavailable)."""
+    from backend.repositories import _base
+
+    return patch.object(_base, "supabase", None)
+
+
+@pytest.mark.anyio
+async def test_header_write_without_a_client_reports_failure_not_success():
+    with _no_client(), patch.object(ls, "escalate") as escalate:
+        event_id = await ls.record_event(
+            event_type="stripe_charge", user_id="u1", ride_id="r1", delta_cents=2000, ref="pi_1"
+        )
+
+    assert event_id is None, "an unwritten tax-ledger row must not read as written"
+    escalate.assert_called_once()
+    assert escalate.call_args.kwargs.get("alert", ls.ALERT_HEADER_LOST) == ls.ALERT_HEADER_LOST
+
+
+@pytest.mark.anyio
+async def test_legs_write_without_a_client_reports_failure_not_success():
+    legs = ls.build_charge_legs(2000, 1500, 220)
+
+    with _no_client(), patch.object(ls, "escalate") as escalate:
+        ok = await ls.write_legs("evt_1", legs, ride_id="r1", event_type="stripe_charge", check_flag=False)
+
+    assert ok is False, "projection counters must not count unwritten legs as projected"
+    escalate.assert_called_once()
+    assert escalate.call_args.kwargs["alert"] == ls.ALERT_LEGS_LOST
+
+
+@pytest.mark.anyio
+async def test_missing_client_is_not_retried():
+    """No number of attempts fixes an absent client — and the settlement
+    request is holding while this runs."""
+    sleeps: list[float] = []
+
+    async def _track_sleep(secs):
+        sleeps.append(secs)
+
+    with (
+        _no_client(),
+        patch.object(ls, "escalate"),
+        patch.object(ls.asyncio, "sleep", side_effect=_track_sleep),
+        patch.object(ls.db_supabase, "insert_one", side_effect=AssertionError("must not reach the DB layer")),
+    ):
+        await ls.record_event(event_type="stripe_charge", user_id="u1", ride_id="r1", delta_cents=1, ref="pi_x")
+
+    assert sleeps == [], "an absent client must fail immediately, not burn the retry budget"
+
+
+@pytest.mark.anyio
+async def test_record_event_still_never_raises_without_a_client():
+    """The contract is unchanged: the money has already moved, so a
+    bookkeeping failure must never fail the caller's request."""
+    with _no_client(), patch.object(ls, "escalate"):
+        assert (
+            await ls.record_event(event_type="stripe_charge", user_id="u1", ride_id="r1", delta_cents=1, ref="p")
+        ) is None

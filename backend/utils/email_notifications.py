@@ -174,7 +174,10 @@ async def send_lifecycle_email(
             return False
 
         recipient = user if user is not None else await resolve_recipient(user_id)
-        if not can_email(recipient) and not (to_override or "").strip():
+        # Normalise once. A whitespace-only override is *not* an address, and
+        # must fall back to the stored one rather than becoming an empty To:.
+        override = (to_override or "").strip()
+        if not can_email(recipient) and not override:
             # Not an error: a driver who never finished profile setup has no
             # address on file. Logged at info so the absence is visible without
             # being alarming, and without the address itself.
@@ -192,7 +195,7 @@ async def send_lifecycle_email(
 
         return bool(
             await send_transactional_email(
-                to=(to_override or (recipient or {}).get("email") or "").strip(),
+                to=override or ((recipient or {}).get("email") or "").strip(),
                 subject=subject,
                 html=rendered.html,
                 text=rendered.text,

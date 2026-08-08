@@ -130,6 +130,52 @@ async def test_preloaded_user_skips_the_lookup():
     lookup.assert_not_awaited()
 
 
+# --- to_override (the email-change security notice) ------------------------
+
+
+async def test_override_sends_to_the_supplied_address_not_the_stored_one():
+    # After an email change the user row already holds the NEW address, so the
+    # notice to the previous one can only be addressed explicitly.
+    _, send = await _run(to_override="previous@example.com")
+    assert send.await_args.kwargs["to"] == "previous@example.com"
+
+
+async def test_override_still_logs_against_the_user_id():
+    _, send = await _run(to_override="previous@example.com")
+    assert send.await_args.kwargs["log_id"] == "user-1"
+
+
+async def test_override_works_when_the_row_has_no_address():
+    # An account that never completed profile setup can still have had an
+    # address change attempted against it.
+    result, send = await _run(user={"id": "user-1", "email": None}, to_override="previous@example.com")
+    assert result is True
+    send.assert_awaited_once()
+
+
+async def test_override_cannot_resurrect_a_tombstoned_account():
+    result, send = await _run(
+        user={"id": "u", "email": "x@example.com", "deleted_at": "2026-01-01T00:00:00Z"},
+        to_override="previous@example.com",
+    )
+    assert result is False
+    send.assert_not_awaited()
+
+
+async def test_override_still_respects_the_kill_switch():
+    result, send = await _run(
+        settings={"lifecycle_emails_enabled": False},
+        to_override="previous@example.com",
+    )
+    assert result is False
+    send.assert_not_awaited()
+
+
+async def test_blank_override_falls_back_to_the_stored_address():
+    _, send = await _run(to_override="   ")
+    assert send.await_args.kwargs["to"] == "driver@example.test"
+
+
 # --- Kill switch -----------------------------------------------------------
 
 

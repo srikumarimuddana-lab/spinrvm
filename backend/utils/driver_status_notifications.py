@@ -185,17 +185,67 @@ def _email_payload(
     """Email fields for a lifecycle notice, or None when the status is push-only."""
     if status not in EMAIL_STATUSES:
         return None
-    paragraphs = [_with_reason(status, body, reason)]
-    next_step = _EMAIL_NEXT_STEPS.get(status)
-    if next_step:
-        paragraphs.append(next_step)
+    return _email_fields(title, _with_reason(status, body, reason), _EMAIL_NEXT_STEPS.get(status), data_type)
+
+
+def _email_fields(
+    title: str,
+    body: str,
+    next_step: str | None,
+    data_type: str,
+) -> dict[str, Any]:
     return {
         # Subject mirrors the push title, so a driver who sees both recognises
         # them as the same notice rather than two separate events.
         "subject": title,
         "heading": title,
-        "paragraphs": paragraphs,
+        "paragraphs": [body] + ([next_step] if next_step else []),
         "email_type": data_type,
+    }
+
+
+# ── Verification toggle (admin "verify" / "unverify") ────────────────────────
+# A separate flag from `status`, so it does not fit the status-keyed maps above.
+# Copy is byte-identical to what routes/admin/drivers.py sent inline before this
+# was routed through the policy — no already-shipped notification changes wording.
+_VERIFICATION_COPY: dict[bool, tuple[str, str]] = {
+    True: (
+        "Account Verified! ✅",
+        "Your driver account has been verified. You can now go online and start accepting rides!",
+    ),
+    False: (
+        "Verification Update ⚠️",
+        "Your driver verification status has been updated. Please check your documents.",
+    ),
+}
+
+_VERIFICATION_NEXT_STEPS: dict[bool, str] = {
+    True: "Open the Spinr driver app, tap Go Online, and you'll start receiving ride offers.",
+    False: (
+        "Open the Spinr driver app to check your documents. "
+        "Contact support@spinr.ca if you're not sure what needs updating."
+    ),
+}
+
+
+def verification_message(verified: bool) -> dict[str, Any]:
+    """Notice for the admin verify/unverify toggle.
+
+    Stays on the NORMAL tier, deliberately. `is_verified` is not what gates
+    earning: routes/drivers/status.py:361 records that `status` became the
+    single source of truth for going online, and the remaining check at :174
+    only applies when `status != "active"`. So un-verifying an already-active
+    driver does not stop them working, and the notice must not bypass the push
+    opt-out the way a genuine account block (rejected/suspended/banned) does.
+    """
+    title, body = _VERIFICATION_COPY[verified]
+    data_type = "driver_verified" if verified else "driver_unverified"
+    return {
+        "title": title,
+        "body": body,
+        "data": {"type": data_type},
+        "priority": NORMAL_PRIORITY,
+        "email": _email_fields(title, body, _VERIFICATION_NEXT_STEPS[verified], data_type),
     }
 
 

@@ -117,6 +117,35 @@ def _invoice_claim_is_stale(sentinel: str) -> bool:
         return False
 
 
+async def _claim_exhausted_alert(ride_id: str) -> bool:
+    """Compare-and-swap the one-notice-per-ride flag. True if this caller won it.
+
+    Three paths reach payment exhaustion — the already-exhausted branch at the
+    top of the scan, the unexpected-intent-state branch, and the exception
+    branch — and only the first one used to claim before alerting. The other
+    two fire on the tick the counter *crosses* MAX_RETRIES, and the first then
+    fires again on the next tick, so every exhausted ride produced two admin
+    alerts five minutes apart.
+
+    That was tolerable while this only paged admins. It is not now that the
+    rider gets an email: two identical "you are blocked from booking" messages
+    is the kind of thing that trains people to ignore us. Gating every path on
+    the same claim also makes it replay-safe across the loop's replicas, which
+    the two unguarded paths never were.
+    """
+    claimed = await db.update_one(
+        "rides",
+        {"id": ride_id, "admin_alerted_payment_exhausted": False},
+        {
+            "$set": {
+                "admin_alerted_payment_exhausted": True,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+    return claimed is not None
+
+
 async def _alert_admins_payment_exhausted(ride: dict) -> None:
     """Notify admins — and the rider — when a ride's payment retries are exhausted.
 
@@ -130,10 +159,15 @@ async def _alert_admins_payment_exhausted(ride: dict) -> None:
     total_fare = ride.get("total_fare", 0)
 
     # First, because it is the only notice that reaches the person actually
-    # affected. Self-swallowing; the retry-exhaustion state is already written,
-    # and the admin alerts below must fire regardless.
+    # affected. Guarded here rather than relying on the sender's own try/except:
+    # the admin alerts below are the operational signal that something needs
+    # human attention, and nothing about a rider email — a failed lookup, a
+    # provider outage, a future refactor of that module — may cost them.
     if rider_id:
-        await send_payment_blocked_email(rider_id, total_fare, ride=ride)
+        try:
+            await send_payment_blocked_email(rider_id, total_fare, ride=ride)
+        except Exception as exc:
+            logger.error(f"Rider payment-blocked email failed for ride {ride_id}: {exc}", exc_info=True)
 
     try:
         await manager.broadcast_to_admins(
@@ -315,19 +349,11 @@ async def retry_failed_payments():
             continue
 
         if retry_count >= MAX_RETRIES:
-            if not ride.get("admin_alerted_payment_exhausted"):
-                claimed = await db.update_one(
-                    "rides",
-                    {"id": ride_id, "admin_alerted_payment_exhausted": False},
-                    {
-                        "$set": {
-                            "admin_alerted_payment_exhausted": True,
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                        }
-                    },
-                )
-                if claimed is not None:
-                    await _alert_admins_payment_exhausted(ride)
+            # The pre-check spares a DB round-trip on every subsequent tick for
+            # a ride that has already been alerted; the claim below is what
+            # actually makes it exactly-once.
+            if not ride.get("admin_alerted_payment_exhausted") and await _claim_exhausted_alert(ride_id):
+                await _alert_admins_payment_exhausted(ride)
             continue
 
         # Skip rides older than 24 hours
@@ -554,7 +580,7 @@ async def retry_failed_payments():
                         }
                     },
                 )
-                if new_count >= MAX_RETRIES:
+                if new_count >= MAX_RETRIES and await _claim_exhausted_alert(ride_id):
                     await _alert_admins_payment_exhausted(ride)
                 continue
 
@@ -573,7 +599,7 @@ async def retry_failed_payments():
                     }
                 },
             )
-            if new_count >= MAX_RETRIES:
+            if new_count >= MAX_RETRIES and await _claim_exhausted_alert(ride_id):
                 await _alert_admins_payment_exhausted(ride)
                 rider_id = ride.get("rider_id")
                 if rider_id:

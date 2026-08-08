@@ -140,6 +140,7 @@ async def send_lifecycle_email(
     email_class: EmailClass = EmailClass.TRANSACTIONAL,
     context: str = "",
     user: dict[str, Any] | None = None,
+    to_override: Optional[str] = None,
 ) -> bool:
     """Send one lifecycle email. Returns True only if a provider accepted it.
 
@@ -157,6 +158,13 @@ async def send_lifecycle_email(
         context: Free-text call-site label for log correlation only.
         user: Pre-loaded ``users`` row, when the caller already has one — skips
             a redundant lookup on background-loop paths that iterate drivers.
+        to_override: Send to this address instead of the one on the user row,
+            keeping every other guard. Exists for the security notice that goes
+            to a rider's **previous** address after an email change — by the
+            time it sends, the row already holds the new address, so there is no
+            other way to reach the person who owned the account before. Use it
+            only for an address the user themselves supplied to us; never accept
+            it from request input.
 
     Never raises.
     """
@@ -166,11 +174,16 @@ async def send_lifecycle_email(
             return False
 
         recipient = user if user is not None else await resolve_recipient(user_id)
-        if not can_email(recipient):
+        if not can_email(recipient) and not (to_override or "").strip():
             # Not an error: a driver who never finished profile setup has no
             # address on file. Logged at info so the absence is visible without
             # being alarming, and without the address itself.
             logger.info("email policy: no deliverable address (%s) for user %s", context, user_id)
+            return False
+        # A soft-deleted account is tombstoned — an override must not resurrect
+        # it as a delivery target.
+        if (recipient or {}).get("deleted_at"):
+            logger.info("email policy: recipient tombstoned (%s) for user %s", context, user_id)
             return False
 
         if email_class is EmailClass.OPTIONAL and not await _email_opt_in(user_id):
@@ -179,7 +192,7 @@ async def send_lifecycle_email(
 
         return bool(
             await send_transactional_email(
-                to=(recipient or {}).get("email", "").strip(),
+                to=(to_override or (recipient or {}).get("email") or "").strip(),
                 subject=subject,
                 html=rendered.html,
                 text=rendered.text,

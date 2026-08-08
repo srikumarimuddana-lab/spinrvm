@@ -352,7 +352,7 @@ def emails(monkeypatch):
     recorder = _EmailRecorder()
     import utils.email_provider as ep
 
-    monkeypatch.setattr(ep, "send_transactional_email", recorder)
+    monkeypatch.setattr(ep, "send_ops_alert_email", recorder)
     return recorder
 
 
@@ -410,7 +410,7 @@ async def test_one_bad_recipient_does_not_block_the_others(monkeypatch):
 
     import utils.email_provider as ep
 
-    monkeypatch.setattr(ep, "send_transactional_email", _flaky)
+    monkeypatch.setattr(ep, "send_ops_alert_email", _flaky)
     _patch_recipients(monkeypatch, ["broken@spinr.ca", "ops@spinr.ca"])
 
     await cw._post_alert("db_circuit_open", "text", None)
@@ -470,7 +470,7 @@ async def test_total_delivery_failure_does_not_consume_the_cooldown(monkeypatch)
     import utils.email_provider as ep
 
     monkeypatch.setattr(cw.httpx, "AsyncClient", _ExplodingClient)
-    monkeypatch.setattr(ep, "send_transactional_email", _dead_email)
+    monkeypatch.setattr(ep, "send_ops_alert_email", _dead_email)
     _patch_recipients(monkeypatch, ["ops@spinr.ca"])
 
     await cw._post_alert("db_pool_saturation", "text", WEBHOOK)
@@ -494,6 +494,66 @@ async def test_cooldown_is_shared_across_channels(monkeypatch, emails):
     await cw._post_alert("db_pool_saturation", "first", None)
     await cw._post_alert("db_pool_saturation", "second", None)
     assert len(emails.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_alert_email_never_touches_the_database(monkeypatch):
+    """The point of the ops-email path.
+
+    An alert reporting a saturated DB pool must not queue work on that pool.
+    `send_transactional_email` does three DB operations per send (load
+    app_settings, query email_suppressions, insert email_send_log); the ops path
+    must do none. This asserts the watchdog reaches the DB-free function and
+    that a fully-unavailable database still lets the alert out.
+    """
+    import utils.email_provider as ep
+
+    calls = []
+
+    async def _boom(*a, **k):  # any DB access at all is a failure here
+        calls.append(a)
+        raise RuntimeError("database unavailable")
+
+    # Poison every DB-touching entry point in the email module.
+    monkeypatch.setattr(ep, "_load_settings", _boom)
+    monkeypatch.setattr(ep, "_is_suppressed", _boom)
+    monkeypatch.setattr(ep, "_log_send", _boom)
+
+    # Credentials cached earlier, while the DB was healthy.
+    monkeypatch.setitem(ep._ops_settings_cache, "aws_ses_access_key_id", "AKIA-test")
+    monkeypatch.setitem(ep._ops_settings_cache, "aws_ses_secret_access_key", "secret")
+
+    sent = {}
+
+    async def _fake_ses(settings, **kwargs):
+        sent.update(kwargs)
+        return "ses-message-id"
+
+    monkeypatch.setattr(ep, "_try_ses", _fake_ses)
+    _patch_recipients(monkeypatch, ["ops@spinr.ca"])
+
+    await cw._post_alert("db_pool_saturation", "Queue depth 73", None)
+
+    assert sent.get("to") == "ops@spinr.ca", "alert did not reach the provider"
+    assert calls == [], "ops alert performed a database operation"
+    assert "db_pool_saturation" in cw._last_alerted
+
+
+@pytest.mark.asyncio
+async def test_cold_credential_cache_falls_back_to_one_db_read(monkeypatch):
+    """First-ever alert after a restart has no cache. One read is acceptable
+    (still better than three) and must not crash when it fails."""
+    import utils.email_provider as ep
+
+    monkeypatch.setattr(ep, "_ops_settings_cache", {})
+
+    async def _dead_settings():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(ep, "_load_settings", _dead_settings)
+
+    ok = await ep.send_ops_alert_email(to="ops@spinr.ca", subject="s", text="t")
+    assert ok is False  # reported as undelivered, not raised
 
 
 def test_alert_recipients_parses_comma_separated(monkeypatch):

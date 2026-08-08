@@ -23,10 +23,18 @@ Signals (all thresholds overridable by env, see the constants):
   3. Rate-limit pressure — spinr_rate_limit_violation_total rising faster than
      120/min for 3 ticks. Distinguishes "real burst" from "a limit set too low".
 
-Replay safety (CLAUDE.md background-loop contract): this loop performs NO
-writes — no DB row, no Redis key, no user-visible notification. The contract's
-claim-flag / idempotency-key / leader-lock options exist to prevent duplicate
-side effects, and there are none here to duplicate.
+Replay safety (CLAUDE.md background-loop contract): this loop writes no
+application state — no ride row, no Redis key, no user-visible notification.
+Its only side effect is delivering an alert, which is idempotent-by-cooldown
+rather than by claim flag.
+
+The alert path is deliberately kept OFF the database. An earlier version sent
+email through ``send_transactional_email``, which performs three DB operations
+per send (load app_settings, query email_suppressions, insert email_send_log) —
+so an alert reporting a saturated pool queued on that same saturated pool and
+would fail exactly when it mattered. It now uses ``send_ops_alert_email``, which
+runs on credentials cached at startup and touches no table. Startup priming is
+the one DB read, and it happens at a moment of our choosing.
 
 Per-replica alerting is INTENTIONAL, not an oversight: thread-pool saturation is
 a per-process condition, and metrics.py is explicitly per-process ("Each backend
@@ -169,27 +177,29 @@ async def _send_email(signal: str, subject: str, body: str, recipients: list) ->
     does not abort the rest — during an incident, reaching three of four people
     is worth more than an all-or-nothing send.
 
-    Note the provider suppression list applies here as it does everywhere: an
-    address that previously hard-bounced is skipped silently by
-    send_transactional_email. That is why ALERT_EMAIL_TO should be a shared
-    inbox or list, not one individual.
+    Uses ``send_ops_alert_email``, NOT ``send_transactional_email``. The latter
+    performs three DB operations per send (load app_settings, query
+    email_suppressions, insert email_send_log), which would route an alert
+    about a saturated database through that same saturated pool — failing
+    precisely when it matters. The ops path uses credentials cached at startup
+    and skips the suppression check and audit-log insert. See that function's
+    docstring for the trade-offs accepted.
     """
     try:
-        from .email_provider import send_transactional_email
+        from .email_provider import send_ops_alert_email
     except ImportError:  # pragma: no cover - non-package entrypoint
-        from utils.email_provider import send_transactional_email  # type: ignore
+        from utils.email_provider import send_ops_alert_email  # type: ignore
 
     any_sent = False
     for addr in recipients:
         try:
-            sent = await send_transactional_email(
+            sent = await send_ops_alert_email(
                 to=addr,
                 subject=subject,
                 text=body,
                 # log_id is a PII-safe correlation tag; the recipient address is
-                # never logged by the provider.
+                # never logged in full by the provider.
                 log_id="capacity",
-                email_type="ops_alert",
             )
             any_sent = any_sent or bool(sent)
         except Exception as exc:
@@ -332,8 +342,9 @@ async def _tick(webhook_url: Optional[str]) -> None:
 async def capacity_watchdog_loop() -> None:
     """Poll saturation signals every INTERVAL_SECONDS and alert on the tripped ones.
 
-    Reads: DB executor state, in-process metrics. Writes: nothing but log lines,
-    a refreshed queue-depth gauge, and webhook posts.
+    Reads: DB executor state, in-process metrics. Writes: log lines, a refreshed
+    queue-depth gauge, and alert deliveries. The alert path itself performs no
+    DB access — see the module docstring.
     """
     try:
         from ..core.config import settings
@@ -345,12 +356,33 @@ async def capacity_watchdog_loop() -> None:
     except ImportError:  # pragma: no cover - non-package entrypoint
         from utils.loop_monitor import record_heartbeat  # type: ignore
 
+    recipients = _alert_recipients()
+
+    # Cache email credentials now, while the DB is healthy — startup has just
+    # passed its DB health check. Doing this here is what lets the alert path
+    # stay DB-free later, when an outage is exactly what we need to report.
+    if recipients:
+        try:
+            from .email_provider import prime_ops_email_settings
+        except ImportError:  # pragma: no cover - non-package entrypoint
+            from utils.email_provider import prime_ops_email_settings  # type: ignore
+        try:
+            primed = await prime_ops_email_settings()
+            if not primed:
+                logger.warning(
+                    "capacity_watchdog: email credentials not cached at startup — "
+                    "the first alert will need one DB read, which may fail during an outage"
+                )
+        except Exception:
+            logger.error("capacity_watchdog: failed to prime email settings", exc_info=True)
+
     logger.info(
         "capacity_watchdog started",
         extra={
             "interval_seconds": INTERVAL_SECONDS,
             "queue_depth_threshold": QUEUE_DEPTH_THRESHOLD,
-            "alerting_enabled": bool(getattr(settings, "ALERT_WEBHOOK_URL", None)),
+            "webhook_enabled": bool(getattr(settings, "ALERT_WEBHOOK_URL", None)),
+            "email_recipients": len(recipients),
         },
     )
 

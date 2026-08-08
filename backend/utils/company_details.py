@@ -1,0 +1,170 @@
+"""Company identity for transactional email, sourced from admin settings.
+
+The footer on a Spinr email used to be two hardcoded constants. That is fine
+for a report PDF filed once, but wrong for email: the legal name, mailing
+address, support address and website are exactly the things that change without
+a code deploy — a move, a rebrand, a new support alias — and an email carrying a
+stale address is a compliance problem, not a cosmetic one.
+
+These now come from the ``settings`` row the admin dashboard already edits
+("Company Info (shown in apps)" on the Settings page), the same source
+``/api/company-info`` serves to the rider and driver apps.
+
+**Every field falls back to the previously-hardcoded value.** An unconfigured
+setting reproduces today's output byte-for-byte, so wiring this up cannot
+silently blank a footer.
+
+Scope: transactional email only. ``report_branding.py`` keeps feeding the PDF,
+Excel and Word report headers from its own constants — those documents have
+already been handed to SGI and airport authorities, and changing them under an
+admin's keystroke is a different decision (see the 2026-08-08 change log).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, NamedTuple, Optional
+from urllib.parse import urlparse
+
+try:
+    from ..core.config import settings as _cfg
+    from ..settings_loader import get_app_settings
+    from ..utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE
+except ImportError:  # pragma: no cover - direct module imports in tests
+    from core.config import settings as _cfg  # type: ignore
+    from settings_loader import get_app_settings  # type: ignore
+    from utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+# Last-resort support address, matching the one baked into COMPANY_CONTACT_LINE.
+_DEFAULT_SUPPORT_EMAIL = "support@spinr.ca"
+
+
+class CompanyDetails(NamedTuple):
+    """Everything an email footer needs, already resolved and fallback-applied."""
+
+    name: str
+    #: Legal name + mailing address, e.g. "Spinr Technologies Inc. — 123 Main St, Saskatoon, SK".
+    identity_line: str
+    #: Support address, website and phone, joined for display.
+    contact_line: str
+    #: Support address on its own, for body copy that tells the reader where to write.
+    support_email: str
+    #: Absolute URL of the logo to render in the header.
+    logo_url: str
+
+
+def _coalesce(settings: Dict[str, Any], key: str) -> str:
+    """Settings value as a clean string.
+
+    The settings loader can surface a DB NULL as Python ``None`` (it overrides
+    the schema default), so a bare ``.get()`` would render the string "None" in
+    a footer. Same guard ``marketing_email._coalesce`` applies for the CASL
+    footer; kept separate because that one is on a consent-critical path this
+    module must not disturb.
+    """
+    return str(settings.get(key) or "").strip()
+
+
+def _postal_address(settings: Dict[str, Any]) -> str:
+    """Assemble the mailing address from its configured parts.
+
+    ``company_address`` is a free-text field on the admin Settings page and
+    often holds the whole address on its own; ``company_city`` /
+    ``company_province`` / ``company_postal_code`` came later (migration 192)
+    and are not on that page, so they are usually blank. Joining only the
+    non-empty parts handles both shapes without producing stray commas.
+    """
+    street = _coalesce(settings, "company_address")
+    locality = " ".join(
+        p
+        for p in (
+            _coalesce(settings, "company_city"),
+            _coalesce(settings, "company_province"),
+            _coalesce(settings, "company_postal_code"),
+        )
+        if p
+    )
+    return ", ".join(p for p in (street, locality) if p)
+
+
+def _bundled_logo_url() -> str:
+    """The Spinr mark served by ``routes/branding.py``.
+
+    Absolute because an email is read outside any origin — a relative path
+    resolves against the mail client, not the API.
+    """
+    base = (_cfg.PUBLIC_API_BASE_URL or "").rstrip("/")
+    return f"{base}/api/v1/branding/spinr-logo.png"
+
+
+def _safe_logo_url(raw: str) -> Optional[str]:
+    """Accept an admin-supplied logo URL only if it is absolute http(s).
+
+    An admin is trusted, but this value lands in an ``<img src>`` in mail sent
+    to riders and drivers, so a typo'd or pasted ``javascript:`` / ``data:``
+    URL should degrade to the bundled asset rather than ship. A relative path
+    is rejected for the same reason the default is absolute: there is no origin
+    to resolve it against in an inbox.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        logger.warning("company_logo_url is not an absolute http(s) URL — falling back to the bundled asset")
+        return None
+    return raw
+
+
+async def load_company_details() -> CompanyDetails:
+    """Resolve company identity from admin settings, with static fallbacks.
+
+    Never raises: a settings-load failure returns the previously-hardcoded
+    values, so an email still goes out with a correct-if-stale footer rather
+    than not going out at all.
+
+    ``get_app_settings`` caches for 60 s in-process, so this is effectively
+    free per send and an admin edit propagates within a minute.
+    """
+    try:
+        settings = await get_app_settings()
+    except Exception as exc:
+        logger.warning("company details: settings load failed, using static fallbacks: %s", exc)
+        settings = {}
+
+    name = _coalesce(settings, "company_name") or "Spinr"
+    address = _postal_address(settings)
+    # Only claim an assembled identity line when an address is actually
+    # configured; otherwise keep the shipped constant, which already carries
+    # the legal name and locality.
+    identity_line = f"{name} — {address}" if address else COMPANY_LINE
+
+    # Build the contact line from CONFIGURED values only. Seeding it with the
+    # default support address would make the list non-empty even when nothing
+    # is set, and the fallback below would never fire — quietly dropping the
+    # website the shipped constant carries. The default belongs to
+    # `support_email`, which body copy needs unconditionally, not to the line.
+    configured_email = _coalesce(settings, "company_email")
+    support_email = configured_email or _DEFAULT_SUPPORT_EMAIL
+    contact_parts = [
+        p
+        for p in (
+            configured_email,
+            _coalesce(settings, "company_website"),
+            _coalesce(settings, "company_phone"),
+        )
+        if p
+    ]
+    contact_line = " · ".join(contact_parts) if contact_parts else COMPANY_CONTACT_LINE
+
+    return CompanyDetails(
+        name=name,
+        identity_line=identity_line,
+        contact_line=contact_line,
+        support_email=support_email,
+        logo_url=_safe_logo_url(_coalesce(settings, "company_logo_url")) or _bundled_logo_url(),
+    )

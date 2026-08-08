@@ -279,6 +279,13 @@ class AppSettings(BaseModel):
     company_phone: str = ""
     company_email: str = ""
     company_website: str = ""
+    # Logo rendered in transactional-email headers. Empty = use the bundled
+    # asset at backend/static/branding/spinr_logo.png, served by
+    # routes/branding.py — which is the correct default, not a placeholder.
+    # Must be an absolute http(s) URL: it lands in an <img src> inside mail
+    # read outside any origin, so a relative path cannot resolve and anything
+    # non-http(s) is rejected by utils/company_details._safe_logo_url.
+    company_logo_url: str = ""
     # Postal address parts for the CASL-required marketing footer (migration
     # 192). Public info, not masked. company_address holds the street line;
     # these complete it into a full, legally-valid mailing address.

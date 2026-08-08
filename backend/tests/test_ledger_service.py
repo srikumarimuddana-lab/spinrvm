@@ -316,3 +316,45 @@ async def test_header_still_written_when_legs_fail():
     assert escalate.call_args.kwargs["alert"] == ls.ALERT_LEGS_LOST, (
         "lost legs must be distinguishable from a lost tax record"
     )
+
+
+# ── Charge metadata (7-year tax record) ──────────────────────────────
+
+
+def test_charge_metadata_captures_tax_for_the_7_year_record():
+    """The ride row is hard-deleted at 7 years (purge Step B) while this ledger
+    row is retained. Without tax_amount/tax_breakdown copied here, the surviving
+    record for an aged charge would be an undifferentiated delta_cents — a gap
+    the refund path never had (it captures tax_reversed)."""
+    from backend.services.payment_service import _charge_event_metadata
+
+    ride = {
+        "total_fare": "18.00",
+        "grand_total": "20.20",
+        "tax_amount": "2.20",
+        "tax_breakdown": {"GST": {"amount": 1.0}, "PST": {"amount": 1.2}},
+        "driver_id": "driver_1",
+        "payment_method": "card",
+        "pickup_address": "1742 Main Street, Saskatoon, SK, S7K 3A1",
+    }
+    meta = _charge_event_metadata(ride, Decimal("2.00"))
+
+    assert meta["tax_amount"] == "2.20"
+    assert meta["tax_breakdown"] == {"GST": {"amount": 1.0}, "PST": {"amount": 1.2}}
+    # PIPEDA: the address must still be city-only, not the full street address.
+    assert meta["pickup_address"] == "Saskatoon"
+
+
+def test_charge_metadata_tax_defaults_to_zero_not_missing():
+    """A legacy/comp ride without tax must still produce a readable field."""
+    from backend.services.payment_service import _charge_event_metadata
+
+    meta = _charge_event_metadata({"total_fare": "0.00"}, None)
+    assert meta["tax_amount"] == "0.00"
+    assert meta["tax_breakdown"] == {}
+
+
+def test_charge_metadata_empty_without_ride():
+    from backend.services.payment_service import _charge_event_metadata
+
+    assert _charge_event_metadata(None, None) == {"source": "process_payment"}

@@ -3489,6 +3489,69 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
 - **Acceptance:** not yet defined — pending the dedicated follow-up
   scoping (b)/(c) above into concrete acceptance criteria.
 
+### B17. `purge_pii_retention` Step B will FK-abort the entire daily retention purge once any paid ride crosses 7 years
+- [ ] **Status:** open — found 2026-08-07 during the PR #3464 regulatory audit,
+  as an adjacent finding while fixing the *same shape of bug* in Step H
+  (migration 289). Dormant, but on a fuse that starts burning 7 years after the
+  first paid ride — no user action required to trigger it.
+- **What breaks:** `financial_events.ride_id` references `rides(id)` with the
+  Postgres default `NO ACTION` (`backend/migrations/58_financial_events.sql:28`
+  — no `ON DELETE` clause). Step B runs a bare
+  `DELETE FROM rides WHERE created_at < now() - 7y` with **no exception handler
+  at all** (contrast Step H, which isolates per-account with
+  `EXCEPTION WHEN foreign_key_violation`). Every paid ride has a retained
+  `stripe_charge` header pointing at it, and **no purge step ever deletes
+  non-DSAR `financial_events` rows** — so the first ride to cross 7 years raises
+  `foreign_key_violation`, aborts the whole transaction, and rolls back Step A
+  too, never reaching Steps C–M.
+- **Why it matters more than the Step H bug this PR just fixed:** (1) *certain*
+  to fire on the passage of time alone, where Step H needed a deletion request
+  plus 7 years; (2) same total blast radius — GPS anonymization, ride deletion,
+  chat/token/stripe-event cleanup, audit-log purge and every other regulatory
+  window silently stop, repeating daily; (3) *less* protected — Step H at least
+  had per-row isolation, Step B has none.
+- **Options (needs a design call, not a one-liner):** NULL the `ride_id` on
+  affected `financial_events` rows before Step B; or migrate the FK to
+  `ON DELETE SET NULL`; or give Step B per-batch exception isolation. Each has a
+  different consequence for the 7-year tax record's ability to link a charge
+  back to its trip, so this is a retention-policy decision as much as a schema
+  one. Note migration 289's change-log records this too, but a dated markdown
+  file is not tracking — hence this entry.
+- **Acceptance:** a decision recorded on which option is taken; the fix applied
+  with a test that proves a 7-year-old paid ride can be purged without aborting
+  the run; `docs/runbooks/data-retention.md` updated to describe Steps H–M,
+  which it currently omits entirely.
+
+### B18. Retention docs promise anonymize-not-delete; migration 216 implements hard-delete, and 289 makes it operative
+- [ ] **Status:** open — found 2026-08-07 in the PR #3464 regulatory audit.
+  **Needs a legal/product decision, not a code change** — filed here rather than
+  "reconciled" unilaterally, because rewriting the policy docs to match the code
+  would be deciding the question rather than surfacing it.
+- **The divergence:** three governing documents state that records are
+  *anonymized* after the retention window —
+  `.claude/context/regulatory-sk.md:45,87` ("rows are anonymized (user_id
+  nulled, coordinates rounded to city centroid), **not deleted** — preserves
+  statistical continuity for regulatory reporting"), `CLAUDE.md` §Compliance
+  →"Deletion" ("Ride records become anonymized"), and
+  `docs/runbooks/data-retention.md`, which additionally omits Steps H–M
+  altogether. `backend/migrations/216_deletion_hard_delete_no_anonymize.sql:1-4`
+  instead implements "the Uber/Lyft attributable-retention model — **NO
+  anonymization**", hard-deleting DSAR accounts at 7 years.
+- **Why now:** Step H has been inert since 216 shipped (it aborted on the
+  migration-58 trigger). Migration 289 fixes that abort, so this PR is what
+  makes the hard-delete path **operative in production for the first time**.
+- **Note on substance:** hard-delete is not *less* PIPEDA-compliant than
+  anonymize — arguably it is a stronger privacy outcome — and the 7-year floor
+  is honored either way. The exposure is (a) the repo's own docs promise a
+  different outcome than what ships, and (b) `data-retention.md:42-47` requires
+  legal + founder sign-off for exactly this kind of change, recorded in the same
+  PR, and no such sign-off is visible for 216 or 289. The anonymize rationale
+  ("statistical continuity for SGI regulatory reporting") is a real tradeoff
+  being foreclosed without a recorded decision.
+- **Acceptance:** a recorded legal/founder decision on anonymize-vs-delete; the
+  three documents reconciled with whichever is chosen; `data-retention.md`
+  extended to cover Steps H–M.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

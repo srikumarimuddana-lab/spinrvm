@@ -157,6 +157,12 @@ COMMENT ON TABLE financial_event_entries IS
     'SUM(credit) per event_id — see financial_event_entries_unbalanced. '
     'Append-only (UPDATE blocked by trigger; DELETE only via parent CASCADE). '
     'Written behind the ledger_double_entry_enabled app_settings flag. '
+    'NEVER AUTHORITATIVE FOR GST/PST REMITTANCE: rides.tax_breakdown is the '
+    'source of truth (routes/admin/compliance.py, and the same field the rider '
+    'receipt renders from). The tax_payable leg here is an internal bookkeeping '
+    'view and reads as understated for any event the projection could not '
+    'decompose (it books those whole to platform_revenue and flags '
+    'spinr_alert=ledger_legs_degraded). Do not build a tax report on this table. '
     'Created in migration 286.';
 
 COMMENT ON VIEW financial_event_entries_unbalanced IS

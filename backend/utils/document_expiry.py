@@ -76,7 +76,7 @@ async def _email_expiry_notice(
             user_id=user_id,
             user=user,
             subject=subject,
-            rendered=render_email(
+            rendered=await render_email(
                 greeting=f"Hi {first_name}," if first_name else None,
                 heading=subject,
                 paragraphs=[body, next_step],

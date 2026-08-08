@@ -10,12 +10,19 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import utils.email_notifications as en
-from utils.email_layout import render_email
+from utils.email_layout import RenderedEmail
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
 _USER = {"id": "user-1", "email": "driver@example.test", "deleted_at": None}
-_RENDERED = render_email(heading="Account suspended", paragraphs=["Contact support."])
+
+
+def _rendered() -> RenderedEmail:
+    """Built per-test: render_email is async now (it reads company details)."""
+    return RenderedEmail(html="<html>body</html>", text="body\n")
+
+
+_RENDERED = _rendered()
 
 
 def _send_mock(result=True):

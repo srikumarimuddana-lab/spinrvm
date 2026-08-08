@@ -29,9 +29,11 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Optional
 
 try:
+    from ..utils.company_details import load_company_details
     from ..utils.email_layout import render_email
     from ..utils.email_notifications import EmailClass, resolve_recipient, send_lifecycle_email
 except ImportError:  # pragma: no cover - direct module imports in tests
+    from utils.company_details import load_company_details  # type: ignore
     from utils.email_layout import render_email  # type: ignore
     from utils.email_notifications import (  # type: ignore
         EmailClass,
@@ -42,8 +44,6 @@ except ImportError:  # pragma: no cover - direct module imports in tests
 logger = logging.getLogger(__name__)
 
 _TWO_PLACES = Decimal("0.01")
-
-SUPPORT_EMAIL = "support@spinr.ca"
 
 
 def _money(value: Any) -> str:
@@ -82,19 +82,27 @@ async def _send(
     email_type: str,
     footnote: Optional[str] = None,
     to_override: Optional[str] = None,
+    company: Optional[Any] = None,
 ) -> bool:
-    """Render and hand off. Resolves the user row once if the caller has none."""
+    """Render and hand off. Resolves the user row once if the caller has none.
+
+    ``company`` is passed through so a sender that already loaded the identity
+    to interpolate the support address into its copy does not read settings
+    twice — and so the footer and that copy cannot disagree about where to
+    write for help.
+    """
     try:
         recipient = user if user is not None else await resolve_recipient(user_id)
         return await send_lifecycle_email(
             user_id=user_id,
             user=recipient,
             subject=subject,
-            rendered=render_email(
+            rendered=await render_email(
                 greeting=_greeting(recipient),
                 heading=heading,
                 paragraphs=paragraphs,
                 footnote=footnote,
+                company=company,
             ),
             email_type=email_type,
             email_class=EmailClass.TRANSACTIONAL,
@@ -117,7 +125,9 @@ async def send_welcome_email(user: dict[str, Any]) -> bool:
     the address we hold actually works, which nothing else in the rider flow
     ever checks.
     """
+    company = await load_company_details()
     return await _send(
+        company=company,
         user_id=user["id"],
         user=user,
         subject="Welcome to Spinr",
@@ -127,7 +137,7 @@ async def send_welcome_email(user: dict[str, Any]) -> bool:
             "Spinr is Saskatchewan-built and takes 0% commission — every dollar of the fare "
             "goes to your driver. You'll always see the full price before you confirm a ride, "
             "with GST and PST shown as separate line items on your receipt.",
-            f"Questions any time: {SUPPORT_EMAIL}",
+            f"Questions any time: {company.support_email}",
         ],
         email_type="rider_welcome",
     )
@@ -147,7 +157,9 @@ async def send_email_changed_notice(
     old = (old_email or "").strip()
     if not old:
         return False
+    company = await load_company_details()
     return await _send(
+        company=company,
         user_id=user["id"],
         user=user,
         subject="The email on your Spinr account was changed",
@@ -156,7 +168,7 @@ async def send_email_changed_notice(
             "The email address on your Spinr account was just changed, so this is the last "
             "message this address will receive.",
             f"If you made this change, nothing more is needed. If you did not, contact "
-            f"{SUPPORT_EMAIL} straight away — your account may have been accessed by someone else.",
+            f"{company.support_email} straight away — your account may have been accessed by someone else.",
         ],
         email_type="rider_email_changed",
         to_override=old,
@@ -166,7 +178,9 @@ async def send_email_changed_notice(
 async def send_account_deletion_notice(user: dict[str, Any], scheduled_at: str) -> bool:
     """Confirms a PIPEDA deletion request and states what is kept, and why."""
     when = (scheduled_at or "")[:10]
+    company = await load_company_details()
     return await _send(
+        company=company,
         user_id=user["id"],
         user=user,
         subject="Your Spinr account has been deactivated",
@@ -178,7 +192,7 @@ async def send_account_deletion_notice(user: dict[str, Any], scheduled_at: str) 
             "Transportation Act and Canadian tax rules require us to hold them for seven "
             f"years. After that they are permanently deleted{f' — currently scheduled for {when}' if when else ''}. "
             "Location traces are removed sooner, at three years.",
-            f"If you did not request this, contact {SUPPORT_EMAIL} immediately.",
+            f"If you did not request this, contact {company.support_email} immediately.",
         ],
         email_type="rider_account_deletion",
     )
@@ -195,7 +209,9 @@ async def send_refund_email(
 ) -> bool:
     """A refund is a financial record; a push that scrolls away is not one."""
     ref = _ride_ref(ride)
+    company = await load_company_details()
     return await _send(
+        company=company,
         user_id=user_id,
         user=user,
         subject=f"Your Spinr refund of ${_money(amount)}",
@@ -208,7 +224,7 @@ async def send_refund_email(
             "statement. It will be credited to the original payment method.",
         ],
         email_type="rider_refund",
-        footnote=f"Not expecting this refund? Contact {SUPPORT_EMAIL}.",
+        footnote=f"Not expecting this refund? Contact {company.support_email}.",
     )
 
 
@@ -219,18 +235,20 @@ async def send_wallet_topup_email(
     user: dict[str, Any] | None = None,
 ) -> bool:
     """Receipt for money added to the Spinr wallet."""
+    company = await load_company_details()
     paragraphs = [f"${_money(amount)} CAD has been added to your Spinr wallet."]
     if new_balance not in (None, ""):
         paragraphs.append(f"Your wallet balance is now ${_money(new_balance)} CAD.")
     paragraphs.append("Your wallet is used automatically on your next ride unless you pick another payment method.")
     return await _send(
+        company=company,
         user_id=user_id,
         user=user,
         subject=f"Spinr wallet top-up — ${_money(amount)}",
         heading=f"Wallet topped up — ${_money(amount)} CAD",
         paragraphs=paragraphs,
         email_type="rider_wallet_topup",
-        footnote=f"Didn't make this top-up? Contact {SUPPORT_EMAIL}.",
+        footnote=f"Didn't make this top-up? Contact {company.support_email}.",
     )
 
 
@@ -242,7 +260,9 @@ async def send_no_show_fee_email(
 ) -> bool:
     """A charge the rider did not choose to make needs a written record."""
     ref = _ride_ref(ride)
+    company = await load_company_details()
     return await _send(
+        company=company,
         user_id=user_id,
         user=user,
         subject=f"No-show fee charged — ${_money(amount)}",
@@ -253,7 +273,7 @@ async def send_no_show_fee_email(
             "The fee goes to the driver for the time and distance they spent getting to you.",
         ],
         email_type="rider_no_show_fee",
-        footnote=f"Think this is wrong? Contact {SUPPORT_EMAIL} and we'll review it.",
+        footnote=f"Think this is wrong? Contact {company.support_email} and we'll review it.",
     )
 
 
@@ -269,7 +289,9 @@ async def send_payment_blocked_email(
     with no explanation and no way to know what to fix.
     """
     ref = _ride_ref(ride)
+    company = await load_company_details()
     return await _send(
+        company=company,
         user_id=user_id,
         user=user,
         subject="Action needed: your Spinr payment didn't go through",
@@ -280,7 +302,7 @@ async def send_payment_blocked_email(
             + ", and your payment method declined each time.",
             "You won't be able to book another ride until this is settled. Open the Spinr app "
             "and add or update a payment method, and we'll retry the outstanding amount.",
-            f"If you think your card is fine, contact {SUPPORT_EMAIL} and we'll look into it.",
+            f"If you think your card is fine, contact {company.support_email} and we'll look into it.",
         ],
         email_type="rider_payment_blocked",
     )

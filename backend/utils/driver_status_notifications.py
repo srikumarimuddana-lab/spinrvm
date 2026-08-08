@@ -132,13 +132,13 @@ _EMAIL_NEXT_STEPS: dict[str, str] = {
     "active": "Open the Spinr driver app, tap Go Online, and you'll start receiving ride offers.",
     "rejected": (
         "Open the Spinr driver app to review your documents and submit them again. "
-        "If you think this decision is wrong, contact support@spinr.ca."
+        "If you think this decision is wrong, contact {support}."
     ),
     "suspended": (
         "You won't be able to go online while your account is suspended. "
-        "Contact support@spinr.ca if you have questions or want to appeal."
+        "Contact {support} if you have questions or want to appeal."
     ),
-    "banned": "Contact support@spinr.ca if you'd like more information about this decision.",
+    "banned": "Contact {support} if you'd like more information about this decision.",
 }
 
 
@@ -222,8 +222,7 @@ _VERIFICATION_COPY: dict[bool, tuple[str, str]] = {
 _VERIFICATION_NEXT_STEPS: dict[bool, str] = {
     True: "Open the Spinr driver app, tap Go Online, and you'll start receiving ride offers.",
     False: (
-        "Open the Spinr driver app to check your documents. "
-        "Contact support@spinr.ca if you're not sure what needs updating."
+        "Open the Spinr driver app to check your documents. Contact {support} if you're not sure what needs updating."
     ),
 }
 
@@ -291,9 +290,11 @@ async def _send_status_email(
         return
     try:
         try:
+            from ..utils.company_details import load_company_details
             from ..utils.email_layout import render_email
             from ..utils.email_notifications import EmailClass, resolve_recipient, send_lifecycle_email
         except ImportError:  # pragma: no cover - direct module imports in tests
+            from utils.company_details import load_company_details  # type: ignore
             from utils.email_layout import render_email  # type: ignore
             from utils.email_notifications import (  # type: ignore
                 EmailClass,
@@ -301,16 +302,28 @@ async def _send_status_email(
                 send_lifecycle_email,
             )
 
+        company = await load_company_details()
         user = await resolve_recipient(driver["user_id"])
         first_name = ((user or {}).get("first_name") or "").strip()
         await send_lifecycle_email(
             user_id=driver["user_id"],
             user=user,
             subject=payload["subject"],
-            rendered=render_email(
+            rendered=await render_email(
                 greeting=f"Hi {first_name}," if first_name else None,
                 heading=payload["heading"],
-                paragraphs=payload["paragraphs"],
+                # The `{support}` placeholder is resolved here rather than in
+                # the copy maps because those are read by the synchronous
+                # `action_message` / `status_message`, and the address lives in
+                # DB-backed settings. Substituting at send time keeps those
+                # pure and keeps the body's support address identical to the
+                # one in the footer.
+                #
+                # A literal replace, not str.format: these paragraphs carry the
+                # admin-written suspension/rejection reason, and a reason
+                # containing a brace would make format() raise.
+                paragraphs=[p.replace("{support}", company.support_email) for p in payload["paragraphs"]],
+                company=company,
             ),
             email_type=payload["email_type"],
             email_class=EmailClass.TRANSACTIONAL,

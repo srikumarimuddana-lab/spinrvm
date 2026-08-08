@@ -586,3 +586,86 @@ async def test_leg_check_alerts_on_a_frozen_head_even_with_a_short_queue():
     log, _store, _rpc = await _run_leg_check(rows=[_queued("only")], previous_head="only")
 
     log.error.assert_called_once()
+
+
+# ── _check_entry_balance ─────────────────────────────────────────────────
+#
+# The trial-balance check: financial_event_entries journals whose debit and
+# credit legs do not net to zero. Expected to return zero rows forever, which
+# is exactly why it needs tests — a silently-broken check looks identical to a
+# healthy ledger. It goes through the migration-293 RPC rather than filtering
+# the view on MIN(created_at), which cannot be pushed below the view's
+# GROUP BY and so re-aggregated the whole table nightly.
+
+
+async def _run_entry_balance(*, rpc_result, run_date=date(2026, 1, 14)):
+    rpc_mock = (
+        AsyncMock(side_effect=rpc_result) if isinstance(rpc_result, Exception) else AsyncMock(return_value=rpc_result)
+    )
+    log = MagicMock()
+
+    with (
+        patch("db_supabase.rpc", rpc_mock),
+        patch("utils.reconciliation.logger", log),
+    ):
+        from utils.reconciliation import _check_entry_balance
+
+        await _check_entry_balance(run_date)
+
+    return log, rpc_mock
+
+
+@pytest.mark.asyncio
+async def test_entry_balance_uses_the_scoped_rpc_with_a_one_day_window():
+    """The date bound must reach the DB as RPC params — filtering the view on
+    its MIN(created_at) column is what forced a full-table aggregate."""
+    _log, rpc_mock = await _run_entry_balance(rpc_result=[])
+
+    rpc_mock.assert_awaited_once()
+    name, params = rpc_mock.await_args[0]
+    assert name == "financial_event_entries_unbalanced_between"
+    assert params["p_start"] == "2026-01-14T00:00:00+00:00"
+    assert params["p_end"] == "2026-01-15T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_entry_balance_month_end_window_does_not_raise():
+    """Same day+1 trap that broke _sum_financial_events every month end."""
+    _log, rpc_mock = await _run_entry_balance(rpc_result=[], run_date=date(2026, 1, 31))
+
+    _name, params = rpc_mock.await_args[0]
+    assert params["p_end"] == "2026-02-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_entry_balance_silent_when_all_legs_balance():
+    log, _rpc = await _run_entry_balance(rpc_result=[])
+
+    log.error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entry_balance_alerts_on_an_unbalanced_journal():
+    log, _rpc = await _run_entry_balance(
+        rpc_result=[{"event_id": "evt_bad", "debit_cents": 2000, "credit_cents": 1500, "imbalance_cents": 500}]
+    )
+
+    log.error.assert_called_once()
+    assert "evt_bad" in log.error.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_entry_balance_treats_a_missing_rpc_as_not_deployed_not_an_alert():
+    """Partial deploy (code live, migration 293 not applied) must not page."""
+    log, _rpc = await _run_entry_balance(rpc_result=RuntimeError("PGRST202 Could not find the function"))
+
+    log.error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entry_balance_never_raises_out_of_the_reconciliation_run():
+    """It is appended after the Stripe-vs-ledger comparison and must never
+    mask that result, whatever the DB does."""
+    log, _rpc = await _run_entry_balance(rpc_result=RuntimeError("connection reset"))
+
+    log.error.assert_not_called()

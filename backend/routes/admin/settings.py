@@ -208,6 +208,12 @@ class SettingsUpdateRequest(BaseModel):
     company_phone: Optional[str] = None
     company_email: Optional[str] = None
     company_website: Optional[str] = None
+    # Logo for transactional-email headers. Empty = the bundled Spinr asset
+    # served at /api/v1/branding/spinr-logo.png, which is the normal setting.
+    # Validated at render time by utils/company_details._safe_logo_url, which
+    # falls back to the bundled asset for anything that is not an absolute
+    # http(s) URL. Does NOT affect report PDF/Excel/Word headers.
+    company_logo_url: Optional[str] = None
     # Locks the rider's quoted fare at booking time so the receipt can't
     # drift if Maps changes the route mid-trip. Toggle on the Settings page.
     fare_lock_enabled: Optional[bool] = None

@@ -128,6 +128,43 @@ def _extract_unverified_user_id(request: Request) -> str | None:
     return str(uid) if uid is not None else None
 
 
+def _metric_path_label(request: Request) -> str:
+    """Bounded path label for metrics — the route TEMPLATE, not the live URL.
+
+    ``request.url.path`` embeds ride and user UUIDs, so labelling a counter with
+    it creates one permanent label set per entity. ``utils/metrics.py`` has no
+    eviction, so that map only grows — fastest during exactly the burst these
+    metrics exist to diagnose — and the capacity watchdog now scans it once a
+    minute per replica. It also makes the counter useless for triage: thousands
+    of one-hit rows instead of a rate per endpoint.
+
+    Starlette stores the matched route on the request scope, whose ``path`` is
+    the template (``/rides/{ride_id}/cancel``), giving one label per endpoint.
+
+    Falls back to a literal ``"unmatched"`` rather than the raw path when no
+    route matched (404s, and some middleware-level rejections) — an unmatched
+    request is attacker-controlled input, and echoing it into a label is the
+    same unbounded-cardinality problem with a hostile author.
+
+    Defensive by design: this runs inside the 429 exception handler, so raising
+    here would turn a rate-limit response into a 500. Any unexpected request
+    shape degrades to the fallback label instead of propagating.
+    """
+    try:
+        route = request.scope.get("route")
+        template = getattr(route, "path", None)
+        if isinstance(template, str) and template:
+            return template
+    except (AttributeError, TypeError) as exc:
+        # Narrow on purpose: only a missing/odd `scope` can land here. Debug
+        # rather than warning — this is a label-quality degradation on a request
+        # that is already being rejected, not a failure worth paging on. It is
+        # logged rather than swallowed so an unexpected request shape is
+        # discoverable instead of silently becoming "unmatched" forever.
+        logger.debug(f"rate-limit metric label fell back to 'unmatched': {exc}")
+    return "unmatched"
+
+
 def get_user_or_ip_key(request: Request) -> str:
     """Key rate limiting by authenticated user, falling back to IP.
 
@@ -560,7 +597,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         f"Limit: {limit_amount} | "
         f"Retry-After: {retry_after}s"
     )
-    _metric_inc("spinr_rate_limit_violation_total", {"path": request.url.path})
+    _metric_inc("spinr_rate_limit_violation_total", {"path": _metric_path_label(request)})
 
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,

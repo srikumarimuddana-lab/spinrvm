@@ -4137,6 +4137,86 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
 
 ## P3 — Post-launch backlog (tracked, not gating)
 
+### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
+
+Full scenario-by-scenario matrix with file:line for all 45 rider/driver events:
+`docs/notification-channel-coverage.md`. Change Impact Log for what was fixed:
+`docs/change-log/2026-08-08-driver-lifecycle-email-channel.md`.
+
+_Closed by that branch (do not redo): the shared branded email layout + logo
+route, the lifecycle-email policy layer with its `app_settings` kill switch,
+driver approval/rejection/suspension/ban emails, document-expiry emails on all
+four tiers, the silent document-approval reactivation (D5), the verify/unverify
+policy bypass (D7/D8), the expiry-suspension priority tier (D13), and
+`email_enabled` becoming a real preference for OPTIONAL-class mail (X1)._
+
+Remaining, roughly in order of user impact:
+
+- [ ] **N1. Rider DSAR export assembles no data and sends no email (R10)** —
+  `POST /users/data-export` (`routes/users.py:124`) inserts a
+  `data_export_requests` row with a 30-day SLA and stops. Nothing builds the
+  export, nothing emails it, and the admin status-change endpoint
+  (`routes/admin/users.py:486`) notifies nobody either. A working export exists
+  driver-side (`routes/drivers/tax_exports.py:668`, handles rider-only
+  accounts at `:721`) but the rider app never calls it. **This is a PIPEDA
+  access-right obligation, not a nice-to-have** — own change, own review.
+- [ ] **N2. Corporate guest rides get no receipt (R26)** —
+  `auto_settle_guest_corporate` (`services/payment_service.py:679`, called from
+  `routes/drivers/ride_complete.py:747`) settles the ride but never calls
+  `send_ride_receipt`. A completed, charged ride with no receipt; GST/PST
+  line-item disclosure never reaches the payer.
+- [ ] **N3. Two push call sites pass the wrong ID and are silently dropped (X6)**
+  — `utils/payment_retry.py:183` passes `drivers.id` and `:412` passes
+  `ride["driver_id"]` where `user_id` is required; `features.py:1659` then finds
+  no user and drops the push at `:1661`. Every "Payout failed" notice from
+  `retry_stuck_payouts` is lost. Same defect shape at
+  `routes/admin/vehicle_fleet.py:541`, which passes `fcm_token`.
+- [ ] **N4. Rider blocked from booking is never told (R32)** — payment retries
+  exhausted (`utils/payment_retry.py:142`) notifies **admins only**. The rider
+  discovers it as a booking failure with no explanation.
+- [ ] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
+  (D29)** — `routes/rides/cancellation.py:356`. A driver en route to pickup
+  with a backgrounded app is not notified.
+- [ ] **N6. Stripe Connect KYC blocking payouts notifies nobody (D24)** —
+  `routes/webhooks.py:1297` → `services/stripe_kyc_sync.apply_account_update`
+  persists the cache columns and stops. A driver whose payouts Stripe has
+  blocked learns nothing.
+- [ ] **N7. Auto-reactivation after `suspended_until` lapses is silent (D21)** —
+  `utils/suspension_reactivation.py` writes an audit row; the driver is never
+  told they can work again.
+- [ ] **N8. Delete dead `utils/receipt_email.py` (X4)** — no production callers
+  (only `tests/test_receipt_email.py`), and it hardcodes `_GST_RATE = 0.05` /
+  `_PST_RATE = 0.06` (`:18-19`) instead of reading the service area, so it will
+  silently mis-tax if anyone wires it up. The name collision with the live
+  `utils/email_receipt.py` is itself a trap.
+- [ ] **N9. Five notification preferences are still dead columns (X2)** —
+  `sms_enabled`, `ride_updates`, `promotions`, `safety_alerts`,
+  `earnings_summary` are persisted, surfaced in the app, and read by nothing.
+  `earnings_summary` in particular is ignored by the statement job
+  (`utils/driver_statement_job.py`). Either wire them or remove them from the UI.
+- [ ] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
+  through to the legacy `users.fcm_token` column (`features.py:1664-1670`)
+  rather than `fcm_token_rider`. Works today only because registration still
+  mirrors both (`routes/notifications.py:329-336`); breaks silently if that
+  mirroring is ever removed.
+- [ ] **N11. Retrofit existing emails onto the shared layout** — the ride
+  receipt and Spinr Pass invoice are near-duplicate one-off templates using
+  `#ee2b2b` and a text wordmark; corporate OTP, admin broadcast and the DSAR
+  link are bare `<p>`/`<div>`; statements, corporate low-balance, KYB decisions
+  and signup ops are plain text only. Deliberately deferred: it changes mail
+  people already receive, so it needs a snapshot test pinning current output
+  **first**, then a feature flag. The receipt also sends `html` only, with no
+  plain-text alternative.
+- [ ] **N12. No visual/snapshot regression tooling for email** — standing gap.
+  `tests/test_email_layout.py` asserts the logo URL, brand colour and footer
+  lines are present, but nothing catches a layout that renders badly in Gmail,
+  Apple Mail or Outlook. Client rendering is verified by hand or not at all.
+- [ ] **N13. Rider-side lifecycle emails** — welcome (R4), email verification
+  (R5), email-address-change confirmation (R7, a security gap: no notice to the
+  old or new address), account-deletion confirmation (R9), refund (R29), wallet
+  top-up (R30), no-show fee (R21). The infrastructure now exists; only the
+  wiring and copy are missing.
+
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 
 _Implemented from the same audit (do not redo): tapped-suggestion coordinate

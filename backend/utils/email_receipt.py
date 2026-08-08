@@ -33,16 +33,43 @@ import httpx
 
 try:
     from ..repositories.ride_repo import create_route_snapshot_signed_url
+    from ..utils.company_details import CompanyDetails, load_company_details
+    from ..utils.email_layout import BRAND_RED as _LAYOUT_BRAND_RED
+    from ..utils.email_layout import footer_html as _layout_footer_html
+    from ..utils.email_layout import header_html as _layout_header_html
     from .datetime_utils import parse_iso_utc
 except ImportError:
     from repositories.ride_repo import create_route_snapshot_signed_url  # type: ignore
+    from utils.company_details import CompanyDetails, load_company_details  # type: ignore
     from utils.datetime_utils import parse_iso_utc
+    from utils.email_layout import BRAND_RED as _LAYOUT_BRAND_RED  # type: ignore
+    from utils.email_layout import footer_html as _layout_footer_html  # type: ignore
+    from utils.email_layout import header_html as _layout_header_html  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 _TWO_PLACES = Decimal("0.01")
 _ROUTE_FINALIZATION_WAIT_SECONDS = 4.0
 _ROUTE_FINALIZATION_POLL_SECONDS = 0.5
+
+# ── Pre-retrofit shell ──────────────────────────────────────────────────────
+# Kept verbatim so `branded_receipt_enabled = false` restores exactly what
+# riders were receiving, with no reconstruction from memory. Pinned by
+# tests/test_receipt_shell_snapshot.py. Delete these once the retrofit has
+# been seen in real inboxes and the flag is retired.
+_LEGACY_BRAND_RED = "#ee2b2b"
+_LEGACY_HEADER = (
+    '<tr><td style="background:#ee2b2b;padding:28px 24px;text-align:center;">\n'
+    '        <h1 style="color:#fff;margin:0;font-size:28px;font-weight:800;letter-spacing:-0.5px;">Spinr</h1>\n'
+    '          <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:14px;">Ride Receipt</p>\n'
+    "        </td></tr>"
+)
+_LEGACY_FOOTER = (
+    '<tr><td style="padding:16px 24px 24px;text-align:center;border-top:1px solid #f0f0f0;">\n'
+    '        <p style="color:#bbb;font-size:12px;margin:0;">Spinr Technologies Inc. · Saskatoon, SK</p>\n'
+    '          <p style="color:#bbb;font-size:11px;margin:4px 0 0;">support@spinr.ca · www.spinr.ca</p>\n'
+    "        </td></tr>"
+)
 
 
 def _d(v: Any) -> Decimal:
@@ -69,8 +96,16 @@ def _line(label: str, amount_html: str, *, label_color: str = "#666", amount_col
     )
 
 
-def _build_fare_rows(ride: Dict[str, Any], tip: Decimal) -> tuple[str, Decimal]:
+def _build_fare_rows(
+    ride: Dict[str, Any],
+    tip: Decimal,
+    accent: str = _LEGACY_BRAND_RED,
+) -> tuple[str, Decimal]:
     """Render the fare breakdown rows + return the grand total used in the header.
+
+    ``accent`` colours the grand-total row. It is threaded through rather than
+    hardcoded so the total does not stay legacy-red inside an otherwise
+    rebranded receipt — a mismatch that would read as a rendering bug.
 
     Reads ``tax_breakdown`` and ``area_fees_breakdown`` (migration 46) so
     the per-tax and per-fee amounts shown reconcile to ``grand_total``.
@@ -194,7 +229,7 @@ def _build_fare_rows(ride: Dict[str, Any], tip: Decimal) -> tuple[str, Decimal]:
     rows.append('<tr><td colspan="2" style="border-top:1px solid #eee;padding:0;"></td></tr>')
     rows.append(
         '<tr><td style="color:#1a1a1a;padding:8px 0;font-weight:700;font-size:16px;">Total</td>'
-        f'<td style="text-align:right;color:#ee2b2b;font-weight:800;font-size:18px;">${_fmt(grand_total_d)}</td></tr>'
+        f'<td style="text-align:right;color:{accent};font-weight:800;font-size:18px;">${_fmt(grand_total_d)}</td></tr>'
     )
 
     return "".join(rows), grand_total_d
@@ -297,10 +332,23 @@ def generate_receipt_html(
     tip: Decimal = Decimal(0),
     *,
     include_route_snapshot: bool = True,
+    company: Optional["CompanyDetails"] = None,
 ) -> str:
-    """Generate HTML receipt for a completed ride."""
+    """Generate HTML receipt for a completed ride.
+
+    Args:
+        company: Resolved company identity. When supplied, the receipt renders
+            with the shared branded shell — real logo, documented brand red, and
+            the company name and address from the admin Settings page. When
+            None it falls back to the original bespoke shell, byte-for-byte.
+
+    Stays synchronous so the fare-row tests can drive it directly; the async
+    caller (:func:`send_receipt_email`) resolves the identity and passes it,
+    gated on ``branded_receipt_enabled``.
+    """
     tip_d = _d(tip)
-    fare_rows, total_d = _build_fare_rows(ride, tip_d)
+    accent = _LAYOUT_BRAND_RED if company is not None else _LEGACY_BRAND_RED
+    fare_rows, total_d = _build_fare_rows(ride, tip_d, accent)
     total_str = _fmt(total_d)
 
     rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Rider"
@@ -344,6 +392,18 @@ def generate_receipt_html(
         </td></tr>
         """
 
+    # Shell only. Everything below the header — amount, route, fare rows,
+    # driver card — is identical either way apart from the accent colour; the
+    # flag governs the wrapper, not the tax-bearing content. See migration 288.
+    if company is not None:
+        header = _layout_header_html(company, "Ride Receipt")
+        footer = _layout_footer_html(company)
+        brand_name = company.name
+    else:
+        header = _LEGACY_HEADER
+        footer = _LEGACY_FOOTER
+        brand_name = "Spinr"
+
     return f"""
     <!DOCTYPE html>
     <html>
@@ -351,20 +411,17 @@ def generate_receipt_html(
     <body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:20px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
         <!-- Header -->
-        <tr><td style="background:#ee2b2b;padding:28px 24px;text-align:center;">
-        <h1 style="color:#fff;margin:0;font-size:28px;font-weight:800;letter-spacing:-0.5px;">Spinr</h1>
-          <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:14px;">Ride Receipt</p>
-        </td></tr>
+        {header}
 
         <!-- Greeting -->
         <tr><td style="padding:24px 24px 0;">
         <p style="color:#1a1a1a;font-size:16px;margin:0;">Hi {rider_name},</p>
-          <p style="color:#888;font-size:14px;margin:6px 0 0;">Thanks for riding with Spinr. Here's your receipt.</p>
+          <p style="color:#888;font-size:14px;margin:6px 0 0;">Thanks for riding with {brand_name}. Here's your receipt.</p>
         </td></tr>
 
         <!-- Amount -->
         <tr><td style="padding:20px 24px;text-align:center;">
-        <p style="color:#ee2b2b;font-size:42px;font-weight:800;margin:0;">${total_str} CAD</p>
+        <p style="color:{accent};font-size:42px;font-weight:800;margin:0;">${total_str} CAD</p>
           <p style="color:#999;font-size:12px;margin:4px 0 0;">{ride_date}</p>
           <p style="color:#999;font-size:11px;margin:6px 0 0;letter-spacing:0.5px;">Ride <strong style="color:#1a1a1a;font-weight:700;">{ride_ref}</strong></p>
         </td></tr>
@@ -378,7 +435,7 @@ def generate_receipt_html(
             <td style="width:24px;vertical-align:top;padding:4px 12px 4px 0;">
                 <div style="width:10px;height:10px;border-radius:5px;background:#10b981;margin:4px auto;"></div>
                 <div style="width:2px;height:24px;background:#ddd;margin:0 auto;"></div>
-                <div style="width:10px;height:10px;border-radius:5px;background:#ee2b2b;margin:0 auto;"></div>
+                <div style="width:10px;height:10px;border-radius:5px;background:{accent};margin:0 auto;"></div>
                 </td>
               <td>
                 <p style="color:#999;font-size:10px;margin:0;text-transform:uppercase;letter-spacing:0.5px;">Pickup</p>
@@ -411,14 +468,104 @@ def generate_receipt_html(
         </td></tr>
 
         <!-- Footer -->
-        <tr><td style="padding:16px 24px 24px;text-align:center;border-top:1px solid #f0f0f0;">
-        <p style="color:#bbb;font-size:12px;margin:0;">Spinr Technologies Inc. · Saskatoon, SK</p>
-          <p style="color:#bbb;font-size:11px;margin:4px 0 0;">support@spinr.ca · www.spinr.ca</p>
-        </td></tr>
+        {footer}
         </table>
     </body>
     </html>
     """
+
+
+async def _branded_company() -> Optional[CompanyDetails]:
+    """Resolved company identity, or None to keep the pre-retrofit shell.
+
+    Never raises: a settings failure falls back to the legacy shell rather than
+    dropping a receipt. The receipt is the one email a rider may actually need
+    later, so "send the old-looking one" always beats "send nothing".
+    """
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        settings = await get_app_settings()
+        if not bool(settings.get("branded_receipt_enabled", True)):
+            return None
+        return await load_company_details()
+    except Exception as exc:
+        logger.warning("receipt branding: falling back to the legacy shell: %s", exc)
+        return None
+
+
+def generate_receipt_text(
+    ride: dict,
+    rider: dict,
+    driver: dict = None,
+    tip: Decimal = Decimal(0),
+    *,
+    company: Optional["CompanyDetails"] = None,
+) -> str:
+    """Plain-text receipt, carrying the same disclosed line items as the HTML.
+
+    Not a courtesy copy: on a tax-bearing document the text part has to show
+    the same GST/PST breakdown, or a recipient reading it has an incomplete
+    record. Rows are derived from the same ``_build_fare_rows`` output the HTML
+    uses, so the two cannot list different charges.
+    """
+    tip_d = _d(tip)
+    fare_rows_html, total_d = _build_fare_rows(ride, tip_d)
+    rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Rider"
+    ride_ref = ride.get("ride_code") or (str(ride.get("id", ""))[:8].upper() or "—")
+    dt = parse_iso_utc(ride.get("ride_completed_at") or ride.get("created_at") or "")
+    ride_date = dt.strftime("%B %d, %Y at %I:%M %p") if dt else ""
+
+    lines = [
+        f"Hi {rider_name},",
+        "",
+        f"Thanks for riding with {company.name if company else 'Spinr'}. Here's your receipt.",
+        "",
+        f"Total: ${_fmt(total_d)} CAD",
+    ]
+    if ride_date:
+        lines.append(ride_date)
+    lines += [
+        f"Ride {ride_ref}",
+        "",
+        f"Pickup:  {ride.get('pickup_address', 'N/A')}",
+        f"Dropoff: {ride.get('dropoff_address', 'N/A')}",
+        "",
+        "Fare breakdown",
+    ]
+    lines += [f"  {label}  {amount}" for label, amount in _fare_rows_as_pairs(fare_rows_html)]
+    if driver:
+        driver_name = f"{driver.get('first_name', '')} {driver.get('last_name', '')}".strip() or driver.get(
+            "name", "Driver"
+        )
+        bits = [b for b in (driver.get("driver_code", ""), driver.get("driver_vehicle", "")) if b]
+        lines += ["", f"Driver: {driver_name}" + (f" ({' · '.join(bits)})" if bits else "")]
+    lines += ["", "--"]
+    if company is not None:
+        lines += [company.identity_line, company.contact_line]
+    else:
+        lines += ["Spinr Technologies Inc. · Saskatoon, SK", "support@spinr.ca · www.spinr.ca"]
+    return "\n".join(lines).strip() + "\n"
+
+
+def _fare_rows_as_pairs(fare_rows_html: str) -> list[tuple[str, str]]:
+    """Recover (label, amount) pairs from the rendered fare rows.
+
+    Reading back the HTML rather than re-deriving the rows is deliberate: it
+    makes it structurally impossible for the text part to list a different set
+    of charges than the HTML part of the same receipt.
+    """
+    import re as _re
+
+    pairs: list[tuple[str, str]] = []
+    for row in _re.findall(r"<tr>(.*?)</tr>", fare_rows_html, _re.S):
+        cells = [_re.sub(r"<[^>]+>", "", c).strip() for c in _re.findall(r"<td[^>]*>(.*?)</td>", row, _re.S)]
+        cells = [c for c in cells if c]
+        if len(cells) == 2:
+            pairs.append((cells[0], cells[1]))
+    return pairs
 
 
 def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
@@ -460,11 +607,17 @@ async def send_receipt_email(
 
     snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
     snapshot_bytes = await _download_route_snapshot(snapshot_url) if snapshot_url else None
+    company = await _branded_company()
     # Private Storage URLs expire. The email body must remain valid long after
     # delivery, so it contains only the quality note; the PDF and PNG contain
     # the immutable bytes downloaded while the signed URL was valid.
-    html = generate_receipt_html(ride, rider, driver, tip, include_route_snapshot=False)
+    html = generate_receipt_html(ride, rider, driver, tip, include_route_snapshot=False, company=company)
     total = _receipt_total(ride, tip)
+    # The receipt shipped HTML-only, so a text-only client, a screen reader or a
+    # blocked-image view got nothing at all — on the one email that doubles as a
+    # tax record. Both parts also let the provider build a real
+    # multipart/alternative, which helps inbox placement.
+    text = generate_receipt_text(ride, rider, driver, tip, company=company)
 
     try:
         from .email_provider import send_transactional_email
@@ -487,6 +640,10 @@ async def send_receipt_email(
             route_snapshot_bytes=snapshot_bytes,
             route_snapshot_note=snapshot_note,
             route_snapshot_is_actual=snapshot_is_actual,
+            # Same identity as the email body. If the attachment and the mail it
+            # arrives in named different companies, that would be worse than
+            # either being stale on its own.
+            company=company,
         )
         ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
         attachments.append({"filename": f"Spinr-receipt-{ref}.pdf", "content": pdf_bytes, "mime": "application/pdf"})
@@ -502,6 +659,7 @@ async def send_receipt_email(
         to=email,
         subject=f"Your Spinr ride receipt — ${total:.2f}",
         html=html,
+        text=text,
         default_from="receipts@spinr.ca",
         log_id=str(recipient_user_id or "-"),
         email_type="receipt",

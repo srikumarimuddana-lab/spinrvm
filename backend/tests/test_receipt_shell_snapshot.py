@@ -18,7 +18,8 @@ about the wrapper around it.
 
 import pytest
 
-from utils.email_receipt import generate_receipt_html
+from utils.company_details import CompanyDetails
+from utils.email_receipt import generate_receipt_html, generate_receipt_text
 
 pytestmark = [pytest.mark.unit]
 
@@ -119,3 +120,122 @@ def test_current_shell_footer_is_hardcoded():
     html = _html()
     assert "Spinr Technologies Inc." in html
     assert "support@spinr.ca" in html
+
+
+# --- Branded shell (branded_receipt_enabled = true) ------------------------
+
+_COMPANY = CompanyDetails(
+    name="Spinr Technologies Inc.",
+    address="220 3rd Ave S, Saskatoon SK S7K 1M1",
+    identity_line="Spinr Technologies Inc. — 220 3rd Ave S, Saskatoon SK S7K 1M1",
+    contact_line="help@spinr.ca · https://spinr.ca · +1 306 555 0100",
+    support_email="help@spinr.ca",
+    logo_url="https://api-spinr.spinr.ca/api/v1/branding/spinr-logo.png",
+)
+
+
+def _branded(**kwargs):
+    kwargs.setdefault("include_route_snapshot", False)
+    return generate_receipt_html(_RIDE, _RIDER, _DRIVER, company=_COMPANY, **kwargs)
+
+
+def test_branded_shell_shows_the_configured_company_name_and_address():
+    # The whole point of the retrofit: a receipt carries the company details an
+    # admin actually configured, not a constant compiled in months ago.
+    html = _branded()
+    assert "220 3rd Ave S, Saskatoon SK S7K 1M1" in html
+    assert "help@spinr.ca" in html
+
+
+def test_branded_shell_drops_the_hardcoded_footer():
+    assert "Spinr Technologies Inc. · Saskatoon, SK" not in _branded()
+    assert "www.spinr.ca" not in _branded()
+
+
+def test_branded_shell_renders_the_real_logo():
+    html = _branded()
+    assert f'src="{_COMPANY.logo_url}"' in html
+    assert ">Spinr</h1>" not in html, "the text wordmark should be gone"
+
+
+def test_branded_shell_uses_the_documented_brand_red():
+    html = _branded()
+    assert "#FF3B30" in html
+    assert "#ee2b2b" not in html
+
+
+def test_branded_greeting_follows_the_configured_name():
+    html = generate_receipt_html(
+        _RIDE, _RIDER, _DRIVER, include_route_snapshot=False, company=_COMPANY._replace(name="Northern Rides Inc.")
+    )
+    assert "Thanks for riding with Northern Rides Inc." in html
+
+
+# --- Content is identical either way ---------------------------------------
+#
+# The flag governs the wrapper. A receipt is a tax-bearing document, so its
+# disclosed charges must not depend on a presentation switch.
+
+
+@pytest.mark.parametrize("company", [None, _COMPANY])
+def test_disclosed_charges_are_the_same_under_both_shells(company):
+    html = generate_receipt_html(_RIDE, _RIDER, _DRIVER, include_route_snapshot=False, company=company)
+    assert "GST (5%)" in html
+    assert "PST (6%)" in html
+    assert "26.64" in html
+    assert "SPN-4417" in html
+
+
+def test_only_the_shell_differs_between_the_two():
+    """Strip both shells and the remaining body must be character-identical."""
+    legacy = generate_receipt_html(_RIDE, _RIDER, _DRIVER, include_route_snapshot=False, company=None)
+    branded = generate_receipt_html(_RIDE, _RIDER, _DRIVER, include_route_snapshot=False, company=_COMPANY)
+
+    def _body(html: str) -> str:
+        # Everything between the header block and the footer block.
+        start = html.index("<!-- Greeting -->")
+        end = html.index("<!-- Footer -->")
+        return html[start:end]
+
+    legacy_body, branded_body = _body(legacy), _body(branded)
+    # Two known, intentional shell bleeds into the body: the accent colour on
+    # the total and the route pin, and the company name in the greeting.
+    normalised = branded_body.replace("#FF3B30", "#ee2b2b").replace(
+        "Thanks for riding with Spinr Technologies Inc.", "Thanks for riding with Spinr"
+    )
+    assert normalised == legacy_body
+
+
+# --- Plain-text alternative ------------------------------------------------
+
+
+def test_text_receipt_carries_the_separate_tax_lines():
+    # A text-only client must not get a receipt missing its tax breakdown —
+    # that is the part of the document with a regulatory requirement behind it.
+    text = generate_receipt_text(_RIDE, _RIDER, _DRIVER, company=_COMPANY)
+    assert "GST (5%)" in text
+    assert "PST (6%)" in text
+
+
+def test_text_receipt_carries_total_reference_and_route():
+    text = generate_receipt_text(_RIDE, _RIDER, _DRIVER, company=_COMPANY)
+    assert "26.64" in text
+    assert "SPN-4417" in text
+    assert "220 3rd Ave S, Saskatoon" in text
+
+
+def test_text_receipt_lists_the_same_charges_as_the_html():
+    text = generate_receipt_text(_RIDE, _RIDER, _DRIVER, company=_COMPANY)
+    html = _branded()
+    for label in ("GST (5%)", "PST (6%)"):
+        assert label in text and label in html
+
+
+def test_text_receipt_contains_no_markup():
+    text = generate_receipt_text(_RIDE, _RIDER, _DRIVER, company=_COMPANY)
+    assert "<" not in text and ">" not in text
+
+
+def test_text_receipt_falls_back_to_the_legacy_footer_without_a_company():
+    text = generate_receipt_text(_RIDE, _RIDER, _DRIVER, company=None)
+    assert "Spinr Technologies Inc. · Saskatoon, SK" in text

@@ -1,6 +1,6 @@
--- verify_migrations_286_289.sql
+-- verify_migrations_286_291.sql
 --
--- Runtime verification for migrations 286-289 (ledger durability, double-entry
+-- Runtime verification for migrations 286-291 (ledger durability, double-entry
 -- legs, atomic card settlement, DSAR purge delete gate).
 --
 -- WHY THIS EXISTS
@@ -23,12 +23,12 @@
 --     from the rolled-back writes.
 --
 -- PREREQUISITE
---   Migrations 286-289 must already be applied:
+--   Migrations 286-291 must already be applied:
 --       cd backend && python scripts/migrate.py          # or --dry-run first
 --
 -- RUN
 --       psql "$PG_CONNECTION_STRING" -v ON_ERROR_STOP=1 \
---            -f backend/scripts/verify_migrations_286_289.sql
+--            -f backend/scripts/verify_migrations_286_291.sql
 --
 -- READ THE OUTPUT
 --   Every check prints "PASS: ..." or "FAIL: ...". The final block prints a
@@ -136,6 +136,64 @@ BEGIN
     END IF;
 EXCEPTION WHEN undefined_object THEN
     PERFORM pg_temp._skip('grants', 'a role (anon/authenticated/service_role) does not exist on this DB');
+END $$;
+
+
+-- ===========================================================================
+-- 1b. TABLE grants — the finding both the security and migration audits
+--     raised as a BLOCKER. RLS policies only NARROW a grant; they do not
+--     remove it. Both ledger tables carry a permissive
+--     `FOR INSERT WITH CHECK (true)` policy with no TO clause, so the
+--     table-level GRANT is the only thing standing between the anon key
+--     (shipped in the mobile apps) and a forged tax-ledger row.
+--
+--     A forged header PLUS a self-balancing pair of legs would pass the
+--     financial_event_entries_unbalanced check silently — defeating the exact
+--     tamper-evidence control these tables exist to provide. Migrations 290
+--     (parent) and 286 (child) close it; this proves it on the live DB.
+-- ===========================================================================
+DO $$
+DECLARE r record; leaked text := '';
+BEGIN
+    FOR r IN
+        SELECT t.tbl, g.rolname, p.priv
+        FROM (VALUES ('financial_events'),('financial_event_entries')) AS t(tbl)
+        CROSS JOIN (VALUES ('anon'),('authenticated')) AS g(rolname)
+        CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE')) AS p(priv)
+        WHERE has_table_privilege(g.rolname, t.tbl, p.priv)
+    LOOP
+        leaked := leaked || r.tbl || '/' || r.rolname || '/' || r.priv || ' ';
+    END LOOP;
+
+    IF leaked = ''
+        THEN PERFORM pg_temp._ok('grants: anon/authenticated cannot WRITE either ledger table');
+        ELSE PERFORM pg_temp._bad('grants: anon/authenticated cannot WRITE either ledger table',
+             'CRITICAL — forged ledger rows are possible via PostgREST: ' || leaked);
+    END IF;
+
+    -- anon should not even be able to read them
+    IF has_table_privilege('anon', 'financial_events', 'SELECT')
+        OR has_table_privilege('anon', 'financial_event_entries', 'SELECT')
+        THEN PERFORM pg_temp._bad('grants: anon cannot SELECT ledger tables', 'anon retains SELECT');
+        ELSE PERFORM pg_temp._ok('grants: anon cannot SELECT ledger tables');
+    END IF;
+
+    -- authenticated keeps SELECT on the parent (RLS scopes it to own rows)
+    IF has_table_privilege('authenticated', 'financial_events', 'SELECT')
+        THEN PERFORM pg_temp._ok('grants: authenticated retains SELECT on financial_events (RLS scopes it)');
+        ELSE PERFORM pg_temp._bad('grants: authenticated retains SELECT on financial_events',
+             'revoked too far — riders can no longer read their own ledger rows');
+    END IF;
+
+    -- the trial-balance view must not be readable by either JWT role
+    IF has_table_privilege('anon', 'financial_event_entries_unbalanced', 'SELECT')
+        OR has_table_privilege('authenticated', 'financial_event_entries_unbalanced', 'SELECT')
+        THEN PERFORM pg_temp._bad('grants: unbalanced view is admin-only',
+             'JWT roles can read system-wide unbalanced-entry data');
+        ELSE PERFORM pg_temp._ok('grants: unbalanced view is admin-only');
+    END IF;
+EXCEPTION WHEN undefined_object OR undefined_table THEN
+    PERFORM pg_temp._skip('table grants', 'a role or table does not exist on this DB');
 END $$;
 
 
@@ -554,7 +612,7 @@ BEGIN
 
     RAISE NOTICE '';
     RAISE NOTICE '==========================================================';
-    RAISE NOTICE ' migrations 286-289 verification: % passed, % failed, % skipped', p, f, s;
+    RAISE NOTICE ' migrations 286-291 verification: % passed, % failed, % skipped', p, f, s;
     RAISE NOTICE '==========================================================';
 
     IF f > 0 THEN

@@ -121,6 +121,31 @@ CREATE POLICY financial_event_entries_select ON financial_event_entries
 
 -- No UPDATE or DELETE policies → denied by default.
 
+-- RLS POLICIES ARE NOT ENOUGH — the table-level GRANTs must be revoked too.
+-- Supabase grants anon/authenticated default CRUD on new public-schema tables,
+-- and the INSERT policy above is WITH CHECK (true) with no TO clause, so it
+-- applies to PUBLIC. Without these REVOKEs any holder of the publishable anon
+-- key (shipped in rider-app/driver-app) could POST to
+-- /rest/v1/financial_event_entries and inject arbitrary legs against any
+-- event_id — including a self-balancing debit/credit pair, which would sail
+-- straight past financial_event_entries_unbalanced, the very tamper-evidence
+-- control this table exists to provide.
+--
+-- Exact pattern from migration 142 (which had to retrofit this onto disputes +
+-- nine corporate money tables) and migration 151, whose comment states it
+-- plainly: "any authenticated anon-key JWT could INSERT/UPDATE/DELETE payment
+-- rows" without it. The backend writes through service_role, which bypasses
+-- both RLS and these grants, so nothing legitimate is affected.
+REVOKE ALL ON financial_event_entries FROM anon;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON financial_event_entries FROM authenticated;
+GRANT  SELECT ON financial_event_entries TO authenticated;
+
+-- The trial-balance view is admin-only by intent. A view executes with its
+-- OWNER's privileges for RLS purposes unless created WITH (security_invoker),
+-- and the migration runner owns it — so the base table's RLS does NOT protect
+-- it. Revoke explicitly rather than relying on that.
+REVOKE ALL ON financial_event_entries_unbalanced FROM anon, authenticated;
+
 -- Tamper-evidence trigger, matching financial_events_no_mutate — but scoped to
 -- UPDATE only, NOT DELETE.
 --

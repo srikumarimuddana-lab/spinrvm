@@ -839,7 +839,11 @@ async def _finalize_card_settlement(
     except ImportError:
         from repositories import ledger_repo  # type: ignore
 
-    amount_cents = int(_round(settled_amount * Decimal("100")))
+    # ledger_service.to_cents, not int(_round(x * 100)): the latter quantizes to
+    # 2dp-of-a-cent then TRUNCATES, so a non-2dp Decimal would round down by a
+    # cent. Harmless with today's already-rounded inputs, but there is no reason
+    # to keep a second dollars->cents formula alive next to the canonical one.
+    amount_cents = ledger_service.to_cents(settled_amount)
     use_rpc = await _atomic_settle_enabled()
     legacy_reason: Optional[str] = None
 
@@ -865,7 +869,19 @@ async def _finalize_card_settlement(
             legacy_reason = "rpc_unavailable"
         except Exception as err:
             # Ambiguous: the transaction may or may not have committed.
-            logger.error("[PAYMENT] atomic settle ambiguous error for ride {} — re-reading state: {}", ride_id, err)
+            # .opt(exception=err) not a bare {} format: run_sync wraps DB
+            # failures in DatabaseError, whose __str__ is the useless constant
+            # "Database operation failed". Without the traceback AND
+            # details["original"], the Sentry page for the single
+            # highest-stakes "did the charge commit?" path in the whole feature
+            # would carry no Postgres error code at all (CLAUDE.md: include
+            # e.details["original"] for DatabaseError).
+            logger.opt(exception=err).error(
+                "[PAYMENT] atomic settle ambiguous error for ride {} — re-reading state: {} (original={})",
+                ride_id,
+                err,
+                (getattr(err, "details", None) or {}).get("original", "n/a"),
+            )
             fresh = None
             try:
                 fresh = await db_supabase.get_ride(ride_id)
@@ -877,6 +893,21 @@ async def _finalize_card_settlement(
                 # (fresh event id — the paid-gate lives in the RPC, not in
                 # record_payment_event). Surface the stuck state instead;
                 # payment_retry + daily reconciliation own the recovery.
+                #
+                # Explicit tagged escalation, not just the generic logger->Sentry
+                # bridge: the rider is told "our team has been notified", so
+                # on-call needs a taggable signal for THIS class rather than
+                # having to grep message text.
+                ledger_service._escalate(
+                    "SETTLEMENT STUCK — atomic RPC ambiguous and ride state unreadable",
+                    {
+                        "ride_id": ride_id,
+                        "user_id": rider_id,
+                        "payment_intent_id": payment_intent_id,
+                        "amount_cents": amount_cents,
+                    },
+                    alert=ledger_service.ALERT_SETTLEMENT_UNVERIFIABLE,
+                )
                 return PaymentResult(
                     success=False,
                     error="Payment was captured but confirmation failed. Do not retry — our team has been notified.",

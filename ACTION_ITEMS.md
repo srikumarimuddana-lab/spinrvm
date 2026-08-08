@@ -3552,6 +3552,48 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   three documents reconciled with whichever is chosen; `data-retention.md`
   extended to cover Steps H–M.
 
+### B19. `payment_retry`'s `requires_capture` hold-recovery still uses the non-atomic two-write settlement
+- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- **What:** `backend/utils/payment_retry.py` (the `requires_capture` branch) still
+  does `Stripe capture → record_payment_event → separate update_ride` — the exact
+  sequence PR #3464 replaced in `settle_card`'s two success paths with the atomic
+  `settle_ride_card_payment` RPC. It was not wired to `_finalize_card_settlement`.
+- **Severity:** low-moderate. It *does* inherit the durable-retry + Sentry
+  escalation for free (it goes through the now-centralized
+  `ledger_service.record_event`), so a lost header there is no longer silently
+  swallowed — but the process-death window between the capture and the two writes
+  is still open on this path. PR #3464 declared its blast radius as "the two
+  settle_card success paths only", so this is a known partial close, not a
+  regression.
+- **Acceptance:** route the branch through `_finalize_card_settlement` so it picks
+  up the flagged atomic path, with a test mirroring `test_atomic_settle.py`'s
+  exactly-one-header matrix.
+
+### B20. Ledger projection can misclassify a tip when a ride is stuck unpaid
+- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- **What:** `backend/utils/ledger_projection.py::_decompose` (default fare branch)
+  reads `rides.driver_earnings` / `tax_amount` at projection time without checking
+  `rides.payment_status`. Migration 287's 30-minute grace window covers the normal
+  header-before-`update_ride` gap, but not a ride whose post-charge DB update failed
+  and wasn't recovered within ~30-45 min (the path that returns 503 + a Sentry page).
+  In that case the projection reads pre-tip earnings and books the tip to
+  `platform_revenue` instead of `driver_payable`.
+- **Severity:** low, and confined to the internal accounting overlay.
+  `rides.driver_earnings` (the actual payout figure feeding T4A and driver
+  statements) and `financial_events.delta_cents` (the tax record) are both
+  unaffected, and the resulting legs still balance — so no unbalanced-legs alert
+  fires and no driver is underpaid. It is a mis-attribution inside the double-entry
+  view only.
+- **Why not fixed inline:** the obvious fix (add `rides.payment_status = 'paid'` to
+  migration 287's work-queue filter) is wrong as stated — cancellation-fee and
+  notice-fee events legitimately point at rides that are cancelled, not paid, and a
+  blanket filter would exclude them from projection permanently. A correct fix has
+  to be source-aware, and the Python-side alternative (skip and retry next tick)
+  reintroduces the head-of-queue starvation risk the degraded-legs design exists to
+  avoid. Needs a deliberate design pass, not a one-liner.
+- **Acceptance:** source-aware settlement check with no starvation regression, plus
+  a projection test covering a stuck-`processing` fare ride.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

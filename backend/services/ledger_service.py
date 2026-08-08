@@ -218,6 +218,12 @@ ALERT_HEADER_LOST = "ledger_write_failed"
 ALERT_LEGS_LOST = "ledger_legs_lost"
 ALERT_LEGS_UNBALANCED = "ledger_legs_unbalanced"
 ALERT_LEGS_DEGRADED = "ledger_legs_degraded"
+# Settlement could not be confirmed either way — the atomic RPC returned an
+# ambiguous error AND the follow-up ride re-read failed, so we cannot tell
+# whether the charge committed. The rider is shown "our team has been
+# notified", which makes this the one tag that must always have a human
+# behind it. Highest severity here.
+ALERT_SETTLEMENT_UNVERIFIABLE = "settlement_state_unverifiable"
 
 
 def _escalate(message: str, context: Dict[str, Any], alert: str = ALERT_HEADER_LOST) -> None:

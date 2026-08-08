@@ -289,8 +289,46 @@ async def _insert_many_with_retry(table: str, rows: List[Dict[str, Any]], *, wha
     return await _attempt_insert(lambda: db_supabase.insert_many(table, rows), what=what)
 
 
+def _client_unavailable() -> bool:
+    """True when the Supabase client was never initialised.
+
+    This has to be checked explicitly because ``insert_one`` and
+    ``insert_many`` return ``None``/``[]`` in that state WITHOUT raising
+    (repositories/_base.py). A bare ``await do_insert(); return True`` therefore
+    reports the 7-year CRA/SK tax-ledger row as durably written when nothing
+    reached a database at all — precisely the silent swallow CLAUDE.md forbids
+    on a payment path, and invisible because it produces no exception to log.
+
+    Production always has the client, so the reachable case is a startup init
+    that failed or was skipped while the app went on serving traffic — which is
+    exactly when a false "written" costs the most.
+
+    Reads ``repositories._base.supabase``, not ``db_supabase.supabase``:
+    db_supabase only re-exports the CRUD helpers, so ``db_supabase.insert_one``
+    IS ``_base.insert_one`` and reads _base's globals. Checking the re-export
+    would test a binding the writer never consults (the same reason
+    tests/conftest.py patches both spellings).
+    """
+    try:
+        from ..repositories import _base
+    except ImportError:  # python -m backend.server vs top-level
+        from repositories import _base  # type: ignore
+
+    return not getattr(_base, "supabase", None)
+
+
 async def _attempt_insert(do_insert, *, what: str) -> bool:
     """Shared retry loop. Returns True on success (or duplicate)."""
+    if _client_unavailable():
+        # Not retried: no number of attempts fixes an absent client, and the
+        # caller's escalation is the point — a lost ledger row must be loud.
+        logger.error(
+            "[LEDGER] {} NOT WRITTEN — Supabase client is not initialised, so the insert "
+            "would silently no-op. Reporting failure rather than a false success.",
+            what,
+        )
+        return False
+
     last_err: Optional[Exception] = None
     for attempt in range(_INSERT_ATTEMPTS):
         try:

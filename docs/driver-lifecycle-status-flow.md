@@ -234,18 +234,52 @@ daily purge. Login is refused outright at that point.
 Two distinct classes. Conflating them is what produced the endless
 "finish your vehicle info" push.
 
-**A. Lifecycle notices** — one push, fired on *entering* a status.
+**A. Lifecycle notices** — one push, fired on *entering* a status, plus an
+email for the statuses in `EMAIL_STATUSES`.
 Policy: `backend/utils/driver_status_notifications.py`.
 
-| Entering | Title | Tier | Fired from |
+| Entering | Title | Tier | Email | Fired from |
+|---|---|---|---|---|
+| `pending` | *(none)* | — | — | Signup screen shows the next step |
+| `active` | "You're Approved! 🎉" / "Account Restored! ✅" / "Account Reactivated! ✅" | `normal` | ✅ | approve / unban / reactivate; document approval that clears the last pending doc |
+| `needs_review` | "Changes Under Review" | `normal` | ❌ | Driver's own vehicle edit or doc re-upload; admin override |
+| `rejected` | "Application Update" + reason | **`account`** | ✅ | reject action; admin override |
+| `suspended` | "Account Suspended ⚠️" + reason | **`account`** | ✅ | suspend action; admin override |
+| `banned` | "Account Deactivated" | **`account`** | ✅ | ban action; admin override |
+| soft-deleted | **never** | — | — | `should_notify_driver` returns False on `deleted_at` |
+
+`needs_review` is the one deliberate email exclusion: it fires on every
+driver-triggered vehicle edit and document re-upload, so emailing it would turn
+routine self-service into inbox noise.
+
+**A2. Verification toggle** — `verification_message()`, keyed on the
+`is_verified` flag rather than a status, since the flag moves independently.
+Copy is byte-identical to what `admin_verify_driver` sent inline before it was
+routed through the policy.
+
+| Action | Title | Tier | Email |
 |---|---|---|---|
-| `pending` | *(none)* | — | Signup screen shows the next step |
-| `active` | "You're Approved! 🎉" / "Account Restored! ✅" / "Account Reactivated! ✅" | `normal` | approve / unban / reactivate |
-| `needs_review` | "Changes Under Review" | `normal` | Driver's own vehicle edit or doc re-upload; admin override |
-| `rejected` | "Application Update" + reason | **`account`** | reject action; admin override |
-| `suspended` | "Account Suspended ⚠️" + reason | **`account`** | suspend action; admin override |
-| `banned` | "Account Deactivated" | **`account`** | ban action; admin override |
-| soft-deleted | **never** | — | `should_notify_driver` returns False on `deleted_at` |
+| verify | "Account Verified! ✅" | `normal` | ✅ |
+| unverify | "Verification Update ⚠️" | `normal` | ✅ |
+
+Both stay on `normal` deliberately. `is_verified` is not what gates earning —
+`routes/drivers/status.py:361` records that `status` became the single source of
+truth for going online, and the remaining check at `:174` only applies when
+`status != "active"`. So un-verifying an already-active driver does not stop
+them working, and the notice must not bypass the push opt-out the way a genuine
+account block does.
+
+**A3. Document expiry** — `backend/utils/document_expiry.py`, not the policy
+module, but it follows the same tier rule.
+
+| Event | Tier | Email |
+|---|---|---|
+| Expiring in 7 / 1 / 0 days | `normal` | ✅ |
+| Expired → auto-suspended | **`account`** | ✅ |
+
+The warning tiers stay on `normal` because the driver can still work until the
+document actually expires. The suspension is on `account` for the same reason
+`rejected`/`suspended`/`banned` are: the driver can no longer earn.
 
 **B. Recurring reminders** — repeating daily nudge, only where the driver has
 work to do. Policy: `backend/utils/driver_onboarding_reminder_rules.py`.
@@ -290,7 +324,10 @@ constraint and the notice is silently dropped.
 | `unban` / `reactivate` always land on `active` | `backend/routes/admin/drivers.py` | Unbanning a never-approved driver silently approves them |
 | No status transition guard | Throughout | Unlike rides (`_require_ride_in_state`), driver status has no central transition validator — any admin action can move any status to any other |
 | Re-review ignores ride state | `backend/routes/drivers/profile.py:195` | A driver mid-trip can be dropped to `needs_review` and forced offline. They are now notified, but the transition itself is still unguarded |
-| `admin_verify_driver` bypasses the notification policy | `backend/routes/admin/drivers.py` | Sends its own push directly rather than through `notify_driver_status_change`, so it does not get the `deleted_at` recipient guard |
+| ~~`admin_verify_driver` bypasses the notification policy~~ | — | **Closed 2026-08-08.** Now routes through `notify_driver_status_change` via `verification_message()`, so it gets the `deleted_at` guard and the email channel |
+| Moving a driver back to `pending` notifies nothing | `backend/utils/driver_status_notifications.py:159` | `status_message()` returns `None` for `pending`. Correct at signup; silent when an admin deliberately demotes someone |
+| Auto-reactivation is silent | `backend/utils/suspension_reactivation.py` | When `suspended_until` lapses the driver is restored but never told they can work again — tracked as N7 in `ACTION_ITEMS.md` |
+| Stripe Connect KYC block is silent | `backend/routes/webhooks.py:1297` | A driver whose payouts Stripe has blocked learns nothing — tracked as N6 |
 
 Fixed on 2026-07-30: the `reject` handler, the `rejected`/`needs_review`
 reachability mismatch, status-override sending no notice, and the silent

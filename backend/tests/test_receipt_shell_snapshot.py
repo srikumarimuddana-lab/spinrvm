@@ -171,6 +171,21 @@ def test_branded_greeting_follows_the_configured_name():
     assert "Thanks for riding with Northern Rides Inc." in html
 
 
+def test_a_name_ending_in_a_period_does_not_produce_a_double_stop():
+    # "… Inc." is the common shape of a configured legal name, and the sentence
+    # supplies its own full stop.
+    html = generate_receipt_html(
+        _RIDE, _RIDER, _DRIVER, include_route_snapshot=False, company=_COMPANY._replace(name="Acme Inc.")
+    )
+    assert "Acme Inc.." not in html
+    assert "Thanks for riding with Acme Inc. Here's your receipt." in html
+
+
+def test_the_same_holds_in_the_text_part():
+    text = generate_receipt_text(_RIDE, _RIDER, _DRIVER, company=_COMPANY._replace(name="Acme Inc."))
+    assert "Acme Inc.." not in text
+
+
 # --- Content is identical either way ---------------------------------------
 #
 # The flag governs the wrapper. A receipt is a tax-bearing document, so its
@@ -201,7 +216,7 @@ def test_only_the_shell_differs_between_the_two():
     # Two known, intentional shell bleeds into the body: the accent colour on
     # the total and the route pin, and the company name in the greeting.
     normalised = branded_body.replace("#FF3B30", "#ee2b2b").replace(
-        "Thanks for riding with Spinr Technologies Inc.", "Thanks for riding with Spinr"
+        "Thanks for riding with Spinr Technologies Inc.", "Thanks for riding with Spinr."
     )
     assert normalised == legacy_body
 

@@ -86,6 +86,9 @@ result = await ledger_repo.settle_ride_card_payment(
 
 ## 10. What was NOT verified
 
-- The RPC itself has never executed against a real Postgres (pglast parse only — noted in migration 288's commit). **Staging run + a real settle with the flag on is required before production enablement.**
+> **UPDATE 2026-08-08 — the database layer of this gap is now CLOSED.** The repo owner applied migrations 286–291 to a real Postgres and ran `backend/scripts/verify_migrations_286_291.sql`; **all checks passed**. See `docs/change-log/2026-08-08-migration-verification-result.md` for exactly what that proved and what it did not. The items below are corrected in place; anything still outstanding is called out there.
+
+
+- ~~The RPC itself has never executed against a real Postgres.~~ **Executed and asserted 2026-08-08**: the paid-gate returns NULL on replay without writing a second header, the header lands in the same transaction as the ride flip, a downward tip correction claws back `driver_earnings`, earnings clamp at zero, and unknown-ride / negative-amount are rejected. This was the one piece of new logic whose money-correctness claim rested purely on code review. **Still required before production enablement: a real settle with the flag on** — the Python↔RPC round trip (notably `p_metadata` JSONB encoding through supabase-py, and `ledger_repo`'s error translation against a real PostgREST error) is still only exercised against mocks.
 - The ambiguous-error recovery is exercised against mocks; a genuine mid-transaction connection drop against live Supabase has not been reproduced.
 - `p_metadata` JSONB round-tripping through supabase-py's RPC param encoding is assumed (dict → JSON), not verified against a live PostgREST.

@@ -98,6 +98,9 @@ Migrations 290/291 are grant/index changes with the rollback SQL in each header;
 
 ## 10. What was NOT verified
 
-- **The grants themselves have still never been applied.** This fix is exactly the class of thing a mocked test suite cannot exercise — which is why it survived review in the first place. The verification script now asserts all of it (`has_table_privilege` for both roles × four write privileges × both tables, plus the view and the preserved-SELECT case), but **that script has not been run** — no Postgres was reachable. Running it on staging is the only thing that actually proves this fix.
+> **UPDATE 2026-08-08 — the database layer of this gap is now CLOSED.** The repo owner applied migrations 286–291 to a real Postgres and ran `backend/scripts/verify_migrations_286_291.sql`; **all checks passed**. See `docs/change-log/2026-08-08-migration-verification-result.md` for exactly what that proved and what it did not. The items below are corrected in place; anything still outstanding is called out there.
+
+
+- ~~The grants themselves have still never been applied.~~ **Applied and asserted 2026-08-08 — the blocker is genuinely closed.** `anon`/`authenticated` hold no INSERT/UPDATE/DELETE/TRUNCATE on either ledger table, `anon` cannot SELECT either, the unbalanced view is unreadable by both JWT roles, and — proving the lockdown did not over-revoke — `authenticated` **retains** SELECT on `financial_events` so riders can still read their own rows. `service_role` retains EXECUTE on all three RPCs, confirming the `REVOKE ... FROM PUBLIC` did not silently strip its inherited rights.
 - Migration 291's index has not been built, so its effect on the work-queue plan is reasoned from the query shape, not measured. The script prints the `EXPLAIN` output as advisory info when run.
 - Whether `anon` currently holds the default grants at all is environment-dependent (it is inferred from migrations 142/151 having needed the same fix). If the verification script reports the grants were already absent, the fix is a no-op — which is a fine outcome and worth knowing either way.

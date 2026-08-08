@@ -93,5 +93,8 @@ Pure `CREATE OR REPLACE` both ways: re-apply 58's trigger body and 285's purge b
 
 ## 10. What was NOT verified
 
-- **No runtime execution** — no real Postgres reachable from this environment, and trigger/GUC interplay cannot be exercised by pglast. Staging verification runbook before relying on it: (1) apply 289; (2) `SELECT purge_pii_retention(true)` dry run; (3) real run; (4) in psql, a manual `UPDATE financial_events ...` and a manual `DELETE FROM financial_events ...` must BOTH still raise.
+> **UPDATE 2026-08-08 — the database layer of this gap is now CLOSED.** The repo owner applied migrations 286–291 to a real Postgres and ran `backend/scripts/verify_migrations_286_291.sql`; **all checks passed**. See `docs/change-log/2026-08-08-migration-verification-result.md` for exactly what that proved and what it did not. The items below are corrected in place; anything still outstanding is called out there.
+
+
+- ~~No runtime execution.~~ **The gate was executed and asserted 2026-08-08**, under all four attacks the runbook called for: UPDATE stays blocked *even with the gate open*; DELETE is blocked when the gate is shut; DELETE is blocked when the GUC holds a truthy-looking non-`'true'` value; DELETE succeeds only with the gate open; and — the case the runbook did not think to ask for — the GUC rolls back with an aborted subtransaction, so a purge failing midway cannot leave the tax ledger deletable. What remains unexercised is a full `purge_pii_retention` run against data old enough to reach Step H, which by construction is years away.
 - The purge has never executed against data old enough to reach Step H anywhere; first true exercise is years away by construction.

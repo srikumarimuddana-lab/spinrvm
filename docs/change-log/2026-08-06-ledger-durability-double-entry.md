@@ -209,18 +209,24 @@ Three independent levers, none requiring a deploy:
 
 ## 10. What was NOT verified
 
+> **UPDATE 2026-08-08 — the database layer of this gap is now CLOSED.** Migrations 286–291 were applied to a real Postgres and `backend/scripts/verify_migrations_286_291.sql` passed all checks. See `docs/change-log/2026-08-08-migration-verification-result.md`.
+
+
 Stated explicitly rather than left to silence:
 
-- **Migration 286 was never executed.** No Supabase instance was reachable, and standing up a
-  local Postgres was blocked by the sandbox (`su`/`chown` denied). The SQL *was* parsed with
-  `pglast` (libpg_query — the real PostgreSQL parser), which accepted all 11 statements with the
-  expected node types (CreateStmt, IndexStmt, ViewStmt, AlterTableStmt, 2×CreatePolicyStmt,
-  CreateFunctionStmt, DoStmt, 2×CommentStmt). **That proves syntax, not semantics** — it does not
-  validate that the FK target exists, that RLS behaves as intended, that the trigger fires
-  correctly, or that the view returns what it claims. **Run it against staging before enabling
-  the flag.** The reconciliation balance check degrades to an info log if the table is absent, so
-  an unmigrated production is safe; the flag must stay off until the migration is applied.
-- **The double-entry path has never executed against a real Postgres.** The `CHECK` constraints
+- ~~**Migration 286 was never executed.**~~ **Applied and asserted 2026-08-08.** The
+  semantics the pglast parse could not reach are now proven: the FK target resolves, the
+  `ON DELETE CASCADE` takes legs with their header, the append-only trigger blocks UPDATE,
+  the `unbalanced` view both ignores a balanced entry and catches a lopsided one, and every
+  CHECK rejects what it should. The migration also gained a `REVOKE` block after the security
+  audit — see `docs/change-log/2026-08-08-ledger-grant-lockdown.md`; the grants are asserted
+  too. The flag may now be enabled on the strength of the DB layer; an end-to-end run with
+  it on is still outstanding.
+- ~~**The double-entry path has never executed against a real Postgres.**~~ **Corrected
+  2026-08-08 — the DB layer is verified** (see
+  `docs/change-log/2026-08-08-migration-verification-result.md`). What follows was the
+  position before that run; the Python leg-writing path driving those constraints on real
+  data is still unexercised. Originally: the `CHECK` constraints
   (`account IN (...)`, `amount_cents > 0`) and the `UNIQUE (event_id, account, side)` index are
   exercised only against mocked `insert_one` in tests. Agreement between the Python
   `LEDGER_ACCOUNTS` set and the SQL CHECK is maintained by hand, not enforced.

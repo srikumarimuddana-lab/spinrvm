@@ -67,6 +67,28 @@ _LOCK_KEY = "spinr:ledger:projection:lock"
 _LOOP_NAME = "ledger_projection (15min)"
 _BATCH_LIMIT = 200
 
+# Per-tick sleep jitter, as a fraction of the interval, so replicas don't tick
+# in lockstep. Minimum sleep is therefore interval * (1 - _JITTER_FRACTION).
+_JITTER_FRACTION = 0.1
+
+# The throttle lock's TTL must be SHORTER than that minimum sleep. Longer, and
+# the pod that ran the last tick wakes to find its OWN key still alive, fails
+# SET NX, and sleeps another full interval — so the loop ticks every ~2
+# intervals and the documented 15-minute cadence silently becomes ~30, halving
+# backfill throughput.
+#
+# Deliberate divergence from payment_retry.py, whose `interval * 1.5` (and the
+# comment claiming it "expires before the next election") has exactly that bug.
+# Filed as ACTION_ITEMS B21 rather than changed here — those loops have their
+# own tuning and blast radius.
+#
+# The cost of the shorter TTL is a brief window each cycle where no pod holds
+# the lock, so two replicas can occasionally run the same tick. That is
+# harmless by construction: correctness comes from UNIQUE(event_id, account,
+# side) plus the whole-batch insert, and this lock is only ever a throttle
+# (module docstring). The extra 0.05 leaves headroom under the 0.9 floor.
+_LOCK_TTL_SECONDS = int(LEDGER_PROJECTION_INTERVAL_SECONDS * (1 - _JITTER_FRACTION - 0.05))
+
 # Ride columns needed to decompose a process_payment charge. Explicit list —
 # never select * in a loop (payment_retry idiom). discount_amount is required,
 # not optional: driver_earnings is computed pre-discount while the rider is
@@ -272,7 +294,7 @@ async def ledger_projection_loop() -> None:
     logger.info("Ledger projection loop started (interval={}s)", LEDGER_PROJECTION_INTERVAL_SECONDS)
     while True:
         try:
-            acquired = await redis_set_nx(_LOCK_KEY, _pod_id(), int(LEDGER_PROJECTION_INTERVAL_SECONDS * 1.5))
+            acquired = await redis_set_nx(_LOCK_KEY, _pod_id(), _LOCK_TTL_SECONDS)
             if acquired:
                 await project_pending_legs()
         except Exception:
@@ -280,5 +302,5 @@ async def ledger_projection_loop() -> None:
         # Heartbeat on both the acquired and lock-skipped paths so follower
         # replicas still look alive to the watchdog.
         _record_heartbeat(_LOOP_NAME)
-        delta = LEDGER_PROJECTION_INTERVAL_SECONDS * 0.1
+        delta = LEDGER_PROJECTION_INTERVAL_SECONDS * _JITTER_FRACTION
         await asyncio.sleep(LEDGER_PROJECTION_INTERVAL_SECONDS + random.uniform(-delta, delta))

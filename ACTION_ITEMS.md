@@ -3594,6 +3594,35 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
 - **Acceptance:** source-aware settlement check with no starvation regression, plus
   a projection test covering a stuck-`processing` fare ride.
 
+### B21. Background-loop lock TTL is longer than the sleep, halving several loops' cadence
+- [ ] **Status:** open — found 2026-08-08 reviewing PR #3464. Fixed in
+  `ledger_projection.py` only; the other loops are untouched.
+- **What:** the shared loop-shell idiom sets the Redis throttle lock with
+  `TTL = interval * 1.5` and then sleeps `interval` (± jitter). The pod that ran
+  the last tick therefore wakes while its OWN key is still alive, fails `SET NX`,
+  and sleeps another full interval — so the loop actually runs every ~2 intervals.
+  `payment_retry.py:629` states the intent explicitly and gets the arithmetic
+  backwards: *"TTL is 1.5× interval so a real lock expires before the next
+  election."* It does not.
+- **Where:** `utils/payment_retry.py` (5 min → ~10), `utils/driver_claim_reaper.py`,
+  `utils/offer_expiry_reaper.py`, `utils/orphaned_hold_reconciler.py`
+  (`interval * 2` → ~3 intervals). Not audited beyond this list.
+- **Severity:** low individually, but it silently halves throughput on sweeps
+  whose whole purpose is bounded recovery latency — `payment_retry` is the one to
+  look at first, since a failed payment waits ~10 min per attempt rather than 5.
+  With several replicas the aggregate cadence lands nearer 1.5× than 2×, so it
+  degrades quietly rather than visibly.
+- **Why not fixed here:** each loop has its own interval, jitter, and multi-replica
+  behaviour, and shortening the TTL trades exclusivity for cadence — safe only
+  where the tick is idempotent by construction (as the projection's is, via
+  `UNIQUE(event_id, account, side)`). `payment_retry` has the atomic
+  `payment_status → retrying` claim so it is very likely also safe, but that is a
+  money path and deserves its own change, not a drive-by.
+- **Acceptance:** per-loop TTL below the minimum sleep, each with a test pinning
+  the invariant (see `test_lock_ttl_expires_before_the_earliest_next_wake` and
+  `test_projection_loop_reacquires_its_own_lock_on_the_next_wake`), and
+  `payment_retry.py`'s misleading comment corrected.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

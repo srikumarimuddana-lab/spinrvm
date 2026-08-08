@@ -111,6 +111,19 @@ def test_promo_ride_projects_fully_not_degraded():
     assert by[(ls.ACCT_PLATFORM_REVENUE, ls.CREDIT)] == 250
 
 
+def test_lock_ttl_expires_before_the_earliest_next_wake():
+    """The arithmetic behind test_projection_loop_reacquires_its_own_lock...
+
+    Stated as an invariant so a future tuning change to the interval or the
+    jitter can't silently re-break the cadence.
+    """
+    min_sleep = lp.LEDGER_PROJECTION_INTERVAL_SECONDS * (1 - lp._JITTER_FRACTION)
+    assert lp._LOCK_TTL_SECONDS < min_sleep, (
+        f"lock TTL {lp._LOCK_TTL_SECONDS}s must expire before the shortest "
+        f"possible sleep ({min_sleep}s), or the loop skips its own next tick"
+    )
+
+
 def test_ride_columns_fetch_discount_amount():
     """The promo fix is only live if the projection actually SELECTs the column.
 

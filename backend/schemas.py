@@ -297,6 +297,14 @@ class AppSettings(BaseModel):
     # Distribution list for safety-incident transactional emails. See
     # migration 95 + the _notify_safety_team helper in features.py.
     safety_alert_emails: str = ""
+    # ── Lifecycle-email kill switch ──────────────────────────────────────
+    # Single off switch for every email sent through
+    # utils/email_notifications.py (driver approval/rejection/suspension,
+    # document expiry, …). Push is unaffected — flipping this false leaves
+    # every existing notification path exactly as it was before those emails
+    # were added, without a redeploy. Receipts, statements, invoices, tax and
+    # DSAR mail do NOT route through that module and are not covered here.
+    lifecycle_emails_enabled: bool = True
     # ── SOS on-call paging (ACTION_ITEMS.md B15(b)) ───────────────────────
     # Real on-call paging for rider/driver SOS, on top of the admin WS
     # broadcast + safety_alert_emails above. Lives here (not .env) for the

@@ -37,7 +37,14 @@ Deliberately **not** done: widening Step H's `foreign_key_violation`-only handle
 - `financial_event_entries` cascade is unobstructed by design: 286's entries trigger is UPDATE-only.
 - Pre-289 purge firings keep failing exactly as today — applying the migration is strictly monotonic improvement; there is no Python-side ordering hazard (the purge is invoked by name via RPC from `utils/retention_purge.py`).
 
-**Adjacent landmine found during this work, NOT fixed (needs its own design):** Step B's `DELETE FROM rides` at 7 years has **no** exception handler, and `financial_events.ride_id REFERENCES rides(id)` with default NO ACTION — once rides age past 7 years while their ledger rows are retained, Step B will 23503 and abort the purge before Step H is even reached. Dormant until ~2033 (no ride is near 7y old). Options when addressed: NULL `ride_id` before the ride delete, or an `ON DELETE SET NULL` migration on the FK. Recorded here so it is not re-discovered.
+**Adjacent landmine found during this work, NOT fixed (needs its own design) — now tracked as `ACTION_ITEMS.md` B17.** Step B's `DELETE FROM rides` at 7 years has **no** exception handler, and `financial_events.ride_id REFERENCES rides(id)` with default NO ACTION — once rides age past 7 years while their ledger rows are retained, Step B will 23503 and abort the purge.
+
+The 2026-08-07 regulatory audit of this PR corrected my initial framing twice, both times making it **worse** than first written here:
+
+- It does not abort "before Step H is reached" in any contained way — it aborts the **entire transaction**, rolling back Step A and never reaching Steps C–M. GPS anonymization, chat/token/stripe-event cleanup and every other regulatory window stop too, repeating daily.
+- It is *more* likely to fire than the Step H bug this migration fixes, not less. Step H needs a deletion request **plus** 7 years; Step B needs only the passage of time on any paid ride — and no purge step ever deletes non-DSAR `financial_events` rows, so essentially every aged paid ride carries a referencing row. Step B also has **no** per-row isolation, where Step H at least had a per-account handler.
+
+Timing: 7 years after the first paid ride. The "~2033" originally written here was an unverified guess and is withdrawn — the real date depends on the earliest retained paid ride. Options when addressed: NULL `ride_id` before the ride delete, migrate the FK to `ON DELETE SET NULL`, or give Step B per-batch exception isolation — each with a different consequence for the tax record's ability to link a charge to its trip, so it is a retention-policy call, not just schema.
 
 ## 5. User-experience effect
 

@@ -147,6 +147,16 @@ def _charge_event_metadata(ride: dict | None, tip_amount: Decimal | None) -> Dic
                 # Keys keep the legacy *_address names for reader compatibility.
                 "pickup_address": area_only(ride.get("pickup_address")) or "",
                 "dropoff_address": area_only(ride.get("dropoff_address")) or "",
+                # GST/PST as charged. NOT the remittance source of truth —
+                # routes/admin/compliance.py reads rides.tax_breakdown directly,
+                # the same field the rider receipt renders from. This copy
+                # exists because the ride row is hard-deleted at 7 years
+                # (purge_pii_retention Step B) while this ledger row is
+                # retained, so without it the surviving tax record for an aged
+                # charge would be an undifferentiated delta_cents. Mirrors what
+                # record_refund_event already captures via tax_reversed.
+                "tax_amount": str(_round(_d(ride.get("tax_amount") or 0))),
+                "tax_breakdown": ride.get("tax_breakdown") or {},
             }
         )
     return meta

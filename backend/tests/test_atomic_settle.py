@@ -108,19 +108,78 @@ async def test_flag_on_rpc_owns_both_writes():
     assert result.success is True
 
 
+_EXTRAS = {"payment_method_id": "pm_new", "card_brand": None, "card_last4": None}
+
+
 @pytest.mark.anyio
-async def test_flag_on_display_extras_follow_best_effort():
-    extras = {"payment_method_id": "pm_new", "card_brand": None, "card_last4": None}
+async def test_flag_on_display_extras_written_once_when_healthy():
     with (
         patch.object(ps, "_atomic_settle_enabled", AsyncMock(return_value=True)),
         patch.object(ledger_repo, "settle_ride_card_payment", AsyncMock(return_value="evt_1")),
         patch.object(ps, "record_payment_event", AsyncMock()),
-        patch.object(ps.db_supabase, "update_ride", AsyncMock(side_effect=RuntimeError("db blip"))) as upd,
+        patch.object(ps.db_supabase, "update_ride", AsyncMock()) as upd,
         patch.object(ps.manager, "send_personal_message", AsyncMock()),
     ):
-        result = await _finalize(extra_ride_fields=extras)
+        result = await _finalize(extra_ride_fields=_EXTRAS)
 
-    upd.assert_awaited_once_with(RIDE_ID, extras)
+    upd.assert_awaited_once_with(RIDE_ID, _EXTRAS)
+    assert result.success is True
+
+
+@pytest.mark.anyio
+async def test_flag_on_display_extras_retry_then_succeed():
+    """On the legacy path these fields ride the same update_ride as the paid
+    flip. Under the RPC they are the one thing that lost atomicity, so a
+    transient blip must not be the end of it."""
+    calls = {"n": 0}
+
+    async def flaky(_ride_id, _fields):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("db blip")
+        return {}
+
+    with (
+        patch.object(ps, "_atomic_settle_enabled", AsyncMock(return_value=True)),
+        patch.object(ledger_repo, "settle_ride_card_payment", AsyncMock(return_value="evt_1")),
+        patch.object(ps, "record_payment_event", AsyncMock()),
+        patch.object(ps.db_supabase, "update_ride", side_effect=flaky),
+        patch.object(ps, "_DISPLAY_FOLLOWUP_BACKOFF_SECONDS", (0, 0)),
+        patch.object(ps.ledger_service, "escalate") as escalate,
+        patch.object(ps.manager, "send_personal_message", AsyncMock()),
+    ):
+        result = await _finalize(extra_ride_fields=_EXTRAS)
+
+    assert calls["n"] == 3, "must retry up to the attempt budget"
+    escalate.assert_not_called(), "a recovered write is not an incident"
+    assert result.success is True
+
+
+@pytest.mark.anyio
+async def test_flag_on_display_extras_exhausted_escalates_but_still_succeeds():
+    """The stale-card state must become KNOWN — a bare log meant nobody
+    learned the admin view was pointing at the rejected card. It still cannot
+    fail a settled payment."""
+    with (
+        patch.object(ps, "_atomic_settle_enabled", AsyncMock(return_value=True)),
+        patch.object(ledger_repo, "settle_ride_card_payment", AsyncMock(return_value="evt_1")),
+        patch.object(ps, "record_payment_event", AsyncMock()),
+        patch.object(ps.db_supabase, "update_ride", AsyncMock(side_effect=RuntimeError("db down"))) as upd,
+        patch.object(ps, "_DISPLAY_FOLLOWUP_BACKOFF_SECONDS", (0, 0)),
+        patch.object(ps.ledger_service, "escalate") as escalate,
+        patch.object(ps.manager, "send_personal_message", AsyncMock()) as ws,
+    ):
+        result = await _finalize(extra_ride_fields=_EXTRAS)
+
+    assert upd.await_count == ps._DISPLAY_FOLLOWUP_ATTEMPTS
+    escalate.assert_called_once()
+    assert escalate.call_args.kwargs["alert"] == ps.ALERT_CARD_DISPLAY_STALE
+    # PIPEDA: the escalation context carries field NAMES, never card values.
+    ctx = escalate.call_args[0][1]
+    assert ctx["ride_id"] == RIDE_ID
+    assert ctx["fields"] == sorted(_EXTRAS.keys())
+    assert "pm_new" not in str(ctx)
+    ws.assert_awaited_once(), "the rider is still told the payment completed"
     assert result.success is True, "display-only follow-up failure cannot fail a settled payment"
 
 

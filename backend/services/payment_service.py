@@ -5,6 +5,7 @@ Each settlement function handles one payment method and returns a result
 dict; the route handler maps results to HTTP responses.
 """
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -785,6 +786,65 @@ async def _fire_guest_purchase_conversion(ride: dict, ride_id: str, charged_amou
 # ── Card (Stripe) settlement ─────────────────────────────────────────
 
 
+# Bounded retry for the display-only follow-up write on the atomic-settle
+# path. Short and matched to the ledger writer's budget: the money is already
+# committed and the request is holding.
+_DISPLAY_FOLLOWUP_ATTEMPTS = 3
+_DISPLAY_FOLLOWUP_BACKOFF_SECONDS = (0.2, 0.5)
+
+# NOT a money alert — the ride is paid and the ledger header is written. It
+# says the admin ride-detail view will keep showing the REJECTED card until
+# something rewrites those fields.
+ALERT_CARD_DISPLAY_STALE = "ride_card_display_stale"
+
+
+async def _write_display_fields(ride_id: str, fields: Dict[str, Any]) -> bool:
+    """Persist the Change-Card display fields after an atomic settle.
+
+    Deliberately NOT folded into settle_ride_card_payment, even though that
+    would make them atomic with the paid flip. These are a display cache:
+    ``card_brand``/``card_last4`` are re-derived from the PaymentIntent and
+    written back by routes/admin/rides.py::_resolve_ride_card whenever they are
+    null, and ``payment_method_id`` has no reader once the ride is paid (a paid
+    ride is out of payment_retry's scan set and will not be settled again). So
+    the failure is a stale cache that self-heals, and widening a SECURITY
+    DEFINER money function's signature — plus re-verifying an already-applied
+    one — costs more than it prevents. Display state does not belong in a money
+    transaction.
+
+    What the failure DID need is to stop being invisible: a single best-effort
+    attempt with a bare log meant nobody learned the admin view was wrong.
+    Bounded retry, then a tagged escalation — the same shape this module uses
+    for a lost leg write, and for the same reason (the authoritative record is
+    already durable; this is the derived view).
+
+    Returns True when the fields are persisted.
+    """
+    last_err: Optional[Exception] = None
+    for attempt in range(_DISPLAY_FOLLOWUP_ATTEMPTS):
+        try:
+            await db_supabase.update_ride(ride_id, dict(fields))
+            return True
+        except Exception as err:
+            last_err = err
+            if attempt < _DISPLAY_FOLLOWUP_ATTEMPTS - 1:
+                await asyncio.sleep(_DISPLAY_FOLLOWUP_BACKOFF_SECONDS[attempt])
+
+    logger.opt(exception=last_err).error(
+        "[PAYMENT] display-field follow-up FAILED after {} attempts for ride {} "
+        "(money already settled; admin will show the rejected card): {}",
+        _DISPLAY_FOLLOWUP_ATTEMPTS,
+        ride_id,
+        last_err,
+    )
+    ledger_service.escalate(
+        "RIDE CARD DISPLAY STALE — settled ride still points at the replaced card",
+        {"ride_id": ride_id, "fields": sorted(fields.keys())},
+        alert=ALERT_CARD_DISPLAY_STALE,
+    )
+    return False
+
+
 async def _atomic_settle_enabled() -> bool:
     """Read the ledger_atomic_settle_enabled flag. Off on any read failure."""
     # Lazy dual import: the module-level except-branch import list is managed
@@ -940,13 +1000,13 @@ async def _finalize_card_settlement(
                 return PaymentResult(success=True, already_paid=True, charged_amount=_money_str(settled_amount))
             if extra_ride_fields:
                 # Display-only follow-up (card repoint / cleared brand cache).
-                try:
-                    await db_supabase.update_ride(ride_id, dict(extra_ride_fields))
-                except Exception:
-                    logger.opt(exception=True).error(
-                        "[PAYMENT] display-field follow-up failed for ride {} (money already settled)",
-                        ride_id,
-                    )
+                # Retried and escalated rather than best-effort-and-forget: on
+                # the legacy path these fields ride the same update_ride as the
+                # paid flip, so under the RPC they are the one thing that lost
+                # atomicity. They are a self-healing cache (see
+                # _write_display_fields), so the fix is visibility, not a wider
+                # money-function signature.
+                await _write_display_fields(ride_id, extra_ride_fields)
             await _send_payment_completed_ws(ride_id, rider_id, settled_amount)
             return PaymentResult(success=True, charged_amount=_money_str(settled_amount))
     if legacy_reason:

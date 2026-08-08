@@ -68,8 +68,11 @@ _LOOP_NAME = "ledger_projection (15min)"
 _BATCH_LIMIT = 200
 
 # Ride columns needed to decompose a process_payment charge. Explicit list —
-# never select * in a loop (payment_retry idiom).
-_RIDE_COLUMNS = "id,total_fare,grand_total,tax_amount,driver_earnings,tip_amount"
+# never select * in a loop (payment_retry idiom). discount_amount is required,
+# not optional: driver_earnings is computed pre-discount while the rider is
+# charged post-discount, so without it every promo ride looks like a fare whose
+# parts exceed the whole. See build_charge_legs.
+_RIDE_COLUMNS = "id,total_fare,grand_total,tax_amount,driver_earnings,tip_amount,discount_amount"
 
 # Set after the first "function does not exist" error so a partial deploy
 # (code live, migration 287 not yet applied) logs once, not every 15 minutes.
@@ -149,6 +152,10 @@ def _decompose(event: Dict[str, Any], ride: Optional[Dict[str, Any]]) -> tuple:
         total_cents=amount,
         driver_cents=to_cents(ride.get("driver_earnings")),
         tax_cents=to_cents(ride.get("tax_amount")),
+        # The rider paid `amount` (post-discount); the driver is owed a share
+        # computed pre-discount. promo_expense carries the difference, which is
+        # what keeps the entry balanced instead of degrading.
+        promo_cents=to_cents(ride.get("discount_amount")),
     )
     if legs:
         return legs, False, None

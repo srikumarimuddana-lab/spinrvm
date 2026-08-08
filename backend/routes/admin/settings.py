@@ -214,6 +214,10 @@ class SettingsUpdateRequest(BaseModel):
     # falls back to the bundled asset for anything that is not an absolute
     # http(s) URL. Does NOT affect report PDF/Excel/Word headers.
     company_logo_url: Optional[str] = None
+    # Renders the ride receipt and Spinr Pass invoice with the shared branded
+    # shell and the company details above. Presentation only — never the fare
+    # rows, GST/PST line items or totals. See migration 288.
+    branded_receipt_enabled: Optional[bool] = None
     # Locks the rider's quoted fare at booking time so the receipt can't
     # drift if Maps changes the route mid-trip. Toggle on the Settings page.
     fare_lock_enabled: Optional[bool] = None

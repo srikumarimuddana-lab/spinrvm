@@ -312,6 +312,19 @@ class AppSettings(BaseModel):
     # were added, without a redeploy. Receipts, statements, invoices, tax and
     # DSAR mail do NOT route through that module and are not covered here.
     lifecycle_emails_enabled: bool = True
+    # ── Branded receipt / invoice retrofit ────────────────────────────────
+    # The ride receipt and Spinr Pass invoice predate the shared email layout
+    # and shipped their own bespoke shell: legacy #ee2b2b, a text wordmark,
+    # a hardcoded company footer and no plain-text alternative. True renders
+    # them with the real logo, the documented brand red, and the company name
+    # and address from the Company Info card above.
+    #
+    # Defaults TRUE because the point of the retrofit is that a receipt should
+    # show the company details an admin actually configured. False restores the
+    # previous shell byte-for-byte, without a redeploy, if it renders badly in
+    # a real inbox. The fare rows, GST/PST line items and totals are outside
+    # this switch entirely — the flag only governs the wrapper.
+    branded_receipt_enabled: bool = True
     # ── SOS on-call paging (ACTION_ITEMS.md B15(b)) ───────────────────────
     # Real on-call paging for rider/driver SOS, on top of the admin WS
     # broadcast + safety_alert_emails above. Lives here (not .env) for the

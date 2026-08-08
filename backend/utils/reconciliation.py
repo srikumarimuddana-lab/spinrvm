@@ -207,40 +207,46 @@ async def _check_leg_completeness() -> None:
 async def _check_entry_balance(date) -> None:  # noqa: ANN001
     """Alert on any double-entry journal whose legs do not net to zero.
 
-    Reads the financial_event_entries_unbalanced view (migration 286), which is
-    expected to be permanently empty. A row means a leg builder produced a
-    lopsided entry or a partial leg write survived — an accounting defect, so
-    it is logged at error even though no rider is affected.
+    An unbalanced entry means a leg builder produced a lopsided set or a partial
+    leg write survived — an accounting defect, so it is logged at error even
+    though no rider is affected. The expected result is always zero rows.
+
+    Goes through the migration-293 RPC rather than filtering the
+    financial_event_entries_unbalanced view (migration 286) directly. The view
+    exposes ``MIN(created_at) AS created_at``, an AGGREGATE OUTPUT, and Postgres
+    cannot push a predicate on one below the GROUP BY — so
+    ``view WHERE created_at >= day`` re-aggregated the ENTIRE table every night
+    just to discard everything outside the day (~20M rows within a year at the
+    projected ~19k events/day × ~3 legs). The RPC applies the date bound inside
+    the aggregate, where it can be pushed down onto migration 292's index.
 
     Never raises: this is an observability check bolted onto the end of the
     reconciliation run and must not mask the Stripe-vs-ledger result above. The
-    table is absent until migration 286 is applied, which is not an error.
+    function is absent until migration 293 is applied, which is not an error.
     """
+    # Lazy dual imports — see _check_leg_completeness for why this module keeps
+    # them in the function body rather than at module scope.
     try:
-        from db_supabase import run_sync  # type: ignore
-        from supabase_client import supabase  # type: ignore
+        from db_supabase import rpc  # type: ignore
     except ImportError:
-        from ..db_supabase import run_sync  # type: ignore
-        from ..supabase_client import supabase  # type: ignore
+        from ..db_supabase import rpc  # type: ignore
 
-    day_start = datetime(date.year, date.month, date.day, tzinfo=timezone.utc).isoformat()
-    day_end = (datetime(date.year, date.month, date.day, tzinfo=timezone.utc) + timedelta(days=1)).isoformat()
+    day_start_dt = datetime(date.year, date.month, date.day, tzinfo=timezone.utc)
+    day_start = day_start_dt.isoformat()
+    day_end = (day_start_dt + timedelta(days=1)).isoformat()
 
     try:
-        rows = await run_sync(
-            lambda: (
-                supabase.table("financial_event_entries_unbalanced")
-                .select("event_id,debit_cents,credit_cents,imbalance_cents")
-                .gte("created_at", day_start)
-                .lt("created_at", day_end)
-                .execute()
+        unbalanced = (
+            await rpc(
+                "financial_event_entries_unbalanced_between",
+                {"p_start": day_start, "p_end": day_end},
             )
+            or []
         )
     except Exception:
-        logger.info(f"reconciliation: entry-balance check unavailable for {date} (migration 286 not applied?)")
+        logger.info(f"reconciliation: entry-balance check unavailable for {date} (migrations 286/292/293 not applied?)")
         return
 
-    unbalanced = rows.data or []
     if not unbalanced:
         logger.info(f"reconciliation: {date} double-entry legs balanced")
         return

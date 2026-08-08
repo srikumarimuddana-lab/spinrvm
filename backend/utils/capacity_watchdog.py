@@ -136,8 +136,76 @@ def _sustained(signal: str, tripped: bool) -> bool:
     return _consecutive[signal] >= SUSTAIN_TICKS
 
 
-async def _post_alert(signal: str, text: str, webhook_url: str) -> None:
-    """Post one alert, respecting the per-signal cooldown.
+def _alert_recipients() -> list:
+    """Parse ALERT_EMAIL_TO into a recipient list (comma-separated)."""
+    try:
+        from ..core.config import settings
+    except ImportError:  # pragma: no cover - non-package entrypoint
+        from core.config import settings  # type: ignore
+
+    raw = getattr(settings, "ALERT_EMAIL_TO", None) or ""
+    return [addr.strip() for addr in raw.split(",") if addr.strip()]
+
+
+async def _send_webhook(signal: str, body: str, webhook_url: str) -> bool:
+    """Post to the Slack-compatible webhook. Returns True on success."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(webhook_url, json={"text": body})
+            resp.raise_for_status()
+        logger.info("capacity_watchdog: posted %s webhook alert", signal)
+        return True
+    except Exception as exc:
+        # Never swallow silently — a watchdog that cannot alert is worse than
+        # no watchdog, because it looks like everything is fine.
+        logger.error("capacity_watchdog: failed to post %s webhook: %s", signal, exc, exc_info=True)
+        return False
+
+
+async def _send_email(signal: str, subject: str, body: str, recipients: list) -> bool:
+    """Email the alert via the same SES/Resend path receipts use.
+
+    Returns True if at least one recipient was accepted. A per-recipient failure
+    does not abort the rest — during an incident, reaching three of four people
+    is worth more than an all-or-nothing send.
+
+    Note the provider suppression list applies here as it does everywhere: an
+    address that previously hard-bounced is skipped silently by
+    send_transactional_email. That is why ALERT_EMAIL_TO should be a shared
+    inbox or list, not one individual.
+    """
+    try:
+        from .email_provider import send_transactional_email
+    except ImportError:  # pragma: no cover - non-package entrypoint
+        from utils.email_provider import send_transactional_email  # type: ignore
+
+    any_sent = False
+    for addr in recipients:
+        try:
+            sent = await send_transactional_email(
+                to=addr,
+                subject=subject,
+                text=body,
+                # log_id is a PII-safe correlation tag; the recipient address is
+                # never logged by the provider.
+                log_id="capacity",
+                email_type="ops_alert",
+            )
+            any_sent = any_sent or bool(sent)
+        except Exception as exc:
+            logger.error(
+                "capacity_watchdog: failed to email %s alert: %s", signal, exc, exc_info=True
+            )
+    return any_sent
+
+
+async def _post_alert(signal: str, text: str, webhook_url: Optional[str]) -> None:
+    """Fan one alert out to every configured channel, respecting the cooldown.
+
+    Webhook and email are attempted INDEPENDENTLY — a dead Slack workspace must
+    not cost you the email, and vice versa. The cooldown is stamped only if at
+    least one channel actually delivered, so a total delivery failure is retried
+    on the next tick instead of being silently throttled away for 30 minutes.
 
     The "never alerted" case is an explicit ``None``, NOT a 0.0 default.
     ``time.monotonic()`` counts from an arbitrary origin that is near zero early
@@ -151,17 +219,25 @@ async def _post_alert(signal: str, text: str, webhook_url: str) -> None:
     if last_sent is not None and now - last_sent < COOLDOWN_SECONDS:
         return
 
-    payload = {"text": f"{text}\nReplica: `{_machine_id()}`\nRunbook: docs/runbooks/capacity-scaling.md"}
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(webhook_url, json=payload)
-            resp.raise_for_status()
+    recipients = _alert_recipients()
+    if not webhook_url and not recipients:
+        return  # no channel configured — stay quiet (dev/test)
+
+    body = f"{text}\nReplica: {_machine_id()}\nRunbook: docs/runbooks/capacity-scaling.md"
+
+    delivered = False
+    if webhook_url:
+        delivered = await _send_webhook(signal, body, webhook_url) or delivered
+    if recipients:
+        subject = f"[Spinr capacity] {signal} on {_machine_id()}"
+        delivered = await _send_email(signal, subject, body, recipients) or delivered
+
+    if delivered:
         _last_alerted[signal] = now
-        logger.info("capacity_watchdog: posted %s alert", signal)
-    except Exception as exc:
-        # Never swallow silently — a watchdog that cannot alert is worse than
-        # no watchdog, because it looks like everything is fine.
-        logger.error("capacity_watchdog: failed to post %s webhook: %s", signal, exc, exc_info=True)
+    else:
+        logger.error(
+            "capacity_watchdog: %s alert reached NO channel — will retry next tick", signal
+        )
 
 
 async def _tick(webhook_url: Optional[str]) -> None:
@@ -191,15 +267,14 @@ async def _tick(webhook_url: Optional[str]) -> None:
             "capacity_watchdog: DB pool saturated",
             extra={"queue_depth": queue_depth, "max_workers": stats["max_workers"]},
         )
-        if webhook_url:
-            await _post_alert(
-                "db_pool_saturation",
-                f":warning: *Spinr DB pool saturated*\n"
-                f"Queue depth *{queue_depth}* (> {QUEUE_DEPTH_THRESHOLD}) for "
-                f"{SUSTAIN_TICKS} consecutive ticks; pool {stats['threads']}/{stats['max_workers']} threads.\n"
-                f"Likely the Supabase tier, which does not autoscale — consider upgrading it.",
-                webhook_url,
-            )
+        await _post_alert(
+            "db_pool_saturation",
+            f":warning: *Spinr DB pool saturated*\n"
+            f"Queue depth *{queue_depth}* (> {QUEUE_DEPTH_THRESHOLD}) for "
+            f"{SUSTAIN_TICKS} consecutive ticks; pool {stats['threads']}/{stats['max_workers']} threads.\n"
+            f"Likely the Supabase tier, which does not autoscale — consider upgrading it.",
+            webhook_url,
+        )
 
     # --- Signal 2: DB calls being rejected outright ------------------------
     # Circuit-open is immediate: the breaker only opens after real failures, so
@@ -209,29 +284,27 @@ async def _tick(webhook_url: Optional[str]) -> None:
             "capacity_watchdog: DB circuit breaker rejecting calls",
             extra={"circuit_open_delta": circuit_open_delta, "breaker_state": breaker_state},
         )
-        if webhook_url:
-            await _post_alert(
-                "db_circuit_open",
-                f":rotating_light: *Spinr DB circuit breaker OPEN*\n"
-                f"*{int(circuit_open_delta)}* calls rejected since last tick "
-                f"(breaker state: `{breaker_state}`).\n"
-                f"The database is already failing — check Supabase status and tier.",
-                webhook_url,
-            )
+        await _post_alert(
+            "db_circuit_open",
+            f":rotating_light: *Spinr DB circuit breaker OPEN*\n"
+            f"*{int(circuit_open_delta)}* calls rejected since last tick "
+            f"(breaker state: `{breaker_state}`).\n"
+            f"The database is already failing — check Supabase status and tier.",
+            webhook_url,
+        )
     elif rejected_delta:
         # Deadline exhaustion/timeout: real, but less acute than an open circuit.
         logger.warning(
             "capacity_watchdog: DB calls rejected",
             extra={"rejected_delta": rejected_delta, "breaker_state": breaker_state},
         )
-        if webhook_url:
-            await _post_alert(
-                "db_calls_rejected",
-                f":warning: *Spinr DB calls rejected*\n"
-                f"*{int(rejected_delta)}* rejected since last tick "
-                f"(breaker state: `{breaker_state}`, queue depth {queue_depth}).",
-                webhook_url,
-            )
+        await _post_alert(
+            "db_calls_rejected",
+            f":warning: *Spinr DB calls rejected*\n"
+            f"*{int(rejected_delta)}* rejected since last tick "
+            f"(breaker state: `{breaker_state}`, queue depth {queue_depth}).",
+            webhook_url,
+        )
 
     # --- Signal 3: users being rate-limited in volume ----------------------
     violations_per_min = None
@@ -246,15 +319,14 @@ async def _tick(webhook_url: Optional[str]) -> None:
             "capacity_watchdog: sustained rate-limit violations",
             extra={"violations_per_min": violations_per_min},
         )
-        if webhook_url:
-            await _post_alert(
-                "rate_limit_pressure",
-                f":warning: *Spinr shedding traffic via rate limits*\n"
-                f"~*{int(violations_per_min or 0)}* violations/min "
-                f"(> {RATE_LIMIT_VIOLATIONS_PER_MIN_THRESHOLD}) for {SUSTAIN_TICKS} ticks.\n"
-                f"Either a genuine burst, or a limit set too low — check which path in /metrics.",
-                webhook_url,
-            )
+        await _post_alert(
+            "rate_limit_pressure",
+            f":warning: *Spinr shedding traffic via rate limits*\n"
+            f"~*{int(violations_per_min or 0)}* violations/min "
+            f"(> {RATE_LIMIT_VIOLATIONS_PER_MIN_THRESHOLD}) for {SUSTAIN_TICKS} ticks.\n"
+            f"Either a genuine burst, or a limit set too low — check which path in /metrics.",
+            webhook_url,
+        )
 
 
 async def capacity_watchdog_loop() -> None:

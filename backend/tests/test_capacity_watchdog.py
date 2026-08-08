@@ -330,6 +330,187 @@ async def test_tick_without_webhook_still_refreshes_metrics(monkeypatch, alerts)
     assert alerts.signals == []
 
 
+# --------------------------------------------------------------------------
+# Email channel
+# --------------------------------------------------------------------------
+
+
+class _EmailRecorder:
+    def __init__(self, result=True):
+        self.sent = []
+        self._result = result
+
+    async def __call__(self, **kwargs):
+        self.sent.append(kwargs)
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+@pytest.fixture
+def emails(monkeypatch):
+    recorder = _EmailRecorder()
+    import utils.email_provider as ep
+
+    monkeypatch.setattr(ep, "send_transactional_email", recorder)
+    return recorder
+
+
+def _patch_recipients(monkeypatch, value):
+    monkeypatch.setattr(cw, "_alert_recipients", lambda: value)
+
+
+@pytest.mark.asyncio
+async def test_email_only_config_still_alerts(monkeypatch, emails):
+    """Email must work with NO webhook configured — the guard used to be
+    `if webhook_url:` around every alert, which would have made an email-only
+    setup completely silent."""
+    _patch_recipients(monkeypatch, ["ops@spinr.ca"])
+    _patch_stats(monkeypatch, queue_depth=cw.QUEUE_DEPTH_THRESHOLD + 10)
+    _patch_metrics(monkeypatch)
+
+    for _ in range(cw.SUSTAIN_TICKS):
+        await cw._tick(None)  # no webhook at all
+
+    assert len(emails.sent) == 1
+    assert emails.sent[0]["to"] == "ops@spinr.ca"
+    assert "db_pool_saturation" in emails.sent[0]["subject"]
+
+
+@pytest.mark.asyncio
+async def test_email_body_carries_the_numbers_replica_and_runbook(monkeypatch, emails):
+    _patch_recipients(monkeypatch, ["ops@spinr.ca"])
+    monkeypatch.setenv("FLY_MACHINE_ID", "d891ee3f4a2b18")
+
+    await cw._post_alert("db_pool_saturation", "Queue depth 73", None)
+
+    body = emails.sent[0]["text"]
+    assert "Queue depth 73" in body
+    assert "d891ee3f4a2b18" in body
+    assert "capacity-scaling.md" in body
+
+
+@pytest.mark.asyncio
+async def test_every_recipient_is_emailed(monkeypatch, emails):
+    _patch_recipients(monkeypatch, ["ops@spinr.ca", "oncall@spinr.ca"])
+    await cw._post_alert("db_circuit_open", "text", None)
+    assert [e["to"] for e in emails.sent] == ["ops@spinr.ca", "oncall@spinr.ca"]
+
+
+@pytest.mark.asyncio
+async def test_one_bad_recipient_does_not_block_the_others(monkeypatch):
+    """During an incident, reaching 1 of 2 people beats an all-or-nothing send."""
+    sent = []
+
+    async def _flaky(**kwargs):
+        if kwargs["to"] == "broken@spinr.ca":
+            raise RuntimeError("SES rejected")
+        sent.append(kwargs["to"])
+        return True
+
+    import utils.email_provider as ep
+
+    monkeypatch.setattr(ep, "send_transactional_email", _flaky)
+    _patch_recipients(monkeypatch, ["broken@spinr.ca", "ops@spinr.ca"])
+
+    await cw._post_alert("db_circuit_open", "text", None)
+
+    assert sent == ["ops@spinr.ca"]
+    # One channel delivered, so the cooldown IS stamped.
+    assert "db_circuit_open" in cw._last_alerted
+
+
+@pytest.mark.asyncio
+async def test_webhook_failure_does_not_cost_the_email(monkeypatch, emails):
+    """The whole point of independent channels: a dead Slack workspace must
+    still leave you with the email."""
+
+    class _ExplodingClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json):
+            raise RuntimeError("slack down")
+
+    monkeypatch.setattr(cw.httpx, "AsyncClient", _ExplodingClient)
+    _patch_recipients(monkeypatch, ["ops@spinr.ca"])
+
+    await cw._post_alert("db_pool_saturation", "text", WEBHOOK)
+
+    assert len(emails.sent) == 1
+    assert "db_pool_saturation" in cw._last_alerted  # email delivered → cooldown stamped
+
+
+@pytest.mark.asyncio
+async def test_total_delivery_failure_does_not_consume_the_cooldown(monkeypatch):
+    """If NOTHING got through, retry next tick rather than going quiet for 30 min."""
+
+    class _ExplodingClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json):
+            raise RuntimeError("slack down")
+
+    async def _dead_email(**kwargs):
+        return False
+
+    import utils.email_provider as ep
+
+    monkeypatch.setattr(cw.httpx, "AsyncClient", _ExplodingClient)
+    monkeypatch.setattr(ep, "send_transactional_email", _dead_email)
+    _patch_recipients(monkeypatch, ["ops@spinr.ca"])
+
+    await cw._post_alert("db_pool_saturation", "text", WEBHOOK)
+
+    assert "db_pool_saturation" not in cw._last_alerted
+
+
+@pytest.mark.asyncio
+async def test_no_channel_configured_sends_nothing(monkeypatch, emails):
+    _patch_recipients(monkeypatch, [])
+    await cw._post_alert("db_pool_saturation", "text", None)
+    assert emails.sent == []
+    assert cw._last_alerted == {}
+
+
+@pytest.mark.asyncio
+async def test_cooldown_is_shared_across_channels(monkeypatch, emails):
+    """One cooldown per signal, not one per channel — otherwise email and Slack
+    would drift out of step and double the effective alert volume."""
+    _patch_recipients(monkeypatch, ["ops@spinr.ca"])
+    await cw._post_alert("db_pool_saturation", "first", None)
+    await cw._post_alert("db_pool_saturation", "second", None)
+    assert len(emails.sent) == 1
+
+
+def test_alert_recipients_parses_comma_separated(monkeypatch):
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "ALERT_EMAIL_TO", "a@spinr.ca, b@spinr.ca ,, c@spinr.ca", raising=False)
+    assert cw._alert_recipients() == ["a@spinr.ca", "b@spinr.ca", "c@spinr.ca"]
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_alert_recipients_empty_when_unset(monkeypatch, value):
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "ALERT_EMAIL_TO", value, raising=False)
+    assert cw._alert_recipients() == []
+
+
 def test_counter_total_sums_across_label_sets():
     snap = {
         "counters": {

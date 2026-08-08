@@ -460,3 +460,129 @@ async def test_record_discrepancy_swallows_insert_failure():
         from utils.reconciliation import _record_discrepancy
 
         await _record_discrepancy(date(2026, 1, 14), 5000, 4998, 2)
+
+
+# ── _check_leg_completeness ──────────────────────────────────────────────
+#
+# This check is the ONLY alarm for a dead double-entry projection loop that
+# still leaves the header ledger intact — the unbalanced-view check beside it
+# can only see legs that exist, so a header that never got legs is invisible
+# to it. Its failure mode is therefore not "misses a problem" but "cries wolf
+# during the intended backfill until nobody reads it", which is what these
+# tests pin.
+
+
+def _queued(event_id: str, created_at: str = "2020-01-01T00:00:00+00:00") -> dict:
+    return {"id": event_id, "created_at": created_at, "event_type": "stripe_charge"}
+
+
+async def _run_leg_check(*, rows, previous_head, flag=True):
+    """Drive _check_leg_completeness with a fake queue + marker store.
+
+    Returns (captured_logger, marker_store) so a test can assert both what was
+    logged and what the run left behind for the next one.
+    """
+    store: dict[str, str] = {}
+    if previous_head is not None:
+        store["spinr:ledger:projection:queue_head"] = previous_head
+
+    async def fake_get(key):
+        return store.get(key)
+
+    async def fake_set(key, value, ttl=None):
+        store[key] = value
+
+    async def fake_delete(key):
+        store.pop(key, None)
+
+    rpc_mock = AsyncMock(return_value=rows) if not isinstance(rows, Exception) else AsyncMock(side_effect=rows)
+    log = MagicMock()
+
+    with (
+        patch("services.ledger_service.double_entry_enabled", AsyncMock(return_value=flag)),
+        patch("db_supabase.rpc", rpc_mock),
+        patch("utils.redis_client.redis_get", fake_get),
+        patch("utils.redis_client.redis_set", fake_set),
+        patch("utils.redis_client.redis_delete", fake_delete),
+        patch("utils.reconciliation.logger", log),
+    ):
+        from utils.reconciliation import _check_leg_completeness
+
+        await _check_leg_completeness()
+
+    return log, store, rpc_mock
+
+
+@pytest.mark.asyncio
+async def test_leg_check_silent_when_double_entry_flag_is_off():
+    """Flag off means the queue is EXPECTED to grow without bound — alerting
+    on it would be permanent noise on a feature that is deliberately dark."""
+    log, store, rpc_mock = await _run_leg_check(rows=[_queued("e1")], previous_head=None, flag=False)
+
+    rpc_mock.assert_not_awaited()
+    log.error.assert_not_called()
+    assert store == {}, "no marker should be written while the projection is off"
+
+
+@pytest.mark.asyncio
+async def test_leg_check_silent_when_rpc_absent():
+    """Partial deploy (code live, migration 287 not applied) is not an alert."""
+    log, _store, _rpc = await _run_leg_check(rows=RuntimeError("PGRST202"), previous_head=None)
+
+    log.error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_leg_check_empty_queue_clears_the_marker():
+    log, store, _rpc = await _run_leg_check(rows=[], previous_head="e_old")
+
+    log.error.assert_not_called()
+    assert store == {}, "a drained queue must not leave a stale head behind"
+
+
+@pytest.mark.asyncio
+async def test_leg_check_first_observation_records_head_without_alerting():
+    """No prior marker (first run ever, or lost with an in-process Redis
+    fallback across a restart) — cannot judge progress yet, so do not guess."""
+    log, store, _rpc = await _run_leg_check(rows=[_queued("e1"), _queued("e2")], previous_head=None)
+
+    log.error.assert_not_called()
+    assert store["spinr:ledger:projection:queue_head"] == "e1"
+
+
+@pytest.mark.asyncio
+async def test_leg_check_does_not_alert_during_the_initial_backfill():
+    """REGRESSION: the check used to alert on queue depth + absolute row age.
+
+    When ledger_double_entry_enabled first turns on, EVERY historical header
+    is leg-less and years old, so a depth/age rule fires at ERROR every night
+    for the entire (intended, working) backfill — training on-call to ignore
+    the one alert that means the projection is dead. A deep queue of ancient
+    rows whose head is ADVANCING is a healthy backfill, not an incident.
+    """
+    ancient = [_queued(f"e{i}", "2019-06-01T00:00:00+00:00") for i in range(500)]
+    log, store, _rpc = await _run_leg_check(rows=ancient, previous_head="e_from_yesterday")
+
+    log.error.assert_not_called()
+    assert store["spinr:ledger:projection:queue_head"] == "e0"
+
+
+@pytest.mark.asyncio
+async def test_leg_check_alerts_when_the_queue_head_has_not_moved():
+    """The actual dead-loop signal: same head 24 h later. Nothing can pin the
+    head legitimately — an undecomposable event is booked DEGRADED, not
+    skipped, precisely so it leaves the queue."""
+    log, store, _rpc = await _run_leg_check(rows=[_queued("stuck_head"), _queued("e2")], previous_head="stuck_head")
+
+    log.error.assert_called_once()
+    assert "NO progress" in log.error.call_args[0][0]
+    assert "stuck_head" in log.error.call_args[0][0]
+    assert store["spinr:ledger:projection:queue_head"] == "stuck_head"
+
+
+@pytest.mark.asyncio
+async def test_leg_check_alerts_on_a_frozen_head_even_with_a_short_queue():
+    """Depth is reported, never a trigger: one stuck row is still a dead loop."""
+    log, _store, _rpc = await _run_leg_check(rows=[_queued("only")], previous_head="only")
+
+    log.error.assert_called_once()

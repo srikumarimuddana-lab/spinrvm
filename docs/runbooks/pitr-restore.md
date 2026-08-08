@@ -20,7 +20,15 @@
 ## Pre-Requisites
 
 - Supabase project admin access (`infra` lead)
-- Supabase plan includes PITR (confirm: Pro tier minimum with 7-day window)
+- **UNCONFIRMED AND LIKELY FALSE — verify before relying on this runbook.**
+  PITR appears to be a separate paid add-on (~$100/mo per 7 days of retention)
+  that also requires at least **Small** compute. Pro's base plan includes
+  **daily backups with 7-day retention, not PITR**. On Pro + Micro compute
+  (the current configuration as of 2026-08-08) this runbook's
+  recovery-point assumptions do not hold — a restore goes to the last daily
+  snapshot, not to an arbitrary second. Check Dashboard → Database → Backups
+  to see which you actually have, and do it now rather than during an incident.
+  See `docs/runbooks/capacity-scaling.md` §5.
 - Target restore timestamp (how far back, in UTC)
 - Sign-off from incident commander on data-loss-window acceptance
 

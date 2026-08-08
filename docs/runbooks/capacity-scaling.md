@@ -162,6 +162,57 @@ Schedule off-peak when possible. Compute bills hourly, so a **temporary** bump
 to Medium for a known event (concert, holiday surge) and back down afterwards
 costs only the hours used — this is a legitimate and cheap tactic.
 
+### Which Supabase add-ons scale automatically (almost none)
+
+This is the question that decides how much manual vigilance you need:
+
+| Add-on | Automatic? | Notes |
+|---|---|---|
+| **Disk size** | **Yes** — grows automatically | The only thing that self-scales. Costs money as it grows; it will not stall you |
+| **Compute** (Micro → Small → …) | **No — always manual** | The one that actually binds. Dashboard action, ~2 min, brief restart |
+| **Read replicas** | No — manual | Requires Small compute minimum |
+| **PITR** | No — manual, **$100/mo per 7 days** | Also requires Small compute minimum. **Not included in Pro** — see the warning below |
+| **IPv4 address / custom domain / log drains** | No — manual | Not capacity-related |
+
+**So: nothing about your database capacity scales on its own.** That asymmetry
+against Fly (which now does scale itself) is the entire reason the
+`capacity_watchdog` exists — the alert is what converts "the DB silently got
+slow" into "someone upgrades the tier."
+
+### Reading the billing page correctly
+
+The Supabase **billing/usage page is not a capacity dashboard** and will look
+healthy right up until the moment compute saturates. Quotas there (egress,
+storage, MAU, Realtime connections, Edge Function invocations) are *plan limits*;
+the thing that actually binds this project is *compute CPU*, which is not a
+quota and does not appear as a percentage anywhere on that page.
+
+For real capacity signals use **Dashboard → Database Health / Observability**
+(CPU, memory, disk IO), not the usage summary.
+
+Two Spinr-specific quirks worth knowing when reading that page:
+
+- **Monthly Active Users will read 0** even with real users. Spinr does not use
+  Supabase Auth — it issues its own JWTs (ADR-001). That zero is correct, not a
+  reporting bug.
+- **Realtime Concurrent Peak Connections will read 0**, and its 500 limit does
+  **not** cap your users. Spinr's WebSockets terminate at FastAPI on Fly and
+  fan out over Redis pub/sub; Supabase Realtime is not in the path.
+
+The plan quota most likely to bind *eventually* is **egress**, since it scales
+with API traffic. Project it from the current cycle rather than assuming
+headroom.
+
+> **Warning — verify before relying on the PITR runbook.**
+> `docs/runbooks/pitr-restore.md` says *"Supabase plan includes PITR (confirm:
+> Pro tier minimum with 7-day window)"*. That "confirm" was never resolved, and
+> the assumption appears to be **wrong**: PITR is a separate **$100/mo** add-on
+> (per 7 days of retention) that additionally requires at least **Small**
+> compute. On Pro with Micro compute you have **daily backups with 7-day
+> retention, not PITR** — so a restore is to the last daily snapshot, and the
+> disaster-recovery runbook's recovery-point assumptions do not hold. Confirm in
+> Dashboard → Database → Backups before an incident, not during one.
+
 ### Read replicas
 
 Available on Pro+, billed as an additional compute instance each. The natural
@@ -174,9 +225,39 @@ on the primary today. Not provisioned yet.
 ## 6. Alert thresholds
 
 The `capacity_watchdog` loop (`backend/utils/capacity_watchdog.py`, 60 s tick)
-posts to `settings.ALERT_WEBHOOK_URL` when any signal trips. Alerts are
-per-machine by design — saturation is a per-process condition — and each signal
-has a 30-minute cooldown so a sustained burst does not spam the channel.
+alerts when any signal trips. Alerts are per-machine by design — saturation is a
+per-process condition — and each signal has a 30-minute cooldown so a sustained
+burst does not spam the channel.
+
+### Turning alerts on (required — they are silent by default)
+
+Both settings default to unset, which means **the watchdog runs but reports
+nothing**. Set at least one:
+
+```bash
+# Slack (or any Slack-compatible incoming webhook)
+fly secrets set ALERT_WEBHOOK_URL=https://hooks.slack.com/services/... -a spinr-backend-yyz
+
+# Email — comma-separated; uses the same SES/Resend path as receipts
+fly secrets set ALERT_EMAIL_TO=ops@spinr.ca,oncall@spinr.ca -a spinr-backend-yyz
+```
+
+Verify with `fly secrets list -a spinr-backend-yyz` (values are hidden; you are
+checking the names are present).
+
+Notes that matter:
+
+- **The channels are independent.** Both are attempted for every alert, so a
+  dead Slack workspace does not cost you the email. The cooldown is shared per
+  signal and is only stamped once at least one channel delivered — if nothing
+  got through, the alert retries on the next tick.
+- **Use a shared inbox or distribution list for `ALERT_EMAIL_TO`, not one
+  person.** The email provider's suppression list means a single address that
+  hard-bounces gets capacity alerts silently dropped from then on.
+- **`ALERT_WEBHOOK_URL` is shared with `loop_watchdog`**, so setting it also
+  turns on background-loop staleness alerts. Expect real findings on first
+  deploy: those alerts were suppressed for the first hour of every process's
+  life until the cooldown fix in this branch.
 
 | Signal | Metric | Threshold | Means |
 |---|---|---|---|

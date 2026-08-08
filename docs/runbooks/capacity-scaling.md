@@ -44,6 +44,16 @@ Fly's proxy resumes a suspended machine when running machines exceed
 `soft_limit`. Concurrency is measured in **connections** because riders and
 drivers each hold a long-lived WebSocket — connection count ≈ active users.
 
+**Pool size and concurrency limits ship together, automatically.**
+`deploy-fly.yml` runs `flyctl scale count 8` immediately after every deploy, so
+`fly.toml`'s limits can never take effect without the machines to absorb them.
+This is deliberate: the two are one capacity decision, and separating them once
+meant a merge would have raised limits 4× on an unchanged 2-machine fleet —
+strictly worse than the limits it replaced. `scale count` is idempotent, so the
+step is a no-op once the pool exists. You do **not** need to run
+`bootstrap-fly.yml` to get the pool; that workflow remains for first-time app
+creation only.
+
 - **Capacity:** 8 × 750 = **6,000** concurrent users before the last machine is
   woken; 8 × 1000 = **8,000** absolute before Fly rejects.
 - **Before this pool existed:** a fixed 2 machines × 250 hard = **~500**, at

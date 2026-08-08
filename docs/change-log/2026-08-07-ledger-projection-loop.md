@@ -92,6 +92,9 @@ stats = await project_pending_legs()            # background, every 15 min
 
 ## 10. What was NOT verified
 
-- The RPC + loop have never run against a real Postgres (mocked `db_supabase.rpc`/`get_rows` only). The 30-minute grace window and `delta_cents <> 0` filter are asserted in SQL review + pglast parse, not runtime.
+> **UPDATE 2026-08-08 — the database layer of this gap is now CLOSED.** The repo owner applied migrations 286–291 to a real Postgres and ran `backend/scripts/verify_migrations_286_291.sql`; **all checks passed**. See `docs/change-log/2026-08-08-migration-verification-result.md` for exactly what that proved and what it did not. The items below are corrected in place; anything still outstanding is called out there.
+
+
+- ~~The RPC + loop have never run against a real Postgres.~~ **The RPC was executed and asserted 2026-08-08**: the work queue includes an old leg-less charge and correctly excludes all four disqualifying cases — inside the 30-minute grace window (the tip-race guard), `delta_cents = 0`, non-projectable `event_type`, and already-projected rows — with the limit clamping at both ends. **The loop itself has still never run against real data**: `utils/ledger_projection.py` driving that RPC over a real backlog is unproven, including how many historical events project *degraded*.
 - Degraded-entry volume on real historical data is unknown — historical cancellation fees (pre-`92771d2`, no fee-split metadata) will all project degraded by design; the count lands in Sentry via `ledger_legs_degraded` when the flag first turns on.
 - `_check_leg_completeness` age-parse edge cases exercised in unit tests only.

@@ -47,6 +47,9 @@ class CompanyDetails(NamedTuple):
     name: str
     #: Legal name + mailing address, e.g. "Spinr Technologies Inc. — 123 Main St, Saskatoon, SK".
     identity_line: str
+    #: Mailing address on its own, for layouts that print the name separately
+    #: (the invoice PDF's header block). Empty when none is configured.
+    address: str
     #: Support address, website and phone, joined for display.
     contact_line: str
     #: Support address on its own, for body copy that tells the reader where to write.
@@ -120,6 +123,34 @@ def _safe_logo_url(raw: str) -> Optional[str]:
     return raw
 
 
+#: Punctuation the assembled lines use that fpdf2's core fonts cannot encode.
+#: The em dash separating name from address is the one that actually bites; a
+#: middot is already latin-1 and passes through unchanged.
+_PDF_SAFE_SUBSTITUTIONS = {
+    "—": "-",  # em dash
+    "–": "-",  # en dash
+    "‘": "'",
+    "’": "'",
+    "“": '"',
+    "”": '"',
+    "…": "...",
+}
+
+
+def to_latin1(value: str) -> str:
+    """Fold a settings-driven line to something fpdf2's core fonts can render.
+
+    The PDF receipt and invoice use Helvetica, an fpdf2 core font, which is
+    latin-1 only — a raw em dash raises on output. An admin can also paste
+    anything at all into a settings field, so unencodable characters are
+    dropped rather than allowed to fail the whole PDF: a receipt with one odd
+    character missing beats no attachment.
+    """
+    for bad, good in _PDF_SAFE_SUBSTITUTIONS.items():
+        value = value.replace(bad, good)
+    return value.encode("latin-1", errors="ignore").decode("latin-1")
+
+
 async def load_company_details() -> CompanyDetails:
     """Resolve company identity from admin settings, with static fallbacks.
 
@@ -164,6 +195,7 @@ async def load_company_details() -> CompanyDetails:
     return CompanyDetails(
         name=name,
         identity_line=identity_line,
+        address=address,
         contact_line=contact_line,
         support_email=support_email,
         logo_url=_safe_logo_url(_coalesce(settings, "company_logo_url")) or _bundled_logo_url(),

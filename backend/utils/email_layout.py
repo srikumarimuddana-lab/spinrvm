@@ -77,7 +77,7 @@ def _esc(value: object) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
 
 
-def _header_html(company: CompanyDetails, subtitle: Optional[str]) -> str:
+def header_html(company: CompanyDetails, subtitle: Optional[str] = None) -> str:
     """Brand band with the logo.
 
     Many clients (Outlook, and Gmail before the sender is trusted) block remote
@@ -149,7 +149,7 @@ def _body_html(
     return "".join(parts)
 
 
-def _footer_html(company: CompanyDetails) -> str:
+def footer_html(company: CompanyDetails) -> str:
     """Company identity, from the admin Settings page (see company_details)."""
     return f"""
         <tr><td style="padding:28px 24px 24px;text-align:center;border-top:1px solid {BORDER};">
@@ -218,9 +218,9 @@ async def render_email(
     <table width="100%" cellpadding="0" cellspacing="0" role="presentation"
            style="max-width:{_MAX_WIDTH_PX}px;margin:20px auto;background:{SURFACE};
                   border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
-{_header_html(details, subtitle)}
+{header_html(details, subtitle)}
 {_body_html(greeting, heading, paras, cta, footnote)}
-{_footer_html(details)}
+{footer_html(details)}
     </table>
 </body>
 </html>

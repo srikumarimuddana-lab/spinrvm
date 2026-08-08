@@ -23,6 +23,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
 _COMPANY = CompanyDetails(
     name="Spinr",
+    address="123 Example St, Saskatoon, SK",
     identity_line="Spinr Technologies Inc. — 123 Example St, Saskatoon, SK",
     contact_line="support@spinr.ca · https://spinr.ca",
     support_email="support@spinr.ca",

@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from backend.repositories import ledger_repo
+from backend.services import ledger_service as ls
 from backend.services import payment_service as ps
 
 RIDE_ID = "ride_atomic_1"
@@ -223,6 +224,7 @@ async def test_ambiguous_error_unverifiable_returns_503_never_double_writes():
         patch.object(ps, "record_payment_event", AsyncMock()) as rec,
         patch.object(ps.db_supabase, "update_ride", AsyncMock()) as upd,
         patch.object(ps.manager, "send_personal_message", AsyncMock()) as ws,
+        patch.object(ls, "_escalate") as escalate,
     ):
         result = await _finalize()
 
@@ -230,6 +232,12 @@ async def test_ambiguous_error_unverifiable_returns_503_never_double_writes():
     upd.assert_not_awaited()
     ws.assert_not_awaited()
     assert result.success is False and result.status_code == 503
+    # The rider is told "our team has been notified" — that must be backed by a
+    # taggable page, not just a log line on-call has to grep for.
+    escalate.assert_called_once()
+    assert escalate.call_args.kwargs["alert"] == ls.ALERT_SETTLEMENT_UNVERIFIABLE
+    ctx = escalate.call_args.args[1]
+    assert ctx["ride_id"] == RIDE_ID and ctx["amount_cents"] == 2000
 
 
 @pytest.mark.anyio

@@ -178,7 +178,13 @@ async def project_pending_legs(limit: int = _BATCH_LIMIT) -> Dict[str, int]:
                 )
                 _rpc_missing_logged = True
         else:
-            logger.error("[LEDGER-PROJ] work-queue fetch failed: {}", err)
+            # opt(exception=...) + details["original"]: run_sync's DatabaseError
+            # stringifies to a constant, so a bare {} loses the Postgres error.
+            logger.opt(exception=err).error(
+                "[LEDGER-PROJ] work-queue fetch failed: {} (original={})",
+                err,
+                (getattr(err, "details", None) or {}).get("original", "n/a"),
+            )
         return stats
 
     stats["fetched"] = len(events)
@@ -197,7 +203,11 @@ async def project_pending_legs(limit: int = _BATCH_LIMIT) -> Dict[str, int]:
         except Exception as err:
             # Without rides every fare event would project degraded — skip the
             # tick instead and let the next one retry with a healthy DB.
-            logger.error("[LEDGER-PROJ] ride batch fetch failed, deferring tick: {}", err)
+            logger.opt(exception=err).error(
+                "[LEDGER-PROJ] ride batch fetch failed, deferring tick: {} (original={})",
+                err,
+                (getattr(err, "details", None) or {}).get("original", "n/a"),
+            )
             return stats
 
     for event in events:

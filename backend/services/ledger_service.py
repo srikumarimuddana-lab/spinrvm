@@ -126,33 +126,49 @@ def assert_balanced(legs: Sequence[Leg]) -> None:
 # ── Leg builders ─────────────────────────────────────────────────────
 
 
-def build_charge_legs(total_cents: int, driver_cents: int, tax_cents: int) -> List[Leg]:
+def build_charge_legs(total_cents: int, driver_cents: int, tax_cents: int, promo_cents: int = 0) -> List[Leg]:
     """Legs for a rider card charge.
 
-        DR stripe_receivable   total collected
+        DR stripe_receivable   total collected from the rider
+        DR promo_expense       discount Spinr absorbed (contra-revenue)
            CR driver_payable     driver's share (100% of ride fare + tip)
            CR tax_payable        GST/PST owed
            CR platform_revenue   remainder — booking fee, airport fee, residual
 
-    Platform revenue is the PLUG, so the entry always balances by construction.
-    That is deliberate but worth knowing: if ``driver_earnings`` is mis-stated
-    upstream, the error lands silently in platform_revenue rather than making
-    the journal unbalanced. The trial-balance view cannot catch that class of
-    bug — reconciliation against Stripe is what does.
+    ``promo_cents`` is load-bearing, not cosmetic. ``driver_earnings`` is
+    derived from ``total_fare`` BEFORE any discount (fare_service: it is
+    ``total_fare - admin_earnings``), while the rider is charged
+    ``grand_total = total_fare + area_fees + tax - discount``. So without the
+    promo debit the residual is ``area_fees + admin_earnings - discount``,
+    which goes NEGATIVE on any promo bigger than the fee floor — and this
+    function would then refuse to build legs at all, collapsing the whole
+    charge into a degraded platform_revenue entry. With it, the residual is
+    ``area_fees + admin_earnings`` regardless of discount size, which is the
+    accounting answer: the platform earns its fees gross and expenses the
+    promo separately.
+
+    Platform revenue is still the PLUG, so the entry always balances by
+    construction. That is deliberate but worth knowing: if ``driver_earnings``
+    is mis-stated upstream, the error lands silently in platform_revenue rather
+    than making the journal unbalanced. The trial-balance view cannot catch
+    that class of bug — reconciliation against Stripe is what does.
 
     Returns [] when there is nothing to record (comp/$0 ride) or when the inputs
-    are internally inconsistent (driver + tax exceeding the total), rather than
-    fabricating a negative leg.
+    are internally inconsistent (driver + tax exceeding total + promo), rather
+    than fabricating a negative leg.
     """
     if total_cents <= 0:
         return []
-    residual = total_cents - driver_cents - tax_cents
-    if driver_cents < 0 or tax_cents < 0 or residual < 0:
+    promo_cents = promo_cents or 0
+    residual = total_cents + promo_cents - driver_cents - tax_cents
+    if driver_cents < 0 or tax_cents < 0 or promo_cents < 0 or residual < 0:
         logger.error(
-            "[LEDGER] refusing to build charge legs — inconsistent amounts total={} driver={} tax={} residual={}",
+            "[LEDGER] refusing to build charge legs — inconsistent amounts "
+            "total={} driver={} tax={} promo={} residual={}",
             total_cents,
             driver_cents,
             tax_cents,
+            promo_cents,
             residual,
         )
         return []
@@ -160,6 +176,8 @@ def build_charge_legs(total_cents: int, driver_cents: int, tax_cents: int) -> Li
     legs = [Leg(ACCT_STRIPE_RECEIVABLE, DEBIT, total_cents)]
     # Zero-value legs are omitted: the DB CHECK requires amount_cents > 0, and a
     # $0 tax line carries no information.
+    if promo_cents > 0:
+        legs.append(Leg(ACCT_PROMO_EXPENSE, DEBIT, promo_cents))
     if driver_cents > 0:
         legs.append(Leg(ACCT_DRIVER_PAYABLE, CREDIT, driver_cents))
     if tax_cents > 0:

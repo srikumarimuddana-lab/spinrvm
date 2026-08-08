@@ -54,6 +54,62 @@ def test_charge_legs_zero_total_produces_nothing():
     assert ls.build_charge_legs(total_cents=0, driver_cents=0, tax_cents=0) == []
 
 
+def test_charge_legs_promo_larger_than_fees_still_balances():
+    """REGRESSION: a promo bigger than the fee floor used to refuse all legs.
+
+    driver_earnings is derived pre-discount (total_fare - admin_earnings) while
+    the rider pays post-discount, so without the promo debit the residual is
+    negative and build_charge_legs bails — which collapsed the entire charge
+    into a degraded platform_revenue entry and paged on every promo ride.
+
+    $20.00 fare (incl. $2.50 booking fee), $1.00 tax, $5.00 promo
+      -> rider is charged $16.00, driver is owed $17.50.
+    """
+    legs = ls.build_charge_legs(total_cents=1600, driver_cents=1750, tax_cents=100, promo_cents=500)
+    ls.assert_balanced(legs)
+
+    by_acct = {(leg.account, leg.side): leg.amount_cents for leg in legs}
+    assert by_acct[(ls.ACCT_STRIPE_RECEIVABLE, ls.DEBIT)] == 1600
+    assert by_acct[(ls.ACCT_PROMO_EXPENSE, ls.DEBIT)] == 500
+    assert by_acct[(ls.ACCT_DRIVER_PAYABLE, ls.CREDIT)] == 1750
+    assert by_acct[(ls.ACCT_TAX_PAYABLE, ls.CREDIT)] == 100
+    # Residual is the fee floor (booking + airport + area fees), NOT netted
+    # down by the promo — the platform earns fees gross and expenses the
+    # discount separately.
+    assert by_acct[(ls.ACCT_PLATFORM_REVENUE, ls.CREDIT)] == 250
+
+
+def test_charge_legs_small_promo_does_not_hide_in_platform_revenue():
+    """A promo under the fee floor balanced before this change, but silently
+    netted the discount out of platform_revenue. promo_expense exists so promo
+    spend is visible; the residual must stay gross either way."""
+    legs = ls.build_charge_legs(total_cents=1900, driver_cents=1750, tax_cents=100, promo_cents=200)
+    ls.assert_balanced(legs)
+    by_acct = {(leg.account, leg.side): leg.amount_cents for leg in legs}
+    assert by_acct[(ls.ACCT_PROMO_EXPENSE, ls.DEBIT)] == 200
+    assert by_acct[(ls.ACCT_PLATFORM_REVENUE, ls.CREDIT)] == 250
+
+
+def test_charge_legs_promo_defaults_to_zero_and_omits_the_leg():
+    """Callers that predate promo_cents keep their exact previous output."""
+    assert ls.build_charge_legs(total_cents=2000, driver_cents=1500, tax_cents=220) == ls.build_charge_legs(
+        total_cents=2000, driver_cents=1500, tax_cents=220, promo_cents=0
+    )
+    legs = ls.build_charge_legs(total_cents=2000, driver_cents=1500, tax_cents=220, promo_cents=0)
+    assert not any(leg.account == ls.ACCT_PROMO_EXPENSE for leg in legs)
+
+
+def test_charge_legs_refuse_negative_promo():
+    """A negative discount is upstream corruption — refuse, never invert a leg."""
+    assert ls.build_charge_legs(total_cents=2000, driver_cents=1500, tax_cents=220, promo_cents=-100) == []
+
+
+def test_charge_legs_still_refuse_when_promo_cannot_cover_the_gap():
+    """The consistency guard survives: promo shifts the threshold, it does not
+    remove it. driver+tax exceeding total+promo still produces NO legs."""
+    assert ls.build_charge_legs(total_cents=1000, driver_cents=900, tax_cents=500, promo_cents=100) == []
+
+
 def test_refund_legs_balance_and_spare_the_driver():
     """Driver keeps their pay on a refund — the platform absorbs it."""
     legs = ls.build_refund_legs(refund_cents=2000, tax_reversed_cents=220)

@@ -50,6 +50,7 @@ def _ride(**overrides) -> dict:
         "tax_amount": "2.20",
         "driver_earnings": "15.00",
         "tip_amount": "0.00",
+        "discount_amount": "0.00",
     }
     base.update(overrides)
     return base
@@ -86,6 +87,37 @@ def test_fare_charge_with_inconsistent_amounts_degrades():
     legs, degraded, reason = lp._decompose(_event(), ride)
     assert degraded and reason == "amounts_inconsistent"
     ls.assert_balanced(legs)
+
+
+def test_promo_ride_projects_fully_not_degraded():
+    """REGRESSION: a promo ride used to degrade, losing the driver/tax split
+    and paging on every discounted ride.
+
+    $20.00 fare (incl. $2.50 booking fee), $1.00 tax, $5.00 promo -> the rider
+    is charged $16.00 while the driver is owed $17.50, because driver_earnings
+    is derived pre-discount.
+    """
+    ride = _ride(total_fare="20.00", grand_total="16.00", tax_amount="1.00", driver_earnings="17.50")
+    ride["discount_amount"] = "5.00"
+    legs, degraded, reason = lp._decompose(_event(delta_cents=1600), ride)
+
+    assert not degraded and reason is None, "a promo ride is normal business, not a decomposition failure"
+    ls.assert_balanced(legs)
+    by = {(leg.account, leg.side): leg.amount_cents for leg in legs}
+    assert by[(ls.ACCT_STRIPE_RECEIVABLE, ls.DEBIT)] == 1600
+    assert by[(ls.ACCT_PROMO_EXPENSE, ls.DEBIT)] == 500
+    assert by[(ls.ACCT_DRIVER_PAYABLE, ls.CREDIT)] == 1750
+    assert by[(ls.ACCT_TAX_PAYABLE, ls.CREDIT)] == 100
+    assert by[(ls.ACCT_PLATFORM_REVENUE, ls.CREDIT)] == 250
+
+
+def test_ride_columns_fetch_discount_amount():
+    """The promo fix is only live if the projection actually SELECTs the column.
+
+    _decompose reads ride["discount_amount"]; a trimmed _RIDE_COLUMNS would
+    make every promo ride silently degrade again with no test failing.
+    """
+    assert "discount_amount" in lp._RIDE_COLUMNS.split(",")
 
 
 def test_cancellation_fee_decomposes_from_metadata_split():

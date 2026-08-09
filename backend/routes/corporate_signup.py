@@ -156,14 +156,25 @@ async def self_serve_company_signup(
     # the durable signal, so a mail failure must not fail the signup.
     if settings.CORPORATE_OPS_EMAIL:
         try:
-            await send_transactional_email(
-                to=settings.CORPORATE_OPS_EMAIL,
-                subject="New Spinr for Business signup awaiting KYB review",
-                text=(
+            try:
+                from ..utils.email_layout import render_from_text
+            except ImportError:
+                from utils.email_layout import render_from_text  # type: ignore
+
+            _ops_subject = "New Spinr for Business signup awaiting KYB review"
+            _ops_rendered = await render_from_text(
+                heading=_ops_subject,
+                body=(
                     f"Company '{body.name}' registered via self-serve signup and is in the "
                     f"KYB queue (status: pending_verification).\n\n"
                     f"Review it in the admin dashboard → Corporate Accounts → KYB Queue."
                 ),
+            )
+            await send_transactional_email(
+                to=settings.CORPORATE_OPS_EMAIL,
+                subject=_ops_subject,
+                text=_ops_rendered.text,
+                html=_ops_rendered.html,
                 log_id=company_id,
                 email_type="corporate_signup_ops",
             )

@@ -211,16 +211,31 @@ async def invite(
 
             company = await get_corporate_account_by_id(company_id) or {}
             company_name = company.get("name") or "your company"
+            try:
+                from ..utils.email_layout import render_email
+            except ImportError:
+                from utils.email_layout import render_email  # type: ignore
+
+            _invite_subject = f"You're invited to {company_name} on Spinr for Business"
+            # A branded shell matters more here than on most: this is an
+            # unsolicited email containing a sign-in link, which is exactly the
+            # shape of a phishing attempt. The logo and the configured company
+            # details are what make it look like us.
+            _invite_rendered = await render_email(
+                heading=_invite_subject,
+                paragraphs=[
+                    f"You've been invited to join {company_name} on Spinr for Business "
+                    f"as {'an admin' if body.role.value in ('admin', 'owner') else 'a member'}.",
+                    "The link below signs you in with a one-time code sent to this address — no password needed.",
+                ],
+                cta=("Accept the invite", web_invite_url),
+                footnote="If you weren't expecting this invitation, you can ignore this email.",
+            )
             email_sent = await send_transactional_email(
                 to=body.email,
-                subject=f"You're invited to {company_name} on Spinr for Business",
-                text=(
-                    f"You've been invited to join {company_name} on Spinr for Business "
-                    f"as {'an admin' if body.role.value in ('admin', 'owner') else 'a member'}.\n\n"
-                    f"Accept the invite and sign in with this email address:\n{web_invite_url}\n\n"
-                    "The link signs you in with a one-time code sent to this address — "
-                    "no password needed."
-                ),
+                subject=_invite_subject,
+                text=_invite_rendered.text,
+                html=_invite_rendered.html,
                 log_id=member.get("id") or company_id,
                 email_type="corporate_member_invite",
             )

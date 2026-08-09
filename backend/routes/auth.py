@@ -717,15 +717,27 @@ async def send_company_email_otp(request: Request, body: CompanyEmailOtpSendRequ
         ) from e
 
     if deliver_via_email:
+        try:
+            from ..utils.email_layout import render_email
+        except ImportError:
+            from utils.email_layout import render_email  # type: ignore
+
+        # A verification code arriving as two bare <p> tags with no branding is
+        # exactly what a phishing attempt looks like. Rendering it through the
+        # shared shell puts the real logo and the configured company details on
+        # the one email whose whole job is to be trusted.
+        _otp_rendered = await render_email(
+            heading="Your verification code",
+            paragraphs=[
+                f"Your Spinr for Business verification code is {otp_code}.",
+                f"It expires in {OTP_EXPIRY_MINUTES} minutes. If you didn't request it, you can ignore this email.",
+            ],
+        )
         sent = await send_transactional_email(
             to=email,
             subject="Your Spinr for Business verification code",
-            text=f"Your Spinr for Business verification code is {otp_code}. It expires in {OTP_EXPIRY_MINUTES} minutes.",
-            html=(
-                "<p>Your Spinr for Business verification code is "
-                f"<strong>{otp_code}</strong>.</p>"
-                f"<p>It expires in {OTP_EXPIRY_MINUTES} minutes.</p>"
-            ),
+            text=_otp_rendered.text,
+            html=_otp_rendered.html,
             log_id=_email_log_id(email),
             email_type="corporate_email_otp",
         )

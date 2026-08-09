@@ -457,10 +457,17 @@ async def kyb_review(
                     + (f"\n\nReviewer note: {decision.note}" if decision.note else "")
                     + "\n\nSign in to the business portal to view the details and resubmit."
                 )
+            try:
+                from ..utils.email_layout import render_from_text
+            except ImportError:
+                from utils.email_layout import render_from_text  # type: ignore
+
+            _kyb_rendered = await render_from_text(heading=subject, body=text)
             await send_transactional_email(
                 to=notify_to,
                 subject=subject,
-                text=text,
+                text=_kyb_rendered.text,
+                html=_kyb_rendered.html,
                 log_id=str(normalized_id),
                 email_type="corporate_kyb_decision",
             )

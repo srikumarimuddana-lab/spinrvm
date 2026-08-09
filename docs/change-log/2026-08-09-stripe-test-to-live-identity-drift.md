@@ -354,7 +354,55 @@ against the code and fixed. The two that were genuine data-loss risks:
   Retiring is now opt-in (`retire_if_unreachable`, default False); only the
   driver's own sync and the admin refresh button pass True.
 
-The rest: corporate top-up 409s removed (above); corporate re-provision now
+## Addendum — second review round
+
+A second review pass over the completed branch found nine more issues. The
+worst was a single wrong assumption repeated across four call sites:
+
+**Four corporate repair paths were dead code.**
+`repositories/corporate_repo.get_default_payment_method` ran its **Stripe**
+call through `run_sync`, the **database** helper. `run_sync` re-raises every
+non-transient exception as `DatabaseError`, so `is_missing_on_key` never saw
+the Stripe error and returned False every time — auto-topup, self-serve
+top-up, `assign_subscription`, and the admin card-panel message all had repair
+logic that could never fire. Verified empirically, not just by reading.
+
+Fixed at the root (that call now uses `asyncio.to_thread`, so Stripe failures
+also stop counting against the *database* circuit breaker and its retry
+budget) and defensively in `is_missing_on_key`, which now unwraps a Stripe
+error re-raised inside another exception type.
+
+Also from this round:
+
+- **`/payments/create-intent` was not wrapped.** It is the authoritative
+  ride-charge path, so a rider whose customer was stranded but who never
+  opened the cards screen would hit a hard failure at trip end — a completed
+  ride with no way to pay for it. Now repairs like the other paths.
+- **The payout-sync error→warning downgrade was too broad.** It applied to a
+  driver's *current* account as well as superseded ones, so a wrong-platform
+  key would make every driver a warning, leave `plan.errors` empty, and let
+  `commit_plan` report success having synced zero T4A income. Downgrade is now
+  scoped to superseded accounts only.
+- **`_create_corporate_customer` returned its own id even when the conditional
+  write matched zero rows** (a race with the auto-topup retire), which would
+  charge a customer the row does not point at and leak an orphan. It now
+  re-reads and defers to the persisted winner, matching the rider path.
+- **`CorporateCustomerUnavailable` was a bare `RuntimeError`**, so it reached
+  the corporate routes uncaught and became an opaque 500 — making the
+  documented kill-switch rollback look like a crash. It is now a
+  `SpinrException` carrying 503, which the registered global handler renders.
+- A driver whose transfer listing hard-failed also received a contradictory
+  "no transfer history" warning; suppressed.
+
+**Conscious sign-off:** the admin "Refresh from Stripe" button now passes
+`retire_if_unreachable=True`, which makes a previously read-only button
+capable of detaching a driver's Connect account. Accepted because that button
+is the operator's repair path, the action is audit-logged, and the undo is
+real — the old id is preserved in `stripe_account_id_superseded` and the
+mapping importer only fills NULL columns, so re-running the drivers CSV
+restores it. Documented in the runbook next to the button.
+
+The rest of the first round: corporate top-up 409s removed (above); corporate re-provision now
 writes the `*_superseded` provenance columns and filters on the value it
 replaces; the audit probe's `log_admin_action` no longer passes `None` for the
 NOT NULL `entity_id` (every probe was running unaudited); embedded driver

@@ -422,13 +422,30 @@ async def sum_autotopups_today(wallet_id: str) -> Decimal:
 
 
 async def get_default_payment_method(stripe_customer_id: str, stripe_secret: str) -> Optional[str]:
-    """Return the Stripe customer's first card payment method, if any."""
+    """Return the Stripe customer's first card payment method, if any.
+
+    Uses ``asyncio.to_thread``, NOT ``run_sync``. This is a Stripe call that
+    happens to live in a repository module; routing it through the database
+    helper had two real consequences:
+
+      1. every Stripe exception was re-raised as ``DatabaseError``, so callers
+         could not tell a "no such customer" (the test→live key-rotation
+         symptom, which they repair) from a genuine outage — the corporate
+         repair paths silently never fired;
+      2. Stripe's failures counted against the *database* circuit breaker and
+         its retry budget, so a Stripe incident could open the breaker and 503
+         unrelated DB traffic.
+
+    Callers now see the real ``stripe.error.*`` exception.
+    """
+    import asyncio
+
     import stripe
 
     def _fn():
         return stripe.PaymentMethod.list(customer=stripe_customer_id, type="card", api_key=stripe_secret)
 
-    methods = await run_sync(_fn)
+    methods = await asyncio.to_thread(_fn)
     data = getattr(methods, "data", None) or []
     return data[0].id if data else None
 

@@ -133,6 +133,20 @@ def is_missing_on_key(exc: BaseException, expected_id: Optional[str] = None) -> 
       - ``APIConnectionError`` / ``RateLimitError`` / ``APIError`` — transient.
       - ``CardError`` — the card failed, the customer exists.
     """
+    # Unwrap a Stripe error that some intermediate layer re-raised inside its
+    # own exception type. `repositories/_base.run_sync` does exactly this
+    # (Stripe error in → DatabaseError out), which silently turned four
+    # corporate repair paths into dead code. The root cause is fixed at that
+    # call site, but unwrapping here keeps a future wrapper from re-breaking
+    # detection in a way that only shows up in production.
+    if not isinstance(exc, stripe.error.StripeError):
+        original = getattr(exc, "details", None)
+        original = original.get("original") if isinstance(original, dict) else None
+        if isinstance(original, stripe.error.StripeError):
+            exc = original
+        elif isinstance(getattr(exc, "__cause__", None), stripe.error.StripeError):
+            exc = exc.__cause__  # type: ignore[assignment]
+
     if isinstance(exc, stripe.error.AuthenticationError):
         return False
 

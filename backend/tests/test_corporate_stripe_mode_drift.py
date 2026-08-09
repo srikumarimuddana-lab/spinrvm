@@ -13,6 +13,7 @@ behaviours and the tests pin the split:
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -32,6 +33,9 @@ COMPANY_ID = "corp_drift_1"
 STALE_CUS = "cus_corp_testmode"
 NEW_CUS = "cus_corp_livemode"
 LIVE_KEY = "sk_live_" + "abc123"
+
+# Sentinel: "no override — the re-read sees whatever we wrote".
+_UNSET = object()
 
 
 def _company(**extra) -> dict:
@@ -61,15 +65,33 @@ def _resource_missing(oid: str = STALE_CUS) -> stripe.error.InvalidRequestError:
 
 
 class _Harness:
-    def __init__(self, *, flag: bool = True, create=None):
+    """Fakes the DB + settings + Stripe surface the identity service reaches.
+
+    `persisted` is what the post-write re-read sees. A replacement create
+    re-reads the row and defers to whatever actually landed, so tests can
+    simulate a concurrent retire/repair by overriding it.
+    """
+
+    def __init__(self, *, flag: bool = True, create=None, persisted: Any = _UNSET):
         self.updates: list = []
+        self._persisted = persisted
 
         async def _update_one(table, filters, update):
             self.updates.append((table, filters, update))
 
+        async def _find_one(table, filters):
+            if self._persisted is not _UNSET:
+                return {"id": COMPANY_ID, "stripe_customer_id": self._persisted}
+            # Default: our write won — the row carries whatever we just wrote.
+            for _t, _f, upd in reversed(self.updates):
+                if "stripe_customer_id" in upd:
+                    return {"id": COMPANY_ID, "stripe_customer_id": upd["stripe_customer_id"]}
+            return {"id": COMPANY_ID, "stripe_customer_id": None}
+
         self.create = create if create is not None else MagicMock(return_value=_customer())
         self._patches = [
             patch("backend.services.corporate_stripe_identity.db_supabase.update_one", side_effect=_update_one),
+            patch("backend.services.corporate_stripe_identity.db_supabase.find_one", side_effect=_find_one),
             patch(
                 "backend.services.corporate_stripe_identity.get_app_settings",
                 AsyncMock(return_value={"stripe_reprovision_stale_ids": flag}),
@@ -235,3 +257,37 @@ class TestWithCorporateCustomerRepair:
             with pytest.raises(stripe.error.InvalidRequestError):
                 await with_corporate_customer_repair(_company(), LIVE_KEY, _op)
         assert calls == [STALE_CUS, NEW_CUS]
+
+
+class TestConcurrentRepairRace:
+    """The conditional write can match zero rows: the auto-topup loop retired
+    the customer, or another admin repaired it, between our read and our write.
+    Returning our own id then would charge a customer the row does not point
+    at and leak an orphan into Stripe."""
+
+    async def test_defers_to_the_persisted_winner(self):
+        other = "cus_won_the_race"
+        with _Harness(persisted=other):
+            result = await get_or_create_corporate_customer(_company(stripe_customer_id_mode="test"), LIVE_KEY)
+        assert result == other
+
+    async def test_raises_when_the_row_was_retired_out_from_under_us(self):
+        with _Harness(persisted=None):
+            with pytest.raises(CorporateCustomerUnavailable):
+                await get_or_create_corporate_customer(_company(stripe_customer_id_mode="test"), LIVE_KEY)
+
+    async def test_first_time_create_does_not_re_read(self):
+        """Nothing to race with, so no extra round-trip."""
+        with _Harness(persisted=None) as h:
+            result = await get_or_create_corporate_customer(_company(stripe_customer_id=None), LIVE_KEY)
+        assert result == NEW_CUS
+        assert h.updates[0][1] == {"id": COMPANY_ID}
+
+
+class TestSurfacesAsA503:
+    def test_unavailable_carries_a_deliberate_status(self):
+        """As a plain RuntimeError this reached the corporate routes uncaught
+        and became an opaque 500, making the documented kill-switch rollback
+        look like a crash."""
+        exc = CorporateCustomerUnavailable("nope")
+        assert exc.status_code == 503

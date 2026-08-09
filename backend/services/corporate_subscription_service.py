@@ -38,6 +38,11 @@ except ImportError:
     import db_supabase  # type: ignore
 
 try:
+    from .corporate_stripe_identity import with_corporate_customer_repair
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
+
+try:
     from ..settings_loader import get_app_settings  # type: ignore
 except ImportError:
     from settings_loader import get_app_settings  # type: ignore
@@ -102,44 +107,38 @@ async def assign_subscription(
     if not stripe_secret:
         raise CorporateSubscriptionError("stripe_not_configured")
 
-    stripe_customer_id = company.get("stripe_customer_id")
-    if not stripe_customer_id:
-        # Lazy-create, mirroring the KYB-approval path (routes/corporate_accounts.py)
-        # — a company that reached "active" status should already have one, but
-        # this keeps assign_subscription usable even if that step previously
-        # failed and was never retried.
-        customer = await asyncio.to_thread(
-            lambda: stripe.Customer.create(
-                email=company.get("billing_email"),
-                name=company.get("legal_name") or company.get("name"),
-                metadata={"corporate_account_id": company_id},
+    # Lazy-create (mirroring the KYB-approval path) now lives in the shared
+    # corporate identity service, which also repairs a customer stranded by a
+    # test→live key rotation. An admin is present, so re-provisioning is safe.
+    #
+    # Both the payment-method lookup and the Subscription.create address the
+    # customer, so the whole sequence goes inside the repair wrapper: if the
+    # stored customer turns out to be unreachable, the retry re-runs against
+    # the replacement and surfaces the honest "no_payment_method_on_file"
+    # (the company's card lived on the customer that is gone) rather than an
+    # opaque Stripe error.
+    async def _create_subscription(customer_id: str):
+        payment_method_id = await db_supabase.get_default_payment_method(customer_id, stripe_secret)
+        if not payment_method_id:
+            raise CorporateSubscriptionError("no_payment_method_on_file")
+        return await asyncio.to_thread(
+            lambda: stripe.Subscription.create(
+                customer=customer_id,
+                items=[{"price": plan["stripe_price_id"]}],
+                default_payment_method=payment_method_id,
+                metadata={"scope": "corporate_subscription", "corporate_account_id": company_id},
                 api_key=stripe_secret,
-                idempotency_key=f"cus-create-corp-{company_id}",
+                # Deterministic per-company (not per-call): a network-retried
+                # request for the same company within Stripe's 24h idempotency
+                # window returns the same subscription instead of creating a
+                # second one, matching the customer-create key above and the
+                # existing corporate_close_refund pattern.
+                idempotency_key=f"corp-sub-create-{company_id}",
             )
         )
-        stripe_customer_id = customer.id
-        await db_supabase.update_corporate_stripe_customer_id(
-            company_id=company_id, stripe_customer_id=stripe_customer_id
-        )
 
-    payment_method_id = await db_supabase.get_default_payment_method(stripe_customer_id, stripe_secret)
-    if not payment_method_id:
-        raise CorporateSubscriptionError("no_payment_method_on_file")
-
-    subscription = await asyncio.to_thread(
-        lambda: stripe.Subscription.create(
-            customer=stripe_customer_id,
-            items=[{"price": plan["stripe_price_id"]}],
-            default_payment_method=payment_method_id,
-            metadata={"scope": "corporate_subscription", "corporate_account_id": company_id},
-            api_key=stripe_secret,
-            # Deterministic per-company (not per-call): a network-retried
-            # request for the same company within Stripe's 24h idempotency
-            # window returns the same subscription instead of creating a
-            # second one, matching the customer-create key above and the
-            # existing corporate_close_refund pattern.
-            idempotency_key=f"corp-sub-create-{company_id}",
-        )
+    stripe_customer_id, subscription = await with_corporate_customer_repair(
+        company, stripe_secret, _create_subscription
     )
 
     row_id = str(uuid.uuid4())

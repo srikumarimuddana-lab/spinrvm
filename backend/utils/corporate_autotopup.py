@@ -62,6 +62,19 @@ except ImportError:
     from utils.metrics import inc as _metric_inc
     from utils.metrics import set_gauge as _metric_gauge
 
+try:
+    from ..services.corporate_stripe_identity import (  # type: ignore
+        corporate_customer_is_stale,
+        retire_corporate_customer,
+    )
+    from .stripe_mode import is_missing_on_key  # type: ignore
+except ImportError:
+    from services.corporate_stripe_identity import (  # type: ignore
+        corporate_customer_is_stale,
+        retire_corporate_customer,
+    )
+    from utils.stripe_mode import is_missing_on_key  # type: ignore
+
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +117,24 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
         )
         return
 
-    pm_id = await get_default_payment_method(company["stripe_customer_id"], stripe_secret)
+    # A customer stranded by a test→live key rotation is retired here, NOT
+    # replaced. Nobody is present to consent to a new payment identity, and a
+    # fresh customer would carry no card — so the charge this tick wanted to
+    # make cannot succeed either way. Retiring converts an endless 10-minutely
+    # Stripe failure into one clean "no stripe_customer_id" state that the
+    # guard above skips for free, that the admin dashboard already reports as
+    # a 409, and that the next admin-present path re-provisions.
+    if corporate_customer_is_stale(company, stripe_secret):
+        await retire_corporate_customer(company, company["stripe_customer_id"], reason="mode_mismatch")
+        return
+
+    try:
+        pm_id = await get_default_payment_method(company["stripe_customer_id"], stripe_secret)
+    except Exception as e:
+        if not is_missing_on_key(e):
+            raise
+        await retire_corporate_customer(company, company["stripe_customer_id"], reason="resource_missing")
+        return
     if not pm_id:
         logger.error("autotopup: wallet %s has no default payment method — skipping", wallet["id"])
         return
@@ -146,6 +176,12 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
             idempotency_key=idempotency_key,
         )
     except stripe.StripeError as e:
+        if is_missing_on_key(e):
+            # Unstamped row (predating migration 286) whose customer turns out
+            # to be unreachable. Same treatment as the stamped case above:
+            # retire so the next 143 ticks today don't each re-discover it.
+            await retire_corporate_customer(company, company["stripe_customer_id"], reason="resource_missing")
+            return
         logger.error("autotopup: Stripe error for wallet %s: %s", wallet["id"], e, exc_info=True)
         return
     logger.info("autotopup: kicked intent for wallet %s (%s CAD)", wallet["id"], topup_amount)

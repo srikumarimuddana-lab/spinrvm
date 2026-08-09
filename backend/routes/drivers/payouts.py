@@ -1120,3 +1120,120 @@ async def get_payout_history(
         desc=True,
     )
     return {"success": True, "payouts": [serialize_doc(p) for p in payouts]}
+
+
+# ── Connected-account records (bank payouts + full ledger) ────────────────
+#
+# `payouts` above records what the PLATFORM sent this driver. The two
+# endpoints below serve the other half — what happened INSIDE their Stripe
+# connected account — from our own tables (migration 288), populated by
+# services/stripe_connect_ledger_service.
+#
+# Reading from our DB rather than Stripe is the point: the driver's history
+# stays available when Stripe is slow or unreachable, survives their account
+# being superseded, and costs no API quota per screen view.
+#
+# NEITHER is an income figure. The same dollar appears as a Transfer in
+# `payouts`, as a Payout here, and as two ledger legs — see migration 288's
+# header. T4A comes from routes/drivers/tax_exports.py, not from these.
+
+_MAX_LEDGER_PAGE = 100
+
+
+@router.get("/stripe/bank-payouts")
+async def get_bank_payout_history(
+    limit: int = Query(20, ge=1, le=_MAX_LEDGER_PAGE),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
+    """Money that left the driver's Stripe balance for their bank account.
+
+    This is what a driver actually means by "did I get paid" — `payouts`
+    tells them Spinr sent it, this tells them the bank received it, when it
+    arrived, and why it failed if it did.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    rows = await db_supabase.get_rows(
+        "driver_stripe_payouts",
+        {"driver_id": driver["id"]},
+        limit=limit,
+        offset=offset,
+        order="created_at",
+        desc=True,
+    )
+    return {
+        "success": True,
+        "bank_payouts": [
+            {
+                "id": r.get("id"),
+                "amount": _money_str(r.get("amount") or 0),
+                "currency": r.get("currency"),
+                "status": r.get("status"),
+                "method": r.get("method"),
+                "arrival_date": r.get("arrival_date"),
+                "failure_code": r.get("failure_code"),
+                "failure_message": r.get("failure_message"),
+                "bank_last4": r.get("bank_last4"),
+                "created_at": r.get("created_at"),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/stripe/ledger")
+async def get_connect_ledger(
+    limit: int = Query(50, ge=1, le=_MAX_LEDGER_PAGE),
+    offset: int = Query(0, ge=0),
+    entry_type: str = Query(None, max_length=64),
+    current_user: dict = Depends(get_current_user),
+):
+    """Full signed ledger for the driver's Stripe account.
+
+    Amounts are SIGNED in Stripe's convention (credits +, debits -), so the
+    client must render them as a statement, never sum them as earnings. A sum
+    over a window is the driver's balance CHANGE, not their income.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    filters = {"driver_id": driver["id"]}
+    if entry_type:
+        filters["type"] = entry_type
+
+    rows = await db_supabase.get_rows(
+        "driver_stripe_ledger",
+        filters,
+        limit=limit,
+        offset=offset,
+        order="created_at",
+        desc=True,
+    )
+    return {
+        "success": True,
+        "signed_amounts": True,
+        "entries": [
+            {
+                "id": r.get("id"),
+                "type": r.get("type"),
+                "amount": _money_str(r.get("amount") or 0),
+                "fee": _money_str(r.get("fee") or 0),
+                "net": _money_str(r.get("net") or 0),
+                "currency": r.get("currency"),
+                "status": r.get("status"),
+                "source": r.get("source"),
+                "description": r.get("description"),
+                "available_on": r.get("available_on"),
+                "created_at": r.get("created_at"),
+            }
+            for r in rows
+        ],
+    }

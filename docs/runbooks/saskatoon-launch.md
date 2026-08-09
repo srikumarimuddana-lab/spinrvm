@@ -53,6 +53,7 @@
 - [ ] **O-2** Sentry alert rule wired: `tag:spinr_alert equals refresh_token_reuse` → PagerDuty / on-call. _(Code shipped in commit `1984fc9`.)_
 - [ ] **O-3** Sentry alert rule for `OTP_LOCKOUT_TRIGGERED` log error → ops Slack channel.
 - [ ] **O-4** Loguru → Sentry bridge verified working (any backend `logger.error` produces a Sentry event).
+- [ ] **O-6** Ledger/settlement alert rules wired — six `spinr_alert` tags, two of which page. Specs and response procedures in `docs/runbooks/ledger-alerts.md`. **Blocks turning on `ledger_double_entry_enabled` / `ledger_atomic_settle_enabled`:** four of the six only fire once a flag is on, so flipping a flag before the rules exist means the code's own failure reporting goes to nobody. `settlement_state_unverifiable` is the one that must not wait — it backs a promise made to the rider on screen ("our team has been notified").
 - [ ] **O-5** Dashboard up showing the KPIs from CLAUDE.md (match rate, cancellation, dispatch P95, payment success, WAV requests).
 
 ### Saskatchewan regulatory

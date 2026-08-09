@@ -83,6 +83,15 @@ class TestObjectMode:
         """A partial/changed payload degrades to unknown, not a wrong stamp."""
         assert object_mode(obj) is None
 
+    @pytest.mark.parametrize("value", ["true", 1, 0, object()])
+    def test_non_boolean_livemode_is_unknown(self, value):
+        """Only a real bool counts — a truthy placeholder must not stamp 'live'.
+
+        Guessing from truthiness would record a mode we never observed, and
+        the stamp is what later decides whether to re-provision an identity.
+        """
+        assert object_mode({"livemode": value}) is None
+
 
 def _invalid_request(message: str, code: str | None = None) -> stripe.error.InvalidRequestError:
     return stripe.error.InvalidRequestError(message, param=None, code=code)

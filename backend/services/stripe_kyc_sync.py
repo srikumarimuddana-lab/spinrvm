@@ -24,11 +24,85 @@ from typing import Any, Dict, Optional
 try:
     from .. import db_supabase
     from ..settings_loader import get_app_settings
+    from ..utils.stripe_mode import is_missing_on_key, key_mode, stale_by_mode
 except ImportError:
     import db_supabase  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.stripe_mode import is_missing_on_key, key_mode, stale_by_mode  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+# Every mirror column below describes the Connect account named by
+# drivers.stripe_account_id. When that account stops being reachable on the
+# running key, the mirror is not merely stale — it is a lie about a payout
+# destination that no longer exists, and it is what the admin slideout and
+# the driver app's "bank linked" state both read. Retiring the account must
+# therefore reset the mirror in the same write.
+_KYC_MIRROR_RESET: Dict[str, Any] = {
+    "stripe_account_onboarded": False,
+    "stripe_details_submitted": False,
+    "stripe_charges_enabled": False,
+    "stripe_payouts_enabled": False,
+    "stripe_id_number_provided": False,
+    "stripe_id_number_last4": None,
+    "stripe_requirements_due": [],
+    "stripe_requirements_past_due": [],
+    "stripe_disabled_reason": None,
+    "stripe_verification_status": None,
+    "stripe_business_type": None,
+    # ToS was accepted on the retired account; the replacement needs its own.
+    "stripe_tos_accepted_at": None,
+}
+
+
+async def retire_stripe_account(driver: Dict[str, Any], stale_account_id: str, reason: str) -> None:
+    """Detach a Connect account that is not reachable on the running key.
+
+    Called only with positive proof (an explicit mode disagreement, or
+    ``resource_missing`` / ``PermissionError`` from Stripe for this exact
+    account) — never on an auth or transient error. See utils/stripe_mode.py.
+
+    Deliberately does NOT create a replacement. A Connect account is a payout
+    destination carrying bank details and verified identity; the driver must
+    go through onboarding again, which the existing in-app "Set up payouts"
+    flow does. Resetting the mirror is what makes the app offer that flow
+    instead of showing a bank that is not there.
+
+    The write filters on the stale id so a concurrent retire or a completed
+    re-onboarding is never clobbered.
+    """
+    await db_supabase.update_one(
+        "drivers",
+        {"id": driver["id"], "stripe_account_id": stale_account_id},
+        {
+            "stripe_account_id": None,
+            "stripe_account_id_mode": None,
+            "stripe_account_id_superseded": stale_account_id,
+            "stripe_account_id_superseded_at": datetime.now(timezone.utc).isoformat(),
+            "stripe_last_synced_at": datetime.now(timezone.utc).isoformat(),
+            **_KYC_MIRROR_RESET,
+        },
+    )
+    # Degraded-but-recovered → warning, per CLAUDE.md's observability rules.
+    # Stripe account IDs are operational identifiers, not PII.
+    logger.warning(
+        "Retired unreachable Stripe Connect account; driver must re-onboard payouts",
+        extra={
+            "driver_id": driver["id"],
+            "reason": reason,
+            "superseded_account_id": stale_account_id,
+        },
+    )
+
+
+def account_is_stale_by_mode(driver: Dict[str, Any], stripe_secret: str) -> bool:
+    """True when the driver's stamped account mode disagrees with the key.
+
+    Cheap pre-check: no Stripe call needed. Unstamped rows (everything
+    predating migration 286) return False and are caught by the
+    ``resource_missing`` path instead.
+    """
+    return stale_by_mode(driver.get("stripe_account_id_mode"), key_mode(stripe_secret))
 
 
 def _kyc_mirror_fields(account: Dict[str, Any]) -> Dict[str, Any]:
@@ -159,13 +233,30 @@ async def refresh_driver_kyc(driver: Dict[str, Any]) -> Dict[str, Any]:
     if not stripe_secret:
         return {"status": "stripe_not_configured"}
 
+    # Cheap pre-check: a stamped account whose mode disagrees with the running
+    # key is unreachable by definition — retire it without spending a call.
+    if account_is_stale_by_mode(driver, stripe_secret):
+        await retire_stripe_account(driver, account_id, reason="mode_mismatch")
+        return {"status": "account_not_on_key", "retired": True}
+
     import stripe
 
     try:
         # to_thread: the Stripe SDK is blocking; batch callers (legacy Stripe
         # mapping import) refresh many drivers concurrently on the event loop.
         account = await asyncio.to_thread(stripe.Account.retrieve, account_id, api_key=stripe_secret)
-    except Exception:
+    except Exception as e:
+        if is_missing_on_key(e):
+            # The account does not exist on this key (the classic symptom of a
+            # test→live rotation) — distinct from a Stripe outage. Retire it so
+            # the mirror stops advertising payouts the platform cannot make,
+            # and the driver is offered onboarding instead of a dead end.
+            logger.warning(
+                "[STRIPE-KYC] refresh: account %s not reachable on the current key — retiring",
+                account_id,
+            )
+            await retire_stripe_account(driver, account_id, reason="resource_missing")
+            return {"status": "account_not_on_key", "retired": True}
         logger.error(
             "[STRIPE-KYC] refresh: Account.retrieve failed for %s",
             account_id,

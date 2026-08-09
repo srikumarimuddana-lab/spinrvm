@@ -83,15 +83,21 @@ def object_mode(obj: Any) -> Optional[str]:
 
     Reads the ``livemode`` boolean that every Stripe object carries. Used to
     stamp a row's ``*_mode`` column from evidence rather than inference after
-    a successful retrieve. Returns ``None`` when the attribute is absent, so a
-    changed/partial payload degrades to "unknown" instead of a wrong stamp.
+    a successful retrieve. Returns ``None`` when the attribute is absent or is
+    not a real boolean, so a changed/partial payload degrades to "unknown"
+    instead of a wrong stamp — callers fall back to the key's mode.
+
+    The ``isinstance(bool)`` check is deliberate rather than a truthiness
+    test: Stripe always sends a JSON boolean here, so anything else is a
+    payload we do not understand, and guessing ``live`` from a truthy
+    placeholder would stamp a row with a mode we never actually observed.
     """
     if obj is None:
         return None
     live = obj.get("livemode") if isinstance(obj, dict) else getattr(obj, "livemode", None)
-    if live is None:
+    if not isinstance(live, bool):
         return None
-    return LIVE if bool(live) else TEST
+    return LIVE if live else TEST
 
 
 def is_missing_on_key(exc: BaseException) -> bool:

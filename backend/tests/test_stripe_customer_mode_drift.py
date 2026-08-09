@@ -223,6 +223,15 @@ class TestFirstTimeCreate:
         assert result == NEW_CUS
         assert h.updates[0][2] == {"stripe_customer_id": NEW_CUS, "stripe_customer_id_mode": "live"}
 
+    async def test_unpersisted_customer_raises_rather_than_returning_falsy(self):
+        """Callers pass this straight to Stripe, where `customer=None` silently
+        creates an unattached object instead of erroring — so a lost write must
+        surface, not slip through."""
+        with _Harness([_user(stripe_customer_id=None), _user(stripe_customer_id=None)]):
+            with pytest.raises(HTTPException) as ei:
+                await get_or_create_stripe_customer(USER_ID, LIVE_KEY)
+        assert ei.value.status_code == 502
+
     async def test_stamp_follows_the_object_not_the_key(self):
         """Evidence over inference: the stamp comes from Stripe's livemode."""
         with _Harness(

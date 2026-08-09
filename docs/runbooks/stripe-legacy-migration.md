@@ -1,5 +1,11 @@
 # Runbook — Migrating Stripe Data from the Legacy Spinr App
 
+> **Switching the SAME app from test keys to live keys is a different
+> problem — see [test→live key cutover](#appendix--testlive-key-cutover-same-app)
+> at the bottom. That data cannot be migrated, and this runbook's CSV importer
+> is the wrong tool for it.**
+
+
 **Goal:** carry drivers' Stripe Connect accounts (bank details, identity
 verification) and riders' saved cards from the old Spinr app into this
 platform, so drivers do **not** redo onboarding and riders keep their cards.
@@ -171,3 +177,153 @@ WHERE legacy_import_metadata->'stripe_migration'->>'batch' = '<batch>';
   attempt to move it.
 - Active subscriptions in the old account — cancel/recreate explicitly if any
   exist; Stripe's customer copy does not migrate subscriptions.
+
+---
+
+# Appendix — test→live key cutover (same app)
+
+This is **not** a migration, and the CSV importer above cannot help. Read this
+before trying to "sync cards back" after going live.
+
+## What happened
+
+Stripe object IDs are mode-scoped: a `cus_…` minted with `sk_test_…` does not
+exist under `sk_live_…`, and neither does an `acct_…`. The prefixes are
+identical in both modes, so the ID gives no hint. When
+`app_settings.stripe_secret_key` flips from test to live, every stored
+`users.stripe_customer_id`, `drivers.stripe_account_id`, and
+`corporate_accounts.stripe_customer_id` becomes a dangling pointer and Stripe
+answers `resource_missing` on every call.
+
+Symptoms, all at once:
+
+| Surface | Symptom |
+|---|---|
+| Rider | Saved cards fail to load; adding a card also fails |
+| Driver | "Set up payouts" dead-ends; admin still shows *payouts enabled* |
+| Admin | "Could not load cards from Stripe" on the user detail panel |
+| Corporate | Wallet auto-topup and subscription charges error |
+
+## What cannot be recovered — read this first
+
+**Test-mode cards and Connect accounts cannot be migrated to live mode.**
+
+- Stripe sandboxes test data completely and offers **no test→live copy path**.
+  Their data-migration service (Step 4 above) is live-account→live-account only.
+- Any card saved in test mode was a test PAN (`4242…`). There is no real card
+  behind it. Nothing of value is lost.
+- A test-mode Connect account holds no real bank details and no verified
+  identity. The driver must onboard for real regardless.
+
+So the goal is **not** to carry data across. It is to get every account into a
+clean live state and tell people what to expect.
+
+## What the backend now does automatically
+
+Since migration 286, identities are stamped with their mode and repaired on the
+paths where the affected user is present:
+
+- **Riders** — the first time they open the payment screen, add a card, or top
+  up the wallet, the stranded customer is replaced under the live key, the dead
+  ID is archived to `users.stripe_customer_id_superseded`, and
+  `default_payment_method` is cleared. They see an empty card list and add a
+  real card. No admin action needed.
+- **Drivers** — tapping "Set up payouts" (or an admin pressing *Refresh from
+  Stripe*) retires the dead account, resets the KYC mirror so the app stops
+  claiming a bank is linked, and mints a fresh Express account to onboard into.
+  The driver re-enters bank details and re-verifies identity. **This is
+  unavoidable** — budget for driver comms.
+- **Corporate** — *not* auto-repaired. See "Known gap" below.
+
+Kill switch: `stripe_reprovision_stale_ids = false` in app_settings stops all of
+it within 60 s, no redeploy.
+
+## Step 1 — measure the damage
+
+```bash
+curl -s -H "Authorization: Bearer $SUPER_ADMIN_TOKEN" \
+  https://api-spinr.spinr.ca/api/admin/stripe/mode-audit
+```
+
+```json
+{
+  "current_key_mode": "live",
+  "kinds": {
+    "riders":  {"live": 12, "test": 0, "unverified": 340, "known_stranded": 0},
+    "drivers": {"live": 3,  "test": 0, "unverified": 41,  "known_stranded": 0}
+  }
+}
+```
+
+`unverified` is everything created before mode tracking existed — their mode was
+never recorded and cannot be inferred from the ID. Right after a cutover this is
+where essentially everyone sits.
+
+## Step 2 — classify the unverified rows
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $SUPER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"riders","limit":100}' \
+  https://api-spinr.spinr.ca/api/admin/stripe/mode-audit/probe
+```
+
+```json
+{"probed": 100, "resolvable": 4, "stranded": 96, "inconclusive": 0,
+ "stranded_ids": ["cus_…", "…"]}
+```
+
+- `resolvable` — reachable on the live key; stamped, nothing to do.
+- `stranded` — repaired on the user's next interaction.
+- **`inconclusive` — stop.** These are auth/rate-limit/network failures, not
+  evidence about the objects. A non-zero count here usually means the key itself
+  is wrong (revoked, or belonging to a different Stripe account). Fix the key
+  before reading anything else into these numbers.
+
+Re-run until `unverified` stops shrinking. The probe never re-provisions or
+retires — it only classifies and stamps.
+
+## Step 3 — communicate before people hit it
+
+Nothing in the apps explains why a saved card or linked bank disappeared, so
+send comms ahead of the first live ride:
+
+- **Riders:** "You'll need to re-add your payment card the next time you book."
+- **Drivers:** "You'll need to set up payouts again — bank details and ID
+  verification — before your next payday." This one is real friction; give
+  notice, not a surprise.
+
+## Step 4 — verify
+
+- One rider: open the payment screen → empty list, not an error → add a card →
+  it persists and a booking preauth succeeds.
+- One driver: "Set up payouts" → Stripe onboarding opens on a **new** account →
+  finish → `/drivers/stripe-sync` reports `payouts_enabled: true`.
+- Admin: user detail card panel loads (empty, not an error); driver slideout no
+  longer claims payouts are enabled for un-onboarded drivers.
+- Re-run the audit: `known_stranded` trending to zero.
+
+## Known gap — corporate accounts
+
+`corporate_accounts.stripe_customer_id` has the tracking columns but **no
+automatic repair**. Corporate wallet auto-topup and subscription renewals charge
+a company's stored card on a schedule with no user present, so silently swapping
+in a new payment identity is the wrong default. Until that path is designed,
+after a cutover each corporate account must have its billing card re-added by
+the company's billing admin. Watch `utils/corporate_autotopup.py` errors.
+
+## Rolling back
+
+`stripe_reprovision_stale_ids = false` stops further repair. Identities already
+replaced keep their predecessor in `*_superseded` — see the rollback SQL in
+`docs/change-log/2026-08-09-stripe-test-to-live-identity-drift.md`. Note that
+restoring those pointers restores *unusable test-mode IDs*: it undoes this
+feature's writes, it does not restore working payments.
+
+## Avoiding this next time
+
+Rotating `stripe_secret_key` across modes is a **data event**, not a config
+change. Treat a mode change like a migration: announce it, expect every stored
+Stripe identity to be invalidated, and plan rider/driver comms before the flip.
+Rotating a key *within* the same mode (live→live key rotation) is safe and
+changes nothing — object IDs stay valid.

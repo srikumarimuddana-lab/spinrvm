@@ -318,7 +318,7 @@ async def with_customer_repair(user_id: str, stripe_secret: str, op):
     try:
         return customer_id, await op(customer_id)
     except Exception as e:
-        if not is_missing_on_key(e):
+        if not is_missing_on_key(e, customer_id):
             raise
         repaired = await _reprovision_stripe_customer(
             user_id, customer_id, stripe_secret, reason="resource_missing"
@@ -679,7 +679,7 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
                     customer=cid,
                     payment_method_types=["card"],
                     api_key=stripe_secret,
-                    idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 60)}",
+                    idempotency_key=f"setup-intent-{current_user['id']}-{cid}-{int(_time.time() // 60)}",
                 )
             )
 

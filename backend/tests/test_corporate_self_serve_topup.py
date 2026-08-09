@@ -128,14 +128,34 @@ def test_inactive_company_rejected(test_client, rider_override):
     assert resp.status_code == 409, resp.text
 
 
-def test_no_stripe_customer_rejected(test_client, rider_override):
+def test_no_stripe_customer_is_provisioned_not_rejected(test_client, rider_override):
+    """A NULL stripe_customer_id no longer 409s — it is provisioned in place.
+
+    The auto-topup loop NULLs this column to retire a customer stranded by a
+    test→live key rotation, so a 409 here would leave the company's own billing
+    admin with no way to ever fund the wallet again. They still get a clean 422
+    if no card is on file.
+    """
     with (
         _as_admin(),
         patch(_ROUTE + "get_corporate_account_by_id", AsyncMock(return_value=_company(stripe_customer_id=None))),
+        patch(_ROUTE + "get_corporate_wallet_by_company", AsyncMock(return_value={"id": "w1", "company_id": "c1"})),
+        patch(_ROUTE + "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
+        patch(
+            "services.corporate_stripe_identity.get_app_settings",
+            AsyncMock(return_value={"stripe_reprovision_stale_ids": True}),
+        ),
+        patch("services.corporate_stripe_identity.db_supabase.update_one", AsyncMock()),
+        patch("stripe.Customer.create", return_value=MagicMock(id="cus_new")) as m_cus,
+        patch(_ROUTE + "get_default_payment_method", AsyncMock(return_value="pm_1")),
+        patch("stripe.PaymentIntent.create", return_value=MagicMock(id="pi_1", client_secret="cs_1")) as m_pi,
+        patch(_ROUTE + "log_user_action", AsyncMock()),
     ):
         resp = test_client.post("/company/c1/wallet/topup", json={"amount": 500})
 
-    assert resp.status_code == 409, resp.text
+    assert resp.status_code == 200, resp.text
+    m_cus.assert_called_once()
+    assert m_pi.call_args.kwargs["customer"] == "cus_new"
 
 
 def test_unknown_company_404(test_client, rider_override):

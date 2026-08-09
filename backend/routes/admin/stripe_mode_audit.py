@@ -210,7 +210,7 @@ async def probe_stripe_identities(
             try:
                 obj = await asyncio.to_thread(spec["retrieve"], obj_id, stripe_secret)
             except Exception as e:
-                if is_missing_on_key(e):
+                if is_missing_on_key(e, obj_id):
                     stranded.append(obj_id)
                 else:
                     # Our key or the network — NOT evidence about this object.
@@ -236,7 +236,11 @@ async def probe_stripe_identities(
         admin,
         "stripe_mode_probe",
         spec["table"],
-        None,
+        # audit_logs.entity_id is NOT NULL (migration 06) and log_admin_action
+        # swallows its own failures — passing None here meant every probe ran
+        # unaudited while still returning 200. This action is table-wide rather
+        # than row-scoped, so the kind names what was swept.
+        f"kind:{body.kind}",
         {
             "kind": body.kind,
             "probed": len(rows),

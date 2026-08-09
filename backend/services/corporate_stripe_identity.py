@@ -156,14 +156,26 @@ async def _create_corporate_customer(
 
     # Stamp from the object's own `livemode`, not the key we sent — evidence
     # over inference, and what lets the next rotation be detected for free.
-    await db_supabase.update_one(
-        "corporate_accounts",
-        {"id": company_id},
-        {
-            "stripe_customer_id": customer.id,
-            "stripe_customer_id_mode": object_mode(customer) or key_mode(stripe_secret),
-        },
-    )
+    update: Dict[str, Any] = {
+        "stripe_customer_id": customer.id,
+        "stripe_customer_id_mode": object_mode(customer) or key_mode(stripe_secret),
+    }
+    if superseded:
+        # Record the provenance the migration-286 columns exist for. Without
+        # this a repaired company is indistinguishable from one that simply
+        # never had a customer, which is exactly the distinction finance needs
+        # when reconciling against the old Stripe account.
+        update["stripe_customer_id_superseded"] = superseded
+        update["stripe_customer_id_superseded_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Conditional on the value we set out to replace, so a concurrent retire
+    # (the auto-topup loop) or another admin's repair is never clobbered. The
+    # first-time create is unconditional because there is nothing to race with.
+    filters: Dict[str, Any] = {"id": company_id}
+    if superseded:
+        filters["stripe_customer_id"] = superseded
+
+    await db_supabase.update_one("corporate_accounts", filters, update)
     return customer.id
 
 
@@ -205,7 +217,7 @@ async def with_corporate_customer_repair(company: Dict[str, Any], stripe_secret:
     try:
         return customer_id, await op(customer_id)
     except Exception as e:
-        if not is_missing_on_key(e):
+        if not is_missing_on_key(e, customer_id):
             raise
         if not await _reprovision_enabled():
             raise CorporateCustomerUnavailable(f"customer {customer_id} unusable; repair disabled by flag") from e

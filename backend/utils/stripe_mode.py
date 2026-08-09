@@ -100,13 +100,23 @@ def object_mode(obj: Any) -> Optional[str]:
     return LIVE if live else TEST
 
 
-def is_missing_on_key(exc: BaseException) -> bool:
+def is_missing_on_key(exc: BaseException, expected_id: Optional[str] = None) -> bool:
     """True when Stripe said *this object* does not exist under the key we used.
 
     This is the trigger for re-provisioning a stored identity, so its
     precision matters more than its recall — a false positive orphans a real
     live customer (and the rider's saved cards with it). The rule is therefore
     narrow: only errors that are evidence **about the object** count.
+
+    ``expected_id`` is what makes "the object" specific, and callers repairing
+    a stored identity must always pass it. A Stripe request names several
+    objects at once — ``PaymentMethod.attach(pm_…, customer=cus_…)``,
+    ``Subscription.create(customer=cus_…, price=price_…)`` — and every one of
+    them can answer ``resource_missing``. Without this check, a rider
+    submitting a stale ``pm_…`` would have their perfectly healthy customer
+    replaced and their saved cards archived along with it. When
+    ``expected_id`` is given, the error must actually name it; if Stripe's
+    message doesn't, we answer False and leave the row alone (fail closed).
 
     Counted:
       - ``InvalidRequestError`` with ``code == "resource_missing"`` — Stripe's
@@ -125,14 +135,25 @@ def is_missing_on_key(exc: BaseException) -> bool:
     """
     if isinstance(exc, stripe.error.AuthenticationError):
         return False
+
     if isinstance(exc, stripe.error.PermissionError):
-        return True
-    if not isinstance(exc, stripe.error.InvalidRequestError):
+        missing = True
+    elif not isinstance(exc, stripe.error.InvalidRequestError):
         return False
-    if getattr(exc, "code", None) == "resource_missing":
+    elif getattr(exc, "code", None) == "resource_missing":
+        missing = True
+    else:
+        message = str(getattr(exc, "user_message", None) or exc).lower()
+        missing = any(hint in message for hint in _MISSING_MESSAGE_HINTS)
+
+    if not missing:
+        return False
+    if expected_id is None:
         return True
-    message = str(getattr(exc, "user_message", None) or exc).lower()
-    return any(hint in message for hint in _MISSING_MESSAGE_HINTS)
+    # Stripe names the offending object in the message ("No such customer:
+    # 'cus_X'"). Require ours to be the one named.
+    blob = f"{getattr(exc, 'user_message', None) or ''} {exc}".lower()
+    return expected_id.lower() in blob
 
 
 def stale_by_mode(stored_mode: Optional[str], current_key_mode: Optional[str]) -> bool:

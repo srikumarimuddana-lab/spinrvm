@@ -133,7 +133,7 @@ async def assign_subscription(
                 # window returns the same subscription instead of creating a
                 # second one, matching the customer-create key above and the
                 # existing corporate_close_refund pattern.
-                idempotency_key=f"corp-sub-create-{company_id}",
+                idempotency_key=f"corp-sub-create-{company_id}-{customer_id}",
             )
         )
 

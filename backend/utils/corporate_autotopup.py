@@ -131,7 +131,7 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
     try:
         pm_id = await get_default_payment_method(company["stripe_customer_id"], stripe_secret)
     except Exception as e:
-        if not is_missing_on_key(e):
+        if not is_missing_on_key(e, company["stripe_customer_id"]):
             raise
         await retire_corporate_customer(company, company["stripe_customer_id"], reason="resource_missing")
         return
@@ -176,7 +176,7 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
             idempotency_key=idempotency_key,
         )
     except stripe.StripeError as e:
-        if is_missing_on_key(e):
+        if is_missing_on_key(e, company["stripe_customer_id"]):
             # Unstamped row (predating migration 286) whose customer turns out
             # to be unreachable. Same treatment as the stamped case above:
             # retire so the next 143 ticks today don't each re-discover it.

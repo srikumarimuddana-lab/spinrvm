@@ -217,12 +217,25 @@ async def apply_account_update(account: Dict[str, Any], *, event_id: Optional[st
     return {**driver, **updates}
 
 
-async def refresh_driver_kyc(driver: Dict[str, Any]) -> Dict[str, Any]:
+async def refresh_driver_kyc(
+    driver: Dict[str, Any],
+    *,
+    retire_if_unreachable: bool = False,
+) -> Dict[str, Any]:
     """Admin "Refresh from Stripe" path.
 
     Retrieves the live Account from Stripe and runs the same mapping the
     webhook uses. Caller is responsible for the audit_log entry — this
     function only touches Stripe + the drivers row.
+
+    ``retire_if_unreachable`` opts in to detaching an account the running key
+    cannot see (the test→live rotation case). It defaults to **False** because
+    the destructive reading is not always the right one: the legacy Stripe
+    mapping import calls this immediately after committing an
+    ``stripe_account_id``, and a Scenario-B account living on the old Connect
+    platform answers ``PermissionError`` — which would null the mapping the
+    import just wrote, and null it again on every re-import. Only callers whose
+    job is repair (the driver's own sync, the admin refresh button) pass True.
     """
     account_id = driver.get("stripe_account_id")
     if not account_id:
@@ -235,7 +248,7 @@ async def refresh_driver_kyc(driver: Dict[str, Any]) -> Dict[str, Any]:
 
     # Cheap pre-check: a stamped account whose mode disagrees with the running
     # key is unreachable by definition — retire it without spending a call.
-    if account_is_stale_by_mode(driver, stripe_secret):
+    if retire_if_unreachable and account_is_stale_by_mode(driver, stripe_secret):
         await retire_stripe_account(driver, account_id, reason="mode_mismatch")
         return {"status": "account_not_on_key", "retired": True}
 
@@ -246,11 +259,18 @@ async def refresh_driver_kyc(driver: Dict[str, Any]) -> Dict[str, Any]:
         # mapping import) refresh many drivers concurrently on the event loop.
         account = await asyncio.to_thread(stripe.Account.retrieve, account_id, api_key=stripe_secret)
     except Exception as e:
-        if is_missing_on_key(e):
+        if is_missing_on_key(e, account_id):
             # The account does not exist on this key (the classic symptom of a
-            # test→live rotation) — distinct from a Stripe outage. Retire it so
-            # the mirror stops advertising payouts the platform cannot make,
-            # and the driver is offered onboarding instead of a dead end.
+            # test→live rotation) — distinct from a Stripe outage.
+            if not retire_if_unreachable:
+                logger.error(
+                    "[STRIPE-KYC] refresh: account %s not reachable on the current key "
+                    "(not retiring — caller did not opt in)",
+                    account_id,
+                )
+                return {"status": "account_not_on_key", "retired": False}
+            # Retire so the mirror stops advertising payouts the platform
+            # cannot make, and the driver is offered onboarding, not a dead end.
             logger.warning(
                 "[STRIPE-KYC] refresh: account %s not reachable on the current key — retiring",
                 account_id,

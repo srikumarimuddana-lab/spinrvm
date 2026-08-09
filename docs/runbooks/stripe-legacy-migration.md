@@ -233,7 +233,9 @@ paths where the affected user is present:
   claiming a bank is linked, and mints a fresh Express account to onboard into.
   The driver re-enters bank details and re-verifies identity. **This is
   unavoidable** — budget for driver comms.
-- **Corporate** — *not* auto-repaired. See "Known gap" below.
+- **Corporate** — repaired where an admin is present; the auto-topup loop
+  retires rather than replaces. See "Corporate accounts" below — the company's
+  billing card still has to be re-added.
 
 Kill switch: `stripe_reprovision_stale_ids = false` in app_settings stops all of
 it within 60 s, no redeploy.
@@ -303,14 +305,26 @@ send comms ahead of the first live ride:
   longer claims payouts are enabled for un-onboarded drivers.
 - Re-run the audit: `known_stranded` trending to zero.
 
-## Known gap — corporate accounts
+## Corporate accounts
 
-`corporate_accounts.stripe_customer_id` has the tracking columns but **no
-automatic repair**. Corporate wallet auto-topup and subscription renewals charge
-a company's stored card on a schedule with no user present, so silently swapping
-in a new payment identity is the wrong default. Until that path is designed,
-after a cutover each corporate account must have its billing card re-added by
-the company's billing admin. Watch `utils/corporate_autotopup.py` errors.
+Corporate is repaired too, but deliberately in two different ways:
+
+- **Where an admin is present** — KYB approval, subscription assignment,
+  internal-admin top-up, company self-serve top-up — the stranded customer is
+  replaced automatically, like a rider's. Safe: a fresh customer has no card, so
+  nothing is charged until someone adds one.
+- **The auto-topup loop** — retires the dead customer (archives the ID, nulls
+  the column) and **never** creates a replacement. Nobody is present to consent
+  to a new payment identity, and a fresh customer would carry no card, so the
+  charge could not have succeeded anyway. This stops the 144-failures-a-day
+  retry loop and leaves a state the next admin action repairs.
+
+**The company still has to re-add its billing card.** The old card lived on the
+customer that is gone. Until a billing admin adds one, top-ups return a clean
+422 ("No payment method on file") and auto-topup skips. Include corporate
+billing admins in the comms at Step 3, and watch the logs for
+`Retired unreachable corporate Stripe customer` — each one is a company that
+cannot fund its wallet until someone acts.
 
 ## Rolling back
 

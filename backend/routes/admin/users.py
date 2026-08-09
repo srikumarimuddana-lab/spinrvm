@@ -166,7 +166,7 @@ async def _list_user_cards(user: Dict[str, Any]) -> tuple[Optional[List[Dict[str
             None,
         )
     except Exception as e:
-        if is_missing_on_key(e):
+        if is_missing_on_key(e, customer_id):
             # Not a Stripe outage: this customer does not exist on the running
             # key — the signature of a test→live key rotation over rows minted
             # under the old mode. Say so precisely, because "Could not load

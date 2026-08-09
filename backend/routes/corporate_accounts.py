@@ -5,7 +5,6 @@ This module implements CRUD operations for corporate accounts that can be used
 for business rides and expense management.
 """
 
-import asyncio
 import logging
 from decimal import Decimal
 from typing import List, Optional
@@ -22,7 +21,6 @@ from db_supabase import (  # noqa: E402
     get_corporate_wallet_by_company,
     get_rows,
     insert_corporate_account,
-    update_corporate_stripe_customer_id,
     update_corporate_wallet_config,
 )
 from db_supabase import (  # noqa: E402
@@ -37,6 +35,10 @@ from schemas.corporate import (  # noqa: E402
 )
 from schemas.corporate import (  # noqa: E402
     CorporateAccountResponse as CorporateAccountDetailResponse,
+)
+from services.corporate_stripe_identity import (  # noqa: E402
+    corporate_customer_is_stale,
+    get_or_create_corporate_customer,
 )
 from settings_loader import get_app_settings  # noqa: E402
 from validators import (
@@ -409,31 +411,25 @@ async def kyb_review(
                 exc_info=True,
             )
             wallet_provisioning_error = True
-        if not row.get("stripe_customer_id"):
-            try:
-                settings = await get_app_settings()
-                stripe_secret = settings.get("stripe_secret_key", "")
-                if stripe_secret:
-                    import stripe
-
-                    customer = await asyncio.to_thread(
-                        lambda: stripe.Customer.create(
-                            email=row.get("billing_email"),
-                            name=row.get("legal_name") or row.get("name"),
-                            metadata={"corporate_account_id": normalized_id},
-                            api_key=stripe_secret,
-                            idempotency_key=f"cus-create-corp-{normalized_id}",
-                        )
-                    )
-                    await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
-            except Exception:
-                logger.error(
-                    "[KYB] Stripe customer creation failed for company %s — status is already 'active' "
-                    "with no Stripe customer; needs manual follow-up before the first billing event.",
-                    normalized_id,
-                    exc_info=True,
-                )
-                stripe_customer_creation_error = True
+        try:
+            settings = await get_app_settings()
+            stripe_secret = settings.get("stripe_secret_key", "")
+            # Covers two cases with one call: no customer yet (the original
+            # reason this block existed), and a customer stranded by a test→live
+            # key rotation — approving KYB against an id the running key cannot
+            # see would leave the company un-billable from day one. Admin is
+            # present, so re-provisioning is safe here. A healthy customer costs
+            # nothing: the helper returns it without touching Stripe.
+            if stripe_secret and (not row.get("stripe_customer_id") or corporate_customer_is_stale(row, stripe_secret)):
+                await get_or_create_corporate_customer(row, stripe_secret)
+        except Exception:
+            logger.error(
+                "[KYB] Stripe customer creation failed for company %s — status is already 'active' "
+                "with no Stripe customer; needs manual follow-up before the first billing event.",
+                normalized_id,
+                exc_info=True,
+            )
+            stripe_customer_creation_error = True
 
     # M2.3: notify the company of the decision — best-effort; the portal's
     # verification page (derived state + review note) is the durable signal.

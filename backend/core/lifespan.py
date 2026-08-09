@@ -535,6 +535,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import Zoho Desk sync loop: {e}")
 
+    # Capacity watchdog — samples DB thread-pool saturation, DB call
+    # rejections, and rate-limit violation rate every 60 s and alerts via
+    # ALERT_WEBHOOK_URL. Read-only (no DB/Redis writes), so it is replay-safe
+    # on every replica by construction; per-replica alerting is intentional
+    # because pool saturation is a per-process condition.
+    # See docs/runbooks/capacity-scaling.md.
+    try:
+        from utils.capacity_watchdog import capacity_watchdog_loop
+
+        _spawn("capacity_watchdog (60s)", capacity_watchdog_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import capacity watchdog loop: {e}")
+
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
@@ -559,6 +572,7 @@ async def lifespan(app: FastAPI):
             "stuck_ride_sweeper (60s)",
             "offer_expiry_reaper (10s)",
             "push_retry (30s)",
+            "capacity_watchdog (60s)",
         ]
     )
 

@@ -168,6 +168,37 @@ def _record_db_queue_depth() -> None:
         _metric_gauge("spinr_db_thread_pool_queue_depth", queue.qsize())
 
 
+def get_db_pool_stats() -> dict:
+    """Live DB thread-pool + circuit-breaker state, sampled on demand.
+
+    Exists because the pool gauges are only written from inside ``run_sync``:
+    ``spinr_db_thread_pool_threads`` / ``_max_workers`` are set on the SUCCESS
+    path only (see the ``else`` branch below), so during an outage — exactly
+    when someone is reading them — they hold whatever the last successful call
+    left behind. Worse, if traffic stops entirely the queue-depth gauge freezes
+    too, so a saturated-then-idle pool and a healthy pool look identical.
+
+    Sampling the executor directly makes the reading independent of whether any
+    query has run recently. The capacity watchdog polls this; it also refreshes
+    the queue-depth gauge as a side effect so a /metrics scrape between two
+    queries reports a current value rather than a stale one.
+
+    Read-only: no DB call, no Redis call, no lock — safe to call from a loop on
+    every replica.
+    """
+    queue = getattr(_DB_EXECUTOR, "_work_queue", None)
+    queue_depth = queue.qsize() if queue is not None else 0
+
+    _metric_gauge("spinr_db_thread_pool_queue_depth", queue_depth)
+
+    return {
+        "queue_depth": queue_depth,
+        "threads": len(getattr(_DB_EXECUTOR, "_threads", ()) or ()),
+        "max_workers": getattr(_DB_EXECUTOR, "_max_workers", _DB_THREAD_POOL_SIZE),
+        "breaker_state": getattr(_breaker, "_state", "unknown"),
+    }
+
+
 # ── Error redaction ─────────────────────────────────────────────────
 # Postgres puts real column values in its error text, and this module is the
 # funnel every table's errors pass through. Redact before the string reaches a

@@ -11,6 +11,23 @@
 # UVICORN_WORKERS stays at 2: 4 workers on shared-cpu-1x/1gb is memory-tight, and
 # worker count is a capacity knob only — the 16 background loops are replay-safe
 # per process (atomic DB claims / idempotency keys / Redis leader locks).
+#
+# BURST CAPACITY (see docs/runbooks/capacity-scaling.md). The app is scaled to 8
+# machines in yyz (bootstrap-fly.yml); autostop suspends idle ones down to
+# min_machines_running=2, and Fly's proxy resumes them when running machines
+# exceed soft_limit. That suspended pool IS the autoscaling mechanism — before
+# it existed the fleet was a fixed 2 machines and hard-rejected past ~500
+# connections. Suspend (not stop) is deliberate: memory-snapshot resume is
+# sub-second versus a 5-15s cold boot (VM + uvicorn + lifespan DB probe + 18
+# loops) plus the 30s check grace period. Suspend supports machines <=2GB, so
+# 1gb qualifies. If resumed machines show stale-connection anomalies beyond what
+# run_sync's httpx.NetworkError retry absorbs, flip this to "stop".
+#
+# Concurrency is counted in connections because riders and drivers hold a
+# long-lived WebSocket each, making connection count ~= active users. 8 x 750
+# soft = 6000 users before the last machine is woken; 8 x 1000 hard = 8000
+# absolute. Do NOT raise per-machine limits further without loadtest evidence —
+# shared-cpu-1x CPU, not memory, is the binding constraint at this size.
 app = "spinr-backend-yyz"
 primary_region = "yyz"
 kill_signal = "SIGINT"
@@ -33,15 +50,15 @@ kill_timeout = "30s"
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = false
+  auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 2
   processes = ["app"]
 
   [http_service.concurrency]
     type = "connections"
-    soft_limit = 200
-    hard_limit = 250
+    soft_limit = 750
+    hard_limit = 1000
 
   [[http_service.checks]]
     grace_period = "30s"

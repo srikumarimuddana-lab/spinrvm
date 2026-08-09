@@ -53,6 +53,19 @@ the instrumentation this harness pairs with:
   `spinr_db_retry_total`, `spinr_db_circuit_state`
 - admin monitoring → replica panel: DB thread-pool `queued_calls` (queue
   growth = the pool is the bottleneck), circuit-breaker state, Redis memory.
+- `spinr_db_thread_pool_queue_depth`, `spinr_db_calls_rejected_total`
+  (labelled by `reason`), `spinr_rate_limit_violation_total` (by `path`) —
+  these are the three signals the `capacity_watchdog` loop alerts on, so a
+  run that trips them should also produce a webhook alert. **A ramp that
+  saturates the pool without an alert arriving is itself a finding**: check
+  `ALERT_WEBHOOK_URL` and the cooldown state before trusting the next run.
+
+Capacity limits, the per-layer ceilings, and what to do when an alert
+fires are documented in
+[`docs/runbooks/capacity-scaling.md`](../docs/runbooks/capacity-scaling.md).
+Read §1 before interpreting a breach — the four layers (rate limits, Fly
+connections, DB thread pool, Supabase tier) fail differently, and the
+lowest one binds.
 
 ## SLA gates
 
@@ -74,6 +87,29 @@ A-grade platforms know their number. After each ramp run, append a row:
 |------|--------|-----|--------------------------|---------------|------------|-------|
 | _example_ 2026-06-14 | abc1234 | staging-fly-1x-shared | 240/80 | estimate P95 612ms | DB thread pool saturated (queued_calls>50) | retest after DB_THREAD_POOL_SIZE=96 |
 | | | | | | | |
+
+### Expected breaking point after the 2026-08-07 burst-capacity change
+
+Nothing below is measured — it is the arithmetic the config was sized on,
+recorded so the first real run has a prediction to falsify rather than a
+blank page. **If a run contradicts these, the run is right.**
+
+| Layer | Predicted ceiling | Predicted first symptom |
+|---|---|---|
+| Fly connections | 8 machines × 750 soft / 1000 hard ⇒ ~6,000 concurrent WS users | Connection refusals at the proxy, before any app-level error |
+| DB thread pool | running machines × 2 workers × 64 = 1,024 at full 8-machine wake | `spinr_db_thread_pool_queue_depth` > 50, then estimate P95 breach |
+| Supabase tier | Unknown — tier-dependent, not autoscaling | `spinr_db_calls_rejected_total{reason=circuit_open}` rising |
+| Rate limits | Per user, so should NOT bind on legitimate load | `spinr_rate_limit_violation_total` climbing on one `path` |
+
+The genuinely untested assumption is **CPU on `shared-cpu-1x`**: 750
+connections per machine was sized against memory (tens of KB per WS), and
+CPU was never profiled. If a ramp breaches SLAs well below 6,000 users
+with a healthy DB pool, CPU is the bottleneck — add machines
+(`flyctl scale count`), do not raise `soft_limit`.
+
+Rate limits binding during a ramp is most likely a **harness** artifact:
+bot users that share one token key to one bucket. Give each bot its own
+authenticated user before concluding the limits are too tight.
 
 "First symptom" = the first SLA gate or error-rate (>1% non-2xx) to
 breach during the ramp. Locust's `results/ramp_stats_history.csv` gives

@@ -199,3 +199,92 @@ async def test_html_is_a_complete_document():
     assert html.lstrip().startswith("<!DOCTYPE html>")
     assert "</html>" in html
     assert 'meta name="viewport"' in html
+
+
+# --- render_from_text ------------------------------------------------------
+# The bridge for senders whose copy was authored as plain text (KYB decisions,
+# ops alerts, admin broadcasts, statements, tax/DSAR exports). Its whole value
+# is giving them the logo and the configured footer *without* editing a word of
+# what they say — so these pin both halves of that.
+
+
+async def test_render_from_text_splits_paragraphs_on_blank_lines():
+    rendered = await layout.render_from_text(
+        heading="Your statement is ready",
+        body="First paragraph.\n\nSecond paragraph.",
+        company=_COMPANY,
+    )
+    assert "First paragraph." in rendered.html
+    assert "Second paragraph." in rendered.html
+    # Two <p> blocks, not one run-together block.
+    assert rendered.html.count("First paragraph.</p>") == 1
+    assert rendered.html.count("Second paragraph.</p>") == 1
+
+
+async def test_render_from_text_keeps_single_newlines_inside_a_paragraph():
+    # An address block or short list must not be exploded into separate blocks.
+    rendered = await layout.render_from_text(
+        heading="Invite",
+        body="123 Example St\nSaskatoon, SK",
+        company=_COMPANY,
+    )
+    # Both lines land in one block, contiguously — not split across two <p>s.
+    assert "123 Example St\nSaskatoon, SK" in rendered.html
+
+
+async def test_render_from_text_carries_the_logo_and_footer():
+    rendered = await layout.render_from_text(heading="Hi", body="Body copy.", company=_COMPANY)
+    assert _COMPANY.logo_url in rendered.html
+    assert _COMPANY.identity_line in rendered.html
+    assert _COMPANY.identity_line in rendered.text
+
+
+async def test_render_from_text_escapes_the_body():
+    rendered = await layout.render_from_text(
+        heading="Broadcast",
+        body="<script>alert(1)</script>",
+        company=_COMPANY,
+    )
+    assert "<script>" not in rendered.html
+    assert "&lt;script&gt;" in rendered.html
+
+
+async def test_render_from_text_tolerates_an_empty_body():
+    # A sender that computed an empty body should still produce a branded
+    # shell rather than raising inside a best-effort notification path.
+    rendered = await layout.render_from_text(heading="Notice", body="", company=_COMPANY)
+    assert "Notice" in rendered.html
+    assert _COMPANY.identity_line in rendered.html
+
+
+async def test_line_breaks_inside_a_paragraph_survive_into_html():
+    # The DSAR export email lists the files in the archive one per line. HTML
+    # collapses a newline to a space, so without this the plain-text version
+    # would keep its shape and the HTML would render one run-on line.
+    rendered = await _render(paragraphs=["The archive contains:\n• rides.csv\n• payouts.csv"])
+    assert "The archive contains:<br>• rides.csv<br>• payouts.csv" in rendered.html
+    assert "• rides.csv\n• payouts.csv" in rendered.text
+
+
+async def test_a_br_cannot_be_forged_by_caller_text():
+    # Escaping runs before newlines become <br>, so caller text saying "<br>"
+    # stays visible text rather than becoming markup.
+    rendered = await _render(paragraphs=["literal <br> tag"])
+    assert "literal &lt;br&gt; tag" in rendered.html
+
+
+async def test_column_alignment_survives_into_html():
+    # The safety-team incident alert and the driver statement pad with spaces
+    # to line up their columns. They were read as plain text before an HTML
+    # part existed; HTML collapses a run of spaces, so without preserving them
+    # adding HTML would have made those emails worse than sending none.
+    rendered = await _render(paragraphs=["Ride ID:   abc123\nCreated:   now"])
+    assert "Ride ID:&nbsp;&nbsp;&nbsp;abc123" in rendered.html
+    assert "Ride ID:   abc123" in rendered.text
+
+
+async def test_a_single_space_is_left_alone():
+    # Only runs are preserved — ordinary prose must still wrap normally.
+    rendered = await _render(paragraphs=["one two three"])
+    assert "one two three" in rendered.html
+    assert "&nbsp;" not in rendered.html

@@ -27,6 +27,7 @@ under riders who are already receiving them.
 from __future__ import annotations
 
 import html
+import re
 from typing import Iterable, NamedTuple, Optional, Sequence, Tuple
 
 try:
@@ -75,6 +76,31 @@ def _esc(value: object) -> str:
     ``quote=True`` so values are also safe inside attributes.
     """
     return html.escape(str(value if value is not None else ""), quote=True)
+
+
+def _esc_multiline(value: object) -> str:
+    """Escape a paragraph, keeping the line breaks the caller wrote.
+
+    HTML collapses a newline to a space, so an address block or a list of the
+    files in a data export would render as one run-on line — while the plain-
+    text alternative kept its shape, making the two versions disagree.
+
+    ``<br>`` rather than ``white-space:pre-line`` because Outlook's Word
+    rendering engine handles the property inconsistently, and a list that
+    silently un-wraps in one major client is the failure this avoids.
+
+    Runs of spaces are preserved for the same reason. Several bodies routed
+    through here are column-aligned with padding — the safety-team incident
+    alert ("Ride ID:   …"), the driver statement's indented totals — and they
+    used to be read as plain text, where the alignment held. HTML collapses a
+    run of spaces to one, so without this, adding an HTML part would have made
+    those emails *worse* than sending none.
+
+    Escaping happens first, so neither the ``<br>`` nor the entity can be
+    forged by caller text.
+    """
+    escaped = _esc(value).replace("\n", "<br>")
+    return re.sub(r"  +", lambda m: "&nbsp;" * len(m.group()), escaped)
 
 
 def header_html(company: CompanyDetails, subtitle: Optional[str] = None) -> str:
@@ -128,7 +154,7 @@ def _body_html(
     for para in paragraphs:
         parts.append(
             f'<tr><td style="padding:14px 24px 0;">'
-            f'<p style="color:{MUTED};font-size:15px;line-height:1.6;margin:0;">{_esc(para)}</p></td></tr>'
+            f'<p style="color:{MUTED};font-size:15px;line-height:1.6;margin:0;">{_esc_multiline(para)}</p></td></tr>'
         )
 
     if cta:
@@ -237,6 +263,28 @@ async def render_email(
             company=details,
         ),
     )
+
+
+async def render_from_text(
+    *,
+    heading: str,
+    body: str,
+    company: Optional[CompanyDetails] = None,
+) -> RenderedEmail:
+    """Wrap an already-written plain-text body in the shared branded shell.
+
+    The bridge for senders whose copy was authored as plain text — corporate
+    KYB decisions, ops alerts, admin broadcasts, driver statements, tax and
+    DSAR exports. Rewriting each one's copy into structured paragraphs would be
+    a bigger, riskier change than they deserve; this gives them the logo and
+    the configured company details without touching a word of what they say.
+
+    Paragraphs split on blank lines, matching how these bodies are written. A
+    single newline inside a paragraph is left alone so an address block or a
+    short list keeps its shape.
+    """
+    paragraphs = [p.strip() for p in (body or "").split("\n\n") if p.strip()]
+    return await render_email(heading=heading, paragraphs=paragraphs, company=company)
 
 
 def render_text(

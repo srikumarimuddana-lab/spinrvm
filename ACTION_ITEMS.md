@@ -4221,13 +4221,27 @@ Remaining, roughly in order of user impact:
   288, defaults on); the pre-retrofit shell is kept verbatim and pinned by
   `tests/test_receipt_shell_snapshot.py`. See
   `docs/change-log/2026-08-08-receipt-invoice-branding-retrofit.md`.
-- [ ] **N11b. Remaining un-retrofitted emails** — corporate OTP
-  (`routes/auth.py`), admin broadcast (`routes/admin/messaging.py`) and the
-  DSAR link (`routes/drivers/tax_exports.py`) are bare `<p>`/`<div>`;
-  driver statements, corporate low-balance, KYB decisions and corporate
-  signup ops are plain text only. Lower stakes than the receipt — none is a
-  tax document — but they are the last emails that look nothing like Spinr.
-  The invoice email is also still HTML-only, with no text alternative.
+- [x] ~~**N11b. Remaining un-retrofitted emails**~~ — done: corporate OTP,
+  member invite, KYB decision, signup ops alert, admin broadcast and the
+  T4A/DSAR export emails now render through `utils/email_layout`. Driver
+  statements, corporate low-balance and the safety-team alert are branded
+  indirectly — `features.send_email` now wraps a plain-text `body` in the
+  shared shell when the caller supplies no `html`, so the next sender added
+  that way is branded by default. Enforced by
+  `tests/test_all_emails_are_branded.py`, which fails if any send site
+  bypasses the layout without an argued allowlist entry. The admin broadcast
+  additionally now **escapes** admin-authored free text, which the previous
+  bare `<h2>`/`<p>` interpolation did not. See
+  `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
+- [ ] **N17. Product name in email copy is still literal "Spinr"** — "Open the
+  Spinr driver app", "your Spinr wallet", "— The Spinr Team". Deliberate, not
+  an oversight: the `company_name` setting holds the *legal entity* name, and
+  "Open the Spinr Technologies Inc. driver app" reads badly, so settings drive
+  the footer identity, mailing address, logo, logo alt text and sentence-final
+  legal-name usage only. A rebrand of the product name itself needs a separate
+  `company_app_name` setting plus a copy sweep across `utils/rider_emails.py`,
+  `utils/driver_status_notifications.py`, `utils/document_expiry.py` and
+  `routes/drivers/tax_exports.py`. Worth doing before, not after, any rename.
 - [ ] **N11c. Delete the pre-retrofit receipt/invoice shell and its flag** —
   once the branded version has been seen in real inboxes. Two shells and a
   switch are a real carrying cost; both `_LEGACY_*` constants are commented

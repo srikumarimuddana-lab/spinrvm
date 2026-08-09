@@ -150,12 +150,28 @@ def _ledger_row(t: dict[str, Any], driver_id: str, acct: str, now_iso: str) -> d
     }
 
 
-def _list_connect(resource: Any, acct: str, stripe_secret: str, window: dict[str, Any]) -> list[dict[str, Any]]:
+def _list_connect(
+    resource: Any,
+    acct: str,
+    stripe_secret: str,
+    window: dict[str, Any],
+    expand: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """List every page of a Connect-scoped resource. Blocking; call in a thread."""
+    params: dict[str, Any] = {"limit": 100, "api_key": stripe_secret, "stripe_account": acct, **window}
+    if expand:
+        params["expand"] = expand
     out: list[dict[str, Any]] = []
-    for obj in resource.list(limit=100, api_key=stripe_secret, stripe_account=acct, **window).auto_paging_iter():
+    for obj in resource.list(**params).auto_paging_iter():
         out.append(dict(obj))
     return out
+
+
+# Stripe returns `destination` as a bare `ba_…` id unless asked to expand it.
+# Without this, `_payout_row` can never find a last4 and the column — plus the
+# driver-facing `bank_last4` field — is always null, which defeats the point of
+# showing which bank account a payout went to.
+_PAYOUT_EXPAND = ["data.destination"]
 
 
 async def _upsert(table: str, rows: list[dict[str, Any]]) -> int:
@@ -215,7 +231,9 @@ async def sync_connect_ledger(
         async with sem:
             for acct in _driver_accounts(driver):
                 try:
-                    payouts = await asyncio.to_thread(_list_connect, stripe.Payout, acct, stripe_secret, window)
+                    payouts = await asyncio.to_thread(
+                        _list_connect, stripe.Payout, acct, stripe_secret, window, _PAYOUT_EXPAND
+                    )
                     txns = await asyncio.to_thread(
                         _list_connect, stripe.BalanceTransaction, acct, stripe_secret, window
                     )
@@ -246,11 +264,36 @@ async def sync_connect_ledger(
 
         if not read_any:
             return
-        result.drivers_synced += 1
-        result.payouts_upserted += await _upsert(PAYOUTS_TABLE, payout_rows)
-        result.ledger_upserted += await _upsert(LEDGER_TABLE, ledger_rows)
 
-    await asyncio.gather(*(one(d) for d in drivers))
+        # Await FIRST, then increment. `result.x += await _upsert(...)` reads
+        # the attribute, suspends at the await, and writes back a value derived
+        # from the stale read — so concurrent drivers clobber each other's
+        # totals and the reported counts are near-meaningless (50 concurrent
+        # increments can land as 1). The counts are this endpoint's entire
+        # output, so that is the whole result being wrong, not a cosmetic slip.
+        try:
+            written_payouts = await _upsert(PAYOUTS_TABLE, payout_rows)
+            written_ledger = await _upsert(LEDGER_TABLE, ledger_rows)
+        except Exception:
+            # A DB failure for one driver must not discard the warnings and
+            # errors already collected for everyone else.
+            logger.error("[CONNECT-LEDGER] upsert failed for driver %s", driver_id, exc_info=True)
+            result.errors.append(
+                LedgerSyncReportItem(driver_id, "db_write_failed", "could not persist synced rows; re-run")
+            )
+            return
+
+        result.drivers_synced += 1
+        result.payouts_upserted += written_payouts
+        result.ledger_upserted += written_ledger
+
+    # return_exceptions so one unexpected failure cannot abort the gather and
+    # leave the remaining coroutines running uncancelled after we unwind.
+    outcomes = await asyncio.gather(*(one(d) for d in drivers), return_exceptions=True)
+    for driver, outcome in zip(drivers, outcomes, strict=True):
+        if isinstance(outcome, BaseException):
+            logger.error("[CONNECT-LEDGER] driver %s failed", driver["id"], exc_info=outcome)
+            result.errors.append(LedgerSyncReportItem(driver["id"], "sync_failed", "unexpected failure; re-run"))
     logger.info(
         "[CONNECT-LEDGER] synced drivers=%s accounts=%s payouts=%s ledger=%s errors=%s",
         result.drivers_synced,

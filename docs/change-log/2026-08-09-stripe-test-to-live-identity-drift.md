@@ -422,3 +422,83 @@ both blocked writes and made its own `NOT VALID`/`VALIDATE` split pointless;
 and repair retries now vary their Stripe idempotency keys by customer, since
 reusing a key with different parameters returns `idempotency_error` rather
 than completing the repaired call.
+
+---
+
+## Addendum — bank payouts and full Connect ledger
+
+Requested follow-up: capture *all* of a driver's Stripe money movement locally,
+not just the platform's transfers to them.
+
+### What was missing
+
+`payouts` only ever recorded one leg — Stripe **Transfers**, platform →
+connected account. The other leg lives *on the connected account* and requires
+`stripe_account=acct_…` to read, so nothing in the app had ever seen it:
+
+| Object | Before | Now |
+|---|---|---|
+| `Transfer` (platform → account) | `payouts` | unchanged |
+| `Payout` (account → driver's bank) | — | `driver_stripe_payouts` |
+| `BalanceTransaction` (fees, refunds, payout failures, adjustments) | — | `driver_stripe_ledger` |
+
+Practically: a driver could see that Spinr *sent* money, but not whether their
+**bank actually received it**, when it arrived, or why it failed.
+
+### The trap this design is built around
+
+**Neither new table is an income record, and neither may ever be summed as one.**
+A single dollar earned appears in all three places as it moves: `payouts`
+(platform sent it) → `driver_stripe_payouts` (account sent it to the bank) →
+`driver_stripe_ledger` (one row per leg, plus fees). Summing them together
+over-reports income to the CRA.
+
+Three defences, deliberately layered:
+
+1. `driver_stripe_ledger.amount` / `net` are **signed** (Stripe convention), so
+   a naive sum nets to the balance *change*, not income. A test asserts a
+   transfer-in plus its payout-out sums to exactly `0.00`.
+2. The warning is in migration 288's header, the service docstring, the route
+   docstring, and the API response `note`.
+3. T4A (`routes/drivers/tax_exports.py`) and payable balance
+   (`routes/drivers/earnings.py`) are **untouched** — still rides +
+   `payouts.payout_type='stripe_sync'` only.
+
+### Design notes
+
+- **No validate/commit split**, unlike the other importers. Theirs exist because
+  their writes feed a T4A total; these are display-only and every write is an
+  idempotent upsert keyed on the Stripe object id, so a dry run would add
+  ceremony without protecting anything. A partial run simply resumes.
+- **Payouts upsert with UPDATE**, not `insert_many_ignore_conflicts` — that
+  passes `ignore_duplicates=True`, which would freeze a payout at its
+  first-seen status. They move `pending → in_transit → paid|failed` after we
+  first see them.
+- Reads **current and superseded** accounts, with the transfer sync's
+  asymmetry preserved: an unreachable *superseded* account warns, an
+  unreachable *current* one errors.
+- **No raw-payload column.** Only named fields are stored, so an unexpected
+  Stripe field cannot silently land PII in the database. `bank_last4` is only
+  populated when Stripe actually expanded `destination` — never guessed.
+
+### Files
+
+| File | What |
+|---|---|
+| `backend/migrations/288_driver_stripe_connect_ledger.sql` | Two tables, RLS, indexes, money-safety header |
+| `backend/services/stripe_connect_ledger_service.py` | Connect-scoped sync |
+| `backend/routes/admin/stripe_connect_ledger.py` | `POST /api/admin/stripe/connect-ledger/sync` |
+| `backend/routes/drivers/payouts.py` | `GET /drivers/stripe/bank-payouts`, `GET /drivers/stripe/ledger` |
+
+### What was NOT verified
+
+- **Migration 288 has not been applied**, like 286 and 287.
+- **No real Stripe Connect call was made.** `Payout.list` and
+  `BalanceTransaction.list` are mocked; the `stripe_account=` scoping is
+  correct per Stripe's docs and matches the existing `Payout.create` call in
+  `routes/drivers/payouts.py`, but it has not been exercised live.
+- **No frontend.** The driver app has no screen for either endpoint yet — the
+  API exists, nothing renders it.
+- **Volume is untested.** A driver-year could be thousands of balance
+  transactions; the sync chunks upserts at 200 rows but no large account has
+  been run through it.

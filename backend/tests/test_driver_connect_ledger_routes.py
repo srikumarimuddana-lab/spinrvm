@@ -202,3 +202,45 @@ class TestAdminSync:
     def test_unknown_fields_are_rejected(self):
         with pytest.raises(ValueError):
             ConnectLedgerSyncRequest(driver_idz=["x"])
+
+
+class TestSyncScopeGuards:
+    def test_empty_driver_ids_is_rejected(self):
+        """`_fetch_sync_targets` treats a falsy list as "all drivers", so an
+        empty selection would silently sweep every connected account's full
+        history — and there is no dry-run step here to catch it."""
+        with pytest.raises(ValueError):
+            ConnectLedgerSyncRequest(driver_ids=[])
+
+    def test_omitting_driver_ids_still_means_all(self):
+        assert ConnectLedgerSyncRequest().driver_ids is None
+
+    async def test_service_failure_surfaces_502_not_500(self):
+        with (
+            patch(
+                "backend.routes.admin.stripe_connect_ledger.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+            ),
+            patch(
+                "backend.routes.admin.stripe_connect_ledger.ledger_svc.sync_connect_ledger",
+                AsyncMock(side_effect=RuntimeError("supabase down")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as ei:
+                await sync_connect_ledger(ConnectLedgerSyncRequest(), admin=SUPER)
+        assert ei.value.status_code == 502
+
+    async def test_deliberate_http_errors_pass_through(self):
+        with (
+            patch(
+                "backend.routes.admin.stripe_connect_ledger.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+            ),
+            patch(
+                "backend.routes.admin.stripe_connect_ledger.ledger_svc.sync_connect_ledger",
+                AsyncMock(side_effect=HTTPException(status_code=429, detail="slow down")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as ei:
+                await sync_connect_ledger(ConnectLedgerSyncRequest(), admin=SUPER)
+        assert ei.value.status_code == 429

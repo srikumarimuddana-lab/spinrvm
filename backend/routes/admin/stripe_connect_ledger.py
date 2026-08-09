@@ -58,7 +58,12 @@ class ConnectLedgerSyncRequest(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    driver_ids: Optional[list[str]] = Field(None, max_length=500)
+    # min_length=1: an empty list must be a 422, not a silent full-fleet sync.
+    # `_fetch_sync_targets` treats a falsy list as "all drivers", so
+    # `{"driver_ids": []}` would otherwise read every connected account's full
+    # history — the opposite of what an empty selection means, and there is no
+    # dry-run step here to catch it.
+    driver_ids: Optional[list[str]] = Field(None, min_length=1, max_length=500)
     # Calendar-year convenience: `year=2025` bounds the Stripe listing to that
     # year, which is how an operator reconciles one tax year at a time.
     year: Optional[int] = Field(None, ge=2015, le=2100)
@@ -90,12 +95,23 @@ async def sync_connect_ledger(
         raise HTTPException(status_code=503, detail="Stripe is not configured.")
 
     created_gte, created_lte = _year_window(body.year)
-    result = await ledger_svc.sync_connect_ledger(
-        stripe_secret,
-        driver_ids=body.driver_ids,
-        created_gte=created_gte,
-        created_lte=created_lte,
-    )
+    try:
+        result = await ledger_svc.sync_connect_ledger(
+            stripe_secret,
+            driver_ids=body.driver_ids,
+            created_gte=created_gte,
+            created_lte=created_lte,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Per-driver failures are already collected into result.errors; reaching
+        # here means the sync itself could not run (DB unreachable, Stripe
+        # client misconfigured). Surface 502 so the operator retries, rather
+        # than a bare 500 — matching the sibling payout-sync endpoint and
+        # CLAUDE.md's "never hand back a half-valid response" rule.
+        logger.error("[CONNECT-LEDGER] sync failed", exc_info=True)
+        raise HTTPException(status_code=502, detail="Could not sync from Stripe. Please try again.") from e
 
     await log_admin_action(
         admin,

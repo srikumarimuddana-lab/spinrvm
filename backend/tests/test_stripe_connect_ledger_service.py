@@ -264,3 +264,72 @@ class TestGuards:
         with _Harness([_driver()], payouts={ACCT: [_payout()]}) as h:
             await svc.sync_connect_ledger("sk_test_x")
         assert set(h.list_calls) == {("payout", ACCT), ("txn", ACCT)}
+
+
+class TestConcurrencyAndFailureIsolation:
+    """`result.x += await f()` reads the attribute, suspends at the await, then
+    writes back from the stale read — so concurrent drivers clobber each
+    other's totals. The counts are this endpoint's entire output."""
+
+    async def test_counts_are_correct_across_many_concurrent_drivers(self):
+        drivers = [
+            {"id": f"drv_{i}", "stripe_account_id": f"acct_{i}", "stripe_account_id_superseded": None}
+            for i in range(25)
+        ]
+        payouts = {f"acct_{i}": [_payout(f"po_{i}")] for i in range(25)}
+        txns = {f"acct_{i}": [_txn(f"txn_{i}")] for i in range(25)}
+
+        with _Harness(drivers, payouts=payouts, txns=txns):
+            result = await svc.sync_connect_ledger("sk_test_x", concurrency=8)
+
+        assert result.drivers_synced == 25
+        assert result.payouts_upserted == 25
+        assert result.ledger_upserted == 25
+
+    async def test_one_drivers_db_failure_does_not_lose_the_others(self):
+        drivers = [
+            {"id": "drv_ok", "stripe_account_id": "acct_ok", "stripe_account_id_superseded": None},
+            {"id": "drv_bad", "stripe_account_id": "acct_bad", "stripe_account_id_superseded": None},
+        ]
+        payouts = {"acct_ok": [_payout("po_ok")], "acct_bad": [_payout("po_bad")]}
+
+        async def _upsert(table, rows):
+            if rows and rows[0]["driver_id"] == "drv_bad":
+                raise RuntimeError("supabase down")
+            return len(rows)
+
+        h = _Harness(drivers, payouts=payouts)
+        with h, patch.object(svc, "_upsert", side_effect=_upsert):
+            result = await svc.sync_connect_ledger("sk_test_x")
+
+        # The healthy driver still synced, and the failure is reported, not lost.
+        assert result.drivers_synced == 1
+        assert [e.field for e in result.errors] == ["db_write_failed"]
+
+    async def test_unexpected_per_driver_error_is_reported_not_raised(self):
+        """gather(return_exceptions=True): one driver blowing up must not abort
+        the run and leave the other coroutines writing uncancelled."""
+        drivers = [{"id": "drv_1", "stripe_account_id": ACCT, "stripe_account_id_superseded": None}]
+        # Needs a payout present, or the row-builder is never reached at all.
+        with (
+            _Harness(drivers, payouts={ACCT: [_payout()]}),
+            patch.object(svc, "_payout_row", side_effect=RuntimeError("boom")),
+        ):
+            result = await svc.sync_connect_ledger("sk_test_x")
+        assert [e.field for e in result.errors] == ["sync_failed"]
+
+
+class TestPayoutExpansion:
+    async def test_destination_is_expanded_so_bank_last4_can_populate(self):
+        """Without expand, Stripe returns `destination` as a bare id and the
+        column is always null — the field would exist but never be filled."""
+        seen: list = []
+
+        def _payout_list(**kw):
+            seen.append(kw.get("expand"))
+            return _FakeList([_payout()])
+
+        with _Harness([_driver()]), patch("stripe.Payout.list", side_effect=_payout_list):
+            await svc.sync_connect_ledger("sk_test_x")
+
+        assert seen and seen[0] == ["data.destination"]

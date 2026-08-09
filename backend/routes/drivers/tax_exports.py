@@ -621,47 +621,50 @@ async def _upload_export_zip(user_id: str, zip_bytes: bytes, expires_in_seconds:
     return _extract_signed_url(res)
 
 
-def _build_export_link_email_text(download_url: str, expires_human: str) -> str:
-    """Plain-text 'your data is ready' email with a download link + expiry."""
-    return (
-        "Hi,\n\n"
-        "As requested, your personal data held by Spinr is ready to download:\n\n"
-        f"  {download_url}\n\n"
-        f"This secure link expires on {expires_human}. If it expires before you "
-        "download it, just request a new export from the app.\n\n"
-        "The download is a ZIP archive containing:\n"
-        "  • README.txt — what each file contains\n"
-        "  • account.csv, driver_profile.csv — your profile\n"
-        "  • rides.csv — your trip history\n"
-        "  • payouts.csv — your payout history\n"
-        "  • documents.csv — your uploaded document records\n"
-        "  • notification_preferences.csv — your notification settings\n"
-        "  • raw_data.json — the complete machine-readable export\n\n"
-        "If you have any questions about your data or would like to request "
-        "deletion, please contact privacy@spinr.ca.\n\n"
-        "— The Spinr Team"
-    )
+#: What the export ZIP contains, itemised.
+#: An access request is answered properly by telling the person what they are
+#: being given, not just handing them an archive — so this manifest survives
+#: from the pre-branding plain-text version rather than being summarised away.
+_EXPORT_MANIFEST = (
+    "The download is a ZIP archive containing:\n"
+    "• README.txt — what each file contains\n"
+    "• account.csv, driver_profile.csv — your profile\n"
+    "• rides.csv — your trip history\n"
+    "• payouts.csv — your payout history\n"
+    "• documents.csv — your uploaded document records\n"
+    "• notification_preferences.csv — your notification settings\n"
+    "• raw_data.json — the complete machine-readable export"
+)
 
 
-def _build_export_link_email_html(download_url: str, expires_human: str) -> str:
-    """Lyft-style 'your data is ready' HTML email with a download button."""
-    return (
-        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-        'max-width:520px;margin:0 auto;color:#1a1a1a;line-height:1.5">'
-        '<h2 style="margin:0 0 12px">Your data export is ready</h2>'
-        "<p>As requested, your personal data held by Spinr is ready to download.</p>"
-        f'<p style="margin:20px 0"><a href="{download_url}" '
-        'style="background:#FF3B30;color:#fff;text-decoration:none;padding:12px 22px;'
-        'border-radius:8px;display:inline-block;font-weight:600">Download my data (ZIP)</a></p>'
-        f'<p style="color:#555;font-size:13px">This secure link expires on '
-        f"<strong>{expires_human}</strong>. If it expires before you download it, just "
-        "request a new export from the app.</p>"
-        "<p>The download contains spreadsheet (CSV) files you can open in Excel, Numbers, "
-        "or Google Sheets, plus a README and the complete machine-readable JSON.</p>"
-        '<p style="color:#555;font-size:13px">Questions about your data or want it deleted? '
-        'Contact <a href="mailto:privacy@spinr.ca">privacy@spinr.ca</a>.</p>'
-        '<p style="color:#888;font-size:12px">— The Spinr Team</p>'
-        "</div>"
+async def _build_export_link_email(download_url: str, expires_human: str):
+    """'Your data is ready' email with a download button, on the shared shell.
+
+    A PIPEDA access request answered by an unbranded email containing a link to
+    "your personal data" is indistinguishable from a phishing attempt, which is
+    a poor way to deliver a privacy right. The shared layout puts the real logo
+    and the configured company details around it.
+
+    Replaces the separate HTML and plain-text builders this used to have: the
+    layout renders both from one source, so the two cannot drift.
+    """
+    try:
+        from ...utils.email_layout import render_email
+    except ImportError:
+        from utils.email_layout import render_email  # type: ignore
+
+    return await render_email(
+        greeting="Hi,",
+        heading="Your data export is ready",
+        paragraphs=[
+            "As requested, your personal data held by Spinr is ready to download.",
+            _EXPORT_MANIFEST,
+            "The CSV files open in Excel, Numbers, or Google Sheets.",
+            f"This secure link expires on {expires_human}. If it expires before you download "
+            "it, just request a new export from the app.",
+        ],
+        cta=("Download my data (ZIP)", download_url),
+        footnote="Questions about your data, or want it deleted? Contact privacy@spinr.ca.",
     )
 
 
@@ -768,11 +771,12 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             # the attribute. (Triggers the attachment fallback below.)
             if not download_url.startswith("https://"):
                 raise ValueError(f"unexpected signed URL scheme: {download_url[:30]!r}")
+            _export_rendered = await _build_export_link_email(download_url, expires_human)
             await _deps.send_email(
                 to=email,
                 subject=subject,
-                body=_build_export_link_email_text(download_url, expires_human),
-                html=_build_export_link_email_html(download_url, expires_human),
+                body=_export_rendered.text,
+                html=_export_rendered.html,
                 email_type="dsar",
                 recipient_user_id=user_id,
                 log_id="dsar",

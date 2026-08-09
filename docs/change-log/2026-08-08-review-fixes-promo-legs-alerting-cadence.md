@@ -211,10 +211,15 @@ its own in 8 days.
 ## 10. What was NOT verified
 
 - **No end-to-end run with `ledger_double_entry_enabled` on.** The promo legs have
-  never been written to a real `financial_event_entries` row; the `promo_expense`
-  value is verified to be in migration 286's CHECK constraint by reading the applied
-  migration, not by inserting a row with it. This is the same standing boundary the
-  rest of the branch carries (see `2026-08-08-migration-verification-result.md`).
+  never been written by the projection to a real `financial_event_entries` row.
+  ~~the `promo_expense` value is verified to be in migration 286's CHECK constraint by
+  reading the applied migration, not by inserting a row with it.~~ **That part is now
+  closed (2026-08-09):** `verify_migrations_292_293.sql` check 3a inserts a five-leg
+  journal including a `promo_expense` debit against a real Postgres and it was accepted,
+  so this fix's chart-of-accounts assumption is proven rather than read. See
+  `2026-08-09-migration-292-293-verification-result.md`. The remaining boundary is the
+  same one the rest of the branch carries — the projection itself has not run
+  (`2026-08-08-migration-verification-result.md`).
 - **The projection loop has still never run against real data**, so the real-world
   degraded-entry volume after this fix is unknown. The promo class is now expected to
   project cleanly; historical cancellation fees predating the fee-split metadata will

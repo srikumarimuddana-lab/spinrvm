@@ -95,9 +95,14 @@ rename, one guard in the ledger retry loop.**
 - **(6) Pure rename, no behaviour change.** Grepped for every reference before and
   after; `utils/safety_checkin_loop.py` has its own unrelated `_escalate` and is
   untouched.
-- **(7) No production behaviour change**, because production always has the client. The
-  reachable case is a startup init that failed while the app went on serving traffic —
-  where the change converts a silent lie into a page. The `never raises` contract of
+- **(7) No production behaviour change.** Stated precisely — the first draft of this
+  entry overstated it: `core/lifespan.py:25-30` **raises** on a falsy client when
+  `ENV == production`, so Uvicorn refuses to serve and the branch is unreachable there.
+  Below production it warns and boots anyway, deliberately, so local work without
+  Supabase is possible. **Dev and staging are the real exposure** — which still matters,
+  because staging is where the double-entry flags get exercised before they are trusted,
+  and a run reporting every ledger write as successful while writing nothing produces
+  false confidence. The `never raises` contract of
   `record_event` is unchanged: it still returns `None` rather than raising, so no caller
   sees a new exception (`payment_service` and `cancellation.py` both ignore the return;
   there is already a containment test that a `None` return does not block a cancel).
@@ -208,9 +213,11 @@ Narrower levers if only part needs backing out:
   `None`**, not by actually starting the app without Supabase credentials. Whether a
   real failed init leaves that binding falsy — rather than, say, a client object that
   errors on use — was reasoned from `repositories/_base.py`, not reproduced.
-- **(7) Only the ledger writer is guarded.** Every other caller of
-  `insert_one`/`insert_many` in the codebase has the same silent-no-op exposure; this
-  change does not sweep them, and no audit of them was done.
+- **(7) Only the ledger writer is guarded here.** Every other caller of
+  `insert_one`/`insert_many` had the same silent-no-op exposure. That sweep was done as
+  a follow-up — see `2026-08-08-crud-noop-write-visibility.md` — and it found a
+  pre-existing documented decision at `repositories/_base.py:843` that had deferred
+  exactly this work.
 - Findings 1–4 from the review are fixed in earlier commits on this branch; there are no
   known open findings from that review after this commit.
 

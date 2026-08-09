@@ -299,9 +299,14 @@ def _client_unavailable() -> bool:
     reached a database at all — precisely the silent swallow CLAUDE.md forbids
     on a payment path, and invisible because it produces no exception to log.
 
-    Production always has the client, so the reachable case is a startup init
-    that failed or was skipped while the app went on serving traffic — which is
-    exactly when a false "written" costs the most.
+    Scope, stated precisely: core/lifespan.py RAISES on a falsy client when
+    ``ENV == production``, so Uvicorn refuses to serve and this branch is not
+    reachable in production. Below production it logs a warning and boots
+    anyway — deliberately, so local work without Supabase is possible — which
+    makes dev and staging the real exposure. That still matters: staging is
+    where the double-entry flags get exercised before they are trusted, and a
+    run that reports every ledger write as successful while writing nothing is
+    worse than one that fails, because it produces false confidence.
 
     Reads ``repositories._base.supabase``, not ``db_supabase.supabase``:
     db_supabase only re-exports the CRUD helpers, so ``db_supabase.insert_one``

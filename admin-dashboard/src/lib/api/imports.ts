@@ -229,6 +229,34 @@ function stripeImportFormData(file: File, kind: StripeImportKind, batch?: string
     return fd;
 }
 
+export interface StripeDiscoveryMatch {
+    driver_id: string;
+    stripe_account_id: string;
+    matched_on: "email";
+    account_country: string | null;
+    account_type: string | null;
+    details_submitted: boolean;
+    payouts_enabled: boolean;
+    was_retired: boolean;
+    phone: string;
+}
+
+export interface StripeDiscoveryReport {
+    matches: StripeDiscoveryMatch[];
+    ambiguous: { email_drivers: string[]; email_accounts: string[]; reason: string }[];
+    matched: number;
+    unmatched_drivers: number;
+    unmatched_accounts: number;
+    matches_without_phone: string[];
+    csv: string;
+}
+
+/** Read-only: match unlinked drivers to connected Stripe accounts by exact
+ * email and return proposals + a ready-to-import CSV. Writes nothing —
+ * the CSV goes through validate → commit below like any hand-built one. */
+export const adminDiscoverStripeDriverAccounts = () =>
+    request<StripeDiscoveryReport>("/api/admin/stripe/import/discover", { method: "POST" });
+
 /** Dry-run: parse, match, and live-validate the mapping CSV (no writes). */
 export const adminValidateStripeImport = (file: File, kind: StripeImportKind, batch?: string) =>
     request<StripeImportReport>("/api/admin/stripe/import/validate", {

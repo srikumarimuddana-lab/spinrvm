@@ -140,6 +140,38 @@ async def _ensure_stripe_account(driver: dict, user: dict, stripe_secret: str) -
     return await _create_stripe_account(driver, user, stripe_secret, superseded=superseded)
 
 
+async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op):
+    """Run ``op(account_id)``, retiring and re-creating a stranded account once.
+
+    Shared by both onboarding entry points (hosted AccountLink and embedded
+    AccountSession). The mode pre-check inside :func:`_ensure_stripe_account`
+    catches *stamped* rows for free; this catches the unstamped ones — the
+    entire pre-migration-286 population — when Stripe answers
+    ``resource_missing``/``PermissionError`` for the account we addressed.
+
+    Both callers are the driver actively asking to set up payouts, which is
+    why recovering in place is right here: the alternative is an error they can
+    do nothing about. Any other Stripe error propagates untouched.
+    """
+    account_id = await _ensure_stripe_account(driver, user, stripe_secret)
+    try:
+        return account_id, op(account_id)
+    except Exception as exc:
+        if not is_missing_on_key(exc, account_id):
+            raise
+        logger.warning(
+            "Stripe Connect account not reachable on the current key — retiring and re-creating",
+            extra={"driver_id": driver["id"], "superseded_account_id": account_id},
+        )
+        await _kyc.retire_stripe_account(driver, account_id, reason="resource_missing")
+        fresh = await _create_stripe_account(
+            {**driver, "stripe_account_id": None}, user, stripe_secret, superseded=account_id
+        )
+        # One retry only. If the fresh account also fails, the key or the
+        # platform is wrong, not this row — let it surface.
+        return fresh, op(fresh)
+
+
 async def _create_stripe_account(driver: dict, user: dict, stripe_secret: str, *, superseded: str | None = None) -> str:
     """Create the driver's CA individual Express account and persist the id."""
     # Idempotency key keyed on the driver makes concurrent / rapid-retry creates
@@ -203,8 +235,9 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
         return {"url": "https://spinr-demo-onboard.com", "mock": True}
 
     try:
-        account_id = await _ensure_stripe_account(driver, user, stripe_secret)
-
+        # NB: no _ensure_stripe_account call here — with_account_repair below
+        # makes it, and calling it twice would create two Express accounts.
+        #
         # Build return/refresh URLs from the externally-routable API host
         # (Cloudflare CNAME), NOT the app_settings dict. The dict has no
         # "base_url" key, so the old code always fell back to localhost:8000 —
@@ -237,26 +270,7 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
                 api_key=stripe_secret,
             )
 
-        try:
-            account_link = _account_link(account_id)
-        except Exception as link_exc:
-            if not is_missing_on_key(link_exc):
-                raise
-            # The stored account is not on this key — an UNSTAMPED row stranded
-            # by a test→live rotation, which the mode pre-check in
-            # _ensure_stripe_account cannot see. This endpoint is the driver
-            # tapping "Set up payouts", so it is exactly the right place to
-            # retire the dead account and onboard them onto a fresh one rather
-            # than returning an error they can do nothing about.
-            logger.warning(
-                "Stripe Connect account not reachable on the current key — retiring and re-creating",
-                extra={"driver_id": driver["id"], "superseded_account_id": account_id},
-            )
-            await _kyc.retire_stripe_account(driver, account_id, reason="resource_missing")
-            account_id = await _create_stripe_account(
-                {**driver, "stripe_account_id": None}, user, stripe_secret, superseded=account_id
-            )
-            account_link = _account_link(account_id)
+        account_id, account_link = await with_account_repair(driver, user, stripe_secret, _account_link)
         # The real onboarded gate is now stripe_details_submitted, set by
         # the account.updated webhook handler in services/stripe_kyc_sync.py.
         # We used to flip stripe_account_onboarded=True here optimistically,
@@ -292,7 +306,9 @@ async def stripe_sync_status(current_user: dict = Depends(get_current_user)) -> 
     except ImportError:
         from services.stripe_kyc_sync import refresh_driver_kyc  # type: ignore
 
-    result = await refresh_driver_kyc(driver)
+    # Opt in to retiring an unreachable account — the driver is here to set
+    # up payouts, so detaching a dead one is what unblocks them.
+    result = await refresh_driver_kyc(driver, retire_if_unreachable=True)
     status = result.get("status")
     if status == "no_stripe_account":
         # Driver hasn't started onboarding yet — not an error, just not set up.
@@ -411,19 +427,25 @@ async def stripe_account_session(current_user: dict = Depends(get_current_user))
         raise HTTPException(status_code=503, detail="Stripe is not configured")
 
     try:
-        account_id = await _ensure_stripe_account(driver, user, stripe_secret)
-        session = stripe.AccountSession.create(
-            account=account_id,
-            components={
-                "account_onboarding": {
-                    "enabled": True,
-                    # Let the driver add their payout bank account inside the
-                    # same embedded flow.
-                    "features": {"external_account_collection": True},
+
+        def _account_session(acct: str):
+            return stripe.AccountSession.create(
+                account=acct,
+                components={
+                    "account_onboarding": {
+                        "enabled": True,
+                        # Let the driver add their payout bank account inside the
+                        # same embedded flow.
+                        "features": {"external_account_collection": True},
+                    },
                 },
-            },
-            api_key=stripe_secret,
-        )
+                api_key=stripe_secret,
+            )
+
+        # Same repair posture as the hosted-link flow: an unstamped account
+        # stranded by a key rotation is retired and re-created here rather than
+        # 502ing a driver who is actively trying to set up payouts.
+        _, session = await with_account_repair(driver, user, stripe_secret, _account_session)
         return {"client_secret": session.client_secret}
     except HTTPException:
         raise

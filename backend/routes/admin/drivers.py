@@ -2794,7 +2794,9 @@ async def admin_refresh_driver_kyc(driver_id: str, admin: dict = Depends(get_adm
     except ImportError:
         from services.stripe_kyc_sync import refresh_driver_kyc  # type: ignore
 
-    result = await refresh_driver_kyc(driver)
+    # Opt in to retiring an account the running key cannot see: this button
+    # is the operator's repair path for exactly that case.
+    result = await refresh_driver_kyc(driver, retire_if_unreachable=True)
     await log_admin_action(
         admin,
         "stripe_kyc_refresh",

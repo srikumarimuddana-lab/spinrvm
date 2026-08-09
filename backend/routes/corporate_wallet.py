@@ -166,8 +166,12 @@ async def manual_topup(
         raise HTTPException(status_code=404, detail="Company not found")
     if company.get("status") != "active":
         raise HTTPException(status_code=409, detail="Company is not active")
-    if not company.get("stripe_customer_id"):
-        raise HTTPException(status_code=409, detail="Company has no Stripe customer")
+    # No 409 on a missing stripe_customer_id: with_corporate_customer_repair
+    # below provisions one. That guard used to be harmless (a NULL customer
+    # only happened when KYB approval's Stripe step had failed), but the
+    # auto-topup loop now NULLs the column when it retires a customer stranded
+    # by a key rotation — so returning 409 here would leave the company with
+    # no in-product way to ever fund its wallet again.
 
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
@@ -210,7 +214,7 @@ async def manual_topup(
         # PI with the wrong amount).
         kwargs["idempotency_key"] = (
             body.client_idempotency_key
-            or f"corp-topup-{wallet['id']}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
+            or f"corp-topup-{wallet['id']}-{customer_id}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
         )
         return kwargs
 

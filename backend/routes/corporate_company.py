@@ -1142,8 +1142,11 @@ async def self_serve_wallet_topup(
         raise HTTPException(status_code=404, detail="Company not found")
     if company.get("status") != "active":
         raise HTTPException(status_code=409, detail="Company is not active")
-    if not company.get("stripe_customer_id"):
-        raise HTTPException(status_code=409, detail="Company has no Stripe customer on file")
+    # No 409 on a missing stripe_customer_id — with_corporate_customer_repair
+    # below provisions one. Since the auto-topup loop NULLs this column when it
+    # retires a customer stranded by a key rotation, a 409 here would leave the
+    # company permanently unable to fund its own wallet. They still get a clean
+    # 422 from the repair path if no card is on file.
 
     wallet = await get_corporate_wallet_by_company(company_id)
     if not wallet:
@@ -1189,7 +1192,7 @@ async def self_serve_wallet_topup(
             api_key=stripe_secret,
             idempotency_key=(
                 body.client_idempotency_key
-                or f"corp-selfserve-topup-{wallet['id']}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
+                or f"corp-selfserve-topup-{wallet['id']}-{customer_id}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
             ),
         )
         return await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**intent_kwargs))

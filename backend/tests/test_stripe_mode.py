@@ -150,6 +150,47 @@ class TestIsMissingOnKey:
         assert is_missing_on_key(ValueError("boom")) is False
 
 
+class TestExpectedIdScoping:
+    """A Stripe request names several objects; any of them can be missing.
+
+    `PaymentMethod.attach(pm_…, customer=cus_…)` with a stale `pm_…` answers
+    resource_missing about the PAYMENT METHOD. Without scoping, that would
+    re-provision a perfectly healthy customer and archive the rider's saved
+    cards along with it — the worst outcome this module exists to prevent.
+    """
+
+    def test_error_about_our_object_matches(self):
+        exc = _invalid_request("No such customer: 'cus_ours'", code="resource_missing")
+        assert is_missing_on_key(exc, "cus_ours") is True
+
+    def test_error_about_a_different_object_does_not_match(self):
+        exc = _invalid_request("No such PaymentMethod: 'pm_stale'", code="resource_missing")
+        assert is_missing_on_key(exc, "cus_ours") is False
+
+    def test_price_missing_does_not_condemn_the_customer(self):
+        """Subscription.create names both a customer and a price."""
+        exc = _invalid_request("No such price: 'price_gone'", code="resource_missing")
+        assert is_missing_on_key(exc, "cus_ours") is False
+
+    def test_match_is_case_insensitive(self):
+        exc = _invalid_request("No such customer: 'CUS_Ours'", code="resource_missing")
+        assert is_missing_on_key(exc, "cus_ours") is True
+
+    def test_unnamed_object_fails_closed(self):
+        """If Stripe doesn't name the object, we leave the row alone."""
+        exc = _invalid_request("No such customer", code="resource_missing")
+        assert is_missing_on_key(exc, "cus_ours") is False
+
+    def test_permission_error_is_still_scoped(self):
+        exc = stripe.error.PermissionError("does not have access to account 'acct_theirs'")
+        assert is_missing_on_key(exc, "acct_ours") is False
+        assert is_missing_on_key(exc, "acct_theirs") is True
+
+    def test_omitting_expected_id_keeps_the_old_broad_behaviour(self):
+        exc = _invalid_request("No such PaymentMethod: 'pm_x'", code="resource_missing")
+        assert is_missing_on_key(exc) is True
+
+
 class TestStaleByMode:
     def test_known_and_different_is_stale(self):
         assert stale_by_mode(TEST, LIVE) is True

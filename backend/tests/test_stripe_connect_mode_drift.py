@@ -138,13 +138,13 @@ class TestRefreshDriverKyc:
     async def test_mode_mismatch_retires_without_calling_stripe(self):
         retrieve = MagicMock(side_effect=AssertionError("stamp alone is enough"))
         with _RefreshHarness(retrieve=retrieve) as h:
-            result = await refresh_driver_kyc(_driver(stripe_account_id_mode="test"))
+            result = await refresh_driver_kyc(_driver(stripe_account_id_mode="test"), retire_if_unreachable=True)
         assert result == {"status": "account_not_on_key", "retired": True}
         assert h.updates[0][2]["stripe_account_id"] is None
 
     async def test_resource_missing_retires(self):
         with _RefreshHarness(retrieve=MagicMock(side_effect=_resource_missing())) as h:
-            result = await refresh_driver_kyc(_driver())
+            result = await refresh_driver_kyc(_driver(), retire_if_unreachable=True)
         assert result == {"status": "account_not_on_key", "retired": True}
         assert h.updates[0][2]["stripe_payouts_enabled"] is False
 
@@ -168,4 +168,38 @@ class TestRefreshDriverKyc:
         with _RefreshHarness() as h:
             result = await refresh_driver_kyc(_driver(stripe_account_id=None))
         assert result == {"status": "no_stripe_account"}
+        assert h.updates == []
+
+    async def test_retire_requires_opt_in(self):
+        """Default is non-destructive.
+
+        The legacy Stripe mapping import calls refresh_driver_kyc right after
+        committing a stripe_account_id. A Scenario-B account still living on
+        the old Connect platform answers PermissionError, and retiring on that
+        would null the mapping the import just wrote — and null it again on
+        every re-import. Only callers whose job is repair opt in.
+        """
+        with _RefreshHarness(retrieve=MagicMock(side_effect=_resource_missing())) as h:
+            result = await refresh_driver_kyc(_driver())
+        assert result == {"status": "account_not_on_key", "retired": False}
+        assert h.updates == []
+
+    async def test_mode_mismatch_without_opt_in_does_not_retire(self):
+        with _RefreshHarness(retrieve=MagicMock(side_effect=_resource_missing())) as h:
+            result = await refresh_driver_kyc(_driver(stripe_account_id_mode="test"))
+        assert result.get("retired") is False
+        assert h.updates == []
+
+    async def test_error_naming_a_different_object_is_not_treated_as_ours(self):
+        """resource_missing about some *other* object must not retire this one.
+
+        A Stripe request names several objects; without this check an error
+        about an unrelated resource would detach a healthy payout destination.
+        """
+        other = stripe.error.InvalidRequestError(
+            "No such external_account: 'ba_xyz'", param=None, code="resource_missing"
+        )
+        with _RefreshHarness(retrieve=MagicMock(side_effect=other)) as h:
+            result = await refresh_driver_kyc(_driver(), retire_if_unreachable=True)
+        assert result == {"status": "stripe_error"}
         assert h.updates == []

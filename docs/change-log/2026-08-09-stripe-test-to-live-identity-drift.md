@@ -286,15 +286,84 @@ State the boundary explicitly rather than letting silence imply coverage.
   returns it; the client ignores unknown fields, so today the driver simply sees
   the not-set-up state with no explanation of why their bank vanished. Wiring
   the copy is follow-up work.
-- **The corporate path is unrepaired.** `corporate_accounts.stripe_customer_id`
-  gets the tracking columns but no re-provision logic, so corporate wallet
-  auto-topup and subscriptions will still fail `resource_missing` after a mode
-  rotation. Deliberate: those flows charge a company's stored card on a
-  schedule with no user present to consent to a new payment identity, so the
-  same "repair where the user is" principle points to a different design.
-  Tracked as follow-up.
+- **Concurrency was reasoned about, not load-tested** (see also below).
 - **No visual/snapshot regression tooling exists** for these surfaces (standing
   gap, `ACTION_ITEMS.md`); no frontend rendering was checked.
 - **Concurrency was reasoned about, not load-tested.** The conditional writes
   and idempotency keys are argued correct in §4 and unit-tested single-threaded;
   no concurrent-replica test was run.
+- **`GET /payments/cards` and `GET /payments/methods` can now mutate.** A read
+  endpoint that repairs an identity writes to a money-path row. Customer
+  *creation* on GET is pre-existing (`get_cards` always called
+  `get_or_create_stripe_customer`); what is new is the re-provision plus the
+  `default_payment_method` clear. Judged acceptable because it only fires on a
+  customer already proven unreachable — the pending charge was doomed either
+  way — and because `is_missing_on_key`'s `expected_id` scoping makes a
+  false trigger very unlikely. Not restructured; noted so the trade-off is on
+  the record rather than implied.
+
+---
+
+## Addendum — corporate path (same day)
+
+The corporate surface was originally left unrepaired and listed here as a
+follow-up. It is now done, with a deliberately different design.
+
+`services/corporate_stripe_identity.py` offers two behaviours because the
+corporate surface has a constraint the rider and driver ones do not: **some of
+its billing paths run with nobody present.**
+
+- **Admin-present** (KYB approval, `assign_subscription`, internal-admin
+  top-up, company self-serve top-up) → re-provision, like riders. Safe because
+  a fresh customer has no card, so nothing can be charged until someone
+  deliberately adds one.
+- **Background** (`utils/corporate_autotopup.py`) → `retire_corporate_customer`
+  archives the dead ID and nulls the active one, and **never** creates a
+  replacement. A new customer would carry no payment method, so the charge the
+  tick wanted to make could not succeed either way; retiring converts 144
+  failed Stripe calls a day into one clean "no Stripe customer" state.
+
+Two consequences worth calling out:
+
+1. The pre-existing `409 "Company has no Stripe customer"` guards on both
+   top-up endpoints were **removed**. They were harmless when a NULL customer
+   only meant KYB's Stripe step had failed; once the loop began NULLing the
+   column, they would have left a company permanently unable to fund its own
+   wallet.
+2. `services/corporate_wallet_winddown_service.py` is untouched. It refunds
+   against PaymentIntent IDs, not the customer, and already reports
+   `stripe_error` / `unrefundable_amount` loudly for the caller to log — the
+   correct behaviour for a refund path.
+
+## Addendum — code-review fixes
+
+A review pass over the full branch found nine issues; all were confirmed
+against the code and fixed. The two that were genuine data-loss risks:
+
+- **`is_missing_on_key` could not tell *which* object Stripe meant.** A Stripe
+  request names several objects at once — `PaymentMethod.attach(pm_…,
+  customer=cus_…)`, `Subscription.create(customer=…, price=…)` — and any of
+  them can answer `resource_missing`. A rider submitting a stale `pm_…` would
+  have had their healthy customer replaced and their saved cards archived.
+  Fixed with a required `expected_id` argument: the error must name the object
+  we asked about, and fails closed if Stripe doesn't name one.
+- **`refresh_driver_kyc` retired unconditionally.** The legacy Stripe mapping
+  import calls it immediately after committing a `stripe_account_id`; a
+  Scenario-B account on the old Connect platform answers `PermissionError`,
+  which would have nulled the mapping the import just wrote, on every re-import.
+  Retiring is now opt-in (`retire_if_unreachable`, default False); only the
+  driver's own sync and the admin refresh button pass True.
+
+The rest: corporate top-up 409s removed (above); corporate re-provision now
+writes the `*_superseded` provenance columns and filters on the value it
+replaces; the audit probe's `log_admin_action` no longer passes `None` for the
+NOT NULL `entity_id` (every probe was running unaudited); embedded driver
+onboarding gained the same `resource_missing` repair as the hosted-link flow
+via a shared `with_account_repair`, which also fixed a double
+`_ensure_stripe_account` call that would have created two Express accounts;
+migration 286's indexes are now `CONCURRENTLY` — `scripts/migrate.py` runs a
+file in one transaction unless it sees that keyword, so the previous version
+both blocked writes and made its own `NOT VALID`/`VALIDATE` split pointless;
+and repair retries now vary their Stripe idempotency keys by customer, since
+reusing a key with different parameters returns `idempotency_error` rather
+than completing the repaired call.

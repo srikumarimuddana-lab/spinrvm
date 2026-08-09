@@ -77,7 +77,7 @@ class TestAssignSubscription:
         call_kwargs = mock_create.call_args.kwargs
         assert call_kwargs["customer"] == "cus_1"
         assert call_kwargs["items"] == [{"price": "price_123"}]
-        assert call_kwargs["idempotency_key"] == "corp-sub-create-c1"
+        assert call_kwargs["idempotency_key"] == "corp-sub-create-c1-cus_1"
         mock_audit.assert_awaited_once()
         assert created_rows and created_rows[0]["plan_id"] == "plan_pro"
 

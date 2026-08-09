@@ -41,10 +41,20 @@
 --   DROP INDEX IF EXISTS corporate_accounts_stripe_customer_mode_idx;
 --
 -- Notes:
--- - The CHECK constraints are added NOT VALID and validated separately so the
---   ALTER takes only a brief ACCESS EXCLUSIVE lock for the catalog change and
---   the scan runs under SHARE UPDATE EXCLUSIVE — safe with traffic in flight
---   (Performance SLA: migration apply < 30 s).
+-- - The indexes are CREATE INDEX CONCURRENTLY. That is not only to avoid the
+--   write lock a plain CREATE INDEX takes on users/drivers/corporate_accounts:
+--   scripts/migrate.py runs a migration file inside ONE transaction unless it
+--   detects CONCURRENTLY, in which case it switches the connection to
+--   autocommit and runs each statement separately. Without CONCURRENTLY here,
+--   the whole file — every ALTER, the VALIDATEs, and all three index builds —
+--   would hold its locks for the duration of a single transaction, and the
+--   NOT VALID / VALIDATE split below would buy nothing at all.
+-- - The CHECK constraints are added NOT VALID and validated as separate
+--   statements so the ALTER takes only a brief ACCESS EXCLUSIVE lock for the
+--   catalog change and the scan then runs under SHARE UPDATE EXCLUSIVE — safe
+--   with traffic in flight (Performance SLA: migration apply < 30 s).
+-- - CONCURRENTLY cannot run in a transaction, so this file must never be
+--   wrapped in an explicit BEGIN/COMMIT.
 -- - `*_superseded` is provenance for reconciliation against the old Stripe
 --   account. It is deliberately NOT unique: it is a historical record, and the
 --   live uniqueness guarantee stays on the active column (migration 257).
@@ -106,15 +116,15 @@ ALTER TABLE public.corporate_accounts VALIDATE CONSTRAINT corporate_accounts_str
 --   WHERE stripe_customer_id IS NOT NULL
 --     AND stripe_customer_id_mode IS DISTINCT FROM '<current mode>'
 -- The partial index keeps the scan to rows that actually hold an identity.
-CREATE INDEX IF NOT EXISTS users_stripe_customer_mode_idx
+CREATE INDEX CONCURRENTLY IF NOT EXISTS users_stripe_customer_mode_idx
     ON public.users (stripe_customer_id_mode)
     WHERE stripe_customer_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS drivers_stripe_account_mode_idx
+CREATE INDEX CONCURRENTLY IF NOT EXISTS drivers_stripe_account_mode_idx
     ON public.drivers (stripe_account_id_mode)
     WHERE stripe_account_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS corporate_accounts_stripe_customer_mode_idx
+CREATE INDEX CONCURRENTLY IF NOT EXISTS corporate_accounts_stripe_customer_mode_idx
     ON public.corporate_accounts (stripe_customer_id_mode)
     WHERE stripe_customer_id IS NOT NULL;
 

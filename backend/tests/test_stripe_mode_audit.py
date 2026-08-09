@@ -165,7 +165,11 @@ class TestProbe:
     async def test_mixed_batch_is_partitioned(self):
         def _retrieve(oid, api_key=None):
             if oid == "cus_gone":
-                raise stripe.error.InvalidRequestError("No such customer", param=None, code="resource_missing")
+                # Stripe names the object in the message; is_missing_on_key
+                # requires it to be the one we asked about.
+                raise stripe.error.InvalidRequestError(
+                    "No such customer: 'cus_gone'", param=None, code="resource_missing"
+                )
             return _customer(oid, livemode=True)
 
         with _ProbeHarness(_rows("cus_ok", "cus_gone"), MagicMock(side_effect=_retrieve)):

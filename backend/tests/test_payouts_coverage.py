@@ -161,7 +161,15 @@ class TestEnsureStripeAccountCreation:
             result = asyncio.run(drv.onboard_stripe(current_user={"id": USER_ID}))
 
         assert result["mock"] is False
-        update_mock.assert_awaited_once_with("drivers", {"id": DRIVER_ID}, {"stripe_account_id": "acct_NEW"})
+        # The Stripe mode is stamped alongside the id so a later test→live key
+        # rotation is detectable without a Stripe round-trip (migration 286).
+        # The mocked Account has no real `livemode` bool, so the stamp falls
+        # back to the key's mode — sk_test_x → "test".
+        update_mock.assert_awaited_once_with(
+            "drivers",
+            {"id": DRIVER_ID},
+            {"stripe_account_id": "acct_NEW", "stripe_account_id_mode": "test"},
+        )
         assert account_link_create.call_args.kwargs["account"] == "acct_NEW"
 
     def test_persist_failure_raises_502_and_is_preserved_by_onboard(self):

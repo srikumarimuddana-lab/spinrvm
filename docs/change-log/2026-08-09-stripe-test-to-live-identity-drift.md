@@ -502,3 +502,115 @@ Three defences, deliberately layered:
 - **Volume is untested.** A driver-year could be thousands of balance
   transactions; the sync chunks upserts at 200 rows but no large account has
   been run through it.
+
+---
+
+## Addendum 6 — phone spelling round-trip between discovery and the import
+
+### Issue/gap identified
+
+The discovery CSV and the import that consumes it disagreed about how a phone
+number is spelled, so a CSV Spinr generated itself could fail to match the
+exact driver row it was generated from — every row landing on `no_match`.
+
+### Root cause
+
+Discovery emitted `normalize_phone(drivers.phone)` (10 digits → `+1XXXXXXXXXX`)
+while the import queried `drivers.phone IN (…)` using the *same* normalization
+of the CSV value. That round-trips cleanly only because `drivers.phone` happens
+to be E.164 today (`auth` validates on signup, `driver_import_service`
+normalizes before insert). Any driver row written by a path that skipped
+normalization is unreachable by an `IN` query on the normalized form — and
+unreachable precisely for the driver discovery had just read it from. Neither
+side had a test that ran the two halves against each other; discovery's tests
+all stopped at the CSV string, and the import's tests hand-wrote their rows.
+
+### Fix/remediation
+
+Both sides, so neither depends on the other's convention:
+
+- Discovery emits the phone **verbatim** from the driver row — the value the
+  import will look up. A phone containing `,`, `"`, `\r` or `\n` would corrupt
+  the CSV and shift `stripe_account_id` onto the wrong driver, so it is dropped
+  to `matches_without_phone` rather than emitted (`_csv_safe_phone`).
+- The import queries and looks up **both** spellings, normalized first, then
+  verbatim (`_phone_lookup_keys`). Hand-written 10-digit CSVs keep working
+  against E.164 rows exactly as before.
+
+Deliberately **not** canonicalized to last-10-digits: that would let
+`+447700900001` collide with `+17700900001` and point a payout destination at
+the wrong driver. Pinned by a test.
+
+### Risk & impact on existing functionality
+
+Blast radius is closed. `_prefetch_drivers` has exactly one caller,
+`_build_local_driver_plan`, which has exactly one caller, `_build_local_plan`
+for `kind='drivers'`. `_prefetch_users` and the riders path are untouched;
+`normalize_phone` itself is unchanged, so `driver_import_service`,
+`rider_import_service` and `booking_import_service` are unaffected.
+
+The lookup widens, so a false *negative* can become a match — the intent. A
+false *positive* would need two driver rows holding the same number in
+different spellings, which is one human with a duplicate row, not two people;
+the normalized row wins deterministically. `no_match` still fires for a phone
+that is genuinely absent (test).
+
+### User experience effect
+
+Internal admin only. An operator who would have seen a full page of `no_match`
+on a CSV the tool generated now sees the matches commit. No rider-, driver- or
+corporate-facing change; nothing renders mid-session.
+
+### Files modified
+
+| file path | what changed | why |
+|---|---|---|
+| `backend/services/stripe_mapping_import_service.py` | `_phone_lookup_keys`, `_csv_safe_phone`; `_prefetch_drivers` queries both spellings; `_build_local_driver_plan` tries both; discovery emits verbatim | Make the round-trip storage-agnostic |
+| `backend/tests/test_stripe_account_discovery.py` | `TestDiscoveryToImportRoundTrip` + CSV-injection case | Run the two halves against each other |
+| `docs/runbooks/stripe-legacy-migration.md` | New "Step 5 — relink drivers whose live account already exists" | The flow had no written procedure |
+
+### Before/after
+
+```python
+# before — discovery normalized, import re-normalized, DB queried on that form only
+"phone": normalize_phone(d.get("phone") or ""),
+phones = sorted({normalize_phone(r.get("phone") or "") for r in rows if ...})
+matched_by_phone = by_phone.get(phone) if phone else None
+
+# after — discovery echoes storage, import accepts either spelling
+"phone": _csv_safe_phone(d.get("phone") or ""),
+phones = sorted({k for r in rows for k in _phone_lookup_keys(r.get("phone") or "")})
+matched_by_phone = next((by_phone[k] for k in _phone_lookup_keys(row.get("phone") or "") if k in by_phone), None)
+```
+
+### Rollback plan
+
+Pure code, no migration and no data written by this change — the commit reverts
+cleanly with no residue. Mappings already committed through the import are
+ordinary `drivers.stripe_account_id` values and are unaffected by a revert;
+they roll back via the per-driver update flow, not by reverting this.
+
+### Verification performed
+
+- `pytest backend/tests/test_stripe_mapping_import_service.py
+  backend/tests/test_admin_stripe_import.py
+  backend/tests/test_stripe_account_discovery.py
+  backend/tests/test_driver_import_service.py
+  backend/tests/test_admin_driver_import.py` — 111 passed.
+- New round-trip tests drive discovery's real output into the real matcher
+  through a fake `_select_in` that filters like SQL `IN`, so a spelling
+  mismatch fails the test instead of passing on a friendly mock.
+- `ruff check` + `ruff format --check` clean.
+
+### What was NOT verified
+
+- **The actual spelling in the production `drivers.phone` column was never
+  queried** — this was reasoned from the write paths (`auth` validation, the
+  legacy import's `normalize_phone`), not observed. The fix removes the need to
+  know, which is why it was written both-ways rather than pinned to E.164.
+- **No real Stripe call**, as with the rest of this branch: `Account.list` is
+  mocked throughout.
+- **No frontend change**, so no build was run for this addendum; the Bulk
+  Operations page passes the CSV through untouched.
+- Not exercised end-to-end against live Supabase — the `IN` query behaviour is
+  modelled by a fake, not observed against PostgREST.

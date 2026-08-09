@@ -30,9 +30,10 @@ rows is in** (they predate mode tracking, so their `*_mode` is NULL).
 
 ## Step 0 — apply the migrations (required, do this first)
 
-Nothing below works until migrations **286 and 287** exist. **Neither has ever
-been run.** 287 adds the kill-switch column; without it the flag is stuck on
-and the rollback path in Step 6 does not work.
+Nothing below works until migrations **286, 287 and 288** exist. **None has
+ever been run.** 287 adds the kill-switch column (without it the flag is stuck
+on and the rollback path in Step 6 does not work); 288 adds the bank-payout and
+ledger tables used in Step 5b.
 
 ```bash
 cd backend
@@ -340,6 +341,44 @@ this work they were dropped entirely). An unreachable **superseded** account
 produces an `account_not_accessible` *warning*; an unreachable **current**
 account is an *error* that blocks commit — that asymmetry is deliberate, so a
 wrong key can't produce a "successful" sync of zero T4A income.
+
+### 5b. Bank payouts + full ledger (migration 288)
+
+This is the *other* leg — what happened inside the driver's connected account.
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $SUPER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"driver_ids":["<DRIVER_ID>"],"year":2025}' \
+  https://<host>/api/admin/stripe/connect-ledger/sync
+```
+
+**Expected:** counts for `payouts_upserted` / `ledger_upserted`. Re-run it —
+the numbers should stay the same and no rows should duplicate (the Stripe
+object id is the primary key).
+
+Then read them back as the driver:
+
+```bash
+curl -s -H "Authorization: Bearer $DRIVER_TOKEN" \
+  https://<host>/api/v1/drivers/stripe/bank-payouts
+curl -s -H "Authorization: Bearer $DRIVER_TOKEN" \
+  "https://<host>/api/v1/drivers/stripe/ledger?limit=50"
+```
+
+**The check that matters** — these must not inflate income:
+
+```sql
+-- T4A must be unchanged by the ledger sync. Record it before and after.
+-- (GET /api/v1/drivers/t4a/2025 → total_earnings)
+
+-- And the ledger nets to the balance CHANGE, not to income:
+SELECT SUM(amount) FROM driver_stripe_ledger WHERE driver_id = '<DRIVER_ID>';
+-- A driver who has been fully paid out nets to ~0, NOT to their earnings.
+```
+
+If the T4A total moved after running this sync, stop — something is summing a
+display table as income, which would over-report to the CRA.
 
 ---
 

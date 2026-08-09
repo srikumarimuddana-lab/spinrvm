@@ -2786,14 +2786,141 @@ async def admin_refresh_driver_kyc(driver_id: str, admin: dict = Depends(get_adm
     # Opt in to retiring an account the running key cannot see: this button
     # is the operator's repair path for exactly that case.
     result = await refresh_driver_kyc(driver, retire_if_unreachable=True)
+    status = result.get("status")
     await log_admin_action(
         admin,
         "stripe_kyc_refresh",
         "drivers",
         driver_id,
-        {"status": result.get("status")},
+        {"status": status},
     )
-    return result
+
+    # Every outcome used to return a bare 200 with the raw status dict, so an
+    # operator clicking "Refresh from Stripe" got an identical success response
+    # whether the sync worked, the key was missing, or Stripe errored — and the
+    # dashboard toasted "Synced from Stripe" regardless. A failure that reports
+    # success is the error-swallowing CLAUDE.md forbids, so the genuine
+    # failures now carry a status code the client cannot mistake.
+    if status == "stripe_not_configured":
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured — set stripe_secret_key in Settings before refreshing.",
+        )
+    if status == "stripe_error":
+        raise HTTPException(
+            status_code=502,
+            detail="Stripe could not be reached. Nothing was changed — try again shortly.",
+        )
+
+    # The remaining outcomes are all real answers, not failures — but each one
+    # means something different, so say which. The dashboard shows `message`.
+    messages = {
+        "ok": "Verification status synced from Stripe.",
+        "no_stripe_account": (
+            "This driver has no Stripe account on file, so there was nothing to refresh. "
+            "They need to complete 'Set up payouts' in the driver app."
+        ),
+        "account_not_on_key": (
+            "The driver's Stripe account is not reachable on the current API key "
+            "(typically a test/live key change). It has been detached and their payout "
+            "details cleared — they must set up payouts again in the driver app."
+        ),
+    }
+    return {
+        **result,
+        # `synced` is the flag the UI should branch on: only "ok" actually
+        # pulled fresh state from Stripe.
+        "synced": status == "ok",
+        "message": messages.get(status, f"Unexpected sync status: {status}"),
+    }
+
+
+class RefreshAllKycRequest(BaseModel):
+    """Scope for the bulk KYC refresh. Empty body = every driver with a
+    Stripe account. `retire_unreachable` is opt-in because retiring detaches
+    payout destinations in bulk — the single-driver button stays the
+    deliberate way to do that one account at a time."""
+
+    model_config = {"extra": "forbid"}
+
+    driver_ids: Optional[List[str]] = None
+    retire_unreachable: bool = False
+
+
+@router.post("/drivers/refresh-stripe-kyc")
+async def admin_refresh_all_driver_kyc(body: RefreshAllKycRequest, admin: dict = Depends(get_admin_user)):
+    """One-click KYC refresh across the fleet ("is there any single button").
+
+    Pulls live Stripe Connect state for every driver that has an account and
+    mirrors it onto their row — the same per-driver sync the slideout button
+    runs, fanned out with bounded concurrency. Returns a per-status breakdown
+    so the operator sees exactly what happened instead of a blind 200:
+
+        {"total": 42, "ok": 38, "no_stripe_account": 0,
+         "account_not_on_key": 3, "stripe_error": 1, "drivers": {...}}
+
+    `account_not_on_key` counts drivers whose account the current key cannot
+    see (the test→live signature). With the default retire_unreachable=false
+    they are only REPORTED — nothing is detached — so this endpoint is safe to
+    click first and read; re-run with retire_unreachable=true to also repair.
+    """
+    import asyncio as _asyncio
+
+    if (admin or {}).get("role") != "super_admin":
+        # Fleet-wide Stripe reads (and optionally fleet-wide retires) are a
+        # bigger hammer than the per-driver button; keep it super_admin.
+        raise HTTPException(status_code=403, detail="Bulk KYC refresh requires super_admin")
+
+    try:
+        from ..services.stripe_kyc_sync import refresh_driver_kyc
+    except ImportError:
+        from services.stripe_kyc_sync import refresh_driver_kyc  # type: ignore
+
+    if body.driver_ids:
+        drivers = [d for did in body.driver_ids if (d := await db_supabase.get_driver_by_id(did))]
+    else:
+        # $notnull, NOT {"$ne": None} — $ne compiles to SQL `<> NULL`, which
+        # never matches anything (see repositories/_base.py's $notnull note).
+        drivers = await db_supabase.get_rows("drivers", {"stripe_account_id": {"$notnull": True}}, limit=2000)
+
+    counts: Dict[str, int] = {}
+    per_driver: Dict[str, str] = {}
+    sem = _asyncio.Semaphore(8)  # stay well under Stripe's rate limit
+
+    async def one(driver: dict) -> None:
+        async with sem:
+            try:
+                res = await refresh_driver_kyc(driver, retire_if_unreachable=body.retire_unreachable)
+                status = res.get("status", "unknown")
+            except Exception:
+                logger.error("bulk kyc refresh failed for driver %s", driver.get("id"), exc_info=True)
+                status = "stripe_error"
+        per_driver[driver["id"]] = status
+
+    results = await _asyncio.gather(*(one(d) for d in drivers), return_exceptions=True)
+    for driver, outcome in zip(drivers, results, strict=True):
+        if isinstance(outcome, BaseException):  # belt-and-braces; one() already catches
+            per_driver[driver["id"]] = "stripe_error"
+    for status in per_driver.values():
+        counts[status] = counts.get(status, 0) + 1
+
+    await log_admin_action(
+        admin,
+        "stripe_kyc_refresh_bulk",
+        "drivers",
+        f"count:{len(drivers)}",
+        {"counts": counts, "retire_unreachable": body.retire_unreachable},
+    )
+    return {
+        "total": len(drivers),
+        **counts,
+        "drivers": per_driver,
+        "note": (
+            "account_not_on_key drivers were only reported, not detached"
+            if not body.retire_unreachable
+            else "account_not_on_key drivers were retired and must re-onboard payouts"
+        ),
+    }
 
 
 @router.post("/drivers/{driver_id}/reveal-sin")

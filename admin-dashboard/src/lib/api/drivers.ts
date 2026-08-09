@@ -349,7 +349,28 @@ export const getDriverPayoutsSummary = (id: string) =>
     request<DriverPayoutSummary>(`/api/admin/drivers/${id}/payouts-summary`);
 
 export const refreshDriverStripeKyc = (id: string) =>
-    request<{ status: string }>(`/api/admin/drivers/${id}/refresh-stripe-kyc`, { method: "POST" });
+    request<{ status: string; synced: boolean; message: string }>(
+        `/api/admin/drivers/${id}/refresh-stripe-kyc`,
+        { method: "POST" },
+    );
+
+/* Fleet-wide KYC refresh (super_admin). With retire_unreachable=false (the
+ * default) drivers whose Stripe account the current key cannot see are only
+ * REPORTED under account_not_on_key — nothing is detached — so it is safe to
+ * run first and read. Re-run with retire_unreachable=true to also repair. */
+export const refreshAllDriverStripeKyc = (opts?: { driver_ids?: string[]; retire_unreachable?: boolean }) =>
+    request<{
+        total: number;
+        ok?: number;
+        no_stripe_account?: number;
+        account_not_on_key?: number;
+        stripe_error?: number;
+        drivers: Record<string, string>;
+        note: string;
+    }>(`/api/admin/drivers/refresh-stripe-kyc`, {
+        method: "POST",
+        body: JSON.stringify(opts ?? {}),
+    });
 
 /* ── Driver earnings statements ──────────────────────────
  * Weekly/monthly statements the backend statement job emails to drivers

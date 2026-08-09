@@ -818,13 +818,19 @@ class TestRefreshStripeKyc:
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch(
                 "services.stripe_kyc_sync.refresh_driver_kyc",
-                AsyncMock(return_value={"status": "verified"}),
+                AsyncMock(return_value={"status": "ok", "updates": {}}),
             ),
             patch("routes.admin.drivers.log_admin_action", AsyncMock()) as log,
         ):
             resp = test_client.post("/api/admin/drivers/drv-1/refresh-stripe-kyc")
         assert resp.status_code == 200, resp.text
-        assert resp.json() == {"status": "verified"}
+        body = resp.json()
+        # The endpoint now annotates the raw sync result: `synced` is the flag
+        # the dashboard branches on, `message` is what it shows. The old bare
+        # status pass-through let every outcome toast "Synced from Stripe".
+        assert body["status"] == "ok"
+        assert body["synced"] is True
+        assert "message" in body
         log.assert_awaited_once()
 
 

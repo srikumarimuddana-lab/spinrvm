@@ -176,21 +176,41 @@ migration 290's rollback) and neither touches a row.
 
 ## 10. What was NOT verified
 
-- **Neither migration has executed against a real Postgres.** `pglast` proves syntax
-  only. Specifically unproven until `verify_migrations_292_293.sql` is run:
-  - that `RETURNS SETOF financial_event_entries_unbalanced` actually matches the
-    view's column **types**. `SUM(bigint)` yields `numeric` in Postgres, which is why
-    the function does not cast to `bigint` — if that reasoning is wrong,
-    `CREATE FUNCTION` fails outright at migrate time. This is the single most likely
-    thing to be wrong in this change.
-  - that the window bounds are half-open in the direction intended;
-  - that the migration-205 grant form left `service_role` with EXECUTE.
-- **The performance claim is reasoned, not measured.** No `EXPLAIN ANALYZE` against a
-  populated table, no before/after timing. The script prints an `EXPLAIN` as advisory
-  output, but on a small or empty staging table Postgres will correctly choose a
-  sequential scan, so it is deliberately **not scored** — a seq scan there is not a
-  failure. The claim "this is now bounded by one day's legs rather than the whole
-  table" rests on the query shape, not on an observed plan at scale.
+> **UPDATE 2026-08-09 — the database layer of this gap is now CLOSED.** The repo owner
+> applied migrations 292–293 and ran `backend/scripts/verify_migrations_292_293.sql`;
+> **all checks passed, no skips**. See
+> `docs/change-log/2026-08-09-migration-292-293-verification-result.md` for exactly what
+> that proved. The items below are corrected in place; anything still outstanding is
+> called out there.
+
+- ~~Neither migration has executed against a real Postgres.~~ **Applied and asserted
+  2026-08-09.**
+  - ~~that `RETURNS SETOF ...` matches the view's column types — the single most likely
+    thing to be wrong in this change.~~ **Proven by `CREATE FUNCTION` succeeding at
+    all**: the `SUM(bigint)` → `numeric` reasoning holds, and had it not, the migration
+    would have failed outright at apply time.
+  - ~~that the window bounds are half-open in the direction intended.~~ **Asserted in
+    both directions**: `p_end` exclusive (a closed one double-reports across
+    consecutive daily runs) and `p_start` inclusive (an exclusive one drops journals
+    into the gap between runs, never checked at all).
+  - ~~that the migration-205 grant form left `service_role` with EXECUTE.~~ **Asserted**,
+    along with `anon`/`authenticated` holding none.
+  - Additionally asserted, and not something the original list thought to ask for: the
+    index is `indisvalid = true`. An interrupted `CREATE INDEX CONCURRENTLY` leaves an
+    INVALID index the planner silently ignores — the fix would have *looked* applied
+    while the nightly check kept sequential-scanning.
+- **The performance claim is STILL reasoned, not measured.** Unchanged by the
+  verification run. No `EXPLAIN ANALYZE` against a populated table, no before/after
+  timing. The script prints an `EXPLAIN` as advisory output, but on a small or empty
+  staging table Postgres will correctly choose a sequential scan, so it is deliberately
+  **not scored** — a seq scan there is not a failure, and it is not a proof of
+  improvement either. The claim "this is now bounded by one day's legs rather than the
+  whole table" rests on the query shape, not on an observed plan at scale. Measuring it
+  needs a populated table, which needs the double-entry flag on.
+- **The Python ↔ PostgREST round trip is still unproven.** The verification script calls
+  the function over SQL, not the way `_check_entry_balance` calls it (`supabase-py`
+  `rpc()` with ISO-8601 strings for two `timestamptz` params). Same class of gap as
+  migration 288's `p_metadata` JSONB encoding.
 - **The `~20M rows/year` figure is derived from the projection's own design
   throughput** (200 events/tick × 96 ticks/day × ~3 legs), not from measured
   production volume. The direction of the problem does not depend on the figure being

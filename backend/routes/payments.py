@@ -22,6 +22,7 @@ try:
     from ..utils.money import dollars_to_cents
     from ..utils.rate_limiter import payment_action_limit
     from ..utils.stripe_config import STRIPE_API_VERSION
+    from ..utils.stripe_mode import is_missing_on_key, key_mode, object_mode, stale_by_mode
 except ImportError:
     import db_supabase
     from core.config import settings as core_settings
@@ -38,7 +39,9 @@ except ImportError:
     from utils.money import dollars_to_cents
     from utils.rate_limiter import payment_action_limit
     from utils.stripe_config import STRIPE_API_VERSION
+    from utils.stripe_mode import is_missing_on_key, key_mode, object_mode, stale_by_mode
 import logging
+from datetime import datetime, timezone
 
 import stripe
 
@@ -117,37 +120,204 @@ class PaymentSheetRequest(BaseModel):
     client_idempotency_key: Optional[str] = None
 
 
+# ── Stripe identity mode drift (test → live cutover) ──────────────────────
+#
+# `stripe_secret_key` lives in the app_settings DB table so it can be rotated
+# without a redeploy (see CLAUDE.md). Rotating it ACROSS modes
+# (`sk_test_…` → `sk_live_…`) silently invalidates every stored
+# `users.stripe_customer_id`: Stripe scopes object IDs per mode, so the live
+# key cannot see a test-mode customer and answers `resource_missing` on every
+# call. Without repair the rider gets a hard 502 on the cards screen forever
+# — and cannot add a replacement card either, because attaching one addresses
+# the same dead customer.
+#
+# The rider's test-mode cards are NOT recoverable: they were test PANs and
+# never existed as real cards, and Stripe offers no test→live copy path. So
+# the honest outcome is a working, empty card list they can add a real card
+# to — not a broken screen.
+#
+# Kill switch: set `stripe_reprovision_stale_ids = false` in app_settings
+# (admin-editable, propagates within the 60 s settings cache, no redeploy).
+_REPROVISION_FLAG = "stripe_reprovision_stale_ids"
+
+
+async def _reprovision_stripe_customer(
+    user_id: str,
+    stale_customer_id: str,
+    stripe_secret: str,
+    reason: str,
+) -> str:
+    """Mint a fresh Stripe customer for ``user_id`` and archive the unusable one.
+
+    Only ever called with positive proof that ``stale_customer_id`` is not
+    reachable on the running key — either an explicit mode disagreement
+    (``stale_by_mode``) or a ``resource_missing`` from Stripe itself
+    (``is_missing_on_key``). It is never called on an authentication or
+    transient error; ``utils/stripe_mode.py`` documents why that distinction
+    is load-bearing (a bad key makes *every* object look missing).
+    """
+    settings = await get_app_settings()
+    if not settings.get(_REPROVISION_FLAG, True):
+        # Kill switch engaged: leave the row untouched and fail loudly rather
+        # than serving a card list we already know addresses a dead customer.
+        logger.error(
+            "Stale Stripe customer detected but %s is off — not repairing",
+            _REPROVISION_FLAG,
+            extra={"user_id": user_id, "reason": reason},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Your payment profile needs attention. Please contact support.",
+        )
+
+    mode = key_mode(stripe_secret)
+    customer = await asyncio.to_thread(
+        lambda: stripe.Customer.create(
+            # PIPEDA (C4): still no email/name to Stripe — only the correlating
+            # user_id, plus the superseded ID so the two can be reconciled
+            # against the old account without a Spinr-side lookup.
+            metadata={"user_id": user_id, "superseded_customer": stale_customer_id},
+            api_key=stripe_secret,
+            # Deliberately NOT the `cus-create-` key used for a first-time
+            # create: replaying that one could hand back the very customer we
+            # just proved unusable. Keying on the dead ID makes concurrent
+            # healers and retries converge on ONE replacement.
+            idempotency_key=f"cus-reprovision-{user_id}-{stale_customer_id}",
+        )
+    )
+
+    # Conditional write: filtering on the stale value means a concurrent healer
+    # that already landed a different customer is not clobbered.
+    #
+    # `default_payment_method` MUST be cleared in the same write. A `pm_…` is
+    # scoped to the customer that owns it, so a token left behind would point
+    # settlement (services/payment_service.py:966) and cancellation-fee capture
+    # (routes/rides/cancellation.py) at a card that no longer exists — turning
+    # a fixed cards screen into failed charges at trip end.
+    await db_supabase.update_one(
+        "users",
+        {"id": user_id, "stripe_customer_id": stale_customer_id},
+        {
+            "stripe_customer_id": customer.id,
+            "stripe_customer_id_mode": mode,
+            "stripe_customer_id_superseded": stale_customer_id,
+            "stripe_customer_id_superseded_at": datetime.now(timezone.utc).isoformat(),
+            "default_payment_method": None,
+        },
+    )
+    # Degraded-but-recovered → warning + metric, per the observability
+    # conventions in CLAUDE.md. Stripe IDs are operational identifiers, not
+    # PII, so they are safe to log; no email/phone/name appears here.
+    logger.warning(
+        "Re-provisioned Stripe customer after mode drift",
+        extra={
+            "user_id": user_id,
+            "reason": reason,
+            "superseded_customer_id": stale_customer_id,
+            "new_customer_id": customer.id,
+            "mode": mode,
+        },
+    )
+    _metrics_inc("spinr_payments_stripe_identity_reprovisioned_total", {"surface": "rider", "reason": reason})
+
+    # Re-read so a concurrent healer's winning value is what we return.
+    fresh = await db_supabase.get_user_by_id(user_id)
+    return (fresh or {}).get("stripe_customer_id") or customer.id
+
+
+def _metrics_inc(name: str, labels: dict) -> None:
+    """Best-effort counter. Metrics must never break a payment path."""
+    try:
+        try:
+            from ..utils import metrics
+        except ImportError:
+            from utils import metrics  # type: ignore
+        metrics.inc(name, labels)
+    except Exception:  # pragma: no cover - defensive only
+        logger.debug("metric %s not recorded", name, exc_info=True)
+
+
 async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
+    """Return the user's Stripe customer id, creating it on first use.
+
+    Adds no Stripe round-trip for an existing customer. A row whose stamped
+    mode disagrees with the running key is repaired here, from the stamp
+    alone; an *unstamped* stale row (everything predating migration 286) is
+    repaired the other way, by :func:`with_customer_repair` catching the
+    ``resource_missing`` from the call that actually fails.
+    """
     user = await db_supabase.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     stripe_customer_id = user.get("stripe_customer_id")
 
-    if not stripe_customer_id:
-        # PIPEDA (C4): do NOT send the rider's email or legal name to Stripe (a
-        # US processor). Neither is required to create a customer — only
-        # metadata.user_id is needed to correlate the Stripe customer back to
-        # our user. Avoiding the transfer keeps PII inside the Canadian region;
-        # contact details can be attached later only if a specific Stripe flow
-        # (e.g. a dispute) actually requires them.
-        customer = await asyncio.to_thread(
-            lambda: stripe.Customer.create(
-                metadata={"user_id": user_id},
-                api_key=stripe_secret,
-                idempotency_key=f"cus-create-{user_id}",
+    if stripe_customer_id:
+        # Cheap path: the row is stamped and the stamp disagrees with the key.
+        # No Stripe call is needed to know the id is unusable.
+        if stale_by_mode(user.get("stripe_customer_id_mode"), key_mode(stripe_secret)):
+            return await _reprovision_stripe_customer(
+                user_id, stripe_customer_id, stripe_secret, reason="mode_mismatch"
             )
-        )
-        stripe_customer_id = customer.id
-        await db_supabase.update_one("users", {"id": user_id}, {"stripe_customer_id": stripe_customer_id})
-        # Re-read to use the authoritative value in case a concurrent replica wrote first.
-        # (The loser's Stripe customer is unused but harmless; deduplication can run offline.)
-        fresh = await db_supabase.get_user_by_id(user_id)
-        if not fresh:
-            raise HTTPException(status_code=404, detail="User not found during Stripe customer creation")
-        stripe_customer_id = fresh["stripe_customer_id"]
+        return stripe_customer_id
 
-    return stripe_customer_id
+    # PIPEDA (C4): do NOT send the rider's email or legal name to Stripe (a
+    # US processor). Neither is required to create a customer — only
+    # metadata.user_id is needed to correlate the Stripe customer back to
+    # our user. Avoiding the transfer keeps PII inside the Canadian region;
+    # contact details can be attached later only if a specific Stripe flow
+    # (e.g. a dispute) actually requires them.
+    customer = await asyncio.to_thread(
+        lambda: stripe.Customer.create(
+            metadata={"user_id": user_id},
+            api_key=stripe_secret,
+            idempotency_key=f"cus-create-{user_id}",
+        )
+    )
+    stripe_customer_id = customer.id
+    # Stamp the mode from the object Stripe returned (its own `livemode`), not
+    # from the key we sent — evidence over inference. This is what lets a
+    # future key rotation be detected without a Stripe round-trip.
+    await db_supabase.update_one(
+        "users",
+        {"id": user_id},
+        {
+            "stripe_customer_id": stripe_customer_id,
+            "stripe_customer_id_mode": object_mode(customer) or key_mode(stripe_secret),
+        },
+    )
+    # Re-read to use the authoritative value in case a concurrent replica wrote first.
+    # (The loser's Stripe customer is unused but harmless; deduplication can run offline.)
+    fresh = await db_supabase.get_user_by_id(user_id)
+    if not fresh:
+        raise HTTPException(status_code=404, detail="User not found during Stripe customer creation")
+    return fresh["stripe_customer_id"]
+
+
+async def with_customer_repair(user_id: str, stripe_secret: str, op):
+    """Run ``await op(customer_id)``, repairing a stranded customer once.
+
+    The repair trigger is the failure itself: if Stripe answers
+    ``resource_missing`` for the customer we addressed, that id is not on this
+    key (the test→live rotation case), so we mint a replacement and run ``op``
+    against it. Any other error — auth, rate limit, connection, card decline —
+    propagates untouched and writes nothing; see ``utils/stripe_mode.py`` for
+    why that line matters.
+
+    Costs nothing on the healthy path: no extra round-trip, no extra read.
+    """
+    customer_id = await get_or_create_stripe_customer(user_id, stripe_secret)
+    try:
+        return customer_id, await op(customer_id)
+    except Exception as e:
+        if not is_missing_on_key(e):
+            raise
+        repaired = await _reprovision_stripe_customer(
+            user_id, customer_id, stripe_secret, reason="resource_missing"
+        )
+        # One retry only. If the fresh customer also 404s, something is wrong
+        # with the key or the account, not with this row — let it surface.
+        return repaired, await op(repaired)
 
 
 @api_router.post("/create-intent")
@@ -500,14 +670,19 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
 
         import time as _time
 
-        setup_intent = await asyncio.to_thread(
-            lambda: stripe.SetupIntent.create(
-                customer=customer_id,
-                payment_method_types=["card"],
-                api_key=stripe_secret,
-                idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 60)}",
+        async def _create_si(cid: str):
+            return await asyncio.to_thread(
+                lambda: stripe.SetupIntent.create(
+                    customer=cid,
+                    payment_method_types=["card"],
+                    api_key=stripe_secret,
+                    idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 60)}",
+                )
             )
-        )
+
+        # Repairs a customer stranded by a test→live key rotation before the
+        # rider is handed a client_secret that could never confirm.
+        customer_id, setup_intent = await with_customer_repair(current_user["id"], stripe_secret, _create_si)
 
         return {
             "client_secret": setup_intent.client_secret,
@@ -540,13 +715,14 @@ async def get_payment_methods(request: Request = None, current_user: dict = Depe
         if not stripe_customer_id:
             return {"methods": [], "mock": False}
 
-        methods = await asyncio.to_thread(
-            lambda: stripe.PaymentMethod.list(
-                customer=stripe_customer_id,
-                type="card",
-                api_key=stripe_secret,
+        # Repair-on-failure: a customer stranded by a test→live key rotation
+        # would otherwise raise `resource_missing` here and 500 forever.
+        async def _list(cid: str):
+            return await asyncio.to_thread(
+                lambda: stripe.PaymentMethod.list(customer=cid, type="card", api_key=stripe_secret)
             )
-        )
+
+        _, methods = await with_customer_repair(current_user["id"], stripe_secret, _list)
 
         return {
             "methods": [
@@ -561,6 +737,11 @@ async def get_payment_methods(request: Request = None, current_user: dict = Depe
             ],
             "mock": False,
         }
+    except HTTPException:
+        # Deliberate status codes raised inside the try (e.g. the 503 the
+        # re-provision kill switch raises) must reach the client as themselves,
+        # not be relabelled 500 by the catch-all below.
+        raise
     except Exception as e:
         logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -602,10 +783,18 @@ async def get_cards(request: Request = None, current_user: dict = Depends(get_cu
         ]
 
     try:
-        customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-        methods = await asyncio.to_thread(
-            lambda: stripe.PaymentMethod.list(customer=customer_id, type="card", api_key=stripe_secret)
-        )
+
+        async def _list(cid: str):
+            return await asyncio.to_thread(
+                lambda: stripe.PaymentMethod.list(customer=cid, type="card", api_key=stripe_secret)
+            )
+
+        # Repair-on-failure: after a test→live key rotation the stored customer
+        # is invisible to the live key. Rather than 502ing the cards screen
+        # forever, mint a live customer and list against it — which correctly
+        # returns an empty list the rider can add a real card to. Their
+        # test-mode cards are not recoverable; they were never real cards.
+        _, methods = await with_customer_repair(current_user["id"], stripe_secret, _list)
         user = await db_supabase.get_user_by_id(current_user["id"])
         default_pm = user.get("default_payment_method") if user else None
         return [
@@ -622,6 +811,10 @@ async def get_cards(request: Request = None, current_user: dict = Depends(get_cu
             }
             for m in methods.data
         ]
+    except HTTPException:
+        # Preserve deliberate status codes raised inside the try (the
+        # re-provision kill switch's 503) instead of relabelling them 502.
+        raise
     except Exception as e:
         # C7: do NOT mask a Stripe outage as "no cards" — that's the log-and-
         # continue-on-payment-error anti-pattern CLAUDE.md forbids, and it makes
@@ -746,13 +939,19 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
         }
 
     try:
-        customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-
         # Attach the client-tokenized PaymentMethod to the customer.
         # The PAN never touched our server — the token came from Stripe.js.
-        pm = await asyncio.to_thread(
-            lambda: stripe.PaymentMethod.attach(payment_method_id, customer=customer_id, api_key=stripe_secret)
-        )
+        #
+        # Wrapped in the repair helper because this is the endpoint a rider
+        # reaches when trying to recover from the cutover: attaching to a
+        # customer the live key cannot see fails `resource_missing`, which
+        # without repair leaves them permanently unable to add ANY card.
+        async def _attach(cid: str):
+            return await asyncio.to_thread(
+                lambda: stripe.PaymentMethod.attach(payment_method_id, customer=cid, api_key=stripe_secret)
+            )
+
+        customer_id, pm = await with_customer_repair(current_user["id"], stripe_secret, _attach)
 
         # Confirm with SetupIntent — saves card for future off-session use.
 
@@ -800,6 +999,10 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
     except stripe.error.StripeError as e:
         logger.error(f"Stripe API error on add-card: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
+    except HTTPException:
+        # Preserve deliberate status codes raised inside the try (the
+        # re-provision kill switch's 503).
+        raise
     except Exception as e:
         logger.error(f"Unexpected error on add-card: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -1002,7 +1205,6 @@ async def create_payment_sheet(
         charge_amount = Decimal(str(body.amount))
 
     try:
-        customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
         amount_cents = dollars_to_cents(charge_amount)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
@@ -1013,13 +1215,21 @@ async def create_payment_sheet(
         # otherwise silently falls back to the SDK's bundled version.
         # ACTION REQUIRED when bumping STRIPE_API_VERSION: update the Stripe
         # dashboard webhook endpoint API version to match.
-        ephemeral_key = await asyncio.to_thread(
-            lambda: stripe.EphemeralKey.create(
-                customer=customer_id,
-                stripe_version=STRIPE_API_VERSION,
-                api_key=stripe_secret,
+        #
+        # EphemeralKey is the first customer-addressed call in this handler, so
+        # it is where a customer stranded by a test→live key rotation surfaces.
+        # Repairing here means the PaymentSheet opens (with no saved cards)
+        # instead of the rider hitting a dead end at payment time.
+        async def _ephemeral(cid: str):
+            return await asyncio.to_thread(
+                lambda: stripe.EphemeralKey.create(
+                    customer=cid,
+                    stripe_version=STRIPE_API_VERSION,
+                    api_key=stripe_secret,
+                )
             )
-        )
+
+        customer_id, ephemeral_key = await with_customer_repair(current_user["id"], stripe_secret, _ephemeral)
 
         if body.client_idempotency_key:
             idempotency_key = body.client_idempotency_key

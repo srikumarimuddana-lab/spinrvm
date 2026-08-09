@@ -44,11 +44,19 @@ async def test_customer_creation_yields_to_event_loop() -> None:
         update_one=AsyncMock(),
     )
     stripe = SimpleNamespace(Customer=SimpleNamespace(create=blocking_create))
+    # The isolated namespace must carry every global the function body reads.
+    # get_or_create_stripe_customer stamps the new customer's Stripe mode, so
+    # the real (pure, no-I/O) helpers from utils.stripe_mode go in here too.
+    from backend.utils.stripe_mode import key_mode, object_mode, stale_by_mode
+
     get_or_create_stripe_customer = _load_payments_function(
         "get_or_create_stripe_customer",
         db_supabase=db,
         stripe=stripe,
         HTTPException=RuntimeError,
+        key_mode=key_mode,
+        object_mode=object_mode,
+        stale_by_mode=stale_by_mode,
     )
 
     timer = threading.Timer(0.1, release.set)

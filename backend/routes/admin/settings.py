@@ -181,6 +181,10 @@ class SettingsUpdateRequest(BaseModel):
     stripe_webhook_secret: Optional[str] = None
     # Connected-accounts endpoint signing secret (account.updated, payout.*).
     stripe_connect_webhook_secret: Optional[str] = None
+    # Kill switch for re-provisioning Stripe identities stranded by a
+    # test→live key rotation (see AppSettings for the full rationale).
+    # Settable here so it can be turned off without a redeploy.
+    stripe_reprovision_stale_ids: Optional[bool] = None
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_from_number: Optional[str] = None

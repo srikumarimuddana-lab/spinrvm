@@ -20,7 +20,6 @@ except ImportError:
 from pydantic import BaseModel, Field
 
 try:
-    from .. import db_supabase
     from ..db import db
     from ..db_supabase import wallet_pay_for_ride
     from ..dependencies import get_current_user
@@ -29,11 +28,12 @@ try:
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.money import dollars_to_cents
+    from .payments import with_customer_repair
 except ImportError:
-    import db_supabase
     from db import db
     from db_supabase import wallet_pay_for_ride
     from dependencies import get_current_user
+    from routes.payments import with_customer_repair
     from settings_loader import get_app_settings
     from utils.error_handling import ErrorCode, SpinrException
     from utils.error_keys import ErrorKeys
@@ -160,31 +160,10 @@ async def top_up_wallet(
             detail="Payment processing is not configured. Please contact support.",
         )
 
-    user = await db_supabase.get_user_by_id(current_user["id"])
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    stripe_customer_id = user.get("stripe_customer_id")
-    if not stripe_customer_id:
-        customer = await asyncio.to_thread(
-            lambda: stripe.Customer.create(
-                email=user.get("email"),
-                name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
-                metadata={"user_id": current_user["id"]},
-                api_key=stripe_secret,
-                idempotency_key=f"cus-create-{current_user['id']}",
-            )
-        )
-        stripe_customer_id = customer.id
-        await db_supabase.update_one(
-            "users",
-            {"id": current_user["id"]},
-            {"stripe_customer_id": stripe_customer_id},
-        )
-        fresh = await db_supabase.get_user_by_id(current_user["id"])
-        if fresh:
-            stripe_customer_id = fresh.get("stripe_customer_id") or stripe_customer_id
-
+    # No separate user fetch: get_or_create_stripe_customer (via
+    # with_customer_repair below) reads the row itself and raises the same
+    # 404 "User not found". Keeping a second read here only duplicated a
+    # cached lookup on every top-up.
     amount_cents = dollars_to_cents(req.amount)
 
     import time as _time
@@ -192,14 +171,28 @@ async def top_up_wallet(
     idempotency_key = f"wallet-topup-{current_user['id']}-{int(_time.time() // 60)}"
 
     try:
+        # Shared with the cards path rather than duplicated here. The local
+        # copy this replaces created the customer with the rider's email and
+        # legal name, contradicting the PIPEDA rule the payments.py helper
+        # documents (no rider PII to Stripe, a US processor) — and which of the
+        # two shapes a rider ended up with depended purely on whether they hit
+        # top-up or cards first. with_customer_repair additionally recovers a
+        # customer stranded by a test→live key rotation, which previously made
+        # every top-up fail `resource_missing` with no way out.
+        #
         # Sync Stripe SDK: threadpool so these round-trips don't block the
         # event loop (idempotency key makes the PI create retry-safe).
-        ephemeral_key = await asyncio.to_thread(
-            lambda: stripe.EphemeralKey.create(
-                customer=stripe_customer_id,
-                stripe_version=stripe.api_version,
-                api_key=stripe_secret,
+        async def _ephemeral(cid: str):
+            return await asyncio.to_thread(
+                lambda: stripe.EphemeralKey.create(
+                    customer=cid,
+                    stripe_version=stripe.api_version,
+                    api_key=stripe_secret,
+                )
             )
+
+        stripe_customer_id, ephemeral_key = await with_customer_repair(
+            current_user["id"], stripe_secret, _ephemeral
         )
 
         intent = await asyncio.to_thread(

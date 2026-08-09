@@ -143,6 +143,19 @@ class AppSettings(BaseModel):
     # cannot verify those — see construct_event dual-secret logic in
     # routes/webhooks.py.
     stripe_connect_webhook_secret: str = ""
+    # ── Stripe identity re-provisioning (test → live cutover) ─────────────
+    # Stripe object IDs are mode-scoped, so rotating stripe_secret_key across
+    # modes strands every stored customer/Connect-account ID: the new key
+    # answers `resource_missing` for all of them. With this on, the backend
+    # mints a replacement under the running key and archives the dead ID
+    # (migration 286) instead of failing the rider's cards screen or the
+    # driver's payout setup forever.
+    #
+    # Default True because the alternative is a permanently broken payment
+    # surface with no in-app recovery. This is the kill switch: turning it
+    # off stops all re-provisioning within the 60 s settings cache and needs
+    # no redeploy — the rollback path for this feature.
+    stripe_reprovision_stale_ids: bool = True
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""

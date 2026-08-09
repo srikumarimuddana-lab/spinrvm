@@ -13,6 +13,7 @@ try:
         _single_row_from_res,
         _user_cache_key,
         _write_cached_row,
+        _write_skipped,
         invalidate_user_cache,
         run_sync,
         supabase,
@@ -25,6 +26,7 @@ except ImportError:
         _single_row_from_res,
         _user_cache_key,
         _write_cached_row,
+        _write_skipped,
         invalidate_user_cache,
         run_sync,
         supabase,
@@ -126,6 +128,7 @@ async def get_otp_record_by_phone(phone: str) -> Optional[Dict[str, Any]]:
 
 async def verify_otp_record(record_id: str):
     if not supabase:
+        _write_skipped("verify_otp_record", "otp_records")
         return None
     return await run_sync(
         lambda: _single_row_from_res(
@@ -136,6 +139,7 @@ async def verify_otp_record(record_id: str):
 
 async def delete_otp_record(record_id: str):
     if not supabase:
+        _write_skipped("delete_otp_record", "otp_records")
         return None
     return await run_sync(
         lambda: _single_row_from_res(supabase.table("otp_records").delete().eq("id", record_id).execute())

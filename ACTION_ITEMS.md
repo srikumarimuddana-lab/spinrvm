@@ -3489,6 +3489,171 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
 - **Acceptance:** not yet defined — pending the dedicated follow-up
   scoping (b)/(c) above into concrete acceptance criteria.
 
+### B17. `purge_pii_retention` Step B will FK-abort the entire daily retention purge once any paid ride crosses 7 years
+- [ ] **Status:** open — found 2026-08-07 during the PR #3464 regulatory audit,
+  as an adjacent finding while fixing the *same shape of bug* in Step H
+  (migration 289). Dormant, but on a fuse that starts burning 7 years after the
+  first paid ride — no user action required to trigger it.
+- **What breaks:** `financial_events.ride_id` references `rides(id)` with the
+  Postgres default `NO ACTION` (`backend/migrations/58_financial_events.sql:28`
+  — no `ON DELETE` clause). Step B runs a bare
+  `DELETE FROM rides WHERE created_at < now() - 7y` with **no exception handler
+  at all** (contrast Step H, which isolates per-account with
+  `EXCEPTION WHEN foreign_key_violation`). Every paid ride has a retained
+  `stripe_charge` header pointing at it, and **no purge step ever deletes
+  non-DSAR `financial_events` rows** — so the first ride to cross 7 years raises
+  `foreign_key_violation`, aborts the whole transaction, and rolls back Step A
+  too, never reaching Steps C–M.
+- **Why it matters more than the Step H bug this PR just fixed:** (1) *certain*
+  to fire on the passage of time alone, where Step H needed a deletion request
+  plus 7 years; (2) same total blast radius — GPS anonymization, ride deletion,
+  chat/token/stripe-event cleanup, audit-log purge and every other regulatory
+  window silently stop, repeating daily; (3) *less* protected — Step H at least
+  had per-row isolation, Step B has none.
+- **Options (needs a design call, not a one-liner):** NULL the `ride_id` on
+  affected `financial_events` rows before Step B; or migrate the FK to
+  `ON DELETE SET NULL`; or give Step B per-batch exception isolation. Each has a
+  different consequence for the 7-year tax record's ability to link a charge
+  back to its trip, so this is a retention-policy decision as much as a schema
+  one. Note migration 289's change-log records this too, but a dated markdown
+  file is not tracking — hence this entry.
+- **Acceptance:** a decision recorded on which option is taken; the fix applied
+  with a test that proves a 7-year-old paid ride can be purged without aborting
+  the run; `docs/runbooks/data-retention.md` updated to describe Steps H–M,
+  which it currently omits entirely.
+
+### B18. Retention docs promise anonymize-not-delete; migration 216 implements hard-delete, and 289 makes it operative
+- [ ] **Status:** open — found 2026-08-07 in the PR #3464 regulatory audit.
+  **Needs a legal/product decision, not a code change** — filed here rather than
+  "reconciled" unilaterally, because rewriting the policy docs to match the code
+  would be deciding the question rather than surfacing it.
+- **The divergence:** three governing documents state that records are
+  *anonymized* after the retention window —
+  `.claude/context/regulatory-sk.md:45,87` ("rows are anonymized (user_id
+  nulled, coordinates rounded to city centroid), **not deleted** — preserves
+  statistical continuity for regulatory reporting"), `CLAUDE.md` §Compliance
+  →"Deletion" ("Ride records become anonymized"), and
+  `docs/runbooks/data-retention.md`, which additionally omits Steps H–M
+  altogether. `backend/migrations/216_deletion_hard_delete_no_anonymize.sql:1-4`
+  instead implements "the Uber/Lyft attributable-retention model — **NO
+  anonymization**", hard-deleting DSAR accounts at 7 years.
+- **Why now:** Step H has been inert since 216 shipped (it aborted on the
+  migration-58 trigger). Migration 289 fixes that abort, so this PR is what
+  makes the hard-delete path **operative in production for the first time**.
+- **Note on substance:** hard-delete is not *less* PIPEDA-compliant than
+  anonymize — arguably it is a stronger privacy outcome — and the 7-year floor
+  is honored either way. The exposure is (a) the repo's own docs promise a
+  different outcome than what ships, and (b) `data-retention.md:42-47` requires
+  legal + founder sign-off for exactly this kind of change, recorded in the same
+  PR, and no such sign-off is visible for 216 or 289. The anonymize rationale
+  ("statistical continuity for SGI regulatory reporting") is a real tradeoff
+  being foreclosed without a recorded decision.
+- **Acceptance:** a recorded legal/founder decision on anonymize-vs-delete; the
+  three documents reconciled with whichever is chosen; `data-retention.md`
+  extended to cover Steps H–M.
+
+### B19. `payment_retry`'s `requires_capture` hold-recovery still uses the non-atomic two-write settlement
+- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- **What:** `backend/utils/payment_retry.py` (the `requires_capture` branch) still
+  does `Stripe capture → record_payment_event → separate update_ride` — the exact
+  sequence PR #3464 replaced in `settle_card`'s two success paths with the atomic
+  `settle_ride_card_payment` RPC. It was not wired to `_finalize_card_settlement`.
+- **Severity:** low-moderate. It *does* inherit the durable-retry + Sentry
+  escalation for free (it goes through the now-centralized
+  `ledger_service.record_event`), so a lost header there is no longer silently
+  swallowed — but the process-death window between the capture and the two writes
+  is still open on this path. PR #3464 declared its blast radius as "the two
+  settle_card success paths only", so this is a known partial close, not a
+  regression.
+- **Acceptance:** route the branch through `_finalize_card_settlement` so it picks
+  up the flagged atomic path, with a test mirroring `test_atomic_settle.py`'s
+  exactly-one-header matrix.
+
+### B20. Ledger projection can misclassify a tip when a ride is stuck unpaid
+- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- **What:** `backend/utils/ledger_projection.py::_decompose` (default fare branch)
+  reads `rides.driver_earnings` / `tax_amount` at projection time without checking
+  `rides.payment_status`. Migration 287's 30-minute grace window covers the normal
+  header-before-`update_ride` gap, but not a ride whose post-charge DB update failed
+  and wasn't recovered within ~30-45 min (the path that returns 503 + a Sentry page).
+  In that case the projection reads pre-tip earnings and books the tip to
+  `platform_revenue` instead of `driver_payable`.
+- **Severity:** low, and confined to the internal accounting overlay.
+  `rides.driver_earnings` (the actual payout figure feeding T4A and driver
+  statements) and `financial_events.delta_cents` (the tax record) are both
+  unaffected, and the resulting legs still balance — so no unbalanced-legs alert
+  fires and no driver is underpaid. It is a mis-attribution inside the double-entry
+  view only.
+- **Why not fixed inline:** the obvious fix (add `rides.payment_status = 'paid'` to
+  migration 287's work-queue filter) is wrong as stated — cancellation-fee and
+  notice-fee events legitimately point at rides that are cancelled, not paid, and a
+  blanket filter would exclude them from projection permanently. A correct fix has
+  to be source-aware, and the Python-side alternative (skip and retry next tick)
+  reintroduces the head-of-queue starvation risk the degraded-legs design exists to
+  avoid. Needs a deliberate design pass, not a one-liner.
+- **Acceptance:** source-aware settlement check with no starvation regression, plus
+  a projection test covering a stuck-`processing` fare ride.
+
+### B21. Background-loop lock TTL is longer than the sleep, halving several loops' cadence
+- [ ] **Status:** open — found 2026-08-08 reviewing PR #3464. Fixed in
+  `ledger_projection.py` only; the other loops are untouched.
+- **What:** the shared loop-shell idiom sets the Redis throttle lock with
+  `TTL = interval * 1.5` and then sleeps `interval` (± jitter). The pod that ran
+  the last tick therefore wakes while its OWN key is still alive, fails `SET NX`,
+  and sleeps another full interval — so the loop actually runs every ~2 intervals.
+  `payment_retry.py:629` states the intent explicitly and gets the arithmetic
+  backwards: *"TTL is 1.5× interval so a real lock expires before the next
+  election."* It does not.
+- **Where:** `utils/payment_retry.py` (5 min → ~10), `utils/driver_claim_reaper.py`,
+  `utils/offer_expiry_reaper.py`, `utils/orphaned_hold_reconciler.py`
+  (`interval * 2` → ~3 intervals). Not audited beyond this list.
+- **Severity:** low individually, but it silently halves throughput on sweeps
+  whose whole purpose is bounded recovery latency — `payment_retry` is the one to
+  look at first, since a failed payment waits ~10 min per attempt rather than 5.
+  With several replicas the aggregate cadence lands nearer 1.5× than 2×, so it
+  degrades quietly rather than visibly.
+- **Why not fixed here:** each loop has its own interval, jitter, and multi-replica
+  behaviour, and shortening the TTL trades exclusivity for cadence — safe only
+  where the tick is idempotent by construction (as the projection's is, via
+  `UNIQUE(event_id, account, side)`). `payment_retry` has the atomic
+  `payment_status → retrying` claim so it is very likely also safe, but that is a
+  money path and deserves its own change, not a drive-by.
+- **Acceptance:** per-loop TTL below the minimum sleep, each with a test pinning
+  the invariant (see `test_lock_ttl_expires_before_the_earliest_next_wake` and
+  `test_projection_loop_reacquires_its_own_lock_on_the_next_wake`), and
+  `payment_retry.py`'s misleading comment corrected.
+
+### B22. `G4a · pip-audit` is red on four advisories in three backend dependencies
+- [ ] **Status:** open — observed 2026-08-09 on PR #3464, which changed **no** dependency
+  manifest (`git diff origin/main...HEAD -- '*requirements*'` is empty), so these are
+  pre-existing on `main`. Filed rather than fixed in that PR, per release gate 8: a red
+  gate left unexplained decays into one people stop reading.
+- **What:**
+
+  | Package | Pinned | Advisory | Fixed in |
+  |---|---|---|---|
+  | `cryptography` | 49.0.0 | PYSEC-2026-3552 | 50.0.0 |
+  | `h2` | 4.3.0 | CVE-2026-71554 | 4.4.1 |
+  | `pypdf` | 6.14.2 | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
+
+- **Why it was not bumped inline:** gate 8 also says not to force a fix that breaks
+  something else to turn a check green. Each of these needs its own verification:
+  - **`h2`** is the riskiest. `repositories/_base.py` has bespoke retry handling for
+    HTTP/2 `GOAWAY` and `httpx.NetworkError` (`run_sync`'s `_HTTPX_NETWORK_EXC` path) —
+    the entire DB layer's transient-failure behaviour sits on top of this library. A
+    version bump needs the DB retry/circuit-breaker tests run deliberately, not
+    incidentally.
+  - **`cryptography`** is pulled in via `google-auth` and `pyjwt`; a major bump
+    (49 → 50) can move JWT signing/verification behaviour, which is the auth path.
+  - **`pypdf`** is the mildest (document generation), and is the one worth doing first
+    as a standalone change to confirm the gate goes green for the right reason.
+- **Severity:** unknown until each advisory is read. The exploitability of an `h2` or
+  `cryptography` CVE in *our* usage may well be nil, but "probably fine" is not the same
+  as a documented accepted risk — which is the other outcome gate 8 allows, via a `[CR]`
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`).
+- **Acceptance:** either each dependency bumped with its affected tests actually run, or
+  a `[CR]` per advisory recording the accepted risk and why. Not a silent red check.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

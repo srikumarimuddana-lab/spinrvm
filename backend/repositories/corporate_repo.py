@@ -15,6 +15,7 @@ try:
         _rows_from_res,
         _serialize_for_api,
         _single_row_from_res,
+        _write_skipped,
         run_sync,
         supabase,
     )
@@ -24,6 +25,7 @@ except ImportError:
         _rows_from_res,
         _serialize_for_api,
         _single_row_from_res,
+        _write_skipped,
         run_sync,
         supabase,
     )
@@ -140,6 +142,7 @@ async def update_corporate_account(account_id: str, update_data: Dict[str, Any])
         Updated corporate account data or None if failed
     """
     if not supabase:
+        _write_skipped("update_corporate_account", "corporate_accounts")
         return None
 
     update_data = _serialize_for_api(update_data)
@@ -162,6 +165,7 @@ async def delete_corporate_account(account_id: str) -> bool:
         True if successful, False otherwise
     """
     if not supabase:
+        _write_skipped("delete_corporate_account", "corporate_accounts")
         return False
 
     def _fn():

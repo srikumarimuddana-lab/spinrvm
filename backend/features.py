@@ -1706,6 +1706,29 @@ async def send_push_notification(
     return False
 
 
+async def _branded_html_from_text(body: str, subject: str) -> Optional[str]:
+    """Wrap a plain-text email body in the shared branded shell.
+
+    Best-effort by design: a rendering or settings failure returns None, and
+    the caller sends the plain-text body exactly as it would have before. An
+    email that looks plain beats an email that never arrives — several of the
+    senders routed through here carry tax documents and safety alerts.
+
+    Splitting rules live in ``email_layout.render_from_text`` so every sender
+    that hands us plain text is wrapped the same way.
+    """
+    try:
+        try:
+            from .utils.email_layout import render_from_text
+        except ImportError:
+            from utils.email_layout import render_from_text  # type: ignore
+
+        return (await render_from_text(heading=subject, body=body)).html
+    except Exception as exc:
+        logger.warning("email branding failed, sending plain text: %s", exc)
+        return None
+
+
 async def send_email(
     *,
     to: str,
@@ -1728,6 +1751,14 @@ async def send_email(
     ``{"filename", "content" (bytes), "mime"}`` dicts (e.g. a data-export ZIP).
     ``email_type``/``recipient_user_id``/``log_id`` flow into email_send_log
     for PIPEDA-safe auditing (never the recipient address).
+
+    **When no ``html`` is supplied, one is rendered from ``body`` through the
+    shared branded layout** — logo, and the company name and address from the
+    admin Settings page. Six senders reach recipients through this helper with
+    plain text only (driver earnings statements, tax and DSAR exports,
+    corporate low-balance alerts, safety-team alerts), and branding them one at
+    a time would leave the next one added unbranded again. Callers that already
+    build their own HTML are passed through untouched.
     """
     if not to:
         return False
@@ -1736,6 +1767,9 @@ async def send_email(
         from .utils.email_provider import send_transactional_email
     except ImportError:
         from utils.email_provider import send_transactional_email  # type: ignore
+
+    if html is None and body:
+        html = await _branded_html_from_text(body, subject)
 
     return await send_transactional_email(
         to=to,

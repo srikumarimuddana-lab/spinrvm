@@ -1724,8 +1724,11 @@ async def _branded_html_from_text(body: str, subject: str) -> Optional[str]:
             from utils.email_layout import render_from_text  # type: ignore
 
         return (await render_from_text(heading=subject, body=body)).html
-    except Exception as exc:
-        logger.warning("email branding failed, sending plain text: %s", exc)
+    except Exception:
+        # exception=True rather than interpolating the message: this is the
+        # only signal that an email went out unbranded, so the traceback is
+        # the part worth having.
+        logger.opt(exception=True).warning("Email branding failed — sending plain text")
         return None
 
 

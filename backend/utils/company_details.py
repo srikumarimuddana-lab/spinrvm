@@ -57,6 +57,18 @@ class CompanyDetails(NamedTuple):
     #: Absolute URL of the logo to render in the header.
     logo_url: str
 
+    @property
+    def name_sentence(self) -> str:
+        """The company name, safe to end a sentence with.
+
+        A configured legal name usually already ends in a period ("… Inc."),
+        and copy that appends its own produces "Spinr Technologies Inc..".
+        Every template that ends a sentence with the name must use this rather
+        than remembering the rule — it is not the kind of thing anyone notices
+        in review, and it is now in front of customers on every email.
+        """
+        return self.name.rstrip(".") + "."
+
 
 def _coalesce(settings: Dict[str, Any], key: str) -> str:
     """Settings value as a clean string.

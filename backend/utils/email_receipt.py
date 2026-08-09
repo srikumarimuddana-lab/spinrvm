@@ -398,15 +398,11 @@ def generate_receipt_html(
     if company is not None:
         header = _layout_header_html(company, "Ride Receipt")
         footer = _layout_footer_html(company)
-        brand_name = company.name
+        brand_sentence = company.name_sentence
     else:
         header = _LEGACY_HEADER
         footer = _LEGACY_FOOTER
-        brand_name = "Spinr"
-    # A configured legal name often already ends in a period ("… Inc."), and
-    # the sentence adds its own — so strip before appending rather than
-    # shipping "Spinr Technologies Inc..".
-    brand_sentence = brand_name.rstrip(".") + "."
+        brand_sentence = "Spinr."
 
     return f"""
     <!DOCTYPE html>
@@ -525,7 +521,7 @@ def generate_receipt_text(
     lines = [
         f"Hi {rider_name},",
         "",
-        f"Thanks for riding with {(company.name if company else 'Spinr').rstrip('.')}. Here's your receipt.",
+        f"Thanks for riding with {company.name_sentence if company else 'Spinr.'} Here's your receipt.",
         "",
         f"Total: ${_fmt(total_d)} CAD",
     ]

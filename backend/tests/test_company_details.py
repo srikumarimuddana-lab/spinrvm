@@ -136,3 +136,32 @@ async def test_unusable_logo_urls_fall_back_to_the_bundled_asset(bad):
 async def test_whitespace_logo_url_falls_back():
     details = await _load({"company_logo_url": "   "})
     assert details.logo_url.endswith("/api/v1/branding/spinr-logo.png")
+
+
+# --- Sentence-final name ----------------------------------------------------
+# This one shipped: the receipt read "Thanks for riding with Spinr Technologies
+# Inc..". Caught by rendering a real receipt, not by a test — so it gets one.
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        ("Spinr Technologies Inc.", "Spinr Technologies Inc."),
+        ("Spinr", "Spinr."),
+        ("Northern Rides Ltd..", "Northern Rides Ltd."),
+        # A trailing space an admin typed is stripped by _coalesce before the
+        # property sees it, so it cannot produce a dangling " .".
+        ("Spinr Technologies Inc. ", "Spinr Technologies Inc."),
+    ],
+)
+async def test_name_sentence_never_doubles_the_period(configured, expected):
+    details = await _load({"company_name": configured})
+    assert details.name_sentence == expected
+    assert ".." not in details.name_sentence
+
+
+async def test_name_sentence_leaves_the_bare_name_alone():
+    # The logo alt text and the invoice PDF header print the name as a label,
+    # not a sentence — they must keep whatever the admin configured.
+    details = await _load({"company_name": "Spinr Technologies Inc."})
+    assert details.name == "Spinr Technologies Inc."

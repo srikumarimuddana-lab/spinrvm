@@ -916,25 +916,29 @@ def _list_connected_accounts(stripe_secret: str, cap: int = 1000) -> list[dict[s
 
 
 def _unlinked_drivers_with_emails() -> list[dict[str, Any]]:
-    """Drivers with no stripe_account_id, with an email resolved from the
-    driver row or, failing that, their users row. Blocking; call in a thread."""
+    """Drivers with no stripe_account_id, each annotated with their email.
+
+    Email comes from the ``users`` row via ``user_id`` — the ``drivers`` table
+    has NO email column (selecting one 42703s in production; the
+    ``driver.get("email")`` reads elsewhere in the codebase only work on dicts
+    already merged with user data). Blocking; call in a thread.
+    """
     drivers = (
         supabase.table("drivers")
-        .select("id,phone,email,user_id,stripe_account_id,stripe_account_id_superseded")
+        .select("id,phone,user_id,stripe_account_id,stripe_account_id_superseded")
         .is_("stripe_account_id", "null")
         .execute()
         .data
         or []
     )
-    missing = [d["user_id"] for d in drivers if not (d.get("email") or "").strip() and d.get("user_id")]
+    user_ids = sorted({d["user_id"] for d in drivers if d.get("user_id")})
     user_emails: dict[str, str] = {}
-    if missing:
-        for u in _select_in("users", "id,email", "id", sorted(set(missing))):
+    if user_ids:
+        for u in _select_in("users", "id,email", "id", user_ids):
             if (u.get("email") or "").strip():
                 user_emails[u["id"]] = u["email"]
     for d in drivers:
-        email = (d.get("email") or "").strip() or user_emails.get(d.get("user_id") or "", "")
-        d["email"] = email.lower()
+        d["email"] = (user_emails.get(d.get("user_id") or "", "") or "").strip().lower()
     return drivers
 
 

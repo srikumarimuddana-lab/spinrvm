@@ -167,3 +167,54 @@ class TestRoute:
         # Non-null entity_id — audit_logs.entity_id is NOT NULL and the logger
         # swallows its own failures.
         assert audit.await_args.args[3] == "matched:2"
+
+
+class TestUnlinkedDriverFetcher:
+    """The fetcher itself was untested (every matcher test patches it), which
+    is exactly how `select("...email...")` against a table with no email
+    column reached production as a 42703. These pin the real query shape."""
+
+    def _fake_supabase(self, drivers_rows, users_rows):
+        selected: dict[str, str] = {}
+
+        def _table(name):
+            t = MagicMock()
+
+            def _select(cols):
+                selected[name] = cols
+                q = MagicMock()
+                res = MagicMock()
+                res.data = drivers_rows if name == "drivers" else users_rows
+                q.is_.return_value.execute.return_value = res
+                q.in_.return_value.execute.return_value = res
+                q.execute.return_value = res
+                return q
+
+            t.select.side_effect = _select
+            return t
+
+        sb = MagicMock()
+        sb.table.side_effect = _table
+        return sb, selected
+
+    def test_never_selects_email_from_drivers(self):
+        """drivers has NO email column — selecting it 42703s in production."""
+        sb, selected = self._fake_supabase([], [])
+        with patch.object(svc, "supabase", sb):
+            svc._unlinked_drivers_with_emails()
+        assert "email" not in selected["drivers"].split(",")
+
+    def test_email_resolves_via_users_and_is_lowered(self):
+        drivers = [{"id": "drv_1", "phone": "306", "user_id": "u1", "stripe_account_id": None}]
+        users = [{"id": "u1", "email": "Driver@X.com"}]
+        sb, _ = self._fake_supabase(drivers, users)
+        with patch.object(svc, "supabase", sb), patch.object(svc, "_select_in", MagicMock(return_value=users)):
+            out = svc._unlinked_drivers_with_emails()
+        assert out[0]["email"] == "driver@x.com"
+
+    def test_driver_with_no_user_row_gets_empty_email(self):
+        drivers = [{"id": "drv_1", "phone": "306", "user_id": "u_gone", "stripe_account_id": None}]
+        sb, _ = self._fake_supabase(drivers, [])
+        with patch.object(svc, "supabase", sb), patch.object(svc, "_select_in", MagicMock(return_value=[])):
+            out = svc._unlinked_drivers_with_emails()
+        assert out[0]["email"] == ""

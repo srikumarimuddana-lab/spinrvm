@@ -293,17 +293,31 @@ Not addressed in the 2026-08-08 branch. Tracked in `ACTION_ITEMS.md`.
 | Logo in emails | ✅ everywhere, from the bundled asset or an admin-set `company_logo_url` — including the ride receipt and Spinr Pass invoice, retrofitted behind `branded_receipt_enabled` |
 | Company name / address / contact | ✅ from the admin Settings page via `utils/company_details.py`, falling back to `report_branding`'s constants when unset. Covers every email **and** the receipt/invoice PDF attachments. Report PDFs (SGI, airport, compliance) still use their own constants deliberately |
 | Brand red | `#FF3B30` per `.claude/context/brand-spinr.md` across every email including the retrofitted receipt and invoice. Report PDFs keep `#ee2b2b` (ADR-008) |
-| Shared shell | ✅ for new emails plus the receipt and invoice. Still outstanding: corporate OTP, admin broadcast and the DSAR link are bare `<p>`/`<div>`; statements, corporate low-balance, KYB decisions and signup ops are plain text only |
+| Shared shell | ✅ **every email**. Directly via `render_email` / `render_from_text`, or indirectly — `features.send_email` wraps a plain-text `body` in the shell when the caller passes no `html`, which covers driver statements, corporate low-balance, tax/DSAR exports and safety-team alerts. Only marketing email is exempt, and deliberately: its CASL footer is a legal requirement with its own shape |
 | Plain-text alternative | ✅ for new emails and the receipt (which carries the same GST/PST breakdown). The invoice email is still HTML-only |
 | Typography | Plus Jakarta Sans leads a system stack. Webfonts are unreliable in email (Outlook ignores `@font-face`), so this degrades by design |
-| Test coverage | ✅ `tests/test_email_layout.py` and `tests/test_receipt_shell_snapshot.py` — the receipt's shell and content are now both pinned, and a test proves the retrofit changed only the wrapper |
+| Test coverage | ✅ `tests/test_email_layout.py`, `tests/test_receipt_shell_snapshot.py`, and `tests/test_all_emails_are_branded.py` — the last walks every send site in `backend/` and fails if one bypasses the layout without an argued allowlist entry, so "all emails are branded" is a check rather than a claim |
 
 **Standing gap:** there is no automated visual or snapshot regression tooling
 for email in this repo. Client rendering (Gmail, Apple Mail, Outlook) is
 verified by hand or not at all.
 
-## Retrofit — not done
+## Retrofit — done
 
-Migrating the receipt, Spinr Pass invoice, and the plain-text-only emails onto
-the shared layout is deferred. It changes mail people are already receiving, so
-it needs a snapshot test pinning current output first, then a feature flag.
+Every email now renders through the shared layout.
+
+- **Receipt and Spinr Pass invoice** (2026-08-08) — behind
+  `branded_receipt_enabled` (migration 288, defaults on), with the
+  pre-retrofit shell kept verbatim and pinned by
+  `tests/test_receipt_shell_snapshot.py`, so the flag's off-position is a real
+  rollback rather than an untested branch.
+- **The remaining senders** (2026-08-09) — corporate OTP, member invite, KYB
+  decision, signup ops alert, admin broadcast, T4A/DSAR exports directly;
+  driver statements, corporate low-balance and safety-team alerts indirectly
+  through `features.send_email`. No flag: the alternative to a branded email
+  here is the bare `<p>` it replaced, so there is no half-state worth having
+  and `git revert` restores it exactly.
+
+What settings do **not** drive: the product name in prose ("Open the Spinr
+driver app"). `company_name` holds the legal entity, which does not read well
+mid-sentence. See N17 in `ACTION_ITEMS.md`.

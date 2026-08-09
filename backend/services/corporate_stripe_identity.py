@@ -47,10 +47,12 @@ import stripe
 try:
     from .. import db_supabase
     from ..settings_loader import get_app_settings
+    from ..utils.error_handling import ErrorCode, SpinrException
     from ..utils.stripe_mode import is_missing_on_key, key_mode, object_mode, stale_by_mode
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     import db_supabase  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.error_handling import ErrorCode, SpinrException  # type: ignore
     from utils.stripe_mode import is_missing_on_key, key_mode, object_mode, stale_by_mode  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -61,14 +63,27 @@ logger = logging.getLogger(__name__)
 _REPROVISION_FLAG = "stripe_reprovision_stale_ids"
 
 
-class CorporateCustomerUnavailable(RuntimeError):
+class CorporateCustomerUnavailable(SpinrException):
     """The company's Stripe customer is unusable and was not replaced.
 
-    Raised when the kill switch is off, or when a background caller hit a
-    stranded customer. Callers must surface this, never swallow it — a
-    corporate billing failure that is logged and forgotten drains a company's
-    wallet until their riders start being refused.
+    Raised when the kill switch is off, or when a repair lost a race. Callers
+    must surface this, never swallow it — a corporate billing failure that is
+    logged and forgotten drains a company's wallet until their riders start
+    being refused.
+
+    A ``SpinrException`` rather than a bare ``RuntimeError`` so the registered
+    global handler turns it into a deliberate 503 with a usable message. As a
+    plain RuntimeError it reached the three corporate routes uncaught and
+    became an opaque 500, which made the documented kill-switch rollback look
+    like a crash instead of the intended "temporarily unavailable".
     """
+
+    def __init__(self, message: str = "Corporate payment profile is unavailable"):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+        )
 
 
 async def _reprovision_enabled() -> bool:
@@ -176,7 +191,28 @@ async def _create_corporate_customer(
         filters["stripe_customer_id"] = superseded
 
     await db_supabase.update_one("corporate_accounts", filters, update)
-    return customer.id
+
+    if not superseded:
+        return customer.id
+
+    # The conditional write may have matched zero rows — the auto-topup loop
+    # retired the customer, or another admin repaired it, between our read and
+    # this write. Returning our own id then would charge a customer the row
+    # does not point at and leak an orphan. Re-read and defer to the winner;
+    # our customer is unused but harmless (no card is ever attached to it).
+    fresh = await db_supabase.find_one("corporate_accounts", {"id": company_id})
+    winner = (fresh or {}).get("stripe_customer_id")
+    if winner and winner != customer.id:
+        logger.warning(
+            "Concurrent corporate customer repair — deferring to the persisted id",
+            extra={"company_id": company_id, "ours": customer.id, "persisted": winner},
+        )
+        return winner
+    if not winner:
+        # Someone retired it out from under us and nothing replaced it. Do not
+        # hand back an id the row does not carry.
+        raise CorporateCustomerUnavailable(f"corporate customer for {company_id} was retired concurrently; retry")
+    return winner
 
 
 async def get_or_create_corporate_customer(company: Dict[str, Any], stripe_secret: str) -> str:

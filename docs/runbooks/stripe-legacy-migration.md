@@ -115,6 +115,20 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
 Retry `stripe_error` drivers individually with the admin
 "Refresh from Stripe" button (`POST /api/admin/drivers/{id}/refresh-stripe-kyc`).
 
+> **That button can now detach an account.** It calls `refresh_driver_kyc`
+> with `retire_if_unreachable=True`, so if Stripe answers `resource_missing`
+> or `PermissionError` for the mapped account, the mapping is nulled and the
+> KYC mirror reset — the driver is then asked to re-onboard. That is the
+> intended repair after a key-mode change, but it is destructive for a
+> *deliberately* mapped Scenario-B account that has become unreachable for
+> some other reason (wrong key loaded, platform access revoked).
+>
+> **Undo:** the old id is kept in `drivers.stripe_account_id_superseded`, and
+> the mapping importer only ever fills NULL columns — so re-running the
+> drivers CSV with that `acct_…` restores the mapping, and the next KYC sync
+> re-populates the mirror from Stripe. The retire is also in `audit_logs`.
+> Confirm the key is right before clicking it on a migrated driver.
+
 ## Step 4 — Scenario B: riders (Customers + cards)
 
 Stripe copies Customers/PaymentMethods between accounts on request — card

@@ -366,18 +366,12 @@ async def create_payment_intent(
         # to binary-float drift. See backend/utils/money.py.
         amount = dollars_to_cents(charge_amount)
 
-        # Get or create customer for saved payments
-        stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-
         intent_params = {
             "amount": amount,
             "currency": "cad",
             "automatic_payment_methods": {"enabled": True},
             "metadata": {"user_id": current_user["id"], "ride_id": body.ride_id or ""},
         }
-
-        if stripe_customer_id:
-            intent_params["customer"] = stripe_customer_id
 
         if body.payment_method_id:
             intent_params["payment_method"] = body.payment_method_id
@@ -402,13 +396,24 @@ async def create_payment_intent(
             idempotency_key = f"intent-{current_user['id']}-{int(_time.time() // 60)}"
         # Sync Stripe SDK: threadpool so the round-trip doesn't block the
         # event loop (idempotency key makes retries safe).
-        intent = await asyncio.to_thread(
-            lambda: stripe.PaymentIntent.create(
-                **intent_params,
-                api_key=stripe_secret,
-                idempotency_key=idempotency_key,
+        #
+        # Wrapped in the repair helper because this is the authoritative
+        # ride-charge path: a rider whose customer was stranded by a key
+        # rotation and who never opened the cards screen (so was never healed
+        # there) would otherwise hit a hard failure at trip end, with a
+        # completed ride and no way to pay for it. The idempotency key carries
+        # the customer so the repaired retry cannot collide with the first
+        # attempt's key.
+        async def _create_intent(cid: str):
+            return await asyncio.to_thread(
+                lambda: stripe.PaymentIntent.create(
+                    **{**intent_params, "customer": cid},
+                    api_key=stripe_secret,
+                    idempotency_key=f"{idempotency_key}-{cid}",
+                )
             )
-        )
+
+        _customer_id, intent = await with_customer_repair(current_user["id"], stripe_secret, _create_intent)
 
         # 3-D Secure / SCA happy-path: PaymentIntent succeeded at the API
         # boundary but Stripe is asking the rider to complete an additional

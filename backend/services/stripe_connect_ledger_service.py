@@ -48,12 +48,14 @@ import stripe
 try:
     from ..supabase_client import supabase
     from ..utils.money import cents_to_dollars
+    from ..utils.stripe_config import stripe_object_to_dict
     from ..utils.stripe_mode import is_missing_on_key
     from .stripe_payout_sync_service import _driver_accounts, _fetch_sync_targets
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from services.stripe_payout_sync_service import _driver_accounts, _fetch_sync_targets  # type: ignore
     from supabase_client import supabase  # type: ignore
     from utils.money import cents_to_dollars  # type: ignore
+    from utils.stripe_config import stripe_object_to_dict  # type: ignore
     from utils.stripe_mode import is_missing_on_key  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -163,7 +165,10 @@ def _list_connect(
         params["expand"] = expand
     out: list[dict[str, Any]] = []
     for obj in resource.list(**params).auto_paging_iter():
-        out.append(dict(obj))
+        # stripe_object_to_dict, never dict(obj) — see utils/stripe_config:
+        # paged StripeObjects are not Mappings on all SDK builds and dict()
+        # falls back to integer indexing (KeyError: 0 in production).
+        out.append(stripe_object_to_dict(obj))
     return out
 
 

@@ -210,6 +210,13 @@ except Exception as e:
 cache and stops all re-provisioning and retiring; the rider path then surfaces
 503 with a support message instead of writing anything.
 
+> **Requires migration 287.** `settings` is a wide table with one real column
+> per setting. Until 287 adds this column the flag can be *read* (falling back
+> to the schema default, `true`) but never *written* — an admin PUT fails
+> PGRST204 "column does not exist", so the switch is stuck on and this
+> rollback plan does not work. Caught while writing the manual test guide;
+> apply 286 **and** 287 together.
+
 For identities already re-provisioned, the old ID is archived, not destroyed —
 a `git revert` alone would leave rows pointing at the new customer, so restore
 by data:

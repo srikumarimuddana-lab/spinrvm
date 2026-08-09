@@ -35,11 +35,20 @@ writes; ``commit_plan`` refuses while errors exist. Reports carry only
 ``driver_id`` / ``acct_…`` / ``tr_…`` identifiers — never names, phones, or
 bank details (PIPEDA).
 
-Known limitation: transfers are listed against the driver's CURRENT
-``stripe_account_id``. A driver migrated onto a brand-new account (Stripe
-support scenario B in docs/runbooks/stripe-legacy-migration.md) has their old
-account's transfer history left behind; the validate report surfaces a
-``no_transfers`` warning for such drivers so the operator can follow up.
+Accounts considered: both ``drivers.stripe_account_id`` and
+``drivers.stripe_account_id_superseded`` (migration 286), merged and
+de-duplicated by transfer id. A driver whose account was detached — by a
+platform migration, or by the key-mode retire in ``services/stripe_kyc_sync``
+— keeps only the superseded value until they re-onboard, so listing the
+current column alone would drop exactly the drivers whose history most needs
+materializing here.
+
+A superseded account that this Stripe key cannot reach (``PermissionError``,
+or ``resource_missing`` for that account) is a **warning**, not an error: it
+is the expected outcome of a test→live cutover, where the old account's
+transfers were never real money, and blocking commit on it would make the
+whole sync unusable after one. Every other Stripe failure still blocks commit
+— a silently short listing would under-report a driver's T4A income.
 """
 
 from __future__ import annotations
@@ -53,10 +62,12 @@ from typing import Any
 
 try:
     from ..supabase_client import supabase
+    from ..utils.stripe_mode import is_missing_on_key
     from .driver_import_service import _select_in
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
     from services.driver_import_service import _select_in
     from supabase_client import supabase  # type: ignore  # noqa: F401
+    from utils.stripe_mode import is_missing_on_key  # type: ignore
 
 try:
     from .. import db_supabase
@@ -121,19 +132,45 @@ def _transfer_created_iso(created_epoch: int) -> str:
 _PAGE_SIZE = 500
 
 
+# Both columns name an account whose Transfers are this driver's payout
+# history. `stripe_account_id_superseded` (migration 286) holds an account we
+# detached — because it was not reachable on the running key, or because a
+# platform migration moved the driver — and a driver retired but not yet
+# re-onboarded has ONLY that one. Selecting on the current column alone would
+# drop them from the sync entirely, which is exactly the population whose
+# history most needs materializing into `payouts`.
+_ACCOUNT_COLUMNS = ("stripe_account_id", "stripe_account_id_superseded")
+_TARGET_SELECT = "id,stripe_account_id,stripe_account_id_superseded"
+
+
+def _driver_accounts(driver: dict[str, Any]) -> list[str]:
+    """Every Connect account whose Transfers belong to this driver, current first.
+
+    De-duplicated and order-stable: a driver whose superseded value equals the
+    current one (possible if a retire raced a re-import) must not have their
+    transfers listed — and therefore counted — twice.
+    """
+    seen: list[str] = []
+    for col in _ACCOUNT_COLUMNS:
+        acct = (driver.get(col) or "").strip()
+        if acct and acct not in seen:
+            seen.append(acct)
+    return seen
+
+
 def _fetch_sync_targets(driver_ids: list[str] | None) -> list[dict[str, Any]]:
-    """Drivers that have a Stripe Connect account mapped (sync candidates)."""
+    """Drivers with at least one Stripe Connect account, current or superseded."""
     rows: list[dict[str, Any]] = []
     if driver_ids:
         for i in range(0, len(driver_ids), 200):
             batch = driver_ids[i : i + 200]
-            rows.extend(supabase.table("drivers").select("id,stripe_account_id").in_("id", batch).execute().data or [])
+            rows.extend(supabase.table("drivers").select(_TARGET_SELECT).in_("id", batch).execute().data or [])
     else:
         offset = 0
         while True:
             page = (
                 supabase.table("drivers")
-                .select("id,stripe_account_id")
+                .select(_TARGET_SELECT)
                 .order("id")
                 .range(offset, offset + _PAGE_SIZE - 1)
                 .execute()
@@ -144,7 +181,7 @@ def _fetch_sync_targets(driver_ids: list[str] | None) -> list[dict[str, Any]]:
             if len(page) < _PAGE_SIZE:
                 break
             offset += _PAGE_SIZE
-    return [d for d in rows if d.get("stripe_account_id")]
+    return [d for d in rows if _driver_accounts(d)]
 
 
 def _prefetch_tracked_transfer_ids(transfer_ids: list[str]) -> set[str]:
@@ -232,21 +269,73 @@ async def build_plan(
 
     sem = asyncio.Semaphore(concurrency)
     transfers_by_driver: dict[str, list[dict[str, Any]]] = {}
+    # Drivers for whom EVERY account was unreachable on this key. Tracked so
+    # the report doesn't also claim they have no transfer history — that would
+    # state something about their earnings when it is really about our access.
+    inaccessible_drivers: set[str] = set()
+    accessible_drivers: set[str] = set()
 
     async def one(driver: dict[str, Any]) -> None:
-        acct = driver["stripe_account_id"]
+        # A driver can own transfers on more than one account: the current one
+        # plus any account we superseded. Merge both so a retired or
+        # platform-migrated driver's history is complete rather than truncated
+        # at the moment their account changed.
+        driver_id = driver["id"]
+        accounts = _driver_accounts(driver)
+        current = (driver.get("stripe_account_id") or "").strip()
+        collected: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        hard_failed = False
+
+        def _blocked(acct: str) -> None:
+            logger.error("[STRIPE-SYNC] transfer list failed for %s", acct, exc_info=True)
+            plan.errors.append(
+                SyncReportItem(driver_id, "stripe_list_failed", f"could not list transfers for {acct}; re-run")
+            )
+
         async with sem:
-            try:
-                transfers_by_driver[driver["id"]] = await _list_transfers_for_account(
-                    acct, stripe_secret, created_gte, created_lte
-                )
-            except stripe.error.StripeError:
-                # A driver we cannot list must BLOCK commit — a silent skip
-                # would under-report their T4A income for the synced era.
-                logger.error("[STRIPE-SYNC] transfer list failed for %s", acct, exc_info=True)
-                plan.errors.append(
-                    SyncReportItem(driver["id"], "stripe_list_failed", f"could not list transfers for {acct}; re-run")
-                )
+            for acct in accounts:
+                try:
+                    listed = await _list_transfers_for_account(acct, stripe_secret, created_gte, created_lte)
+                    accessible_drivers.add(driver_id)
+                    for t in listed:
+                        # A transfer reachable from both accounts (Stripe
+                        # platform migrations can expose the same object) must
+                        # be counted once.
+                        if t["id"] not in seen_ids:
+                            seen_ids.add(t["id"])
+                            collected.append(t)
+                    continue
+                except stripe.error.StripeError as e:
+                    inaccessible = isinstance(e, stripe.error.PermissionError) or is_missing_on_key(e, acct)
+
+                # An unreachable account is only a warning when it is one we
+                # SUPERSEDED — that is the expected residue of a cutover or a
+                # platform migration, and its transfers are either gone or were
+                # never real money. An unreachable CURRENT account is an error:
+                # it is the account we believe is live, so downgrading it would
+                # let a wrong-platform key produce a "successful" commit that
+                # synced zero T4A income for the entire fleet.
+                if inaccessible and acct != current:
+                    logger.info("[STRIPE-SYNC] superseded account %s not on this key; skipping", acct)
+                    inaccessible_drivers.add(driver_id)
+                    plan.warnings.append(
+                        SyncReportItem(
+                            driver_id,
+                            "account_not_accessible",
+                            f"{acct} is not on this Stripe key; its history cannot be synced",
+                        )
+                    )
+                    continue
+
+                _blocked(acct)
+                hard_failed = True
+
+        # A driver whose listing hard-failed gets no entry at all: leaving an
+        # empty list would earn them a "no transfer history" warning that
+        # contradicts the error we just filed.
+        if not hard_failed:
+            transfers_by_driver[driver_id] = collected
 
     await asyncio.gather(*(one(d) for d in drivers))
 
@@ -266,9 +355,15 @@ async def build_plan(
         if transfers:
             drivers_with_transfers += 1
         else:
-            plan.warnings.append(
-                SyncReportItem(driver_id, "no_transfers", "mapped account has no transfer history in the window")
-            )
+            # Only claim "no history" when we could actually look. A driver
+            # whose every account was unreachable already got
+            # `account_not_accessible`; adding "has no transfer history" would
+            # read as a fact about their earnings rather than about our access.
+            could_look = driver_id in accessible_drivers or driver_id not in inaccessible_drivers
+            if could_look:
+                plan.warnings.append(
+                    SyncReportItem(driver_id, "no_transfers", "mapped account has no transfer history in the window")
+                )
         for t in transfers:
             transfers_seen += 1
             if t["id"] in tracked:

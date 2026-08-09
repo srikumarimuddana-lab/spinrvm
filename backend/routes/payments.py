@@ -291,7 +291,15 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
     fresh = await db_supabase.get_user_by_id(user_id)
     if not fresh:
         raise HTTPException(status_code=404, detail="User not found during Stripe customer creation")
-    return fresh["stripe_customer_id"]
+    # Never hand back a falsy customer id: callers pass it straight to Stripe,
+    # where `customer=None` silently creates an unattached object rather than
+    # erroring. Raising here keeps that invariant in one place instead of
+    # repeating a defensive check at each call site.
+    persisted = fresh.get("stripe_customer_id")
+    if not persisted:
+        logger.error("Stripe customer create persisted no id", extra={"user_id": user_id})
+        raise HTTPException(status_code=502, detail="Could not set up payments. Please try again.")
+    return persisted
 
 
 async def with_customer_repair(user_id: str, stripe_secret: str, op):
@@ -663,11 +671,6 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
         return {"client_secret": "mock_setup_secret", "mock": True}
 
     try:
-        customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-
-        if not customer_id:
-            raise HTTPException(status_code=400, detail="Could not create Stripe customer")
-
         import time as _time
 
         async def _create_si(cid: str):
@@ -691,7 +694,9 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
             "mock": False,
         }
     except HTTPException:
-        # The 400 for a missing Stripe customer must reach the client.
+        # Deliberate status codes raised inside the try — the customer-setup
+        # 502 and the re-provision kill switch's 503 — must reach the client
+        # as themselves, not be relabelled 500 by the catch-all below.
         raise
     except Exception as e:
         logger.error(f"Stripe error: {e}", exc_info=True)

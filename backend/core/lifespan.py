@@ -411,6 +411,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
+    # Double-entry leg projection — derives financial_event_entries rows from
+    # financial_events headers (oldest first, via the missing-legs RPC,
+    # migration 287). No-op until ledger_double_entry_enabled is on. Replay-safe
+    # via the UNIQUE(event_id, account, side) constraint + whole-batch insert;
+    # the Redis lock is only a throttle.
+    try:
+        from utils.ledger_projection import ledger_projection_loop
+
+        _spawn("ledger_projection (15min)", ledger_projection_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import ledger projection loop: {e}")
+
     # Distance reconciliation — daily 04:00 UTC, one replica via Redis leader
     # lock. Compares each completed ride's quoted vs measured distance; opens a
     # per-ride integrity event on outliers and logs at ERROR (→ Sentry) on a
@@ -541,6 +553,7 @@ async def lifespan(app: FastAPI):
             "retention_purge (24h)",
             "data_export_purge (1h)",
             "stripe_reconcile (24h)",
+            "ledger_projection (15min)",
             "t4a_annual_job (yearly Feb 28)",
             "driver_statements (30min)",
             "stuck_ride_sweeper (60s)",

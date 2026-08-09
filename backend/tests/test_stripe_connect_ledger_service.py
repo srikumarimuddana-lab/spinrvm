@@ -333,3 +333,34 @@ class TestPayoutExpansion:
             await svc.sync_connect_ledger("sk_test_x")
 
         assert seen and seen[0] == ["data.destination"]
+
+
+class _FakeStripeObject:
+    """Non-Mapping StripeObject shape (deployed SDK): __getitem__ over _data,
+    no keys() — dict() on it raises KeyError: 0, as seen in production on the
+    discovery lister. This pins the same fix on the ledger lister."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def __getitem__(self, k):
+        return self._data[k]
+
+    def to_dict_recursive(self):
+        return dict(self._data)
+
+
+class TestStripeObjectConversion:
+    async def test_lister_survives_non_mapping_stripe_objects(self):
+        payout = _payout()
+        fake_page = MagicMock()
+        fake_page.auto_paging_iter.return_value = iter([_FakeStripeObject(payout)])
+
+        def _payout_list(**kw):
+            return fake_page
+
+        with _Harness([_driver()]) as h, patch("stripe.Payout.list", side_effect=_payout_list):
+            result = await svc.sync_connect_ledger("sk_test_x")
+
+        assert result.payouts_upserted == 1
+        assert h.rows(svc.PAYOUTS_TABLE)[0]["id"] == "po_1"

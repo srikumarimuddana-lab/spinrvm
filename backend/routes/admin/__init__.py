@@ -101,6 +101,7 @@ from .service_areas import router as service_areas_router
 from .settings import router as settings_router
 from .sgi_forms import router as sgi_forms_router
 from .staff import router as staff_router
+from .stripe_connect_ledger import router as stripe_connect_ledger_router
 from .stripe_import import router as stripe_import_router
 from .stripe_mode_audit import router as stripe_mode_audit_router
 from .stripe_payout_sync import router as stripe_payout_sync_router
@@ -147,6 +148,11 @@ admin_router.include_router(stripe_import_router, dependencies=[Depends(require_
 # Transfer truth). Writes to payouts, so it takes the booking-import posture:
 # require_super_admin at the mount AND re-checked inside each handler.
 admin_router.include_router(stripe_payout_sync_router, dependencies=[Depends(require_super_admin)])
+# Connected-account ledger sync (bank payouts + balance transactions into
+# driver_stripe_payouts / driver_stripe_ledger). Reads every driver's full
+# financial history from Stripe and spends API quota per account, so it
+# takes the same super_admin posture as the payout sync above.
+admin_router.include_router(stripe_connect_ledger_router, dependencies=[Depends(require_super_admin)])
 # Stripe key-mode drift diagnostic. Read-mostly (its only write is stamping an
 # identity's observed mode), but it reports which drivers have an unreachable
 # payout destination and spends Stripe API quota, so it takes the same

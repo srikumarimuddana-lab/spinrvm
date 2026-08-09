@@ -896,9 +896,16 @@ def _list_connected_accounts(stripe_secret: str, cap: int = 1000) -> list[dict[s
     loud error rather than silent partial matching."""
     import stripe
 
+    try:
+        from ..utils.stripe_config import stripe_object_to_dict
+    except ImportError:  # pragma: no cover - dual-import pattern
+        from utils.stripe_config import stripe_object_to_dict  # type: ignore
+
     out: list[dict[str, Any]] = []
     for acct in stripe.Account.list(limit=100, api_key=stripe_secret).auto_paging_iter():
-        d = dict(acct)
+        # stripe_object_to_dict, never dict(acct): on the deployed SDK the
+        # paged objects are not Mappings and dict() dies with KeyError: 0.
+        d = stripe_object_to_dict(acct)
         out.append(
             {
                 "id": d.get("id"),

@@ -80,18 +80,48 @@ def test_topup_rejects_if_company_not_active(test_client, admin_override):
     assert resp.status_code == 409, resp.text
 
 
-def test_topup_rejects_if_no_stripe_customer(test_client, admin_override):
+def test_topup_provisions_a_stripe_customer_when_missing(test_client, admin_override):
+    """A NULL stripe_customer_id no longer 409s — it is provisioned in place.
+
+    The old 409 was harmless when a NULL customer only meant KYB approval's
+    Stripe step had failed. It stopped being harmless once the auto-topup loop
+    began NULLing the column to retire a customer stranded by a key rotation:
+    rejecting here would have left the company permanently unable to fund its
+    own wallet.
+    """
     no_cust = corporate_account_row("active", id="c1", stripe_customer_id=None)
-    with patch(
-        "routes.corporate_wallet.get_corporate_account_by_id",
-        AsyncMock(return_value=no_cust),
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_account_by_id",
+            AsyncMock(return_value=no_cust),
+        ),
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "company_id": "c1"}),
+        ),
+        patch(
+            "routes.corporate_wallet.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
+        patch(
+            "services.corporate_stripe_identity.get_app_settings",
+            AsyncMock(return_value={"stripe_reprovision_stale_ids": True}),
+        ),
+        patch(
+            "services.corporate_stripe_identity.db_supabase.update_one",
+            AsyncMock(),
+        ),
+        patch("stripe.Customer.create", return_value=MagicMock(id="cus_new")) as m_cus,
+        patch("stripe.PaymentIntent.create", return_value=MagicMock(id="pi_1", client_secret="cs_1")) as m_pi,
+        patch("routes.corporate_wallet.log_admin_action", AsyncMock()),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/wallet/topup",
             json={"amount": 500},
         )
-    assert resp.status_code == 409, resp.text
-    assert "stripe" in resp.json()["detail"].lower()
+    assert resp.status_code == 200, resp.text
+    m_cus.assert_called_once()
+    assert m_pi.call_args.kwargs["customer"] == "cus_new"
 
 
 def test_topup_404_when_company_missing(test_client, admin_override):

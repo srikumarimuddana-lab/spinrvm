@@ -474,7 +474,7 @@ class TestWalletTopUp:
                 AsyncMock(return_value={"stripe_secret_key": "sk_test_x", "stripe_publishable_key": "pk_test_x"}),
             ),
             patch(
-                "backend.routes.wallet.db_supabase.get_user_by_id",
+                "backend.routes.payments.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"id": USER_ID, "stripe_customer_id": "cus_existing"}),
             ),
             patch("backend.routes.wallet.stripe.EphemeralKey.create", return_value=mock_ephemeral),

@@ -322,3 +322,182 @@ async def test_driver_synced_earnings_for_year_sums_decimal():
     assert filters["payout_type"] == "stripe_sync"
     assert filters["created_at"]["$gte"].startswith("2025-01-01")
     assert filters["created_at"]["$lt"].startswith("2026-01-01")
+
+
+# ── Superseded Connect accounts (migration 286 / key-mode retire) ──────────
+#
+# retire_stripe_account NULLs drivers.stripe_account_id and archives the old
+# value. Listing only the current column would drop a retired driver from the
+# sync entirely — exactly the driver whose payout history most needs
+# materializing into `payouts` so the app can serve it from our own tables.
+
+
+@pytest.mark.anyio
+async def test_superseded_account_history_is_synced(store):
+    """A retired driver (no current account) is still a sync target."""
+    store["drivers"] = [
+        {"id": "drv_1", "stripe_account_id": None, "stripe_account_id_superseded": "acct_OLD"}
+    ]
+    with _patch_transfers({"acct_OLD": [_transfer("tr_old", 5000)]}):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert plan.errors == []
+    assert [r["stripe_transfer_id"] for r in plan.payouts_to_insert] == ["tr_old"]
+    assert plan.payouts_to_insert[0]["driver_id"] == "drv_1"
+
+
+@pytest.mark.anyio
+async def test_both_accounts_are_merged(store):
+    """Re-onboarded driver: history spans the old and new accounts."""
+    store["drivers"] = [
+        {"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}
+    ]
+    with _patch_transfers(
+        {"acct_NEW": [_transfer("tr_new", 1000)], "acct_OLD": [_transfer("tr_old", 2000)]}
+    ):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert plan.errors == []
+    assert sorted(r["stripe_transfer_id"] for r in plan.payouts_to_insert) == ["tr_new", "tr_old"]
+    assert plan.stats["sum_planned"] == 30.00
+
+
+@pytest.mark.anyio
+async def test_transfer_visible_on_both_accounts_is_counted_once(store):
+    """A platform migration can expose the same transfer from both accounts;
+    double-counting it would inflate the driver's T4A income."""
+    store["drivers"] = [
+        {"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}
+    ]
+    shared = _transfer("tr_same", 4000)
+    with _patch_transfers({"acct_NEW": [shared], "acct_OLD": [shared]}):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert len(plan.payouts_to_insert) == 1
+    assert plan.stats["sum_planned"] == 40.00
+
+
+@pytest.mark.anyio
+async def test_identical_current_and_superseded_lists_once(store):
+    store["drivers"] = [
+        {"id": "drv_1", "stripe_account_id": "acct_A1", "stripe_account_id_superseded": "acct_A1"}
+    ]
+    calls: list[str] = []
+
+    def _list(**params):
+        calls.append(params.get("destination"))
+        return _FakeTransferList([_transfer("tr_1", 1000)])
+
+    with patch("stripe.Transfer.list", side_effect=_list):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert calls == ["acct_A1"]
+    assert len(plan.payouts_to_insert) == 1
+
+
+@pytest.mark.anyio
+async def test_unreachable_superseded_account_warns_but_does_not_block(store):
+    """The test→live case: the old account is invisible to the live key and
+    its transfers were never real money. Blocking commit on that would make
+    the sync unusable after a cutover — the new account still syncs."""
+    import stripe as _stripe
+
+    store["drivers"] = [
+        {"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}
+    ]
+
+    def _list(**params):
+        if params.get("destination") == "acct_OLD":
+            raise _stripe.error.PermissionError("does not have access to account 'acct_OLD'")
+        return _FakeTransferList([_transfer("tr_new", 1000)])
+
+    with patch("stripe.Transfer.list", side_effect=_list):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert plan.errors == []
+    assert [w.field for w in plan.warnings] == ["account_not_accessible"]
+    assert [r["stripe_transfer_id"] for r in plan.payouts_to_insert] == ["tr_new"]
+
+
+@pytest.mark.anyio
+async def test_resource_missing_for_the_account_warns(store):
+    import stripe as _stripe
+
+    store["drivers"] = [
+        {"id": "drv_1", "stripe_account_id": None, "stripe_account_id_superseded": "acct_OLD"}
+    ]
+
+    def _list(**params):
+        raise _stripe.error.InvalidRequestError(
+            "No such account: 'acct_OLD'", param=None, code="resource_missing"
+        )
+
+    with patch("stripe.Transfer.list", side_effect=_list):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert plan.errors == []
+    assert [w.field for w in plan.warnings] == ["account_not_accessible"]
+
+
+@pytest.mark.anyio
+async def test_other_stripe_errors_still_block_commit(store):
+    """Only inaccessibility is downgraded — a transient failure must still
+    block, or a short listing silently under-reports T4A income."""
+    import stripe as _stripe
+
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": "acct_A1"}]
+
+    def _list(**params):
+        raise _stripe.error.RateLimitError("slow down")
+
+    with patch("stripe.Transfer.list", side_effect=_list):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert [e.field for e in plan.errors] == ["stripe_list_failed"]
+
+
+@pytest.mark.anyio
+async def test_driver_with_no_account_at_all_is_not_a_target(store):
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": None, "stripe_account_id_superseded": None}]
+    with _patch_transfers({}):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert plan.payouts_to_insert == []
+    assert plan.warnings == []
+
+
+@pytest.mark.anyio
+async def test_inaccessible_current_account_blocks_commit(store):
+    """Only a SUPERSEDED account's inaccessibility is a warning.
+
+    If the downgrade applied to the current account too, a wrong-platform key
+    would make every driver a warning, leave plan.errors empty, and let commit
+    report success having synced zero T4A income for the whole fleet.
+    """
+    import stripe as _stripe
+
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": "acct_A1"}]
+
+    def _list(**params):
+        raise _stripe.error.PermissionError("does not have access to account 'acct_A1'")
+
+    with patch("stripe.Transfer.list", side_effect=_list):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert [e.field for e in plan.errors] == ["stripe_list_failed"]
+
+
+@pytest.mark.anyio
+async def test_hard_failed_driver_gets_no_contradictory_no_transfers_warning(store):
+    import stripe as _stripe
+
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": "acct_A1"}]
+
+    def _list(**params):
+        raise _stripe.error.RateLimitError("slow down")
+
+    with patch("stripe.Transfer.list", side_effect=_list):
+        plan = await svc.build_plan("sk_test_x", "batch1")
+
+    assert [e.field for e in plan.errors] == ["stripe_list_failed"]
+    assert "no_transfers" not in [w.field for w in plan.warnings]

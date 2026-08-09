@@ -23,6 +23,7 @@ try:
         update_corporate_wallet_config,
     )
     from ..dependencies import get_admin_user  # type: ignore
+    from ..services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
     from ..services.corporate_wallet_service import apply_adjustment  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
     from ..utils.audit_logger import log_admin_action  # type: ignore
@@ -38,6 +39,7 @@ except ImportError:
         update_corporate_wallet_config,
     )
     from dependencies import get_admin_user  # type: ignore
+    from services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
     from services.corporate_wallet_service import apply_adjustment  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore
@@ -164,8 +166,12 @@ async def manual_topup(
         raise HTTPException(status_code=404, detail="Company not found")
     if company.get("status") != "active":
         raise HTTPException(status_code=409, detail="Company is not active")
-    if not company.get("stripe_customer_id"):
-        raise HTTPException(status_code=409, detail="Company has no Stripe customer")
+    # No 409 on a missing stripe_customer_id: with_corporate_customer_repair
+    # below provisions one. That guard used to be harmless (a NULL customer
+    # only happened when KYB approval's Stripe step had failed), but the
+    # auto-topup loop now NULLs the column when it retires a customer stranded
+    # by a key rotation — so returning 409 here would leave the company with
+    # no in-product way to ever fund its wallet again.
 
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
@@ -176,42 +182,53 @@ async def manual_topup(
     if not stripe_secret:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    intent_kwargs = dict(
-        amount=dollars_to_cents(body.amount),
-        currency="cad",
-        customer=company["stripe_customer_id"],
-        metadata={
-            "scope": "corporate_topup",
-            "company_id": normalized_id,
-            "wallet_id": wallet["id"],
-            "initiated_by": current_admin["id"],
-        },
-        api_key=stripe_secret,
-    )
-    if body.payment_method_id:
-        intent_kwargs.update(
-            payment_method=body.payment_method_id,
-            off_session=True,
-            confirm=True,
-            # Server-side off_session confirm: disable redirect-based payment
-            # methods so Stripe doesn't demand a `return_url` (it has no browser
-            # to return to) and reject the top-up with invalid_request_error.
-            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+    def _intent_kwargs(customer_id: str) -> dict:
+        kwargs = dict(
+            amount=dollars_to_cents(body.amount),
+            currency="cad",
+            customer=customer_id,
+            metadata={
+                "scope": "corporate_topup",
+                "company_id": normalized_id,
+                "wallet_id": wallet["id"],
+                "initiated_by": current_admin["id"],
+            },
+            api_key=stripe_secret,
         )
-    # Always set an idempotency key so retries after network timeouts don't
-    # create duplicate PaymentIntents. Client may supply one (e.g. a UUID they
-    # track); fall back to a 1-minute time-bucket keyed on wallet + amount so
-    # a retry of the same top-up reuses the intent, while a different amount
-    # in the same minute gets a fresh key (same scheme as ride-charge keys —
-    # without the amount, the second top-up would silently return the first
-    # PI with the wrong amount).
-    intent_kwargs["idempotency_key"] = (
-        body.client_idempotency_key
-        or f"corp-topup-{wallet['id']}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
-    )
-    # Sync Stripe SDK: threadpool so the round-trip doesn't block the event
-    # loop (idempotency key above makes retries safe).
-    intent = await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**intent_kwargs))
+        if body.payment_method_id:
+            kwargs.update(
+                payment_method=body.payment_method_id,
+                off_session=True,
+                confirm=True,
+                # Server-side off_session confirm: disable redirect-based payment
+                # methods so Stripe doesn't demand a `return_url` (it has no browser
+                # to return to) and reject the top-up with invalid_request_error.
+                automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+            )
+        # Always set an idempotency key so retries after network timeouts don't
+        # create duplicate PaymentIntents. Client may supply one (e.g. a UUID they
+        # track); fall back to a 1-minute time-bucket keyed on wallet + amount so
+        # a retry of the same top-up reuses the intent, while a different amount
+        # in the same minute gets a fresh key (same scheme as ride-charge keys —
+        # without the amount, the second top-up would silently return the first
+        # PI with the wrong amount).
+        kwargs["idempotency_key"] = (
+            body.client_idempotency_key
+            or f"corp-topup-{wallet['id']}-{customer_id}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
+        )
+        return kwargs
+
+    async def _create_intent(customer_id: str):
+        # Sync Stripe SDK: threadpool so the round-trip doesn't block the event
+        # loop (idempotency key above makes retries safe).
+        return await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**_intent_kwargs(customer_id)))
+
+    # A Spinr admin is present, so a customer stranded by a test→live key
+    # rotation is replaced here rather than 500ing the top-up. The retry runs
+    # against the new customer; if the company's card lived on the old one,
+    # Stripe reports the missing payment method plainly instead of a confusing
+    # "no such customer".
+    _, intent = await with_corporate_customer_repair(company, stripe_secret, _create_intent)
 
     # Corporate module lifecycle audit Finding 9: this endpoint moves real
     # money (creates a Stripe PaymentIntent) but never wrote to the admin

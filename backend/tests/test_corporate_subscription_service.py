@@ -77,7 +77,7 @@ class TestAssignSubscription:
         call_kwargs = mock_create.call_args.kwargs
         assert call_kwargs["customer"] == "cus_1"
         assert call_kwargs["items"] == [{"price": "price_123"}]
-        assert call_kwargs["idempotency_key"] == "corp-sub-create-c1"
+        assert call_kwargs["idempotency_key"] == "corp-sub-create-c1-cus_1"
         mock_audit.assert_awaited_once()
         assert created_rows and created_rows[0]["plan_id"] == "plan_pro"
 
@@ -158,7 +158,13 @@ class TestAssignSubscription:
             patch.object(svc.db_supabase, "get_active_corporate_subscription", AsyncMock(return_value=None)),
             patch.object(svc, "get_app_settings", AsyncMock(return_value=_SETTINGS)),
             patch.object(svc.stripe.Customer, "create", return_value=customer_obj) as mock_customer_create,
-            patch.object(svc.db_supabase, "update_corporate_stripe_customer_id", AsyncMock()) as mock_update_cus,
+            # The lazy create + persist moved into services/corporate_stripe_identity,
+            # shared with the KYB-approval path and the drift-repair paths. It
+            # writes the id and its Stripe mode together via update_one.
+            patch(
+                "services.corporate_stripe_identity.db_supabase.update_one",
+                AsyncMock(),
+            ) as mock_update_cus,
             patch.object(svc.db_supabase, "get_default_payment_method", AsyncMock(return_value="pm_1")),
             patch.object(svc.stripe.Subscription, "create", return_value=_stripe_subscription()),
             patch.object(svc.db_supabase, "create_corporate_subscription_row", AsyncMock(side_effect=lambda r: r)),
@@ -167,7 +173,10 @@ class TestAssignSubscription:
             row = await svc.assign_subscription(company_id="c1", plan_id="plan_pro", admin_id="admin-1")
 
         mock_customer_create.assert_called_once()
-        mock_update_cus.assert_awaited_once_with(company_id="c1", stripe_customer_id="cus_new")
+        mock_update_cus.assert_awaited_once()
+        table, filters, update = mock_update_cus.await_args.args
+        assert (table, filters) == ("corporate_accounts", {"id": "c1"})
+        assert update["stripe_customer_id"] == "cus_new"
         assert row["stripe_customer_id"] == "cus_new"
 
 

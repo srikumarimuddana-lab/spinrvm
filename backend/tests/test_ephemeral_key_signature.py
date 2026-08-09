@@ -84,7 +84,7 @@ async def test_wallet_top_up_ephemeral_key_call_contract():
     with (
         patch("backend.routes.wallet.get_or_create_wallet", AsyncMock(return_value=wallet)),
         patch("backend.routes.wallet.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
-        patch("backend.routes.wallet.db_supabase", mock_db),
+        patch("backend.routes.payments.db_supabase", mock_db),
         patch("backend.routes.wallet.stripe.EphemeralKey.create", return_value=mock_ephemeral) as ek_create,
         patch("backend.routes.wallet.stripe.PaymentIntent.create", return_value=mock_intent),
     ):

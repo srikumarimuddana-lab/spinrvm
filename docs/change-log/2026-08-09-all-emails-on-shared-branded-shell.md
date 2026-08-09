@@ -240,7 +240,13 @@ and needs no migration rollback.
   line-break cases.
 - Targeted sweep `-k "email or receipt or dsar or tax or export or layout or
   branding or company_details"` — 728 passed, 1 skipped.
-- Full backend suite — see below.
+- **Full backend suite: 10,187 passed, 8 skipped, 1 xfailed** (11m08s). It
+  caught one real defect in this batch: `features.py` logs through loguru,
+  which formats with `str.format`, and the `%s` written into the
+  branding-fallback warning emitted the placeholder literally while dropping
+  the exception — leaving the one signal that an email went out unbranded with
+  no reason attached. Fixed to `logger.opt(exception=True)` and the suite's
+  `test_loguru_call_conventions.py` re-run green.
 - `ruff check` / `ruff format` clean on every file this branch changes. (31
   pre-existing ruff findings exist elsewhere in `backend/`; none in changed
   files, none introduced here.)

@@ -3623,6 +3623,37 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   `test_projection_loop_reacquires_its_own_lock_on_the_next_wake`), and
   `payment_retry.py`'s misleading comment corrected.
 
+### B22. `G4a · pip-audit` is red on four advisories in three backend dependencies
+- [ ] **Status:** open — observed 2026-08-09 on PR #3464, which changed **no** dependency
+  manifest (`git diff origin/main...HEAD -- '*requirements*'` is empty), so these are
+  pre-existing on `main`. Filed rather than fixed in that PR, per release gate 8: a red
+  gate left unexplained decays into one people stop reading.
+- **What:**
+
+  | Package | Pinned | Advisory | Fixed in |
+  |---|---|---|---|
+  | `cryptography` | 49.0.0 | PYSEC-2026-3552 | 50.0.0 |
+  | `h2` | 4.3.0 | CVE-2026-71554 | 4.4.1 |
+  | `pypdf` | 6.14.2 | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
+
+- **Why it was not bumped inline:** gate 8 also says not to force a fix that breaks
+  something else to turn a check green. Each of these needs its own verification:
+  - **`h2`** is the riskiest. `repositories/_base.py` has bespoke retry handling for
+    HTTP/2 `GOAWAY` and `httpx.NetworkError` (`run_sync`'s `_HTTPX_NETWORK_EXC` path) —
+    the entire DB layer's transient-failure behaviour sits on top of this library. A
+    version bump needs the DB retry/circuit-breaker tests run deliberately, not
+    incidentally.
+  - **`cryptography`** is pulled in via `google-auth` and `pyjwt`; a major bump
+    (49 → 50) can move JWT signing/verification behaviour, which is the auth path.
+  - **`pypdf`** is the mildest (document generation), and is the one worth doing first
+    as a standalone change to confirm the gate goes green for the right reason.
+- **Severity:** unknown until each advisory is read. The exploitability of an `h2` or
+  `cryptography` CVE in *our* usage may well be nil, but "probably fine" is not the same
+  as a documented accepted risk — which is the other outcome gate 8 allows, via a `[CR]`
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`).
+- **Acceptance:** either each dependency bumped with its affected tests actually run, or
+  a `[CR]` per advisory recording the accepted risk and why. Not a silent red check.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

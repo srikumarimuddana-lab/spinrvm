@@ -21,6 +21,7 @@ try:
     from ...features import send_push_notification
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
+    from ...utils.driver_status_notifications import notify_driver_status_change, status_message
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
@@ -34,6 +35,10 @@ except ImportError:
     from features import send_push_notification  # noqa: F401
     from supabase_client import supabase  # noqa: F401
     from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.driver_status_notifications import (  # noqa: F401
+        notify_driver_status_change,
+        status_message,
+    )
 
 from .drivers import _log_driver_activity
 
@@ -432,8 +437,24 @@ async def admin_review_driver_document(
                             {"id": driver_id},
                             {"status": "active", "is_verified": True},
                         )
-                except Exception as _exc:
-                    logger.debug(f"Could not reset driver {driver_id} status to active: {_exc}")
+                        # Tell them. This transition was silent: the rejection
+                        # path below notified, the approval path did not, so a
+                        # driver re-activated by an admin learned it only by
+                        # discovering the Go-online toggle worked again.
+                        # Routed through the shared policy so it gets the same
+                        # copy, the deleted_at recipient guard, and now email.
+                        await notify_driver_status_change(drv, status_message("active"), "document_approved")
+                except Exception:
+                    # A DB failure here leaves the driver stranded in
+                    # needs_review, unable to work, with nothing surfacing it —
+                    # error, not debug (CLAUDE.md: never swallow DB errors).
+                    # Still non-fatal: the document approval itself is committed
+                    # and the audit trail below records it regardless.
+                    logger.error(
+                        "Could not reset driver %s status to active after document approval",
+                        driver_id,
+                        exc_info=True,
+                    )
 
     # Log to activity timeline
     doc_type = existing.get("document_type", "Document")

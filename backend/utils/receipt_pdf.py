@@ -19,8 +19,10 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
 try:
+    from .company_details import to_latin1
     from .datetime_utils import parse_iso_utc
 except ImportError:
+    from utils.company_details import to_latin1  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
 
 _CENT = Decimal("0.01")
@@ -133,8 +135,17 @@ def generate_receipt_pdf(
     route_snapshot_bytes: Optional[bytes] = None,
     route_snapshot_note: Optional[str] = None,
     route_snapshot_is_actual: bool = False,
+    company: Optional[Any] = None,
 ) -> bytes:
-    """Return a branded ride-receipt PDF as raw bytes (starts with b'%PDF')."""
+    """Return a branded ride-receipt PDF as raw bytes (starts with b'%PDF').
+
+    ``company`` carries the identity resolved from the admin Settings page. It
+    is threaded in rather than loaded here because fpdf2 is synchronous and the
+    settings read is not — and because the PDF is attached to the receipt
+    email, so the two must show the same company or the pair contradicts
+    itself, which is worse than either being stale alone. None keeps the
+    pre-retrofit lines.
+    """
     from fpdf import FPDF  # type: ignore[import-untyped]
 
     tip_d = _d(tip)
@@ -262,8 +273,13 @@ def generate_receipt_pdf(
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(150, 150, 150)
     pdf.ln(4)
-    pdf.cell(W, 5, "Spinr Technologies Inc. - Saskatoon, SK", align="C", ln=True)
-    pdf.cell(W, 5, "support@spinr.ca - www.spinr.ca", align="C", ln=True)
+    identity = company.identity_line if company is not None else "Spinr Technologies Inc. - Saskatoon, SK"
+    contact = company.contact_line if company is not None else "support@spinr.ca - www.spinr.ca"
+    # fpdf2 core fonts are latin-1; the settings-driven lines can contain an
+    # em dash or a middot, which would raise on output. Fold them to ASCII
+    # rather than dropping the line.
+    pdf.cell(W, 5, to_latin1(identity), align="C", ln=True)
+    pdf.cell(W, 5, to_latin1(contact), align="C", ln=True)
 
     out = pdf.output()
     return bytes(out)

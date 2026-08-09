@@ -148,6 +148,9 @@ async def _send_email_one(row: dict, title: str, description: str, is_marketing:
     uid = row.get("id")
     if not to or not uid:
         return False
+    # Marketing keeps its own body: send_marketing_email appends the CASL
+    # footer (sender identity, physical address, unsubscribe) to whatever it is
+    # given, and that footer is a legal requirement, not a style choice.
     html = f"<h2>{title}</h2><p>{description}</p>"
     if is_marketing:
         try:
@@ -159,8 +162,24 @@ async def _send_email_one(row: dict, title: str, description: str, is_marketing:
         from ...utils.email_provider import send_transactional_email
     except ImportError:
         from utils.email_provider import send_transactional_email  # type: ignore
+    # Transactional broadcasts get the shared shell. This also escapes the
+    # admin-authored title and description, which the bare <h2>/<p> above did
+    # not — a broadcast is the one place an admin's free text reaches every
+    # rider or driver at once.
+    try:
+        from ...utils.email_layout import render_from_text
+    except ImportError:
+        from utils.email_layout import render_from_text  # type: ignore
+
+    rendered = await render_from_text(heading=title, body=description)
     return await send_transactional_email(
-        to=to, subject=title, html=html, text=description, email_type="broadcast", recipient_user_id=uid, log_id="cm"
+        to=to,
+        subject=title,
+        html=rendered.html,
+        text=rendered.text,
+        email_type="broadcast",
+        recipient_user_id=uid,
+        log_id="cm",
     )
 
 

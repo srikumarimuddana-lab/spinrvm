@@ -300,6 +300,13 @@ class AppSettings(BaseModel):
     company_phone: str = ""
     company_email: str = ""
     company_website: str = ""
+    # Logo rendered in transactional-email headers. Empty = use the bundled
+    # asset at backend/static/branding/spinr_logo.png, served by
+    # routes/branding.py — which is the correct default, not a placeholder.
+    # Must be an absolute http(s) URL: it lands in an <img src> inside mail
+    # read outside any origin, so a relative path cannot resolve and anything
+    # non-http(s) is rejected by utils/company_details._safe_logo_url.
+    company_logo_url: str = ""
     # Postal address parts for the CASL-required marketing footer (migration
     # 192). Public info, not masked. company_address holds the street line;
     # these complete it into a full, legally-valid mailing address.
@@ -318,6 +325,27 @@ class AppSettings(BaseModel):
     # Distribution list for safety-incident transactional emails. See
     # migration 95 + the _notify_safety_team helper in features.py.
     safety_alert_emails: str = ""
+    # ── Lifecycle-email kill switch ──────────────────────────────────────
+    # Single off switch for every email sent through
+    # utils/email_notifications.py (driver approval/rejection/suspension,
+    # document expiry, …). Push is unaffected — flipping this false leaves
+    # every existing notification path exactly as it was before those emails
+    # were added, without a redeploy. Receipts, statements, invoices, tax and
+    # DSAR mail do NOT route through that module and are not covered here.
+    lifecycle_emails_enabled: bool = True
+    # ── Branded receipt / invoice retrofit ────────────────────────────────
+    # The ride receipt and Spinr Pass invoice predate the shared email layout
+    # and shipped their own bespoke shell: legacy #ee2b2b, a text wordmark,
+    # a hardcoded company footer and no plain-text alternative. True renders
+    # them with the real logo, the documented brand red, and the company name
+    # and address from the Company Info card above.
+    #
+    # Defaults TRUE because the point of the retrofit is that a receipt should
+    # show the company details an admin actually configured. False restores the
+    # previous shell byte-for-byte, without a redeploy, if it renders badly in
+    # a real inbox. The fare rows, GST/PST line items and totals are outside
+    # this switch entirely — the flag only governs the wrapper.
+    branded_receipt_enabled: bool = True
     # ── SOS on-call paging (ACTION_ITEMS.md B15(b)) ───────────────────────
     # Real on-call paging for rider/driver SOS, on top of the admin WS
     # broadcast + safety_alert_emails above. Lives here (not .env) for the

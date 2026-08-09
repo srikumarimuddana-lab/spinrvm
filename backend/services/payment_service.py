@@ -764,6 +764,23 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
         # hook these rides would be the one class of paid ride that produces
         # no conversion at all.
         await _fire_guest_purchase_conversion(ride, ride_id, result.charged_amount)
+        # …and for exactly the same reason, no receipt was ever sent. Every
+        # other ride receipts from /process-payment, which a guest never calls,
+        # so corporate guest rides were the one class of completed, charged ride
+        # producing no receipt and no GST/PST line-item disclosure at all.
+        #
+        # Guarded by `not already_paid` like the conversion above, so a replayed
+        # settlement does not re-send. Guests cannot tip — tip is pinned to 0,
+        # matching the settle_corporate call above. send_ride_receipt swallows
+        # its own failures and skips silently when the guest has no email on
+        # file (a phone-only guest booking), which is the common case.
+        #
+        # Runs inline rather than spawned: this whole coroutine is already
+        # backgrounded by its caller in routes/drivers/ride_complete.py.
+        try:
+            await send_ride_receipt(ride, ride.get("rider_id") or "", Decimal("0"))
+        except Exception:
+            logger.opt(exception=True).error("[PAYMENT] guest receipt failed for ride {}", ride_id)
     return result
 
 

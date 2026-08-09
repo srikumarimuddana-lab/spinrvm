@@ -118,6 +118,7 @@ from routes.admin import admin_auth_router
 from routes.admin import admin_router as admin_router
 from routes.ai import api_router as ai_router
 from routes.auth import api_router as auth_router
+from routes.branding import router as branding_router
 from routes.corporate_accounts import router as corporate_accounts_router
 from routes.corporate_company import router as corporate_company_router
 from routes.corporate_company_bookings import router as corporate_company_bookings_router
@@ -356,6 +357,7 @@ v1_api_router.include_router(legal_documents_router)
 v1_api_router.include_router(safety_router)
 v1_api_router.include_router(service_areas_router)
 v1_api_router.include_router(offer_card_router)
+v1_api_router.include_router(branding_router)
 v1_api_router.include_router(maps_router)
 
 # Include API routers

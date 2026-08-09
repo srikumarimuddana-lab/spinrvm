@@ -14,6 +14,11 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Optional
 
+try:
+    from .company_details import to_latin1
+except ImportError:  # pragma: no cover - direct module imports in tests
+    from utils.company_details import to_latin1  # type: ignore
+
 _CENT = Decimal("0.01")
 _BRAND = (238, 43, 43)  # #ee2b2b
 _GRAY = (150, 150, 150)
@@ -51,8 +56,15 @@ def generate_subscription_invoice_pdf(
     total: Decimal,
     province: str = "SK",
     stripe_invoice_url: Optional[str] = None,
+    company: Optional[Any] = None,
 ) -> bytes:
-    """Return a branded Spinr Pass invoice PDF as raw bytes (starts with b'%PDF')."""
+    """Return a branded Spinr Pass invoice PDF as raw bytes (starts with b'%PDF').
+
+    ``company`` carries the identity resolved from the admin Settings page,
+    threaded in because fpdf2 is synchronous and the settings read is not. None
+    keeps the pre-retrofit lines. An invoice is a tax document a driver may
+    file, so the issuing company's name has to be the configured one.
+    """
     from fpdf import FPDF  # type: ignore[import-untyped]
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
@@ -66,7 +78,7 @@ def generate_subscription_invoice_pdf(
     pdf.set_text_color(255, 255, 255)
     pdf.set_xy(left, 7)
     pdf.set_font("Helvetica", "B", 24)
-    pdf.cell(0, 10, "Spinr", ln=True)
+    pdf.cell(0, 10, to_latin1(company.name if company is not None else "Spinr"), ln=True)
     pdf.set_x(left)
     pdf.set_font("Helvetica", "", 11)
     pdf.cell(0, 6, "Subscription Invoice", ln=True)
@@ -75,11 +87,25 @@ def generate_subscription_invoice_pdf(
     pdf.set_xy(110, 7)
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(230, 230, 230)
-    pdf.cell(85, 5, "Spinr Technologies Inc.", align="R", ln=True)
+    pdf.cell(85, 5, to_latin1(company.name if company is not None else "Spinr Technologies Inc."), align="R", ln=True)
     pdf.set_x(110)
-    pdf.cell(85, 5, "support@spinr.ca · www.spinr.ca", align="R", ln=True)
+    pdf.cell(
+        85,
+        5,
+        to_latin1(company.contact_line if company is not None else "support@spinr.ca · www.spinr.ca"),
+        align="R",
+        ln=True,
+    )
     pdf.set_x(110)
-    pdf.cell(85, 5, "Saskatoon, SK, Canada", align="R", ln=True)
+    # Mailing address from the Settings page; the previous hardcoded line is
+    # the fallback when none is configured.
+    pdf.cell(
+        85,
+        5,
+        to_latin1((company.address if company is not None else "") or "Saskatoon, SK, Canada"),
+        align="R",
+        ln=True,
+    )
 
     pdf.set_y(38)
     pdf.set_text_color(0, 0, 0)

@@ -4302,6 +4302,142 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
 
 ## P3 — Post-launch backlog (tracked, not gating)
 
+### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
+
+Full scenario-by-scenario matrix with file:line for all 45 rider/driver events:
+`docs/notification-channel-coverage.md`. Change Impact Log for what was fixed:
+`docs/change-log/2026-08-08-driver-lifecycle-email-channel.md`.
+
+_Closed by that branch (do not redo): the shared branded email layout + logo
+route, the lifecycle-email policy layer with its `app_settings` kill switch,
+driver approval/rejection/suspension/ban emails, document-expiry emails on all
+four tiers, the silent document-approval reactivation (D5), the verify/unverify
+policy bypass (D7/D8), the expiry-suspension priority tier (D13), and
+`email_enabled` becoming a real preference for OPTIONAL-class mail (X1)._
+
+_Also closed by the rider follow-up (`utils/rider_emails.py`, change log
+`docs/change-log/2026-08-08-rider-lifecycle-emails.md`): welcome email (R4),
+email-address-change security notice to the old address (R7), account-deletion
+confirmation (R9), no-show fee receipt (R21), corporate guest receipt (R26,
+formerly N2), refund (R29), wallet top-up (R30), and telling the blocked rider
+when payment retries are exhausted (R32, formerly N4)._
+
+Remaining, roughly in order of user impact:
+
+- [ ] **N1. Rider DSAR export assembles no data and sends no email (R10)** —
+  `POST /users/data-export` (`routes/users.py:152`) inserts a
+  `data_export_requests` row with a 30-day SLA and stops. Nothing builds the
+  export, nothing emails it, and the admin status-change endpoint
+  (`routes/admin/users.py:486`) notifies nobody either. A working export exists
+  driver-side (`routes/drivers/tax_exports.py:668`, handles rider-only
+  accounts at `:721`) but the rider app never calls it. **This is a PIPEDA
+  access-right obligation, not a nice-to-have** — own change, own review.
+  Now the largest open item in this group.
+- [x] ~~**N2. Corporate guest rides get no receipt (R26)**~~ — done: the
+  receipt hook now sits beside the Meta conversion hook in
+  `auto_settle_guest_corporate`, gated on `not already_paid` so a replayed
+  settlement does not re-send. A phone-only guest still has no email on file
+  and is skipped silently.
+- [ ] **N3. Two push call sites pass the wrong ID and are silently dropped (X6)**
+  — `utils/payment_retry.py:183` passes `drivers.id` and `:412` passes
+  `ride["driver_id"]` where `user_id` is required; `features.py:1659` then finds
+  no user and drops the push at `:1661`. Every "Payout failed" notice from
+  `retry_stuck_payouts` is lost. Same defect shape at
+  `routes/admin/vehicle_fleet.py:541`, which passes `fcm_token`.
+- [x] ~~**N4. Rider blocked from booking is never told (R32)**~~ — done:
+  `_alert_admins_payment_exhausted` now emails the rider first, before the
+  admin WS broadcast and pushes, and is self-swallowing so those still fire.
+- [ ] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
+  (D29)** — `routes/rides/cancellation.py:356`. A driver en route to pickup
+  with a backgrounded app is not notified.
+- [ ] **N6. Stripe Connect KYC blocking payouts notifies nobody (D24)** —
+  `routes/webhooks.py:1297` → `services/stripe_kyc_sync.apply_account_update`
+  persists the cache columns and stops. A driver whose payouts Stripe has
+  blocked learns nothing.
+- [ ] **N7. Auto-reactivation after `suspended_until` lapses is silent (D21)** —
+  `utils/suspension_reactivation.py` writes an audit row; the driver is never
+  told they can work again.
+- [ ] **N8. Delete dead `utils/receipt_email.py` (X4)** — no production callers
+  (only `tests/test_receipt_email.py`), and it hardcodes `_GST_RATE = 0.05` /
+  `_PST_RATE = 0.06` (`:18-19`) instead of reading the service area, so it will
+  silently mis-tax if anyone wires it up. The name collision with the live
+  `utils/email_receipt.py` is itself a trap.
+- [ ] **N9. Five notification preferences are still dead columns (X2)** —
+  `sms_enabled`, `ride_updates`, `promotions`, `safety_alerts`,
+  `earnings_summary` are persisted, surfaced in the app, and read by nothing.
+  `earnings_summary` in particular is ignored by the statement job
+  (`utils/driver_statement_job.py`). Either wire them or remove them from the UI.
+- [ ] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
+  through to the legacy `users.fcm_token` column (`features.py:1664-1670`)
+  rather than `fcm_token_rider`. Works today only because registration still
+  mirrors both (`routes/notifications.py:329-336`); breaks silently if that
+  mirroring is ever removed.
+- [ ] **N16. Consolidate the two copies of the company-address assembly** —
+  `utils/company_details.py` and `utils/marketing_email.py` both carry
+  `_coalesce` / `_postal_address`. Deliberately not merged: marketing's copy
+  sits on a CASL consent-critical path and produces a legally-required footer,
+  so touching it needs its own review rather than being folded into an
+  unrelated change.
+- [x] ~~**N11. Retrofit the ride receipt and Spinr Pass invoice**~~ — done:
+  both now use the shared header/footer, the real logo, `#FF3B30`, and the
+  company name and address from the admin Settings page, in the email **and**
+  in the attached PDFs. The receipt gained a plain-text alternative carrying
+  the same GST/PST breakdown. Behind `branded_receipt_enabled` (migration
+  288, defaults on); the pre-retrofit shell is kept verbatim and pinned by
+  `tests/test_receipt_shell_snapshot.py`. See
+  `docs/change-log/2026-08-08-receipt-invoice-branding-retrofit.md`.
+- [x] ~~**N11b. Remaining un-retrofitted emails**~~ — done: corporate OTP,
+  member invite, KYB decision, signup ops alert, admin broadcast and the
+  T4A/DSAR export emails now render through `utils/email_layout`. Driver
+  statements, corporate low-balance and the safety-team alert are branded
+  indirectly — `features.send_email` now wraps a plain-text `body` in the
+  shared shell when the caller supplies no `html`, so the next sender added
+  that way is branded by default. Enforced by
+  `tests/test_all_emails_are_branded.py`, which fails if any send site
+  bypasses the layout without an argued allowlist entry. The admin broadcast
+  additionally now **escapes** admin-authored free text, which the previous
+  bare `<h2>`/`<p>` interpolation did not. See
+  `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
+- [ ] **N17. Product name in email copy is still literal "Spinr"** — "Open the
+  Spinr driver app", "your Spinr wallet", "— The Spinr Team". Deliberate, not
+  an oversight: the `company_name` setting holds the *legal entity* name, and
+  "Open the Spinr Technologies Inc. driver app" reads badly, so settings drive
+  the footer identity, mailing address, logo, logo alt text and sentence-final
+  legal-name usage only. A rebrand of the product name itself needs a separate
+  `company_app_name` setting plus a copy sweep across `utils/rider_emails.py`,
+  `utils/driver_status_notifications.py`, `utils/document_expiry.py` and
+  `routes/drivers/tax_exports.py`. Worth doing before, not after, any rename.
+- [ ] **N11c. Delete the pre-retrofit receipt/invoice shell and its flag** —
+  once the branded version has been seen in real inboxes. Two shells and a
+  switch are a real carrying cost; both `_LEGACY_*` constants are commented
+  to say so.
+- [ ] **N12. No visual/snapshot regression tooling for email** — standing gap.
+  `tests/test_email_layout.py` asserts the logo URL, brand colour and footer
+  lines are present, but nothing catches a layout that renders badly in Gmail,
+  Apple Mail or Outlook. Client rendering is verified by hand or not at all.
+- [x] ~~**N13. Rider-side lifecycle emails**~~ — done for welcome (R4),
+  email-address-change security notice (R7), account-deletion confirmation
+  (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
+  `utils/rider_emails.py` and go through the policy layer, so the
+  `lifecycle_emails_enabled` kill switch covers them.
+- [ ] **N14. Rider email addresses are never verified (R5)** — `email_verified`
+  is written `false` at `routes/users.py` and nothing ever flips it for a
+  rider; the only `verify-email-otp` endpoint (`routes/auth.py:744`) belongs to
+  the corporate business portal. The welcome email is now a *de facto*
+  deliverability signal — a hard bounce lands the address on the suppression
+  list — but that is not a verification flow, and nothing surfaces the
+  difference to the rider or to support.
+- [ ] **N15. Remaining silent rider surfaces** — grouped rather than split,
+  since they share one cause (no notification call of any kind at the site):
+  rider-initiated ride completion sends the rider nothing while the
+  driver-initiated path does (R19, `routes/rides/lifecycle.py:126`); wallet
+  debits/credits, promos and loyalty tier changes have zero notification calls
+  (R31/R33/R34); scheduled rides have one reminder tier and no booking
+  confirmation (R35/R37); rider SOS sends the rider no confirmation that help
+  was alerted (R38); corporate allowance reset and exhaustion are silent, with
+  exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
+  "new device signed in" alert (R8).
+
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 
 _Implemented from the same audit (do not redo): tapped-suggestion coordinate

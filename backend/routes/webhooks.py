@@ -16,6 +16,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..utils.money import cents_to_dollars
     from ..utils.rate_limiter import default_limiter
+    from ..utils.rider_emails import send_refund_email, send_wallet_topup_email
 except ImportError:
     import db_supabase
     from core.config import settings as app_config
@@ -30,6 +31,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from utils.money import cents_to_dollars
     from utils.rate_limiter import default_limiter
+    from utils.rider_emails import send_refund_email, send_wallet_topup_email
 import asyncio
 import json
 import logging
@@ -732,6 +734,13 @@ async def stripe_webhook(request: Request):
                     )
                 except Exception:
                     logger.warning("Push notification failed for wallet_topup", exc_info=True)
+                # Receipt for money the rider just moved into Spinr.
+                # Gated on the credit NOT being a dedup hit: wallet_apply_credit
+                # is idempotent on the payment_intent, so a replay returns the
+                # original balance without crediting again — mailing a second
+                # receipt for it would claim a top-up that did not happen.
+                if not credit.get("deduped"):
+                    await send_wallet_topup_email(user_id, amount, new_balance)
 
             return {"received": True, "scope": "wallet_topup", "event_id": event_id}
 
@@ -1075,6 +1084,11 @@ async def stripe_webhook(request: Request):
                         )
                     except Exception as _e:
                         logger.debug(f"Refund push failed: {_e}")
+                    # A refund is a financial record; a push that scrolls out of
+                    # the tray is not one. Safe against a duplicate Stripe
+                    # delivery because claim_stripe_event(event_id) already
+                    # deduped this whole handler upstream. Self-swallowing.
+                    await send_refund_email(rider_id, refunded_amount, ride=ride)
             else:
                 await _record_orphan_refund(
                     charge=charge,

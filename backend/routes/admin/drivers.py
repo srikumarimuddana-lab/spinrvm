@@ -20,6 +20,7 @@ try:
         action_message,
         notify_driver_status_change,
         status_message,
+        verification_message,
     )
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
     from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
@@ -36,6 +37,7 @@ except ImportError:
         action_message,
         notify_driver_status_change,
         status_message,
+        verification_message,
     )
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
@@ -1536,26 +1538,13 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: d
             status_code=500,
             detail="Failed to update driver.",
         ) from e
-    # G4: Notify the driver via push so they know their verification status
-    # changed without having to manually check the Documents screen.
-    try:
-        if existing_driver.get("user_id"):
-            if req.verified:
-                await send_push_notification(
-                    existing_driver["user_id"],
-                    "Account Verified! ✅",
-                    "Your driver account has been verified. You can now go online and start accepting rides!",
-                    {"type": "driver_verified"},
-                )
-            else:
-                await send_push_notification(
-                    existing_driver["user_id"],
-                    "Verification Update ⚠️",
-                    "Your driver verification status has been updated. Please check your documents.",
-                    {"type": "driver_unverified"},
-                )
-    except Exception as e:
-        logger.warning(f"[ADMIN] Push notification failed for driver {driver_id}: {e}")
+    # G4: Notify the driver so they know their verification status changed
+    # without having to manually check the Documents screen. Routed through the
+    # shared policy (copy unchanged) so it picks up the deleted_at recipient
+    # guard it was missing and now also reaches email — this endpoint used to
+    # send its own push directly, which is why it was the one documented
+    # exception in docs/driver-lifecycle-status-flow.md.
+    await notify_driver_status_change(existing_driver, verification_message(req.verified), f"verify:{req.verified}")
 
     # Meta DriverApproved. CAPI-only: approval happens in the admin dashboard,
     # never on the driver's device, so there is no client event to de-duplicate

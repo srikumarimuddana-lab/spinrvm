@@ -29,6 +29,7 @@ import {
     ArrowRight,
 } from "lucide-react";
 import {
+    adminDiscoverStripeDriverAccounts,
     adminValidateStripeImport,
     adminCommitStripeImport,
     adminStripeImportStatus,
@@ -344,6 +345,44 @@ export default function BulkOperationsPage() {
         resetReport();
     };
 
+    const [discovering, setDiscovering] = useState(false);
+    const handleDiscover = async () => {
+        setDiscovering(true);
+        try {
+            const rep = await adminDiscoverStripeDriverAccounts();
+            const bits = [
+                `${rep.matched} matched by email`,
+                rep.ambiguous.length ? `${rep.ambiguous.length} ambiguous (skipped)` : null,
+                rep.unmatched_drivers ? `${rep.unmatched_drivers} drivers with no matching account` : null,
+                rep.matches_without_phone.length
+                    ? `${rep.matches_without_phone.length} matched but missing a phone (cannot ride the CSV)`
+                    : null,
+            ].filter(Boolean).join(" · ");
+            if (!rep.csv) {
+                toast({ title: "No importable matches", description: bits || "Nothing to download.", variant: "destructive" });
+                return;
+            }
+            // Download the CSV; the operator uploads it below through the same
+            // validate → commit flow as a hand-built file. Nothing was written.
+            const blob = new Blob([rep.csv], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "drivers_mapping_by_email.csv";
+            a.click();
+            URL.revokeObjectURL(url);
+            toast({ title: "Mapping CSV downloaded", description: `${bits}. Upload it below, validate, then commit.` });
+        } catch (e) {
+            toast({
+                title: "Discovery failed",
+                description: e instanceof Error ? e.message : "Could not read Stripe accounts",
+                variant: "destructive",
+            });
+        } finally {
+            setDiscovering(false);
+        }
+    };
+
     const handleValidate = async () => {
         if (!file) return;
         setValidating(true);
@@ -492,13 +531,31 @@ export default function BulkOperationsPage() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div className="flex items-end">
+                        <div className="flex items-end gap-2">
                             <Button variant="outline" onClick={() => downloadTemplate(kind)}>
                                 <FileDown className="mr-2 h-4 w-4" />
                                 Download CSV template
                             </Button>
+                            {kind === "drivers" && (
+                                <Button variant="outline" onClick={handleDiscover} disabled={discovering}>
+                                    {discovering ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <FileDown className="mr-2 h-4 w-4" />
+                                    )}
+                                    Find matches by email
+                                </Button>
+                            )}
                         </div>
                     </div>
+                    {kind === "drivers" && (
+                        <p className="text-xs text-muted-foreground">
+                            &ldquo;Find matches by email&rdquo; reads your Stripe connected accounts and matches
+                            them to drivers that have no Stripe account linked, by exact email. It writes
+                            nothing — it downloads a pre-filled mapping CSV that you upload and validate below
+                            like any other. Ambiguous emails are skipped and reported, never guessed.
+                        </p>
+                    )}
                 </CardContent>
             </Card>
 

@@ -218,3 +218,45 @@ class TestUnlinkedDriverFetcher:
         with patch.object(svc, "supabase", sb), patch.object(svc, "_select_in", MagicMock(return_value=[])):
             out = svc._unlinked_drivers_with_emails()
         assert out[0]["email"] == ""
+
+
+class _FakeStripeObject:
+    """Mimics the deployed SDK's StripeObject: __getitem__ over _data, NO
+    keys()/__iter__. dict() on this falls back to integer-index sequence
+    iteration and raises KeyError: 0 — the exact production failure."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def __getitem__(self, k):
+        return self._data[k]
+
+    def to_dict_recursive(self):
+        return dict(self._data)
+
+
+class TestStripeObjectConversion:
+    def test_dict_on_the_fake_reproduces_the_production_failure(self):
+        """Sanity-check the fixture actually models the bug."""
+        with pytest.raises(KeyError):
+            dict(_FakeStripeObject({"id": "acct_1"}))
+
+    def test_lister_survives_non_mapping_stripe_objects(self):
+        fake_page = MagicMock()
+        fake_page.auto_paging_iter.return_value = iter(
+            [_FakeStripeObject({"id": "acct_1", "email": "A@X.com", "country": "CA",
+                                "type": "express", "details_submitted": True,
+                                "payouts_enabled": True, "created": 1})]
+        )
+        with patch("stripe.Account.list", MagicMock(return_value=fake_page)):
+            out = svc._list_connected_accounts("sk_test_x")
+        assert out == [{
+            "id": "acct_1", "email": "a@x.com", "country": "CA", "type": "express",
+            "details_submitted": True, "payouts_enabled": True, "created": 1,
+        }]
+
+    def test_converter_prefers_accessor_and_still_handles_dicts(self):
+        from backend.utils.stripe_config import stripe_object_to_dict
+
+        assert stripe_object_to_dict(_FakeStripeObject({"a": 1})) == {"a": 1}
+        assert stripe_object_to_dict({"a": 1}) == {"a": 1}

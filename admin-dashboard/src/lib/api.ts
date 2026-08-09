@@ -64,6 +64,7 @@ export {
     requeueFailedReferral,
     getReferralPairs,
     getDriverPayoutsSummary,
+    refreshAllDriverStripeKyc,
     refreshDriverStripeKyc,
     revealDriverSin,
     getDriverStatements,

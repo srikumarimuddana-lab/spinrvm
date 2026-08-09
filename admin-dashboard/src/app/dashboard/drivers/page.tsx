@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshAllDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -598,6 +598,38 @@ export default function DriversPage() {
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
+    const [bulkKycRunning, setBulkKycRunning] = useState(false);
+    const handleBulkKycRefresh = async () => {
+        // Report-only by design: account_not_on_key drivers are counted but
+        // NOT detached. Retiring in bulk stays a deliberate per-driver action
+        // (the slideout button), never one click across the fleet.
+        if (!window.confirm(
+            "Refresh Stripe verification for ALL drivers with a Stripe account?\n\n" +
+            "This reads live state from Stripe and updates each driver's row. " +
+            "Nothing is detached or changed on Stripe."
+        )) return;
+        setBulkKycRunning(true);
+        try {
+            const res = await refreshAllDriverStripeKyc();
+            const parts = [
+                `${res.ok ?? 0} synced`,
+                res.account_not_on_key ? `${res.account_not_on_key} not on this Stripe key (need re-onboarding)` : null,
+                res.no_stripe_account ? `${res.no_stripe_account} without a Stripe account` : null,
+                res.stripe_error ? `${res.stripe_error} failed (retry)` : null,
+            ].filter(Boolean).join(" · ");
+            toast({
+                title: `KYC refresh: ${res.total} driver${res.total === 1 ? "" : "s"}`,
+                description: parts || "No drivers with a Stripe account.",
+                ...(res.stripe_error || res.account_not_on_key ? { variant: "destructive" as const } : {}),
+            });
+            loadDrivers(); // re-pull the table so mirrored columns show fresh state
+        } catch (e: any) {
+            toast({ title: "Bulk refresh failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkKycRunning(false);
+        }
+    };
+
     const handleExport = async () => {
         try {
             const res = await exportDrivers();
@@ -744,6 +776,9 @@ export default function DriversPage() {
                     </div>
                     {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
+                    <Button variant="outline" size="sm" onClick={handleBulkKycRefresh} disabled={bulkKycRunning} title="Pull live Stripe verification state for every driver with a Stripe account (super admin)">
+                        {bulkKycRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh Stripe KYC
+                    </Button>
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={sorted.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
             </div>
@@ -1372,10 +1407,20 @@ export default function DriversPage() {
                                         onRefreshKyc={async () => {
                                             setRefreshingKyc(true);
                                             try {
-                                                await refreshDriverStripeKyc(selected.id);
+                                                // The endpoint returns 200 for several distinct
+                                                // outcomes (synced / no account / account retired).
+                                                // Toasting a blanket "Synced from Stripe" for all of
+                                                // them is how a detached account looked like a
+                                                // successful refresh — branch on `synced` and show
+                                                // the backend's own explanation.
+                                                const res = await refreshDriverStripeKyc(selected.id);
                                                 const fresh = await getDriverPayoutsSummary(selected.id);
                                                 setPayoutSummary(fresh);
-                                                toast({ title: "Synced from Stripe" });
+                                                toast({
+                                                    title: res.synced ? "Synced from Stripe" : "Not synced",
+                                                    description: res.message,
+                                                    ...(res.synced ? {} : { variant: "destructive" as const }),
+                                                });
                                             } catch (e: any) {
                                                 toast({ title: "Refresh failed", description: e?.message || "Unknown error", variant: "destructive" });
                                             } finally {

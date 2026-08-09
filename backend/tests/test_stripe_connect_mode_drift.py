@@ -203,3 +203,126 @@ class TestRefreshDriverKyc:
             result = await refresh_driver_kyc(_driver(), retire_if_unreachable=True)
         assert result == {"status": "stripe_error"}
         assert h.updates == []
+
+
+class TestAdminRefreshEndpoint:
+    """The per-driver refresh returned a bare 200 with a raw status dict for
+    EVERY outcome, and the dashboard toasted "Synced from Stripe" for all of
+    them — a failure that reports success. These pin the corrected contract."""
+
+    def _harness(self, refresh_result):
+        return (
+            patch(
+                "backend.routes.admin.drivers.db_supabase.get_driver_by_id",
+                AsyncMock(return_value=_driver()),
+            ),
+            patch(
+                "backend.services.stripe_kyc_sync.refresh_driver_kyc",
+                AsyncMock(return_value=refresh_result),
+            ),
+            patch("backend.routes.admin.drivers.log_admin_action", AsyncMock()),
+        )
+
+    async def test_ok_reports_synced_true(self):
+        from backend.routes.admin.drivers import admin_refresh_driver_kyc
+
+        p1, p2, p3 = self._harness({"status": "ok", "updates": {}})
+        with p1, p2, p3:
+            resp = await admin_refresh_driver_kyc("drv_1", admin={"id": "a", "role": "super_admin"})
+        assert resp["synced"] is True
+        assert "message" in resp
+
+    async def test_retired_account_says_so_instead_of_claiming_success(self):
+        from backend.routes.admin.drivers import admin_refresh_driver_kyc
+
+        p1, p2, p3 = self._harness({"status": "account_not_on_key", "retired": True})
+        with p1, p2, p3:
+            resp = await admin_refresh_driver_kyc("drv_1", admin={"id": "a", "role": "super_admin"})
+        assert resp["synced"] is False
+        assert "detached" in resp["message"]
+
+    async def test_stripe_error_is_502_not_a_quiet_200(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin.drivers import admin_refresh_driver_kyc
+
+        p1, p2, p3 = self._harness({"status": "stripe_error"})
+        with p1, p2, p3:
+            with pytest.raises(HTTPException) as ei:
+                await admin_refresh_driver_kyc("drv_1", admin={"id": "a", "role": "super_admin"})
+        assert ei.value.status_code == 502
+
+    async def test_unconfigured_stripe_is_503(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin.drivers import admin_refresh_driver_kyc
+
+        p1, p2, p3 = self._harness({"status": "stripe_not_configured"})
+        with p1, p2, p3:
+            with pytest.raises(HTTPException) as ei:
+                await admin_refresh_driver_kyc("drv_1", admin={"id": "a", "role": "super_admin"})
+        assert ei.value.status_code == 503
+
+
+class TestBulkRefreshEndpoint:
+    async def test_reports_per_status_counts(self):
+        from backend.routes.admin.drivers import RefreshAllKycRequest, admin_refresh_all_driver_kyc
+
+        drivers = [
+            {"id": "drv_a", "stripe_account_id": "acct_a"},
+            {"id": "drv_b", "stripe_account_id": "acct_b"},
+            {"id": "drv_c", "stripe_account_id": "acct_c"},
+        ]
+        statuses = {"drv_a": {"status": "ok"}, "drv_b": {"status": "ok"}, "drv_c": {"status": "account_not_on_key"}}
+
+        async def _refresh(driver, retire_if_unreachable=False):
+            assert retire_if_unreachable is False  # report-only by default
+            return statuses[driver["id"]]
+
+        with (
+            patch(
+                "backend.routes.admin.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=drivers),
+            ),
+            patch("backend.services.stripe_kyc_sync.refresh_driver_kyc", side_effect=_refresh),
+            patch("backend.routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            resp = await admin_refresh_all_driver_kyc(
+                RefreshAllKycRequest(), admin={"id": "a", "role": "super_admin"}
+            )
+
+        assert resp["total"] == 3
+        assert resp["ok"] == 2
+        assert resp["account_not_on_key"] == 1
+        assert resp["drivers"]["drv_c"] == "account_not_on_key"
+        assert "not detached" in resp["note"]
+
+    async def test_requires_super_admin(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin.drivers import RefreshAllKycRequest, admin_refresh_all_driver_kyc
+
+        with pytest.raises(HTTPException) as ei:
+            await admin_refresh_all_driver_kyc(RefreshAllKycRequest(), admin={"id": "a", "role": "admin"})
+        assert ei.value.status_code == 403
+
+    async def test_one_driver_failure_does_not_stop_the_rest(self):
+        from backend.routes.admin.drivers import RefreshAllKycRequest, admin_refresh_all_driver_kyc
+
+        drivers = [{"id": "drv_a", "stripe_account_id": "acct_a"}, {"id": "drv_b", "stripe_account_id": "acct_b"}]
+
+        async def _refresh(driver, retire_if_unreachable=False):
+            if driver["id"] == "drv_a":
+                raise RuntimeError("boom")
+            return {"status": "ok"}
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=drivers)),
+            patch("backend.services.stripe_kyc_sync.refresh_driver_kyc", side_effect=_refresh),
+            patch("backend.routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            resp = await admin_refresh_all_driver_kyc(
+                RefreshAllKycRequest(), admin={"id": "a", "role": "super_admin"}
+            )
+        assert resp["ok"] == 1
+        assert resp["stripe_error"] == 1

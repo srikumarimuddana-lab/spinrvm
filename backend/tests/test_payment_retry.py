@@ -9,6 +9,7 @@ Verifies that:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -430,3 +431,76 @@ async def test_unexpected_intent_state_releases_claim_to_failed():
     assert failed_calls[0][0][2]["$set"]["payment_retry_count"] == 1
     statuses = [c[0][2].get("$set", {}).get("payment_status") for c in mock_db_update.await_args_list]
     assert statuses[-1] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# ACTION_ITEMS B21: throttle-lock TTL must expire before the loop's own next
+# wake, or the pod that ran the last tick fails its own SET NX and skips a
+# full interval — see utils/ledger_projection.py's _LOCK_TTL_SECONDS for the
+# sibling fix this mirrors.
+# ---------------------------------------------------------------------------
+
+
+def test_payment_retry_lock_ttl_expires_before_the_earliest_next_wake():
+    """Stated as an invariant so a future tuning change to the interval or the
+    jitter fraction can't silently re-break the cadence (see
+    utils/ledger_projection.py's test of the same name)."""
+    from utils import payment_retry as pr
+
+    jitter_fraction = 0.1  # matches payment_retry_loop's `delta = interval * 0.1`
+    min_sleep = pr.RETRY_INTERVAL_SECONDS * (1 - jitter_fraction)
+    lock_ttl = int(pr.RETRY_INTERVAL_SECONDS * 0.85)
+    assert lock_ttl < min_sleep, (
+        f"lock TTL {lock_ttl}s must expire before the shortest possible sleep "
+        f"({min_sleep}s), or the loop skips its own next tick"
+    )
+
+
+def test_payment_retry_loop_reacquires_its_own_lock_on_the_next_wake():
+    """REGRESSION: with the old TTL = 1.5x interval against a 1x interval
+    sleep, the pod that ran the last tick woke to find its OWN key still
+    alive, failed SET NX, and slept another full interval — so a loop
+    documented as "5min" actually ticked every ~10 minutes.
+
+    Simulated against a virtual clock with real SET NX EX semantics, jitter
+    pinned to its most adverse value (the SHORTEST sleep) — the case the TTL
+    has to survive. Mirrors ledger_projection.py's loop-cadence regression test.
+    """
+    from utils import payment_retry as pr
+
+    clock = {"t": 0.0}
+    expiries: dict[str, float] = {}
+    wakes = {"n": 0}
+
+    async def fake_set_nx(key, _value, ttl):
+        exp = expiries.get(key)
+        if exp is not None and exp > clock["t"]:
+            return False
+        expiries[key] = clock["t"] + ttl
+        return True
+
+    async def fake_sleep(secs):
+        clock["t"] += secs
+        wakes["n"] += 1
+        if wakes["n"] >= 2:
+            raise asyncio.CancelledError
+
+    with (
+        patch.object(pr, "redis_set_nx", side_effect=fake_set_nx),
+        patch.object(pr, "retry_failed_payments", AsyncMock()) as retry_failed,
+        patch.object(pr, "retry_stuck_payouts", AsyncMock()),
+        patch.object(pr, "sweep_guest_corporate_settlements", AsyncMock()),
+        patch.object(pr, "_record_heartbeat"),
+        patch.object(pr.asyncio, "sleep", side_effect=fake_sleep),
+        # uniform(-delta, +delta) -> -delta: the shortest sleep the loop can take.
+        patch.object(pr.random, "uniform", side_effect=lambda lo, _hi: lo),
+    ):
+        try:
+            asyncio.run(pr.payment_retry_loop())
+        except asyncio.CancelledError:
+            pass
+
+    assert retry_failed.await_count == 2, (
+        "the single replica must tick once per interval; a TTL longer than the "
+        "minimum sleep makes it skip its own next wake and halves the cadence"
+    )

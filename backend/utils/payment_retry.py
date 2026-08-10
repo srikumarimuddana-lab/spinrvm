@@ -666,8 +666,15 @@ async def payment_retry_loop():
         # double-charge is prevented by the atomic DB claim (payment_status →
         # 'retrying') + the Stripe idempotency key (see module docstring). The
         # lock only reduces redundant work; it is never relied on for safety.
-        # TTL is 1.5× interval so a real lock expires before the next election.
-        lock_ttl = int(RETRY_INTERVAL_SECONDS * 1.5)
+        # TTL must be SHORTER than the minimum possible sleep below (interval *
+        # 0.9, the worst-case jitter draw), or the pod that ran the last tick
+        # wakes to find its OWN key still alive, fails SET NX, and sleeps
+        # another full interval — halving the documented cadence. The old
+        # `interval * 1.5` got this backwards (comment claimed it "expires
+        # before the next election" — it does not, 1.5x > 0.9x). Matches
+        # ledger_projection.py's `_LOCK_TTL_SECONDS` formula (ACTION_ITEMS B21):
+        # 0.05 headroom under the 0.9 floor.
+        lock_ttl = int(RETRY_INTERVAL_SECONDS * 0.85)
         if not await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl):
             _record_heartbeat("payment_retry (5min)")
             await asyncio.sleep(RETRY_INTERVAL_SECONDS)

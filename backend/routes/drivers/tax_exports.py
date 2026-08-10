@@ -418,6 +418,15 @@ _EXPORT_REDACT_RIDE = frozenset(
 )
 
 
+# Per-ride fields omitted from a RIDER's export of their own `rides_as_rider`
+# (mirrors _EXPORT_REDACT_RIDE's rider_id stripping, in reverse): driver_id
+# identifies the DRIVER, not the rider (the data subject) here. Unlike the
+# driver-side export, pickup/dropoff coordinates and the route polyline are
+# the rider's OWN trip data (their own pickup/dropoff, not a third party's
+# home address) and are deliberately kept.
+_EXPORT_REDACT_RIDE_FOR_RIDER = frozenset({"driver_id"})
+
+
 # Driver-profile (drivers) fields omitted from a data export:
 #  - password_hash / fcm_token: credentials
 #  - stripe_account_id / bank_account: financial credentials (already excluded
@@ -492,17 +501,21 @@ def _build_export_readme(payload: dict, generated_on: str) -> str:
         "This archive contains the personal data Spinr holds about you, provided\n"
         "in PIPEDA-compliant form. Files:\n\n"
         "  account.csv                  Your account record (field,value).\n"
-        "  driver_profile.csv           Your driver profile (field,value).\n"
-        "  rides.csv                    Your trip history (one row per ride).\n"
+        "  driver_profile.csv           Your driver profile (field,value), if you're a driver.\n"
+        "  rides.csv                    Trips where you were the driver (one row per ride).\n"
+        "  rides_as_rider.csv           Trips where you were the rider (one row per ride).\n"
         "  payouts.csv                  Your payout history (one row per payout).\n"
         "  documents.csv                Records of documents you uploaded\n"
         "                               (the file contents themselves are not included).\n"
+        "  saved_addresses.csv          Addresses you saved as a rider.\n"
         "  notification_preferences.csv Your notification settings.\n"
         "  raw_data.json                The complete export in machine-readable JSON.\n\n"
         "Counts:\n"
-        f"  Rides:     {len(payload.get('rides') or [])}\n"
-        f"  Payouts:   {len(payload.get('payouts') or [])}\n"
-        f"  Documents: {len(payload.get('documents') or [])}\n\n"
+        f"  Rides (as driver): {len(payload.get('rides') or [])}\n"
+        f"  Rides (as rider):  {len(payload.get('rides_as_rider') or [])}\n"
+        f"  Payouts:           {len(payload.get('payouts') or [])}\n"
+        f"  Documents:         {len(payload.get('documents') or [])}\n"
+        f"  Saved addresses:   {len(payload.get('saved_addresses') or [])}\n\n"
         "Questions or deletion requests: privacy@spinr.ca\n"
     )
 
@@ -517,8 +530,10 @@ def _build_export_zip(payload: dict, generated_on: str) -> bytes:
         "account.csv": _object_to_csv(payload.get("account", {})),
         "driver_profile.csv": _object_to_csv(payload.get("driver_profile", {})),
         "rides.csv": _rows_to_csv(payload.get("rides") or []),
+        "rides_as_rider.csv": _rows_to_csv(payload.get("rides_as_rider") or []),
         "payouts.csv": _rows_to_csv(payload.get("payouts") or []),
         "documents.csv": _rows_to_csv(payload.get("documents") or []),
+        "saved_addresses.csv": _rows_to_csv(payload.get("saved_addresses") or []),
         "notification_preferences.csv": _rows_to_csv(payload.get("notification_preferences") or []),
         "raw_data.json": json.dumps(payload, indent=2, default=str),
     }
@@ -542,9 +557,11 @@ def _build_export_email_html(filename: str) -> str:
         "<ul>"
         "<li><strong>README.txt</strong> — what each file contains</li>"
         "<li><strong>account.csv</strong>, <strong>driver_profile.csv</strong> — your profile</li>"
-        "<li><strong>rides.csv</strong> — your trip history</li>"
+        "<li><strong>rides.csv</strong> — trips where you were the driver</li>"
+        "<li><strong>rides_as_rider.csv</strong> — trips where you were the rider</li>"
         "<li><strong>payouts.csv</strong> — your payout history</li>"
         "<li><strong>documents.csv</strong> — your uploaded document records</li>"
+        "<li><strong>saved_addresses.csv</strong> — addresses you saved as a rider</li>"
         "<li><strong>notification_preferences.csv</strong> — your notification settings</li>"
         "<li><strong>raw_data.json</strong> — the complete machine-readable export</li>"
         "</ul>"
@@ -637,9 +654,11 @@ _EXPORT_MANIFEST = (
     "The download is a ZIP archive containing:\n"
     "• README.txt — what each file contains\n"
     "• account.csv, driver_profile.csv — your profile\n"
-    "• rides.csv — your trip history\n"
+    "• rides.csv — trips where you were the driver\n"
+    "• rides_as_rider.csv — trips where you were the rider\n"
     "• payouts.csv — your payout history\n"
     "• documents.csv — your uploaded document records\n"
+    "• saved_addresses.csv — addresses you saved as a rider\n"
     "• notification_preferences.csv — your notification settings\n"
     "• raw_data.json — the complete machine-readable export"
 )
@@ -705,8 +724,15 @@ async def export_driver_data(
     return {"message": "Your data export is being prepared. Check your email."}
 
 
-async def _build_and_email_data_export(user_id: str, email: str) -> None:
-    """Background task: collect all driver data and email a JSON export."""
+async def _build_and_email_data_export(user_id: str, email: str) -> bool:
+    """Background task: collect all driver data and email a JSON export.
+
+    Returns True on success, False if the whole thing failed (already logged
+    at error level below — the return value exists only so a caller that
+    tracks request state, e.g. the rider DSAR queue, can reflect the real
+    outcome instead of assuming success). The original driver-side caller
+    (a fire-and-forget background task with no status to update) ignores it.
+    """
     import asyncio  # noqa: PLC0415
 
     try:
@@ -751,13 +777,42 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             payouts = payouts or []
             documents = documents or []
 
+        # Wave 3 (not driver_id-dependent — every account can have ridden as a
+        # passenger, driver or not) — the trips/addresses this function used
+        # to omit entirely for a rider-only account (ACTION_ITEMS.md N1: an
+        # export that only contained account + notification_preferences was
+        # not a real answer to a PIPEDA access request for someone whose main
+        # relationship with Spinr is as a rider). `rides_as_rider` is
+        # deliberately a separate key from `rides` (the driver-shaped list
+        # above) rather than merged into it — the two have different
+        # redaction rules (a driver's export strips the RIDER's identity from
+        # `rides`; a rider's export must strip the DRIVER's identity from
+        # `rides_as_rider` instead) and merging them risks a redaction rule
+        # from one context leaking into the other.
+        rides_as_rider, saved_addresses = await asyncio.gather(
+            db_supabase.get_rows(
+                "rides",
+                {"rider_id": user_id},
+                limit=500,
+                order="created_at",
+                desc=True,
+            ),
+            db_supabase.get_rows("saved_addresses", {"user_id": user_id}, limit=100),
+        )
+        rides_as_rider = rides_as_rider or []
+        saved_addresses = saved_addresses or []
+
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
             "account": {k: v for k, v in user.items() if k not in _EXPORT_REDACT_ACCOUNT},
             "driver_profile": {k: v for k, v in driver.items() if k not in _EXPORT_REDACT_DRIVER},
             "rides": [{k: v for k, v in r.items() if k not in _EXPORT_REDACT_RIDE} for r in rides],
+            "rides_as_rider": [
+                {k: v for k, v in r.items() if k not in _EXPORT_REDACT_RIDE_FOR_RIDER} for r in rides_as_rider
+            ],
             "payouts": payouts,
             "documents": [{k: v for k, v in doc.items() if k != "document_url"} for doc in documents],
+            "saved_addresses": saved_addresses,
             "notification_preferences": notification_prefs,
         }
 
@@ -827,6 +882,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
                 "metric": "dsar_export_completed",
             },
         )
+        return True
 
     except Exception as exc:
         # Surface the full traceback and, for DatabaseError, the original DB
@@ -839,3 +895,4 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             f" — {original}" if original else "",
             exc_info=True,
         )
+        return False

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile  # type: ignore
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile  # type: ignore
 
 try:
     from .. import db_supabase  # type: ignore
@@ -9,6 +9,7 @@ try:
     from ..utils.error_handling import ErrorCode, SpinrException  # type: ignore
     from ..utils.error_keys import ErrorKeys  # type: ignore
     from ..utils.insurance_periods import record_period_transition  # type: ignore
+    from ..utils.rate_limiter import dsar_export_limit  # type: ignore
     from ..utils.redis_client import redis_delete  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
@@ -31,6 +32,7 @@ except ImportError:
     from utils.error_handling import ErrorCode, SpinrException  # type: ignore  # noqa: F811
     from utils.error_keys import ErrorKeys  # type: ignore  # noqa: F811
     from utils.insurance_periods import record_period_transition  # type: ignore  # noqa: F811
+    from utils.rate_limiter import dsar_export_limit  # type: ignore  # noqa: F811
     from utils.redis_client import redis_delete  # type: ignore  # noqa: F811
     from utils.referral_terms import (  # type: ignore  # noqa: F811
         area_id_for_rider,
@@ -149,10 +151,75 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
     return UserProfile(**updated_user)
 
 
+async def _fulfill_rider_data_export(user_id: str, email: str, request_id: str) -> None:
+    """Background task: actually build and email the DSAR export, then reflect
+    the real outcome on the queued `data_export_requests` row.
+
+    Reuses `_build_and_email_data_export` from the driver module rather than
+    duplicating it (N1, ACTION_ITEMS.md). That function now includes a
+    rider-shaped `rides_as_rider` + `saved_addresses` read alongside its
+    original driver-shaped `rides`/`payouts`/`documents` (gated on having a
+    `drivers` row) — an earlier version of this fix reused it before that
+    branch existed and shipped an export containing only account +
+    notification-preferences for a rider-only account, which is not a real
+    answer to a PIPEDA access request from someone whose relationship with
+    Spinr is as a rider. The export itself never raises out (its own
+    try/except logs the full traceback at error level on failure).
+    """
+    try:
+        from .drivers.tax_exports import _build_and_email_data_export  # type: ignore
+    except ImportError:
+        from routes.drivers.tax_exports import _build_and_email_data_export  # type: ignore
+
+    succeeded = await _build_and_email_data_export(user_id, email)
+    try:
+        await db_supabase.update_one(
+            "data_export_requests",
+            {"id": request_id},
+            {
+                "status": "completed" if succeeded else "pending",
+                "completed_at": datetime.now(timezone.utc).isoformat() if succeeded else None,
+            },
+        )
+    except Exception:
+        # The export itself already succeeded or failed and was logged by
+        # _build_and_email_data_export above — a failure here only means the
+        # DSAR queue row's status didn't update, not that the export was
+        # lost. Still surfaced loudly: an admin relying on the queue's status
+        # to track SLA compliance needs to know it may be stale.
+        logger.error(
+            "Failed to update data_export_requests status for request %s (user %s)",
+            request_id,
+            user_id,
+            exc_info=True,
+        )
+
+
 @api_router.post("/data-export")
-async def request_data_export(current_user: dict = Depends(get_current_user)):
-    """R-P1-6 / DV-17 PIPEDA DSAR: Queue a data-export request with 30-day SLA tracking.
-    PIPEDA s.9 requires a response within 30 days of receipt.
+@dsar_export_limit
+async def request_data_export(request: Request = None, current_user: dict = Depends(get_current_user)):
+    """R-P1-6 / DV-17 / N1 PIPEDA DSAR: queue a data-export request with 30-day
+    SLA tracking, and actually fulfil it.
+
+    Previously this only inserted the `data_export_requests` row and stopped —
+    nothing built the export or emailed it, so a rider's access request sat
+    unfulfilled until an admin noticed it (there is no admin-side automation
+    either; ACTION_ITEMS.md N1). Now it also spawns the same build-and-email
+    flow the driver-side `/drivers/me/export-data` endpoint already uses,
+    self-swallowing per the shared `spawn()` helper's contract so a background
+    failure can't affect this response.
+
+    Rate-limited (@dsar_export_limit, 3/hour) — this now fans out the same
+    DB-reads + ZIP-build + Storage-upload + email pipeline the driver export
+    does, not just a single insert, so it needs the same abuse cap (storage
+    fill / SES exhaustion). SlowAPI needs a parameter named ``request`` typed
+    as starlette Request; do not remove it (mirrors
+    routes/drivers/tax_exports.py::export_driver_data).
+
+    PIPEDA s.9 requires a response within 30 days of receipt — the queued row
+    with its SLA deadline is recorded either way, so even if no email is on
+    file (fulfilment is skipped, logged, and the row stays 'pending' for an
+    admin to handle manually) the request itself is never lost.
     """
     user_id = current_user["id"]
     request_id = str(uuid.uuid4())
@@ -174,6 +241,21 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
             exc_info=True,
         )
         raise HTTPException(status_code=503, detail="data_export_request_failed") from e
+
+    email = (current_user.get("email") or "").strip()
+    if "@" in email:
+        spawn(_fulfill_rider_data_export(user_id, email, request_id))
+    else:
+        # Matches the driver endpoint's own requirement (a phone-number
+        # fallback would leak a raw phone number to the email provider and
+        # fail to send anyway) — the request row stays 'pending' for an
+        # admin to fulfil manually via the existing DSAR admin queue.
+        logger.warning(
+            "DSAR request %s for user %s has no email on file — request recorded but not auto-fulfilled",
+            request_id,
+            user_id,
+        )
+
     return {
         "success": True,
         "request_id": request_id,

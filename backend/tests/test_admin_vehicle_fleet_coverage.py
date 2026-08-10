@@ -532,6 +532,12 @@ class TestLostAndFound:
                     result = await vf.admin_report_lost_item("ride_1", vf.LostAndFoundRequest(item_description="phone"))
         assert result == item
         push_mock.assert_awaited_once()
+        # N3 (ACTION_ITEMS.md): the first positional arg must be the driver's
+        # users.id ("u1"), not the raw fcm_token string ("tok") —
+        # send_push_notification looks the recipient up by users.id itself;
+        # passing the token there always missed that lookup and silently
+        # dropped every lost-item push.
+        assert push_mock.await_args[0][0] == "u1"
         update_mock.assert_awaited_once()
 
     @pytest.mark.asyncio

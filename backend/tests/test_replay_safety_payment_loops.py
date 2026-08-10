@@ -139,8 +139,16 @@ def test_retry_atomic_claim_winner_fires_driver_push():
     async def _capture_push(*args, **kwargs):
         push_calls.append((args, kwargs))
 
+    async def fake_get_rows(table, *args, **kwargs):
+        if table == "drivers":
+            # N3 (ACTION_ITEMS.md): rides.driver_id is a drivers.id, not a
+            # users.id — resolved via a batched "drivers" lookup before the
+            # push fires.
+            return [{"id": "driver_1", "user_id": "driver_1_user"}]
+        return [ride]
+
     with (
-        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.db.get_rows", AsyncMock(side_effect=fake_get_rows)),
         patch("utils.payment_retry.get_app_settings", AsyncMock(return_value=_settings_with_secret())),
         patch("utils.payment_retry.send_push_notification", _capture_push),
         patch("utils.payment_retry.db.update_one", AsyncMock(return_value={"id": "ride_1"})),
@@ -152,8 +160,8 @@ def test_retry_atomic_claim_winner_fires_driver_push():
         asyncio.run(retry_failed_payments())
 
     assert len(push_calls) == 1
-    # First positional arg is the user_id (driver_id in this branch)
-    assert push_calls[0][0][0] == "driver_1"
+    # First positional arg is the resolved users.id, not rides.driver_id.
+    assert push_calls[0][0][0] == "driver_1_user"
 
 
 def test_retry_atomic_claim_filters_on_prior_count():
@@ -230,8 +238,16 @@ def test_stuck_payout_winner_notifies_driver_once():
     async def _capture_push(*args, **kwargs):
         push_calls.append((args, kwargs))
 
+    async def fake_get_rows(table, *args, **kwargs):
+        if table == "drivers":
+            # N3 (ACTION_ITEMS.md): payouts.driver_id is a drivers.id, not a
+            # users.id — resolved via a batched "drivers" lookup before the
+            # push fires.
+            return [{"id": "driver_1", "user_id": "driver_1_user"}]
+        return [payout]
+
     with (
-        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[payout])),
+        patch("utils.payment_retry.db.get_rows", AsyncMock(side_effect=fake_get_rows)),
         patch("utils.payment_retry.send_push_notification", _capture_push),
         patch("utils.payment_retry.db.update_one", AsyncMock(return_value={"id": "payout_1"})),
     ):
@@ -240,7 +256,8 @@ def test_stuck_payout_winner_notifies_driver_once():
         asyncio.run(retry_stuck_payouts())
 
     assert len(push_calls) == 1
-    assert push_calls[0][0][0] == "driver_1"
+    # First positional arg is the resolved users.id, not payouts.driver_id.
+    assert push_calls[0][0][0] == "driver_1_user"
 
 
 def test_stuck_payout_claim_filters_on_status_pending():

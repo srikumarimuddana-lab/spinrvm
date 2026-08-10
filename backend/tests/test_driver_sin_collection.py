@@ -172,8 +172,12 @@ class TestUpdateProfileRoute:
         async def _get_rows(*_a, **_k):
             return [existing_driver] if existing_driver else []
 
-        async def _update_one(_table, _filt, updates):
+        async def _update_one(_table, filt, updates):
+            captured["filter"] = filt
             captured["update"] = updates
+            # Real update_one returns the updated row; None means the filter
+            # matched nothing (the compare-and-set losing a race).
+            return updates
 
         async def _insert_one(_table, row):
             captured["insert"] = row
@@ -557,9 +561,7 @@ class TestSinImmutability:
         still update GST, language, etc."""
         captured: dict = {}
         driver = {"id": "drv-1", "user_id": "user-1", "status": "active", "sin": "vault-token-old"}
-        await TestUpdateProfileRoute._call(
-            TestUpdateProfileRoute._body(gst_bn="123456789RT0001"), driver, captured
-        )
+        await TestUpdateProfileRoute._call(TestUpdateProfileRoute._body(gst_bn="123456789RT0001"), driver, captured)
         assert captured["update"]["gst_bn"] == "123456789RT0001"
 
     @pytest.mark.anyio
@@ -572,3 +574,51 @@ class TestSinImmutability:
         with pytest.raises(HTTPException) as exc:
             await TestUpdateProfileRoute._call(TestUpdateProfileRoute._body(sin=VALID_SIN), driver, {})
         assert not re.search(r"\d{4}", exc.value.detail)
+
+
+class TestSinFirstWriteRace:
+    """The in-memory 403 check reads the driver once; two concurrent first
+    writes both pass it. The write itself must therefore be a compare-and-set
+    (filter sin IS NULL) so the loser gets a 409 instead of silently
+    overwriting the winner."""
+
+    @pytest.mark.anyio
+    async def test_sin_write_filters_on_sin_is_null(self):
+        captured: dict = {}
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active"}
+        await TestUpdateProfileRoute._call(TestUpdateProfileRoute._body(sin=VALID_SIN), driver, captured)
+        assert captured["filter"] == {"id": "drv-1", "sin": None}
+
+    @pytest.mark.anyio
+    async def test_non_sin_write_is_unfiltered(self):
+        captured: dict = {}
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active"}
+        await TestUpdateProfileRoute._call(TestUpdateProfileRoute._body(gst_bn="123456789RT0001"), driver, captured)
+        assert captured["filter"] == {"id": "drv-1"}
+
+    @pytest.mark.anyio
+    async def test_losing_the_race_is_409(self):
+        from unittest.mock import patch as _patch
+
+        from fastapi import HTTPException
+
+        from backend.routes.drivers import profile as mod
+
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active"}
+
+        async def _get_rows(*_a, **_k):
+            return [driver]
+
+        with (
+            _patch.object(mod.db_supabase, "get_rows", _get_rows),
+            # 0 rows matched: another request set the SIN between our read
+            # and this write.
+            _patch.object(mod.db_supabase, "update_one", AsyncMock(return_value=None)),
+            _patch.object(_shared, "_vault_encrypt", AsyncMock(return_value="vault-token")),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await mod.update_my_driver(
+                    TestUpdateProfileRoute._body(sin=VALID_SIN), {"id": "user-1", "phone": "+13065550001"}
+                )
+        assert exc.value.status_code == 409
+        assert VALID_SIN not in exc.value.detail

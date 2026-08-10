@@ -250,7 +250,25 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         logger.info(f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review")
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db_supabase.update_one("drivers", {"id": driver["id"]}, await _shared._encrypt_driver_pii(updates))
+    write_filter: dict = {"id": driver["id"]}
+    if "sin" in updates:
+        # DB-level compare-and-set backing the 403 above. The in-memory check
+        # reads `driver` once at the top of the request, so two concurrent
+        # first writes (double-tap submit, client retry) both pass it; without
+        # this filter the second would silently overwrite the first — the
+        # exact bypass the immutability rule forbids. Same convention as the
+        # ride-acceptance {'status': 'searching'} guard: the losing request
+        # matches 0 rows and is told so, instead of winning by being last.
+        write_filter["sin"] = None
+    result = await db_supabase.update_one("drivers", write_filter, await _shared._encrypt_driver_pii(updates))
+    if "sin" in updates and result is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Your SIN was already saved by another request and cannot be "
+                "overwritten. Contact support if it needs a correction."
+            ),
+        )
     # Append-only vehicle/identity change history (SGI/insurance audit). Uses
     # the pre-update `driver` row as the "before" snapshot.
     if changed_vehicle:

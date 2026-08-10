@@ -172,12 +172,18 @@ class TestCommit:
         assert body["stripe_push"] == "started"
         assert VALID_SIN not in resp.text  # never in the response
 
-        written = upd.await_args.args[2]
+        # One compare-and-set write per column, each filtered on that column
+        # being NULL so a concurrent in-app write wins over the CSV.
+        assert upd.await_count == 2
+        (sin_call, gst_call) = upd.await_args_list
+        assert sin_call.args[1] == {"id": "drv-1", "sin": None}
+        written = sin_call.args[2]
         assert written["sin"] == "vault-token"  # the Vault token, not the number
         assert written["sin_last4"] == VALID_SIN[-4:]
         assert written["sin_collected_at"]
-        assert written["gst_bn"] == "123456789RT0001"
-        assert written["gst_registered"] is True
+        assert gst_call.args[1] == {"id": "drv-1", "gst_bn": None}
+        assert gst_call.args[2]["gst_bn"] == "123456789RT0001"
+        assert gst_call.args[2]["gst_registered"] is True
 
         # Background push got the token + account, never the plaintext.
         pushed = push.call_args.args[0]
@@ -230,3 +236,25 @@ class TestNoSinLeaks:
             resp = _post(test_client, VALIDATE, _csv(f"{PHONE},{VALID_SIN},"))
         text_without_gst = resp.text.replace("123456789RT0001", "")
         assert not re.search(re.escape(VALID_SIN), text_without_gst)
+
+
+class TestCommitRaceGuard:
+    def test_driver_who_entered_sin_mid_commit_is_not_clobbered(self, test_client, super_admin_override):
+        """The plan validates against a snapshot; if the driver self-enters
+        their SIN in the app before this row's write, the compare-and-set
+        matches 0 rows and the CSV value is dropped with a warning — the
+        driver's own entry wins, and no Stripe push happens for the row."""
+        upd = AsyncMock(return_value=None)  # 0 rows matched
+        push = AsyncMock()
+        ps = _patches([_driver(stripe_account_id="acct_9")], update_mock=upd)
+        with ps[0], ps[1], ps[2] as log, ps[3], patch("routes.admin.tax_id_import._push_sins_to_stripe", push):
+            resp = _post(test_client, COMMIT, _csv(f"{PHONE},{VALID_SIN},123456789RT0001"))
+        body = resp.json()
+        assert body["committed"] is True
+        assert body["written_sin"] == 0
+        assert body["written_gst"] == 0
+        assert body["stripe_push"] == "not_applicable"
+        push.assert_not_called()
+        assert any("since validation" in w["message"] for w in body["warnings"])
+        # Audit reflects what actually happened, not what the CSV wanted.
+        assert log.await_args.args[4] == {"written_sin": 0, "written_gst": 0, "stripe_pushes": 0}

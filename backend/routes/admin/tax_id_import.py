@@ -279,29 +279,51 @@ async def commit_tax_id_import(
     written_sin = 0
     written_gst = 0
     stripe_pushes: list[dict[str, str]] = []
+    warnings = list(plan["warnings"])
     for u in plan["updates"]:
-        updates: dict[str, Any] = {"updated_at": now}
+        # One write per column, each a compare-and-set on that column being
+        # NULL. The plan's already-on-file checks read a snapshot taken at the
+        # top of the request; a driver self-entering their SIN in the app
+        # while this loop runs would otherwise be silently clobbered by the
+        # CSV value — bypassing the immutability rule with no reason and no
+        # per-driver audit. 0 rows matched → changed since validation →
+        # skipped with a warning, same convention as the ride-acceptance
+        # {'status': 'searching'} guard.
         if "sin" in u:
-            updates["sin"] = u["sin"]
-            updates["sin_last4"] = sin_last4(u["sin"])
-            updates["sin_collected_at"] = now
-        if "gst_bn" in u:
-            updates["gst_bn"] = u["gst_bn"]
-            updates["gst_registered"] = True
-        # Same fail-closed Vault encryption as the driver path: Vault down →
-        # 503 out of the whole commit, never a plaintext SIN in a column.
-        # Rows already written stay written (NULL-only fill makes a re-run
-        # converge: they skip as already-on-file warnings).
-        encrypted = await _encrypt_driver_pii(updates)
-        await db_supabase.update_one("drivers", {"id": u["driver_id"]}, encrypted)
-        if "sin" in u:
-            written_sin += 1
-            if u.get("stripe_account_id"):
-                stripe_pushes.append(
-                    {"driver_id": u["driver_id"], "sin_token": encrypted["sin"], "account_id": u["stripe_account_id"]}
+            # Fail-closed Vault encryption, same helper as the driver path:
+            # Vault down → 503 out of the whole commit, never plaintext in a
+            # column. Rows already written stay written; a re-run converges
+            # (they skip as already-on-file warnings).
+            encrypted = await _encrypt_driver_pii(
+                {"sin": u["sin"], "sin_last4": sin_last4(u["sin"]), "sin_collected_at": now, "updated_at": now}
+            )
+            result = await db_supabase.update_one("drivers", {"id": u["driver_id"], "sin": None}, encrypted)
+            if result is None:
+                warnings.append(
+                    {"row_ref": u["row_ref"], "field": "sin", "message": "SIN set since validation — skipped"}
                 )
+            else:
+                written_sin += 1
+                if u.get("stripe_account_id"):
+                    stripe_pushes.append(
+                        {
+                            "driver_id": u["driver_id"],
+                            "sin_token": encrypted["sin"],
+                            "account_id": u["stripe_account_id"],
+                        }
+                    )
         if "gst_bn" in u:
-            written_gst += 1
+            result = await db_supabase.update_one(
+                "drivers",
+                {"id": u["driver_id"], "gst_bn": None},
+                {"gst_bn": u["gst_bn"], "gst_registered": True, "updated_at": now},
+            )
+            if result is None:
+                warnings.append(
+                    {"row_ref": u["row_ref"], "field": "gst_bn", "message": "GST BN set since validation — skipped"}
+                )
+            else:
+                written_gst += 1
 
     stripe_push = "not_applicable"
     if stripe_pushes:
@@ -323,5 +345,5 @@ async def commit_tax_id_import(
         "written_sin": written_sin,
         "written_gst": written_gst,
         "stripe_push": stripe_push,
-        "warnings": plan["warnings"],
+        "warnings": warnings,
     }

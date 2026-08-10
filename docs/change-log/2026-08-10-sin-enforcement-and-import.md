@@ -124,6 +124,23 @@ typed it into Stripe's own form. No feature flag: the gate must hold for
 every driver or the T4A copy guarantee is only a suggestion; reverting is a
 single deploy with no live-data repair.
 
+## Post-audit hardening (same day)
+
+`spinr-security-auditor` pass on the branch found no blockers but two
+TOCTOU races that could bypass immutability without a 403 — both fixed:
+
+- `PUT /drivers/me`: the first-SIN write is now a compare-and-set
+  (`update_one` filtered on `sin IS NULL`); a losing concurrent request
+  gets **409** instead of silently overwriting the winner.
+- Importer commit: one write per column, each filtered on that column being
+  NULL; a driver who self-enters their SIN mid-commit wins over the CSV
+  (row skipped with a "set since validation" warning, no Stripe push, audit
+  counts reflect what actually landed).
+
+Also filed `ACTION_ITEMS.md` D8: reveal-sin / update-sin / tax-ID import
+have no rate limiting (pre-existing posture, super_admin-gated) — needs a
+deliberate decision.
+
 ## Verification performed
 
 - `pytest` on the 10 affected test files: **439 passed** (includes 27 new

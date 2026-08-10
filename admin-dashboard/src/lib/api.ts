@@ -66,6 +66,7 @@ export {
     getDriverPayoutsSummary,
     refreshAllDriverStripeKyc,
     refreshDriverStripeKyc,
+    refreshDriverStripePayouts,
     revealDriverSin,
     getDriverStatements,
     downloadDriverStatement,

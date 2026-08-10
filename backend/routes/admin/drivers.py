@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -2620,11 +2621,20 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         except (InvalidOperation, ValueError):
             return Decimal("0")
 
-    lifetime_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
+    lifetime_ride_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
     lifetime_tips = sum((_dec(r.get("tip_amount")) for r in rides), Decimal("0"))
 
+    # ---- Aggregate from driver_bonuses (quest/referral/adjustment) ----
+    bonus_rows = await db_supabase.get_rows(
+        "driver_bonuses",
+        {"driver_id": driver_id},
+        limit=10000,
+    )
+    total_bonuses = sum((_dec(b.get("amount") or 0) for b in bonus_rows), Decimal("0"))
+    lifetime_earnings = lifetime_ride_earnings + total_bonuses
+
     year_start = datetime(datetime.now(timezone.utc).year, 1, 1, tzinfo=timezone.utc).isoformat()
-    ytd_earnings = sum(
+    ytd_ride_earnings = sum(
         (
             _dec(r.get("driver_earnings"))
             for r in rides
@@ -2632,6 +2642,11 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         ),
         Decimal("0"),
     )
+    ytd_bonuses = sum(
+        (_dec(b.get("amount") or 0) for b in bonus_rows if (b.get("created_at") or "") >= year_start),
+        Decimal("0"),
+    )
+    ytd_earnings = ytd_ride_earnings + ytd_bonuses
 
     # Active days in last 30d — same definition the driver app's "Active
     # days" earnings metric uses (≥1 completed ride on that calendar date).
@@ -2663,9 +2678,8 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     on_hold = _sum_by_status("failed")
 
     # Amount owed to the driver that hasn't been queued for payout yet.
-    # Negative would mean we've paid out more than they earned — guard
-    # by clamping at zero so the UI never shows a confusing negative
-    # owed balance (admins resolve that via a separate clawback flow).
+    # Includes ride earnings + bonuses - paid out - in flight, matching
+    # the driver-facing balance in routes/drivers/earnings.py.
     pending_balance = max(lifetime_earnings - total_paid_out - pending_in_flight, Decimal("0"))
 
     last_completed = next((p for p in payouts if p.get("status") == "completed"), None)
@@ -2717,6 +2731,8 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     return {
         "summary": {
             "lifetime_earnings": float(lifetime_earnings),
+            "lifetime_ride_earnings": float(lifetime_ride_earnings),
+            "lifetime_bonuses": float(total_bonuses),
             "lifetime_tips": float(lifetime_tips),
             "ytd_earnings": float(ytd_earnings),
             "total_paid_out": float(total_paid_out),
@@ -2754,6 +2770,8 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
                 "id": p.get("id"),
                 "amount": float(_dec(p.get("amount"))),
                 "status": p.get("status"),
+                "payout_type": p.get("payout_type"),
+                "stripe_transfer_id": p.get("stripe_transfer_id"),
                 "stripe_payout_id": p.get("stripe_payout_id"),
                 "bank_name": p.get("bank_name"),
                 "account_last4": p.get("account_last4"),
@@ -2762,6 +2780,16 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
                 "processed_at": p.get("processed_at"),
             }
             for p in payouts[:limit]
+        ],
+        "bonuses": [
+            {
+                "id": b.get("id"),
+                "amount": float(_dec(b.get("amount") or 0)),
+                "kind": b.get("kind"),
+                "description": b.get("description"),
+                "created_at": b.get("created_at"),
+            }
+            for b in sorted(bonus_rows, key=lambda x: x.get("created_at") or "", reverse=True)
         ],
     }
 
@@ -2832,6 +2860,168 @@ async def admin_refresh_driver_kyc(driver_id: str, admin: dict = Depends(get_adm
         # pulled fresh state from Stripe.
         "synced": status == "ok",
         "message": messages.get(status, f"Unexpected sync status: {status}"),
+    }
+
+
+@router.post("/drivers/{driver_id}/refresh-stripe-payouts")
+async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depends(get_admin_user)):
+    """Sync ALL financial data from Stripe for a single driver.
+
+    Pulls Stripe Transfers (platform -> connected account) via the payout sync
+    service and materializes any missing ones as ``payouts`` rows. Also triggers
+    the connect-ledger sync to pull bank payouts and balance transactions from
+    the driver's connected account.
+
+    Returns the full set of synced transfer records with timestamps so the
+    admin dashboard can display every payment Stripe knows about for this
+    driver, supporting earnings review and T4A generation.
+    """
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    stripe_account_id = (driver.get("stripe_account_id") or "").strip()
+    if not stripe_account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Driver has no Stripe Connect account on file. They must complete payout setup first.",
+        )
+
+    try:
+        from ...services import stripe_payout_sync_service as sync_svc
+        from ...services.stripe_connect_ledger_service import sync_connect_ledger
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from services import stripe_payout_sync_service as sync_svc  # type: ignore
+        from services.stripe_connect_ledger_service import sync_connect_ledger  # type: ignore
+        from settings_loader import get_app_settings  # type: ignore
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured — set stripe_secret_key in Settings.",
+        )
+
+    batch = f"admin-refresh-{driver_id[:8]}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+
+    # 1. Sync Stripe Transfers -> payouts table
+    plan = await sync_svc.build_plan(
+        stripe_secret,
+        batch,
+        driver_ids=[driver_id],
+    )
+
+    transfers_inserted = 0
+    transfers_skipped = 0
+    plan_errors = []
+    if plan.errors:
+        plan_errors = [{"field": e.field, "message": e.message} for e in plan.errors]
+        logger.warning("[STRIPE-REFRESH] plan has errors for driver %s: %s", driver_id, plan_errors)
+    else:
+        try:
+            commit_result = await asyncio.to_thread(sync_svc.commit_plan, plan)
+            transfers_inserted = commit_result.get("inserted", 0)
+            transfers_skipped = commit_result.get("skipped_existing", 0)
+        except Exception:
+            logger.error("[STRIPE-REFRESH] commit failed for driver %s", driver_id, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to write synced transfers to the database. Try again.",
+            )
+
+    # 2. Sync connected-account bank payouts + balance transactions
+    ledger_result = await sync_connect_ledger(
+        stripe_secret,
+        driver_ids=[driver_id],
+    )
+
+    await log_admin_action(
+        admin,
+        "stripe_payout_refresh",
+        "drivers",
+        driver_id,
+        {
+            "transfers_inserted": transfers_inserted,
+            "transfers_skipped": transfers_skipped,
+            "payouts_upserted": ledger_result.payouts_upserted,
+            "ledger_upserted": ledger_result.ledger_upserted,
+        },
+    )
+
+    # 3. Read back the full payout history for this driver
+    all_payouts = await db_supabase.get_rows(
+        "payouts",
+        {"driver_id": driver_id},
+        order="created_at",
+        desc=True,
+        limit=500,
+    )
+
+    # 4. Read back synced bank payouts (connected-account -> bank)
+    bank_payouts = await db_supabase.get_rows(
+        "driver_stripe_payouts",
+        {"driver_id": driver_id},
+        order="created_at",
+        desc=True,
+        limit=500,
+    )
+
+    def _dec(x: Any) -> Decimal:
+        try:
+            return Decimal(str(x or 0))
+        except (InvalidOperation, ValueError):
+            return Decimal("0")
+
+    return {
+        "synced": True,
+        "message": (
+            f"Synced from Stripe: {transfers_inserted} new transfer(s), "
+            f"{transfers_skipped} already tracked. "
+            f"{ledger_result.payouts_upserted} bank payout(s), "
+            f"{ledger_result.ledger_upserted} ledger entries."
+        ),
+        "transfers_inserted": transfers_inserted,
+        "transfers_skipped": transfers_skipped,
+        "bank_payouts_synced": ledger_result.payouts_upserted,
+        "ledger_entries_synced": ledger_result.ledger_upserted,
+        "plan_warnings": [{"field": w.field, "message": w.message} for w in plan.warnings],
+        "plan_errors": plan_errors,
+        "ledger_warnings": [{"field": w.field, "message": w.message} for w in ledger_result.warnings],
+        "ledger_errors": [{"field": e.field, "message": e.message} for e in ledger_result.errors],
+        "payouts": [
+            {
+                "id": p.get("id"),
+                "amount": float(_dec(p.get("amount"))),
+                "status": p.get("status"),
+                "payout_type": p.get("payout_type"),
+                "stripe_transfer_id": p.get("stripe_transfer_id"),
+                "stripe_payout_id": p.get("stripe_payout_id"),
+                "bank_name": p.get("bank_name"),
+                "account_last4": p.get("account_last4"),
+                "error_message": p.get("error_message"),
+                "created_at": p.get("created_at"),
+                "processed_at": p.get("processed_at"),
+            }
+            for p in all_payouts
+        ],
+        "bank_payouts": [
+            {
+                "id": bp.get("id"),
+                "amount": float(_dec(bp.get("amount"))),
+                "currency": bp.get("currency"),
+                "status": bp.get("status"),
+                "method": bp.get("method"),
+                "arrival_date": bp.get("arrival_date"),
+                "bank_last4": bp.get("bank_last4"),
+                "failure_code": bp.get("failure_code"),
+                "failure_message": bp.get("failure_message"),
+                "created_at": bp.get("created_at"),
+                "synced_at": bp.get("synced_at"),
+            }
+            for bp in bank_payouts
+        ],
     }
 
 

@@ -94,6 +94,11 @@ class UpdateDriverProfileRequest(BaseModel):
     # Safe fields (no re-verification)
     gst_registered: Optional[bool] = None
     gst_bn: Optional[str] = None  # CRA Business Number, format 123456789RT0001
+    # Write-only. Validated (9 digits + Luhn) and Vault-encrypted before it
+    # reaches a column; never returned by any endpoint. Optional on purpose —
+    # making it required would lock every already-onboarded driver out of
+    # their profile mid-session.
+    sin: Optional[str] = None
     preferred_language: Optional[str] = None
     photo_url: Optional[str] = None
     is_wav: Optional[bool] = None
@@ -133,6 +138,9 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         "gst_bn",
         "preferred_language",
         "is_wav",
+        # Tax identity, like gst_bn — supplying it must not flip a verified
+        # driver to needs_review and knock them offline mid-shift.
+        "sin",
     }
     # Vehicle/doc fields — changing these on a verified driver triggers re-review
     vehicle_fields = {
@@ -155,6 +163,28 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     allowed_fields = safe_fields | vehicle_fields
 
     updates = {k: v for k, v in body.model_dump(exclude_none=True).items() if k in allowed_fields}
+
+    # Validate the SIN before anything else touches it. A typo is not caught
+    # until CRA rejects the T4A months later, by which time the driver may be
+    # unreachable — so a bad number must never reach the column. The
+    # ValueError message describes what is wrong and never echoes the value,
+    # so it is safe to return to the client.
+    if updates.get("sin"):
+        try:
+            from ...utils.sin import sin_last4, validate_sin
+        except ImportError:  # pragma: no cover - dual-import pattern
+            from utils.sin import sin_last4, validate_sin  # type: ignore
+        try:
+            validated = validate_sin(str(updates["sin"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # `sin` is encrypted by _encrypt_driver_pii on the way to the DB;
+        # last4 is stored in the clear so on-file state is visible without a
+        # decrypt, and it is the only part ever displayed.
+        updates["sin"] = validated
+        updates["sin_last4"] = sin_last4(validated)
+        updates["sin_collected_at"] = datetime.now(timezone.utc).isoformat()
+
     if not updates:
         return {"success": True}
 
@@ -184,11 +214,18 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
             "created_at": datetime.now(timezone.utc).isoformat(),
             **updates,
         }
-        await db_supabase.insert_one("drivers", new_driver)
+        # Encrypt on this path too. It was writing `**updates` straight to the
+        # DB, so a driver whose FIRST profile write carried a license_number
+        # (or now a SIN) stored it as plaintext — the exact PIPEDA failure
+        # _vault_encrypt is fail-closed to prevent. The update path below has
+        # always encrypted; only this auto-create branch did not.
+        await db_supabase.insert_one("drivers", await _shared._encrypt_driver_pii(new_driver))
         # Mark as driver; is_rider is intentionally left unchanged so a
         # driver who was already riding keeps both flags (dual-role).
         await db_supabase.update_one("users", {"id": current_user["id"]}, {"role": "driver", "is_driver": True})
-        return serialize_doc(new_driver)
+        # Serialize the pre-encryption dict, so strip the write-only PII
+        # rather than echoing a SIN the caller just sent us.
+        return serialize_doc({k: v for k, v in new_driver.items() if k not in _STRIP_FROM_SELF_RESPONSE})
 
     # Check if an active driver changed vehicle/document fields → needs review
     changed_vehicle = any(k in vehicle_fields for k in updates)
@@ -229,7 +266,14 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
             )
         await notify_driver_status_change(driver, status_message("needs_review"), "vehicle_edit")
     updated = await db_supabase.get_driver_by_id(driver["id"])
-    return serialize_doc(await _shared._decrypt_driver_pii(updated))
+    # Same strip GET /drivers/me applies. This response was returning the raw
+    # row, so stripe_account_id / bank_account / fcm_token came back on every
+    # profile update while the GET withheld them — and `sin` would have
+    # followed them out. One shape for the driver's own record, both verbs.
+    response_data = serialize_doc(await _shared._decrypt_driver_pii(updated))
+    for field in _STRIP_FROM_SELF_RESPONSE:
+        response_data.pop(field, None)
+    return response_data
 
 
 @router.get("/demand-heatmap")

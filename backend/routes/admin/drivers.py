@@ -2044,6 +2044,15 @@ async def admin_get_driver_live_stats(driver_id: str):
         "photo_url": photo_url,
         "license_number_last4": license_number_last4,
         "license_number_on_file": bool(drv and drv.get("license_number")),
+        # SIN needs no decrypt: `sin_last4` is stored in the clear precisely so
+        # T4A readiness is visible without one, and nothing in the application
+        # decrypts `drivers.sin` at all. An admin sees whether a number is on
+        # file, its last 4 to confirm which, and when it was given — never the
+        # number. Do not add a decrypt here; a SIN read path is a separate,
+        # audited, super_admin decision that has not been made.
+        "sin_last4": (drv or {}).get("sin_last4"),
+        "sin_on_file": bool(drv and drv.get("sin")),
+        "sin_collected_at": (drv or {}).get("sin_collected_at"),
     }
 
 

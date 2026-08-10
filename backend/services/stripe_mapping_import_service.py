@@ -36,10 +36,12 @@ from typing import Any
 
 try:
     from ..supabase_client import supabase
+    from ..utils.stripe_mode import key_mode, object_mode
     from .driver_import_service import _select_in, normalize_phone, read_csv_text
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
     from services.driver_import_service import _select_in, normalize_phone, read_csv_text
     from supabase_client import supabase  # type: ignore  # noqa: F401
+    from utils.stripe_mode import key_mode, object_mode  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -442,11 +444,33 @@ def _build_local_rider_plan(rows: list[dict[str, str]], plan: StripeMappingPlan)
 
 def _livemode_error(obj: dict[str, Any], stripe_secret: str) -> tuple[str, str] | None:
     """Hard error: a test-mode object must never be mapped as a live payout
-    destination (or vice versa). Normally unreachable — a key can't retrieve
-    the other mode's objects — so if it fires, something is deeply wrong."""
-    live_key = stripe_secret.startswith("sk_live_")
-    if bool(obj.get("livemode")) != live_key:
-        return ("livemode", "object livemode does not match the configured key mode")
+    destination (or vice versa).
+
+    This is a **cross-check, not the primary evidence**. The retrieve in
+    `_retrieve_stripe` already proves mode: Stripe cannot return an object
+    from the other mode, it 404s, which lands as `not_accessible`. So this
+    only ever fires on a contradiction Stripe should be incapable of
+    producing — and it must stay silent when it has nothing to compare:
+
+    - **A Connect `Account` carries no `livemode` field at all** (unlike
+      `Customer`, which does). Reading it as a falsy boolean made every live
+      account look test-mode and failed 100% of driver rows.
+    - **A restricted key (`rk_live_…`) is a live key.** Matching only the
+      `sk_live_` prefix made every live object look mode-mismatched.
+
+    Both are handled by delegating to `object_mode` / `key_mode`, which return
+    None for "cannot tell" rather than guessing. None on either side means no
+    finding — never a hard error inferred from absent evidence.
+    """
+    observed = object_mode(obj)
+    configured = key_mode(stripe_secret)
+    if observed is None or configured is None:
+        return None
+    if observed != configured:
+        return (
+            "livemode",
+            f"object is {observed}-mode but the configured Stripe key is {configured}-mode",
+        )
     return None
 
 

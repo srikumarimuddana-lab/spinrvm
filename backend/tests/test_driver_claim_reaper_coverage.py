@@ -234,8 +234,6 @@ async def test_loop_reacquires_its_own_lock_on_the_next_wake():
     pinned to its most adverse value (the SHORTEST sleep) — the case the TTL
     has to survive. Mirrors ledger_projection.py's loop-cadence regression test.
     """
-    from backend.utils import driver_claim_reaper as reaper
-
     clock = {"t": 0.0}
     expiries: dict[str, float] = {}
     wakes = {"n": 0}

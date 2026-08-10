@@ -1196,7 +1196,7 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
           <Plus className="h-4 w-4" /> Add document type
         </button>
         <div className="flex-1" />
-        {dirty && <span className="text-xs text-amber-600 font-medium">Unsaved changes</span>}
+        {dirty && <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Unsaved changes</span>}
         <button onClick={() => { onSave(rows); setDirty(false); }} className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm' : 'bg-muted text-muted-foreground'}`}>
           <span className="flex items-center gap-1.5"><CheckCircle className="h-4 w-4" /> Save Documents</span>
         </button>

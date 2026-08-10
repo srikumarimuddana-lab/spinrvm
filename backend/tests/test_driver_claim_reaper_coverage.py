@@ -200,3 +200,73 @@ def test_pod_id_shape():
     host, _, pid = pod_id.rpartition(":")
     assert host
     assert pid.isdigit()
+
+
+# ---------------------------------------------------------------------------
+# ACTION_ITEMS B21: throttle-lock TTL must expire before the loop's own next
+# wake, or the pod that ran the last tick fails its own SET NX and skips a
+# full interval — see utils/ledger_projection.py's _LOCK_TTL_SECONDS for the
+# sibling fix this mirrors.
+# ---------------------------------------------------------------------------
+
+
+def test_lock_ttl_expires_before_the_earliest_next_wake():
+    """Stated as an invariant so a future tuning change to the interval or the
+    jitter fraction can't silently re-break the cadence."""
+    from backend.utils import driver_claim_reaper as reaper
+
+    jitter_fraction = 0.1  # matches the loop's `delta = interval * 0.1`
+    min_sleep = reaper.REAP_INTERVAL_SECONDS * (1 - jitter_fraction)
+    lock_ttl = int(reaper.REAP_INTERVAL_SECONDS * 0.85)
+    assert lock_ttl < min_sleep, (
+        f"lock TTL {lock_ttl}s must expire before the shortest possible sleep "
+        f"({min_sleep}s), or the loop skips its own next tick"
+    )
+
+
+async def test_loop_reacquires_its_own_lock_on_the_next_wake():
+    """REGRESSION: with the old TTL = 2x interval against a 1x interval sleep,
+    the pod that ran the last tick woke to find its OWN key still alive,
+    failed SET NX, and slept another full interval — so a loop documented as
+    "60s" actually ticked every ~120s.
+
+    Simulated against a virtual clock with real SET NX EX semantics, jitter
+    pinned to its most adverse value (the SHORTEST sleep) — the case the TTL
+    has to survive. Mirrors ledger_projection.py's loop-cadence regression test.
+    """
+    clock = {"t": 0.0}
+    expiries: dict[str, float] = {}
+    wakes = {"n": 0}
+
+    async def fake_set_nx(key, _value, ttl):
+        exp = expiries.get(key)
+        if exp is not None and exp > clock["t"]:
+            return False
+        expiries[key] = clock["t"] + ttl
+        return True
+
+    async def fake_sleep(secs):
+        clock["t"] += secs
+        wakes["n"] += 1
+        if wakes["n"] >= 2:
+            raise asyncio.CancelledError
+
+    with (
+        patch(P + "redis_set_nx", side_effect=fake_set_nx),
+        patch(P + "_reap_tick", AsyncMock()) as tick,
+        patch(P + "_record_heartbeat"),
+        patch(P + "asyncio.sleep", side_effect=fake_sleep),
+        # uniform(-delta, +delta) -> -delta: the shortest sleep the loop can take.
+        patch(P + "random.uniform", side_effect=lambda lo, _hi: lo),
+    ):
+        from backend.utils.driver_claim_reaper import driver_claim_reaper_loop
+
+        try:
+            await driver_claim_reaper_loop()
+        except asyncio.CancelledError:
+            pass
+
+    assert tick.await_count == 2, (
+        "the single replica must tick once per interval; a TTL longer than the "
+        "minimum sleep makes it skip its own next wake and halves the cadence"
+    )

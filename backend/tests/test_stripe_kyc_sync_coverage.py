@@ -365,32 +365,19 @@ class TestSinRevealRefusal:
         return mod
 
     @pytest.mark.anyio
-    async def test_refusal_raises_typed_error_carrying_account_type(self, monkeypatch):
+    async def test_refusal_raises_the_typed_error(self, monkeypatch):
         calls = []
 
         def _retrieve(_id, api_key=None, expand=None):
             calls.append(expand)
-            if expand:
-                raise TestSinRevealRefusal._refusal()
-            return {"id": _id, "type": "express"}  # the un-expanded retrieve still works
+            raise TestSinRevealRefusal._refusal()
 
         mod = self._patches(monkeypatch, _retrieve)
-        with pytest.raises(mod.SinNotRevealable) as ei:
+        with pytest.raises(mod.SinNotRevealable):
             await mod.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert ei.value.account_type == "express"
-        assert calls == [["individual.id_number"], None]
-
-    @pytest.mark.anyio
-    async def test_account_type_lookup_failure_degrades_not_crashes(self, monkeypatch):
-        def _retrieve(_id, api_key=None, expand=None):
-            if expand:
-                raise TestSinRevealRefusal._refusal()
-            raise RuntimeError("stripe down")
-
-        mod = self._patches(monkeypatch, _retrieve)
-        with pytest.raises(mod.SinNotRevealable) as ei:
-            await mod.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert ei.value.account_type is None
+        # One call only. The refusal reason is universal (id_number is
+        # write-only on Connect), so there is nothing to go back and diagnose.
+        assert calls == [["individual.id_number"]]
 
     @pytest.mark.anyio
     async def test_transient_failure_still_returns_none_not_the_typed_error(self, monkeypatch):

@@ -893,3 +893,139 @@ fails closed (no SIN returned) in both versions. Nothing to undo downstream.
 - **No admin-dashboard change.** The frontend renders whatever `detail` the API
   returns; it was not rebuilt or visually checked, and no visual-regression
   tooling exists for that surface.
+
+---
+
+## Addendum 9 — the SIN cannot be read back from Stripe at all
+
+### Issue/gap identified
+
+Addendum 8 left the cause of Stripe's refusal open, and hypothesised the
+Connect account type. **That hypothesis was wrong.** `individual.id_number` is
+**write-only** on Stripe Connect. No account type, key permission, or API
+version returns it. `POST /drivers/{id}/reveal-sin` can never succeed, and
+never could.
+
+A second, previously unnoticed defect surfaced from the same investigation:
+`drivers.stripe_id_number_last4` is **always NULL**.
+
+### Root cause
+
+Verified against the Stripe Python SDK 15.1.0 installed on the backend, which
+is generated from Stripe's own API spec (`docs.stripe.com` is blocked by this
+environment's egress proxy, so the SDK was used as the authority — it is the
+same spec and it is what the running code actually calls):
+
+- `id_number` appears **only** as a request parameter:
+  `params/_account_create_params.py:1579`,
+  `params/_account_update_params.py:1521`,
+  `params/_account_create_person_params.py:64`,
+  `params/_account_modify_person_params.py:64`,
+  `params/_account_person_create_params.py:63`,
+  `params/_account_person_update_params.py:63` — all `NotRequired[str]`.
+- It appears **nowhere** as a response attribute on `Account` or `Person`.
+- What the response does carry: `Person.id_number_provided: Optional[bool]`
+  (`_person.py:698`) and `Person.ssn_last_4_provided: Optional[bool]`
+  (`_person.py:748`) — **booleans**, not digits.
+
+So `This property cannot be expanded (individual.id_number)` is Stripe stating
+there is no such response property, not withholding one. Stripe's server and
+its published spec agree.
+
+For the second defect: `_kyc_mirror_fields` read
+`individual.get("id_number_last_4")`. **That field does not exist anywhere in
+the Stripe API** — zero occurrences in the SDK. Stripe returns no digits of an
+ID number in any form, so the column has been NULL since it was added and the
+admin slideout's `"On file · ••••1234"` has never rendered digits. The
+`id_number_provided` boolean beside it is real and does work.
+
+### Fix/remediation
+
+Documentation and honesty only — no behaviour beyond error copy:
+
+- `SinNotRevealable` now carries no diagnostic fields and its docstring records
+  the SDK evidence. Offering an account-type knob implied a fix that does not
+  exist.
+- Dropped `_account_type_or_none` — a second Stripe call on the failure path to
+  report a field that turned out to be irrelevant.
+- The 409 states the real reason: write-only, affects every driver, Spinr holds
+  no other copy, collect from the driver for T4A.
+- The `reveal_sin_from_stripe` and route docstrings previously asserted
+  "Stripe surfaces the SIN to the platform owner once per call". Corrected.
+- `_kyc_mirror_fields` carries a comment recording that `id_number_last_4` is
+  not a Stripe field, so nobody "fixes" the empty column by renaming it.
+
+**The endpoint is deliberately kept.** Deleting it, and deciding how Spinr
+sources the SIN for T4A, is a compliance decision for the user — not a code
+cleanup to make on their behalf. It now fails loudly and accurately.
+
+### Risk & impact on existing functionality
+
+Smaller blast radius than Addendum 8: one exception class (one raise site, one
+catch site), the removal of a helper with no other callers, error copy, and
+comments. `_kyc_mirror_fields` is byte-for-byte unchanged in behaviour — it
+still reads the absent key and still yields `None`.
+
+Transient-vs-permanent separation from Addendum 8 is untouched and still
+tested: an outage still returns `None` → 502 → retryable.
+
+### User experience effect
+
+Internal super-admin only. The 409 now explains that no retry or configuration
+change will produce the SIN, instead of pointing at the Connect account type.
+No rider-, driver- or corporate-facing change. No money moves.
+
+### Files modified
+
+| file path | what changed | why |
+|---|---|---|
+| `backend/services/stripe_kyc_sync.py` | `SinNotRevealable` docstring/signature; `_account_type_or_none` removed; module + function docstrings corrected; `id_number_last_4` comment | Record the evidence; stop asserting a capability Stripe does not have |
+| `backend/routes/admin/drivers.py` | 409 detail states write-only; docstring corrected | Tell the admin the truth |
+| `backend/tests/test_stripe_kyc_sync_coverage.py` | refusal test asserts a single Stripe call | No diagnostic round-trip to make |
+| `backend/tests/test_admin_drivers_coverage.py` | asserts "write-only" in the detail | Pin the corrected copy |
+
+### Before/after
+
+```python
+# before (Addendum 8) — implied the account type was the cause
+raise SinNotRevealable(await asyncio.to_thread(_account_type_or_none, account_id, stripe_secret)) from exc
+# → 409 "... (Connect account type: express). This is permanent ..."
+
+# after — the reason is universal
+raise SinNotRevealable from exc
+# → 409 "Stripe never returns a driver's SIN — on Connect the ID number is
+#        write-only ... affects every driver ... must be collected from the
+#        driver directly for T4A."
+```
+
+### Rollback plan
+
+Pure code and copy; no migration, no data written, no Stripe object mutated —
+this path only reads. `git revert` restores the previous text exactly; both
+versions fail closed (no SIN returned).
+
+### Verification performed
+
+- `pytest -k "kyc or admin_drivers or compliance or t4a"` — **287 passed, 1
+  skipped**.
+- The write-only claim is checked mechanically, not from memory: greps over the
+  installed SDK show `id_number` in six param files and zero response models,
+  and `id_number_last_4` nowhere at all.
+- `ruff check` + `ruff format` clean.
+
+### What was NOT verified
+
+- **Stripe's hosted documentation was not read** — `docs.stripe.com` is blocked
+  by this environment's egress proxy. The conclusion rests on the installed
+  generated SDK plus Stripe's own live error response, which agree. If Stripe
+  offers a private/allow-listed capability for reading ID numbers that is
+  absent from the public spec, only Stripe support could confirm it.
+- **The Stripe Dashboard was not checked.** Whether a platform user can view a
+  connected account's ID number in the Dashboard UI is a separate question from
+  the API and was not tested.
+- **T4A is unresolved and is now a known gap.** Spinr persists no SIN, and
+  Stripe will not return one. Stripe's 1099 tax-form product is US-only and
+  does not file Canadian T4A. Sourcing the SIN is an open compliance decision —
+  raised with the user, not decided here.
+- **No admin-dashboard build was run**; the frontend renders the API's `detail`
+  string and was not rebuilt or visually checked.

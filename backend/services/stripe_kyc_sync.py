@@ -3,9 +3,10 @@
 Maps a Stripe Express ``account.updated`` payload (or a live
 ``Account.retrieve()`` response) into the cache columns on the
 ``drivers`` row added by migration 92. The SIN itself is never stored —
-we keep only ``id_number_provided`` (boolean) and ``id_number_last4`` so
-the admin slideout can display "On file · ••••1234" without us holding
-the regulated data.
+we keep only ``id_number_provided`` (boolean). The ``id_number_last4``
+column exists but is always NULL: Stripe returns no digits of an ID number
+in any form, so the slideout's "On file · ••••1234" shows only the on-file
+state. See :class:`SinNotRevealable`.
 
 Sources:
   - routes/webhooks.py  — fires apply_account_update on the webhook event
@@ -118,9 +119,17 @@ def _kyc_mirror_fields(account: Dict[str, Any]) -> Dict[str, Any]:
     verification = (individual.get("verification") or {}) if individual else {}
     tos = account.get("tos_acceptance") or {}
 
-    # Stripe reports id_number_provided + id_number_last_4 on the
-    # `individual` object when the SIN has been collected. The actual
-    # number stays on Stripe's side.
+    # `id_number_provided` is real and works. `id_number_last_4` is NOT a
+    # Stripe field — it does not exist anywhere in the API (verified against
+    # the installed SDK: zero occurrences). Stripe exposes only booleans about
+    # the ID number: `id_number_provided` and, for US SSNs,
+    # `ssn_last_4_provided` — the *digits* are never returned in any form.
+    #
+    # So `stripe_id_number_last4` is always NULL and the admin slideout's
+    # "On file · ••••1234" has never rendered digits. Kept reading the absent
+    # key (a harmless None) rather than deleting the column, because the fix
+    # is a product decision — Spinr must collect the last 4 itself or drop the
+    # display — not a rename. See the SIN section of the Stripe runbook.
     id_provided = bool(individual.get("id_number_provided"))
     id_last4_raw = individual.get("id_number_last_4")
     id_last4: Optional[str] = None
@@ -299,19 +308,26 @@ async def refresh_driver_kyc(
 
 
 class SinNotRevealable(Exception):
-    """Stripe refuses to expand ``individual.id_number`` for this account.
+    """Stripe will not return ``individual.id_number``. Ever, for any account.
 
-    A *permanent* refusal, distinct from a transient Stripe/network failure.
-    It is its own type because the two need opposite advice: a transient
-    failure is worth retrying, and this is not — an admin who retries a
-    refusal just burns time on a call that can never succeed. Carries the
-    account type because that is the field most likely to explain which
-    accounts are affected, and the operator cannot see it from the error.
+    ``id_number`` is **write-only** on Stripe Connect. Verified against the
+    installed SDK (generated from Stripe's own API spec): it appears solely as
+    a request parameter — ``params/_account_create_params.py``,
+    ``_account_update_params.py``, ``_account_{create,modify}_person_params``
+    and the two ``_account_person_*_params`` — and **never** as a response
+    attribute on ``Account`` or ``Person``. What the response does carry is
+    ``id_number_provided: bool`` and, for US SSNs, ``ssn_last_4_provided:
+    bool`` — booleans, not digits. Stripe returns no part of the number.
+
+    "This property cannot be expanded" is therefore Stripe stating there is no
+    such response property, not withholding one. It is not affected by the
+    account's Connect type, the key's permissions, or the API version, so the
+    error deliberately carries no diagnostic fields — there is nothing to
+    diagnose and offering a knob implies a fix that does not exist.
     """
 
-    def __init__(self, account_type: Optional[str]) -> None:
-        self.account_type = account_type
-        super().__init__(f"Stripe refused to expand individual.id_number (account type: {account_type or 'unknown'})")
+    def __init__(self) -> None:
+        super().__init__("Stripe Connect never returns individual.id_number; the field is write-only")
 
 
 def _expansion_refused(exc: BaseException) -> bool:
@@ -329,33 +345,22 @@ def _expansion_refused(exc: BaseException) -> bool:
     return "cannot be expanded" in f"{getattr(exc, 'user_message', None) or ''} {exc}".lower()
 
 
-def _account_type_or_none(account_id: str, stripe_secret: str) -> Optional[str]:
-    """The account's Connect type, best-effort. Failure-path only — a plain
-    retrieve with no expand, which is exactly what the KYC mirror already
-    does successfully, so it is not the call that was refused."""
-    import stripe
-
-    try:
-        acct = stripe.Account.retrieve(account_id, api_key=stripe_secret)
-        return acct.get("type")
-    except Exception:
-        logger.error("[STRIPE-KYC] reveal-sin: could not read account type for %s", account_id, exc_info=True)
-        return None
-
-
 async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
     """Return the plaintext SIN once, for a single audit-logged admin reveal.
 
-    Uses Stripe's expand mechanism to retrieve ``individual.id_number``,
-    which Stripe surfaces only to the platform owner and not in normal
-    Account.retrieve responses. **The returned value is NEVER persisted
-    anywhere on our side.** Caller MUST write the audit_log entry around
-    this call so we have an authoritative record of who saw it and when.
+    **This cannot currently succeed.** It asks Stripe to expand
+    ``individual.id_number``, which is write-only on Connect — see
+    :class:`SinNotRevealable`. The function is kept, rather than deleted,
+    because removing the endpoint is a T4A/compliance decision (Spinr holds no
+    other copy of the SIN) and because it fails loudly and correctly: Stripe's
+    refusal raises :class:`SinNotRevealable`, which the route reports as a
+    permanent 409.
 
-    Raises :class:`SinNotRevealable` when Stripe permanently refuses the
-    expansion; returns ``None`` for every other failure, which the caller
-    reports as retryable. Collapsing the two into one ``None`` told admins
-    to "try again" on a call that could never succeed.
+    Every *other* failure still returns ``None`` and is reported as a
+    retryable 502, so a genuine Stripe outage is never mistaken for the
+    permanent refusal. If the returned value is ever non-empty it is **NEVER
+    persisted anywhere on our side**, and the caller MUST write the audit_log
+    entry around this call.
     """
     account_id = driver.get("stripe_account_id")
     if not account_id:
@@ -383,7 +388,7 @@ async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
             exc_info=True,
         )
         if _expansion_refused(exc):
-            raise SinNotRevealable(await asyncio.to_thread(_account_type_or_none, account_id, stripe_secret)) from exc
+            raise SinNotRevealable from exc
         return None
 
     sin = (account.get("individual") or {}).get("id_number")

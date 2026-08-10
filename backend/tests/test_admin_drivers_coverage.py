@@ -904,13 +904,13 @@ class TestRevealSin:
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-sin-3")),
             patch(
                 "services.stripe_kyc_sync.reveal_sin_from_stripe",
-                AsyncMock(side_effect=SinNotRevealable("express")),
+                AsyncMock(side_effect=SinNotRevealable()),
             ),
         ):
             resp = test_client.post("/api/admin/drivers/drv-1/reveal-sin")
         assert resp.status_code == 409
         detail = resp.json()["detail"]
-        assert "express" in detail
+        assert "write-only" in detail
         assert "permanent" in detail.lower()
         assert "Try again" not in detail
 
@@ -924,7 +924,7 @@ class TestRevealSin:
             patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-sin-4")) as log,
             patch(
                 "services.stripe_kyc_sync.reveal_sin_from_stripe",
-                AsyncMock(side_effect=SinNotRevealable(None)),
+                AsyncMock(side_effect=SinNotRevealable()),
             ),
         ):
             resp = test_client.post("/api/admin/drivers/drv-1/reveal-sin")

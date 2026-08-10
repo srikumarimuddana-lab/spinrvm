@@ -2938,10 +2938,15 @@ async def admin_refresh_all_driver_kyc(body: RefreshAllKycRequest, admin: dict =
 async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admin_user)):
     """One-shot retrieval of the driver SIN from Stripe for tax filing.
 
-    The SIN is held by Stripe Connect Express (never persisted on our
-    side). This endpoint:
+    **This cannot currently succeed.** Stripe Connect's `individual.id_number`
+    is write-only — submittable, never readable — so the expand below is
+    always refused and this endpoint always returns 409. Left in place, and
+    failing loudly, because Spinr holds no other copy of the SIN and choosing
+    how to source it for T4A is a compliance decision, not a code fix.
+
+    The flow it was built for:
       1. Calls Stripe Account.retrieve with expand=["individual.id_number"]
-         — Stripe surfaces the SIN to the platform owner once per call
+         — which Stripe refuses; see services.stripe_kyc_sync.SinNotRevealable
       2. Writes an audit_log row capturing admin, driver, timestamp,
          IP/user-agent (caller supplies)
       3. Returns the plaintext SIN to the caller exactly once
@@ -2996,18 +3001,17 @@ async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admi
     try:
         sin = await reveal_sin_from_stripe(driver)
     except SinNotRevealable as exc:
-        # Permanent refusal — 409, not 502. A 502 with "try again" sent admins
-        # into a retry loop on a call Stripe will never answer. The account
-        # type is included because it is the likeliest explanation of which
-        # drivers are affected and is not otherwise visible from the dashboard
-        # without hunting for the account.
+        # 409, not 502. Stripe Connect's `individual.id_number` is write-only:
+        # it exists only as a request parameter and is never a response field,
+        # so no account type, key permission or API version makes this work.
+        # The old 502 "Try again" put admins in a loop on an impossible call.
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Stripe will not release this driver's SIN via the API "
-                f"(Connect account type: {exc.account_type or 'unknown'}). This is permanent, "
-                f"not a transient error — retrying will not help. Read it from the Stripe "
-                f"Dashboard for this account, or collect it from the driver directly."
+                "Stripe never returns a driver's SIN — on Connect the ID number is "
+                "write-only, so it can be submitted but not read back. This is permanent "
+                "and affects every driver; retrying will not help. Spinr holds no other "
+                "copy, so the SIN must be collected from the driver directly for T4A."
             ),
         ) from exc
     if not sin:

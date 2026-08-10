@@ -2598,9 +2598,22 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
-- [ ] **Status:** open — found 2026-07-30 while adding migration 275. Migration
-  274 itself is clean (verified by simulating the runner's splitter); this is a
-  pre-existing defect in the runner affecting **34 already-merged migrations**.
+- [x] **Status:** done (2026-08-10) — replaced the naive `sql.split(";")`
+  splitter with a comment/literal-aware tokenizer (`_tokenize_sql` in
+  `backend/scripts/migrate.py`) that skips semicolons inside `--`/`/* */`
+  comments, `'...'`/`"..."` literals, and `$tag$...$tag$` dollar-quoted
+  bodies. `CONCURRENTLY` routing now checks parsed executable statements
+  instead of raw file text, so a mention inside a comment no longer
+  misroutes a migration. `_KNOWN_UNSPLITTABLE` removed entirely;
+  `test_migration_concurrently_splitting.py`'s exhaustive property test now
+  runs over every migration file in the repo (362 tests passing, up from a
+  subset). Full detail + what was NOT verified (no live DB to apply
+  end-to-end against):
+  `docs/change-log/2026-08-10-b0-migration-concurrently-splitting.md`.
+- **Original finding (2026-07-30, kept for record):** found while adding
+  migration 275. Migration 274 itself was clean (verified by simulating the
+  runner's splitter); this was a pre-existing defect in the runner affecting
+  **34 already-merged migrations**.
 - **Files:** `backend/scripts/migrate.py:195` (`_apply_migration_autocommit`),
   frozen list in `backend/tests/test_migration_concurrently_splitting.py`
   (`_KNOWN_UNSPLITTABLE`)

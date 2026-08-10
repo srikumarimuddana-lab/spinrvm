@@ -26,6 +26,7 @@ import argparse
 import glob
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -160,19 +161,167 @@ def get_applied_versions(conn) -> set:
         return set()
 
 
+_DOLLAR_TAG_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
+
+# Matches CREATE/DROP INDEX ... CONCURRENTLY and REINDEX ... CONCURRENTLY —
+# the statement forms that require running outside a transaction block.
+_CONCURRENTLY_STMT_RE = re.compile(
+    r"\b(CREATE\s+(UNIQUE\s+)?INDEX|DROP\s+INDEX|REINDEX)\b.*\bCONCURRENTLY\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _tokenize_sql(sql: str):
+    """Yield (kind, text) chunks covering the whole input, in order.
+
+    kind is one of:
+      - "code": ordinary SQL text that may legally contain a top-level
+        statement-separating semicolon.
+      - "comment": a `-- ...` line comment or `/* ... */` block comment.
+      - "literal": a `'...'` string (with `''`-escaped quotes), a `"..."`
+        quoted identifier, or a `$tag$...$tag$` dollar-quoted body (standard
+        Postgres dollar-quoting used for function bodies; tag may be empty,
+        i.e. `$$...$$`, or named, e.g. `$func$...$func$`).
+
+    Semicolons inside "comment" or "literal" chunks are never statement
+    separators — only ones inside "code" chunks are.
+    """
+    i = 0
+    n = len(sql)
+    while i < n:
+        if sql.startswith("--", i):
+            j = sql.find("\n", i)
+            end = n if j == -1 else j + 1
+            yield ("comment", sql[i:end])
+            i = end
+            continue
+        if sql.startswith("/*", i):
+            j = sql.find("*/", i + 2)
+            end = n if j == -1 else j + 2
+            yield ("comment", sql[i:end])
+            i = end
+            continue
+        ch = sql[i]
+        if ch == "'":
+            j = i + 1
+            while j < n:
+                if sql[j : j + 2] == "''":
+                    j += 2
+                    continue
+                if sql[j] == "'":
+                    j += 1
+                    break
+                j += 1
+            else:
+                j = n
+            yield ("literal", sql[i:j])
+            i = j
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n and sql[j] != '"':
+                j += 1
+            j = min(j + 1, n)
+            yield ("literal", sql[i:j])
+            i = j
+            continue
+        if ch == "$":
+            m = _DOLLAR_TAG_RE.match(sql, i)
+            if m:
+                tag = m.group(0)
+                close = sql.find(tag, m.end())
+                end = n if close == -1 else close + len(tag)
+                yield ("literal", sql[i:end])
+                i = end
+                continue
+        j = i
+        while j < n and sql[j] not in "-/'\"$":
+            j += 1
+        if j == i:
+            j += 1
+        yield ("code", sql[i:j])
+        i = j
+
+
+def split_sql_statements(sql: str) -> list:
+    """Split a SQL script into top-level, semicolon-delimited statements.
+
+    Unlike a naive `sql.split(";")`, this ignores semicolons that appear
+    inside `--`/`/* */` comments and inside `'...'` / `"..."` / `$tag$...$tag$`
+    literals, so a stray semicolon in a prose comment (or inside a `$$`-quoted
+    function body) does not shred the migration into broken fragments.
+
+    Each returned statement retains any leading comment lines that preceded
+    it (callers that need the bare executable SQL should strip those, see
+    `_strip_leading_comments`).
+    """
+    statements = []
+    buf = []
+    for kind, text in _tokenize_sql(sql):
+        if kind != "code" or ";" not in text:
+            buf.append(text)
+            continue
+        start = 0
+        while True:
+            idx = text.find(";", start)
+            if idx == -1:
+                buf.append(text[start:])
+                break
+            buf.append(text[start:idx])
+            stmt = "".join(buf).strip()
+            if stmt:
+                statements.append(stmt)
+            buf = []
+            start = idx + 1
+    tail = "".join(buf).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
+def _strip_leading_comments(stmt: str) -> str:
+    """Drop leading comments (`--` line or `/* ... */` block) and blank lines
+    so only executable SQL remains. Uses the same comment-aware tokenizer as
+    the splitter, so a `/* ... */` header comment strips just like a `--` one
+    — a naive line-based strip only handled the latter."""
+    tokens = list(_tokenize_sql(stmt))
+    i = 0
+    while i < len(tokens):
+        kind, text = tokens[i]
+        if kind == "comment" or (kind == "code" and not text.strip()):
+            i += 1
+            continue
+        break
+    return "".join(text for _, text in tokens[i:]).strip()
+
+
+def _statement_needs_autocommit(stmt: str) -> bool:
+    """True if `stmt` is a CREATE/DROP INDEX or REINDEX ... CONCURRENTLY.
+
+    Only "code" tokens are inspected — a `CONCURRENTLY` mention inside a
+    comment (e.g. a rollback-instructions block) does not count, so a
+    migration is routed to the non-transactional autocommit path only when
+    it actually contains a statement that requires it.
+    """
+    code_only = "".join(text for kind, text in _tokenize_sql(stmt) if kind == "code")
+    return bool(_CONCURRENTLY_STMT_RE.search(code_only))
+
+
 def apply_migration(conn, version: str, sql: str, dry_run: bool) -> bool:
     """Execute a single migration. Returns True on success.
 
-    Migrations containing CREATE INDEX CONCURRENTLY (or DROP INDEX CONCURRENTLY)
-    must run outside a transaction block. For those, we temporarily switch the
-    connection to autocommit, execute each statement individually, then record
-    the version. All other migrations run inside a single transaction.
+    Migrations containing CREATE INDEX CONCURRENTLY (or DROP INDEX/REINDEX
+    CONCURRENTLY) must run outside a transaction block. For those, we
+    temporarily switch the connection to autocommit, execute each statement
+    individually, then record the version. All other migrations run inside a
+    single transaction.
     """
     if dry_run:
         logger.info(f"  [DRY-RUN] Would apply: {version}")
         return True
 
-    needs_autocommit = "CONCURRENTLY" in sql.upper()
+    statements = split_sql_statements(sql)
+    needs_autocommit = any(_statement_needs_autocommit(stmt) for stmt in statements)
 
     if needs_autocommit:
         return _apply_migration_autocommit(conn, version, sql)
@@ -197,25 +346,18 @@ def _apply_migration_autocommit(conn, version: str, sql: str) -> bool:
 
     psycopg2 requires autocommit=True for any statement that cannot run inside
     a transaction block (CREATE/DROP INDEX CONCURRENTLY, VACUUM, CLUSTER, etc.).
-    We execute each semicolon-delimited statement individually so that the
-    schema_migrations INSERT can follow without being inside the same implicit
-    transaction that CONCURRENTLY would reject.
+    We execute each top-level statement individually — split with
+    `split_sql_statements` (comment/literal aware, not a naive `split(";")`)
+    so that a mid-comment semicolon or a `$$`-quoted function body cannot
+    shred a statement — so that the schema_migrations INSERT can follow
+    without being inside the same implicit transaction that CONCURRENTLY
+    would reject.
     """
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
-            # Split on semicolons, then strip leading `--` comment lines from
-            # each chunk BEFORE deciding whether to skip it. The previous
-            # `stmt.startswith("--")` check threw away any chunk whose first
-            # line was a comment — which is every migration that opens with
-            # the conventional header/rollback comment block — silently
-            # skipping the CREATE INDEX CONCURRENTLY it was written to run.
-            statements = [s.strip() for s in sql.split(";") if s.strip()]
-            for stmt in statements:
-                lines = stmt.splitlines()
-                while lines and (not lines[0].strip() or lines[0].strip().startswith("--")):
-                    lines.pop(0)
-                executable = "\n".join(lines).strip()
+            for stmt in split_sql_statements(sql):
+                executable = _strip_leading_comments(stmt)
                 if not executable:
                     continue
                 cur.execute(executable)

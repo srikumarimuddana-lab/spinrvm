@@ -893,6 +893,45 @@ class TestRevealSin:
             resp = test_client.post("/api/admin/drivers/drv-1/reveal-sin")
         assert resp.status_code == 502
 
+    def test_permanent_refusal_is_409_not_a_retry_prompt(self, test_client, super_admin_override):
+        """Stripe refusing the expansion is not a transient upstream fault.
+        A 502 saying "Try again" put admins in a loop on a call that can
+        never succeed."""
+        from services.stripe_kyc_sync import SinNotRevealable
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER_WITH_STRIPE)),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-sin-3")),
+            patch(
+                "services.stripe_kyc_sync.reveal_sin_from_stripe",
+                AsyncMock(side_effect=SinNotRevealable("express")),
+            ),
+        ):
+            resp = test_client.post("/api/admin/drivers/drv-1/reveal-sin")
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "express" in detail
+        assert "permanent" in detail.lower()
+        assert "Try again" not in detail
+
+    def test_refusal_still_leaves_an_audit_trail(self, test_client, super_admin_override):
+        """The reveal was attempted; the intent must be on record even when
+        Stripe declines."""
+        from services.stripe_kyc_sync import SinNotRevealable
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER_WITH_STRIPE)),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="audit-sin-4")) as log,
+            patch(
+                "services.stripe_kyc_sync.reveal_sin_from_stripe",
+                AsyncMock(side_effect=SinNotRevealable(None)),
+            ),
+        ):
+            resp = test_client.post("/api/admin/drivers/drv-1/reveal-sin")
+        assert resp.status_code == 409
+        log.assert_awaited_once()
+        assert "sin" not in log.await_args.args[4]
+
 
 # ---------------------------------------------------------------------------
 # _subscription_summary -- pure helper, no DB

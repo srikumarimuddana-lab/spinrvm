@@ -2970,9 +2970,15 @@ async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admi
         raise HTTPException(status_code=400, detail="No SIN on file at Stripe yet")
 
     try:
-        from ..services.stripe_kyc_sync import reveal_sin_from_stripe
+        from ..services.stripe_kyc_sync import SinNotRevealable, reveal_sin_from_stripe
     except ImportError:
-        from services.stripe_kyc_sync import reveal_sin_from_stripe  # type: ignore
+        # Both names, or the `except SinNotRevealable` below raises NameError on
+        # the very path it exists to handle. This is the branch that runs in
+        # production — `..services` does not resolve from routes.admin.
+        from services.stripe_kyc_sync import (  # type: ignore
+            SinNotRevealable,
+            reveal_sin_from_stripe,
+        )
 
     # Audit log BEFORE the reveal, so a Stripe failure still leaves a
     # trail of the intent. metadata never carries the SIN itself.
@@ -2987,7 +2993,23 @@ async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admi
         },
     )
 
-    sin = await reveal_sin_from_stripe(driver)
+    try:
+        sin = await reveal_sin_from_stripe(driver)
+    except SinNotRevealable as exc:
+        # Permanent refusal — 409, not 502. A 502 with "try again" sent admins
+        # into a retry loop on a call Stripe will never answer. The account
+        # type is included because it is the likeliest explanation of which
+        # drivers are affected and is not otherwise visible from the dashboard
+        # without hunting for the account.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Stripe will not release this driver's SIN via the API "
+                f"(Connect account type: {exc.account_type or 'unknown'}). This is permanent, "
+                f"not a transient error — retrying will not help. Read it from the Stripe "
+                f"Dashboard for this account, or collect it from the driver directly."
+            ),
+        ) from exc
     if not sin:
         raise HTTPException(
             status_code=502,

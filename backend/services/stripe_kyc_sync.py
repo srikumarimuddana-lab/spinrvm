@@ -298,6 +298,51 @@ async def refresh_driver_kyc(
     return {"status": "ok", "updates": updates}
 
 
+class SinNotRevealable(Exception):
+    """Stripe refuses to expand ``individual.id_number`` for this account.
+
+    A *permanent* refusal, distinct from a transient Stripe/network failure.
+    It is its own type because the two need opposite advice: a transient
+    failure is worth retrying, and this is not — an admin who retries a
+    refusal just burns time on a call that can never succeed. Carries the
+    account type because that is the field most likely to explain which
+    accounts are affected, and the operator cannot see it from the error.
+    """
+
+    def __init__(self, account_type: Optional[str]) -> None:
+        self.account_type = account_type
+        super().__init__(f"Stripe refused to expand individual.id_number (account type: {account_type or 'unknown'})")
+
+
+def _expansion_refused(exc: BaseException) -> bool:
+    """True for Stripe's "This property cannot be expanded (…)" response.
+
+    Matched on the message rather than a code because Stripe sends this as a
+    generic ``InvalidRequestError`` with no distinguishing ``code``. Narrowed
+    by the exception type so an unrelated invalid request cannot be mistaken
+    for a permanent refusal and hide a real, retryable fault.
+    """
+    import stripe
+
+    if not isinstance(exc, stripe.error.InvalidRequestError):
+        return False
+    return "cannot be expanded" in f"{getattr(exc, 'user_message', None) or ''} {exc}".lower()
+
+
+def _account_type_or_none(account_id: str, stripe_secret: str) -> Optional[str]:
+    """The account's Connect type, best-effort. Failure-path only — a plain
+    retrieve with no expand, which is exactly what the KYC mirror already
+    does successfully, so it is not the call that was refused."""
+    import stripe
+
+    try:
+        acct = stripe.Account.retrieve(account_id, api_key=stripe_secret)
+        return acct.get("type")
+    except Exception:
+        logger.error("[STRIPE-KYC] reveal-sin: could not read account type for %s", account_id, exc_info=True)
+        return None
+
+
 async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
     """Return the plaintext SIN once, for a single audit-logged admin reveal.
 
@@ -306,6 +351,11 @@ async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
     Account.retrieve responses. **The returned value is NEVER persisted
     anywhere on our side.** Caller MUST write the audit_log entry around
     this call so we have an authoritative record of who saw it and when.
+
+    Raises :class:`SinNotRevealable` when Stripe permanently refuses the
+    expansion; returns ``None`` for every other failure, which the caller
+    reports as retryable. Collapsing the two into one ``None`` told admins
+    to "try again" on a call that could never succeed.
     """
     account_id = driver.get("stripe_account_id")
     if not account_id:
@@ -324,7 +374,7 @@ async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
             api_key=stripe_secret,
             expand=["individual.id_number"],
         )
-    except Exception:
+    except Exception as exc:
         # B-P3-leak-cleanup: full traceback to logs (server-side only),
         # no Stripe error detail in the return.
         logger.error(
@@ -332,6 +382,8 @@ async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
             account_id,
             exc_info=True,
         )
+        if _expansion_refused(exc):
+            raise SinNotRevealable(await asyncio.to_thread(_account_type_or_none, account_id, stripe_secret)) from exc
         return None
 
     sin = (account.get("individual") or {}).get("id_number")

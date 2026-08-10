@@ -764,3 +764,132 @@ not undone by a revert; those roll back through the per-driver update flow.
   open question.
 - The `rk_live_` path is covered by unit test only; no restricted key has been
   configured in `app_settings` and exercised end to end.
+
+---
+
+## Addendum 8 — SIN reveal reported a permanent refusal as a retryable 502
+
+### Issue/gap identified
+
+`POST /api/admin/drivers/{id}/reveal-sin` returned **502 "Could not retrieve
+SIN from Stripe. Try again or check Stripe Dashboard."** for a failure that
+will never succeed on retry — Stripe answered `This property cannot be
+expanded (individual.id_number)`. The admin was told to retry a call Stripe
+had permanently declined.
+
+### Root cause
+
+`reveal_sin_from_stripe` wrapped the whole Stripe call in `except Exception:
+… return None`, collapsing every distinct failure into one falsy value. The
+route then mapped that single `None` to a retry prompt. Two failures with
+opposite correct responses — a network blip (retry) and a policy refusal
+(never retry) — were indistinguishable at the call site.
+
+The underlying Stripe refusal itself is **not diagnosed here**. Expansion of
+`individual.id_number` is restricted by Stripe, and the route's own docstring
+assumes Express (`"The SIN is held by Stripe Connect Express"`), while the
+platform now holds a mix of imported Custom accounts and Spinr-created Express
+ones. Which class is affected is an open question — this change makes the
+error report the account type so the next occurrence answers it, rather than
+guessing now.
+
+### Fix/remediation
+
+- New `SinNotRevealable` exception carrying the Connect account type.
+- `_expansion_refused()` matches Stripe's message, narrowed by
+  `isinstance(exc, stripe.error.InvalidRequestError)` so an unrelated invalid
+  request cannot be misread as permanent and hide a retryable fault.
+- On refusal, a plain un-expanded `Account.retrieve` (the call the KYC mirror
+  already makes successfully) reads `type` best-effort; failure degrades to
+  `None`, never crashes the handler.
+- Route returns **409** with the account type and an explicit "retrying will
+  not help", instead of 502 "Try again".
+- Every other failure still returns `None` → still 502 → still retryable.
+
+Deliberately kept as an exception rather than a richer return value: the
+success path returns the bare SIN string, and putting a SIN inside a dict
+alongside status fields invites a future caller logging the whole dict.
+
+### Risk & impact on existing functionality
+
+`reveal_sin_from_stripe` has exactly one caller — this route. Its signature is
+unchanged (`Optional[str]`), so all existing call-sites and tests hold; the new
+behaviour is an additional exception on a path that previously returned `None`.
+`get_legal_name_and_address_from_stripe` (the T4A filer-handoff export) is a
+deliberately separate function, does not expand `id_number`, and is untouched.
+
+The audit log is written *before* the reveal attempt, so a refusal still leaves
+the intent on record — verified by test. No SIN is logged, returned, or stored
+on any path; the 409 detail carries only the Connect account type.
+
+Direction of change is strictly more information, never less. No status code
+that previously succeeded now fails.
+
+### User experience effect
+
+Internal super-admin only. An admin who saw "Try again" and retried
+indefinitely now gets a clear statement that the API will not release the value
+and a pointer to the Stripe Dashboard. Nothing rider-, driver- or
+corporate-facing; no money moves.
+
+### Files modified
+
+| file path | what changed | why |
+|---|---|---|
+| `backend/services/stripe_kyc_sync.py` | `SinNotRevealable`, `_expansion_refused`, `_account_type_or_none`; refusal raises instead of returning `None` | Separate permanent refusal from transient failure |
+| `backend/routes/admin/drivers.py` | catches `SinNotRevealable` → 409 naming the account type; fallback import carries both names | Stop prompting a retry that cannot work |
+| `backend/tests/test_stripe_kyc_sync_coverage.py` | `TestSinRevealRefusal` | Pin refusal vs transient vs unrelated-invalid-request |
+| `backend/tests/test_admin_drivers_coverage.py` | 409 + audit-trail-on-refusal route tests | Pin the user-visible behaviour |
+
+### Before/after
+
+```python
+# before — every failure is the same falsy value
+except Exception:
+    logger.error(...); return None
+# → route: 502 "Could not retrieve SIN from Stripe. Try again ..."
+
+# after — the permanent case is its own type
+except Exception as exc:
+    logger.error(...)
+    if _expansion_refused(exc):
+        raise SinNotRevealable(await asyncio.to_thread(_account_type_or_none, ...)) from exc
+    return None
+# → route: 409 "Stripe will not release this driver's SIN via the API
+#           (Connect account type: express). This is permanent ..."
+```
+
+### Rollback plan
+
+Pure code; no migration, no data written, no Stripe object mutated — this path
+only ever reads. `git revert` restores the previous behaviour exactly, which
+fails closed (no SIN returned) in both versions. Nothing to undo downstream.
+
+### Verification performed
+
+- `pytest -k "kyc or admin_drivers or payout or compliance or t4a"` — **468
+  passed, 1 skipped**.
+- New service tests cover: refusal → typed error with account type; account-type
+  lookup failing → degrades to `None`; `APIConnectionError` → still `None`
+  (retryable); an unrelated `InvalidRequestError` ("No such account") → still
+  `None`, not misreported as permanent; detector rejects a non-Stripe exception
+  carrying the same words.
+- New route tests assert 409, that the detail names the account type and does
+  **not** say "Try again", and that the audit row is still written on refusal
+  with no SIN in its metadata.
+- `ruff check` + `ruff format --check` clean.
+
+### What was NOT verified
+
+- **The root cause of Stripe's refusal is unresolved.** It is not known whether
+  it is driven by account type, key permissions, or API version. This change
+  makes the next occurrence self-diagnosing; it does not restore the SIN.
+- **No real Stripe call.** The refusal is a constructed
+  `InvalidRequestError`; the live API was not exercised.
+- **The T4A consequence is not addressed.** Per `ACTION_ITEMS.md` the SIN is
+  held only by Stripe and never persisted, so if the API will not release it,
+  there is no second source for annual T4A filing. That is a business/deadline
+  question, out of scope for this fix and explicitly not solved here.
+- **No admin-dashboard change.** The frontend renders whatever `detail` the API
+  returns; it was not rebuilt or visually checked, and no visual-regression
+  tooling exists for that surface.

@@ -614,3 +614,153 @@ they roll back via the per-driver update flow, not by reverting this.
   Operations page passes the CSV through untouched.
 - Not exercised end-to-end against live Supabase — the `IN` query behaviour is
   modelled by a fake, not observed against PostgREST.
+
+---
+
+## Addendum 7 — livemode cross-check failed 100% of driver rows under a live key
+
+### Issue/gap identified
+
+Every row of a driver mapping CSV validated against a live Stripe key failed
+with `livemode — object livemode does not match the configured key mode`. 111
+of 111 rows, on accounts the same key had just listed successfully. Nothing was
+wrong with the data or the Stripe accounts; the check itself was wrong. It also
+blocked the per-driver fallback (`update_driver_stripe_account`), so there was
+no path around it.
+
+### Root cause
+
+Two independent defects in one line:
+
+```python
+live_key = stripe_secret.startswith("sk_live_")
+if bool(obj.get("livemode")) != live_key:
+```
+
+1. **A Stripe `Account` object carries no `livemode` field.** `Customer` does;
+   `Account` does not (verified against the installed SDK: zero occurrences in
+   `stripe/_account.py`, declared on `stripe/_customer.py`). So
+   `obj.get("livemode")` is `None`, `bool(None)` is `False`, and under a live
+   key every account read as test-mode.
+2. **A restricted key (`rk_live_…`) is a live key** but does not start with
+   `sk_live_`, so every live object would read as mismatched on such a key.
+
+`backend/utils/stripe_mode.py` already solved both — `key_mode()` matches
+`sk_`/`rk_` prefixes, `object_mode()` requires a real boolean and returns
+`None` for "cannot tell" — but this call site hand-rolled its own version
+instead of using them.
+
+**Why the tests passed.** The account fixture invented a `"livemode": False`
+field real accounts do not have, *and* the module's `SECRET` was a test key.
+With `live_key = False`, the missing-field case (`bool(None) == False`)
+compared equal and passed. The fixture was wrong in the one direction that
+made the bug invisible.
+
+### Fix/remediation
+
+Delegate to the audited helpers, and treat absent evidence as no finding:
+
+```python
+observed = object_mode(obj)       # None when livemode absent / not a bool
+configured = key_mode(stripe_secret)  # handles sk_ and rk_, None if unreadable
+if observed is None or configured is None:
+    return None
+if observed != configured:
+    return ("livemode", f"object is {observed}-mode but the configured Stripe key is {configured}-mode")
+```
+
+Relaxing the absent case does not weaken the guard. `livemode` was always a
+cross-check, never the primary evidence: `_retrieve_stripe` already proves mode
+because Stripe cannot return an object from the other mode — it 404s, which
+lands as `not_accessible`. The check now fires only on a contradiction Stripe
+should be incapable of producing, which is what its docstring always claimed.
+
+### Risk & impact on existing functionality
+
+`_livemode_error` has exactly two callers, both in this module: `build_plan`
+(validate/commit, both kinds) and `update_driver_stripe_account` (per-driver
+update). No other module calls it.
+
+The other readers of `livemode` were checked and are already correct:
+`routes/drivers/payouts.py:205` and `routes/payments.py:286` use
+`object_mode(obj) or key_mode(secret)`, so an account with no `livemode` falls
+back to the key's mode rather than mis-stamping; `routes/admin/
+stripe_mode_audit.py:223` only stamps `if body.stamp and observed`, so `None`
+skips the stamp and the row still counts as resolvable.
+
+Direction of change is strictly toward *fewer* errors. The riders path is
+unaffected in practice — `Customer` carries `livemode`, so those rows were
+being checked correctly and still are. The only behavioural loss is that a
+Connect account is no longer mode-cross-checked, which was never happening
+correctly anyway (it was returning a false verdict, not a true one).
+
+### User experience effect
+
+Internal admin only. An operator who saw 111 errors and zero mappable rows now
+sees the rows validate. No rider-, driver- or corporate-facing change; nothing
+renders mid-session. No money moves — validate writes nothing, and commit only
+fills `stripe_account_id` where it is NULL.
+
+### Files modified
+
+| file path | what changed | why |
+|---|---|---|
+| `backend/services/stripe_mapping_import_service.py` | `_livemode_error` delegates to `object_mode`/`key_mode`; imports added to both halves of the dual-import block | Fix both defects using already-audited helpers |
+| `backend/tests/test_stripe_mapping_import_service.py` | `SECRET` is now a **live** key; `_acct_payload` drops the invented `livemode`; customer payloads flipped to live; `TestLivemodeCrossCheck` added | Make the default fixture production's configuration |
+| `backend/tests/test_admin_stripe_import.py` | `ACCT_PAYLOAD` drops `livemode` | Same fixture lie, same file family |
+
+### Before/after
+
+```python
+# before — truthiness on a field Account does not have, and sk_-only prefix match
+live_key = stripe_secret.startswith("sk_live_")
+if bool(obj.get("livemode")) != live_key:
+    return ("livemode", "object livemode does not match the configured key mode")
+
+# after — absent evidence is not a verdict
+observed, configured = object_mode(obj), key_mode(stripe_secret)
+if observed is None or configured is None:
+    return None
+if observed != configured:
+    return ("livemode", f"object is {observed}-mode but ... key is {configured}-mode")
+```
+
+### Rollback plan
+
+Pure code; no migration, no data written by this change. `git revert` is a
+genuine rollback here — reverting restores the old check, which fails validate
+closed (blocks all rows) rather than committing anything wrong. Mappings
+committed after the fix are ordinary `drivers.stripe_account_id` values and are
+not undone by a revert; those roll back through the per-driver update flow.
+
+### Verification performed
+
+- `pytest -k "stripe or import or payout or corporate or payment"` — **2145
+  passed, 3 skipped**.
+- `test_stripe_mapping_import_service.py` — 62 passed, including the new
+  `TestLivemodeCrossCheck` (account-shape, restricted key, both contradiction
+  directions, unreadable key, non-boolean `livemode`).
+- `test_real_sdk_account_model_confirms_no_livemode` asserts the premise
+  against the installed SDK's own model, so an upgrade that adds the field
+  fails a test instead of silently re-arming the check.
+- The whole driver-validation fixture now runs against a **live** key, so this
+  class of bug fails in CI rather than in production.
+- `ruff check` + `ruff format` clean.
+
+### What was NOT verified
+
+- **Not re-run against the user's real Stripe platform.** The conclusion that
+  their 111 rows now validate follows from the account payloads they reported
+  (which parsed `type`, `requirements` and `payouts_enabled` correctly — proof
+  the object was read fine and only `livemode` was absent), not from an
+  observed re-run.
+- **No real Stripe call anywhere in these tests**; `Account.retrieve` and
+  `Account.list` remain mocked, as across this whole branch.
+- **The warnings on their file were not addressed** — 144 warnings, dominated
+  by `account type is custom, not express`. Those are non-blocking and the
+  accounts are legitimate, but Spinr's in-app onboarding flow was written for
+  Express accounts; whether a Custom account can complete the remaining
+  requirements through that flow has **not** been tested and is a separate
+  open question.
+- The `rk_live_` path is covered by unit test only; no restricted key has been
+  configured in `app_settings` and exercised end to end.

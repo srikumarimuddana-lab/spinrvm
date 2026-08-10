@@ -128,11 +128,11 @@ ACCT_PAYLOAD = {
     "business_type": "individual",
     "details_submitted": True,
     "payouts_enabled": True,
-    "livemode": False,
+    # No "livemode": real Stripe Account objects do not carry one.
     "capabilities": {"transfers": "active"},
     "requirements": {"currently_due": [], "disabled_reason": None},
 }
-CUS_PAYLOAD = {"id": "cus_C1", "livemode": False, "metadata": {}}
+CUS_PAYLOAD = {"id": "cus_C1", "livemode": False, "metadata": {}}  # matches the test key below
 
 
 def _patches(store, *, kyc_sync=None):

@@ -308,6 +308,11 @@ function PayoutScreen() {
     // asks — and then our form asks again. Being asked twice for a SIN is
     // exactly what this ordering exists to prevent.
     const allReady = isStripeReady && sinOnFile && gstOnFile;
+    // The backend hard-gates /stripe-onboard (422) until a SIN is on file —
+    // either our encrypted copy or, for legacy drivers, the one Stripe
+    // already holds (stripeIdOnFile). Mirror that gate here so the driver
+    // sees a locked step with a reason instead of an error toast.
+    const sinSatisfiesStripeGate = sinOnFile || stripeIdOnFile;
     const setupSteps: {
         key: string;
         icon: keyof typeof Ionicons.glyphMap;
@@ -330,7 +335,9 @@ function PayoutScreen() {
             // driver it is "only" for our T4A while also sending it to Stripe
             // would be the same kind of untruth as the line this replaced.
             subtitle: sinOnFile
-                ? `On file · ••••${driverMe?.sin_last4}`
+                // Changes are admin-approved only (the server rejects a second
+                // write), so say where to go instead of offering a dead end.
+                ? `On file · ••••${driverMe?.sin_last4} · Contact support to change it`
                 : 'Encrypted for your T4A, and passed to Stripe so you are only asked once',
             done: sinOnFile,
             // Not gated on Stripe: this is our own record for tax filing, and a
@@ -344,9 +351,12 @@ function PayoutScreen() {
             title: 'Connect payout account',
             subtitle: isStripeReady
                 ? 'Connected with Stripe'
-                : 'Link your bank and verify your identity with Stripe',
+                : sinSatisfiesStripeGate
+                    ? 'Link your bank and verify your identity with Stripe'
+                    : 'Add your SIN first — it unlocks this step',
             done: isStripeReady,
-            locked: false,
+            // Mirrors the backend 422 gate on /stripe-onboard: no SIN, no link.
+            locked: !isStripeReady && !sinSatisfiesStripeGate,
             onPress: handleStripeOnboarding,
         },
         {
@@ -574,9 +584,10 @@ function PayoutScreen() {
                         <View style={styles.gstForm}>
                             <Text style={styles.inputLabel}>SIN</Text>
                             <Text style={styles.gstHelpText}>
-                                {sinOnFile
-                                    ? `We have ••••${driverMe?.sin_last4} on file. Enter your SIN again to replace it.`
-                                    : 'Enter your 9-digit Social Insurance Number.'}
+                                {/* Once on file the SIN is locked server-side (403 on a second
+                                    write; changes go through support -> admin), and the checklist
+                                    row stops opening this form — so no "replace it" copy here. */}
+                                Enter your 9-digit Social Insurance Number.
                             </Text>
                             <TextInput
                                 style={styles.textInput}

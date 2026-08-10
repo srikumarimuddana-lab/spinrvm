@@ -3614,7 +3614,29 @@ _Last updated: 2026-08-10 — B19 and B21 CLOSED: `payment_retry.py`'s `requires
   exactly-one-header matrix.
 
 ### B20. Ledger projection can misclassify a tip when a ride is stuck unpaid
-- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- [x] **Status:** CLOSED (2026-08-10) — found 2026-08-07 by the money-auditor pass on
+  PR #3464. Fixed source-aware, per the Acceptance line below: `_decompose`'s default
+  fare branch now gates on a new `_fare_ready_to_decompose(ride, event)` helper —
+  `payment_status == 'paid'` decomposes as before; not yet paid and still within a new
+  6h bounded fallback (`_SETTLEMENT_FALLBACK_SECONDS`) skips-and-retries next tick
+  (`reason="awaiting_payment_settlement"`, no legs written, no misbooking); past the
+  6h fallback it falls back to the existing degraded-legs contract
+  (`reason="payment_not_settled_timeout"`) instead of retrying forever. Cancellation-fee
+  and notice-fee events are untouched — both `return` earlier in `_decompose`, before
+  the new gate is ever reached, and two regression tests
+  (`test_cancellation_fee_unaffected_by_stuck_ride_payment_status`,
+  `test_notice_fee_unaffected_by_stuck_ride_payment_status`) pin that against a ride
+  stuck at `payment_status='processing'`. `_RIDE_COLUMNS` gained `payment_status`.
+  6h (not 24h) was chosen to stay well clear of `utils/reconciliation.py`'s 24h
+  work-queue-head-stalled alarm while comfortably covering `payment_retry.py`'s
+  typical ~30-60 min stuck-`processing` recovery — see the constant's comment and
+  `docs/change-log/2026-08-10-b20-ledger-projection-tip-fix.md` for the full blast-radius
+  grep and interaction analysis. No migration or schema change — Python-logic-only,
+  as scoped. 26 tests in `test_ledger_projection.py` pass (20 pre-existing + 6 new);
+  148 pass across the wider payment/loop surface
+  (`test_replay_safety_payment_loops.py`, `test_payment_retry.py`,
+  `test_payment_retry_coverage.py`, `test_atomic_settle.py`, `test_coverage_payments.py`);
+  37 pass in `test_reconciliation.py`. See git history for the commit.
 - **What:** `backend/utils/ledger_projection.py::_decompose` (default fare branch)
   reads `rides.driver_earnings` / `tax_amount` at projection time without checking
   `rides.payment_status`. Migration 287's 30-minute grace window covers the normal

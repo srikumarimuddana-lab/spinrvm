@@ -3780,14 +3780,11 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   `test_db_executor.py`, `test_db_supabase_helpers.py`,
   `test_health_db_ping.py`, `test_error_handling.py`,
   `test_dual_import_parity.py`, `test_monitoring_health.py`,
-  `test_capacity_watchdog.py`) — 162 passed, 1 skipped, 0 failed. A full
-  backend suite run (~10,600 tests) was also kicked off as a broader sanity
-  pass; still in progress with zero failures observed at commit time — the
-  388 targeted tests above (chosen specifically to cover the blast radius
-  in this entry) are the evidence this closure relies on, not the full-suite
-  run. See `docs/change-log/2026-08-11-b22-h2-cve-bump.md` for a follow-up
-  note once it completes. Local `pip-audit -r requirements-locked.txt`
-  confirms both `h2 4.4.1` and
+  `test_capacity_watchdog.py`) — 162 passed, 1 skipped, 0 failed. Full
+  backend suite also completed clean: **10,698 passed, 8 skipped, 1
+  xfailed, 0 failed** (649.71s) with `cryptography==50.0.0` and
+  `h2==4.4.1`/`hpack==4.2.0` installed together. Local
+  `pip-audit -r requirements-locked.txt` confirms both `h2 4.4.1` and
   `hpack 4.2.0` report zero vulnerabilities. **Not verified: real Docker
   build/Trivy re-scan** (no daemon in this session) or a real APNs
   sandbox/production push. Full writeup:

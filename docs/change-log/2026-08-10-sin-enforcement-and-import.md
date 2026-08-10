@@ -141,6 +141,52 @@ Also filed `ACTION_ITEMS.md` D8: reveal-sin / update-sin / tax-ID import
 have no rate limiting (pre-existing posture, super_admin-gated) — needs a
 deliberate decision.
 
+## Round-2 code-review fixes (same day)
+
+A full-diff review pass (`1cd3ff1..HEAD`) surfaced six findings — four
+correctness, one PIPEDA-consent, one efficiency — all fixed, one commit
+each:
+
+1. **Empty-string SIN bypass** (`profile.py`) — `{"sin": ""}` survived
+   `exclude_none` but failed the truthiness gate, skipping validation +
+   immutability + encryption and writing `''` verbatim: a non-NULL,
+   non-token value that permanently fails the `sin IS NULL`
+   compare-and-set, bricking self-serve entry for that driver. Gate is
+   now a membership test; empty input 422s via `validate_sin`.
+2. **Reveal button gated on the wrong flag** (dashboard + payouts
+   summary) — the panel keyed on Stripe's `id_number_provided`, but the
+   reveal decrypts OUR column; under SIN-before-Stripe the button was
+   hidden for exactly the drivers it applies to. `payouts-summary.kyc`
+   now carries `sin_on_file`/`sin_last4`; the panel gates on those,
+   masks with our last4, and shows "Held by Stripe only — not
+   revealable" for the legacy case.
+3. **GC-able background push** (`tax_id_import.py`) — bare
+   `asyncio.create_task` holds only a weak reference; replaced with
+   `utils.background.spawn` so imported-SIN pushes cannot be silently
+   collected mid-flight.
+4. **Hot-path Stripe round-trip** (`payouts.py`) — every
+   `/stripe-account-session` mint paid an `Account.retrieve` inside the
+   prefill; it now short-circuits when the drivers row mirrors
+   `stripe_id_number_provided` for the same account id, and persists
+   that mirror after a successful push. Also self-heals the stale-false
+   legacy flag called out under "Could regress" above.
+5. **Untrue consent copy** (`payout.tsx`) — the form said the SIN is
+   "used only for the T4A" and "never shown to Spinr staff"; it is
+   pushed once to Stripe and super_admin-revealable under audit. Copy
+   now states both, plus the audit logging.
+6. **update-sin ignored a 0-row write** (`admin/drivers.py`) — a driver
+   deleted/raced mid-correction still returned success and pushed the
+   new SIN to Stripe against a stale account, with an audit row claiming
+   a landed change. 0 rows now → 409, no Stripe push, error log with the
+   audit id.
+
+Blast radius of the round-2 fixes: fix 4 adds a write to a column
+`stripe_kyc_sync` already owns (same value it would set, just earlier);
+fix 2's payload change is additive (two new fields, nothing renamed);
+fixes 1/3/6 are strictly tightening (inputs that previously
+half-succeeded now fail loudly); fix 5 is copy only. 14 new/updated
+tests pin them.
+
 ## Verification performed
 
 - `pytest` on the 10 affected test files: **439 passed** (includes 27 new
@@ -150,11 +196,17 @@ deliberate decision.
 - Manual trace of the legacy-driver path (`stripe_id_number_provided` set,
   no Vault copy) through both gates.
 
+- Round-2 fixes: 310 tests green across the five affected backend
+  suites; `ruff` clean; `tsc --noEmit` clean for both apps (the 28
+  pre-existing admin-dashboard errors are unrelated test-file typing,
+  identical before/after); **a real `npm run build` production build of
+  admin-dashboard passed** for the reveal-gating change.
+
 ## What was NOT verified
 
 - **No real production build was run for the driver app** (`tsc --noEmit`
-  only — no `expo export`/EAS build; the change is JS-level conditional
-  rendering in one screen).
+  only — no `expo export`/EAS build; the changes are JS-level conditional
+  rendering and copy in one screen).
 - Not tested against live Supabase or live Stripe — all API behaviour is
   pinned via mocks; the importer's background Stripe push in particular has
   not been exercised against a real Connect account.

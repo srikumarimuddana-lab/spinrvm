@@ -601,10 +601,16 @@ function PayoutScreen() {
                                 autoComplete="off"
                                 textContentType="none"
                             />
+                            {/* Consent copy must match reality (PIPEDA): the SIN IS
+                                shared with Stripe (the prefill that stops their form
+                                re-asking) and IS accessible to authorized admins via
+                                the audited reveal — "never shown to staff" was untrue. */}
                             <Text style={styles.gstNote}>
-                                Stored encrypted and used only to prepare your year-end T4A slip. It is
-                                never shown back to you or to Spinr staff — only the last 4 digits are
-                                ever displayed.
+                                Stored encrypted. Used to prepare your year-end T4A slip and shared
+                                once with Stripe, our payout partner, so you aren't asked for it
+                                again. The app only ever shows the last 4 digits; authorized Spinr
+                                staff can access it solely for tax filing or a correction you
+                                request, and every access is logged.
                             </Text>
                             <View style={styles.gstFormButtons}>
                                 <TouchableOpacity

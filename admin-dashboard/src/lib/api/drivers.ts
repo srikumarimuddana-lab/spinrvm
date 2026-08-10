@@ -337,8 +337,8 @@ export interface DriverPayoutSummary {
         processed_at: string | null;
     }>;
     // Stripe Connect KYC + tax identity mirror (migration 92).
-    // SIN itself is never exposed here — only id_number_provided and
-    // last4. Use /reveal-sin for the one-shot retrieval.
+    // SIN itself is never exposed here — only on-file flags and last4.
+    // Use /reveal-sin for the one-shot retrieval.
     kyc: {
         details_submitted: boolean;
         charges_enabled: boolean;
@@ -347,6 +347,11 @@ export interface DriverPayoutSummary {
         business_type: string | null;
         id_number_provided: boolean;
         id_number_last4: string | null;
+        /** True when Spinr holds a Vault-encrypted SIN (migration 289) — the
+         * copy /reveal-sin decrypts and the T4A reads. NOT the same as
+         * `id_number_provided`, which reports a number Stripe never returns. */
+        sin_on_file: boolean;
+        sin_last4: string | null;
         gst_hst_number: string | null;
         requirements_due: string[];
         requirements_past_due: string[];

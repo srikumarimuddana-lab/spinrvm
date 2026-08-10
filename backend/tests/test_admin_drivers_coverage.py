@@ -1641,6 +1641,9 @@ class TestAdminUpdateSin:
 
         async def _upd(*a, **k):
             calls.append("write")
+            # Real update_one returns the updated row; None means 0 rows
+            # matched, which the endpoint now treats as a failed correction.
+            return {"id": "drv-1"}
 
         async def _enc(d):
             return {**d, "sin": "vault-new"}
@@ -1670,6 +1673,25 @@ class TestAdminUpdateSin:
         written = upd.await_args.args[2]
         assert written["sin"] == "vault-new"
         assert written["sin_last4"] == sin[-4:]
+
+    def test_driver_gone_mid_update_is_409_with_no_stripe_push(self, test_client, super_admin_override):
+        """0 rows matched on the write (driver deleted/raced between the read
+        and the update): success here would leave an audit row claiming a
+        correction that never landed, and push the new SIN to Stripe for a
+        stale account. Must 409 and skip the push."""
+        driver = {**DRIVER, "sin": "vault-old", "sin_last4": "1111", "stripe_account_id": "acct_9"}
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),  # 0 rows
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="a")),
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: {**d, "sin": "t"})),
+            patch("settings_loader.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
+            patch("stripe.Account.modify") as modify,
+        ):
+            resp = self._post(test_client)
+        assert resp.status_code == 409
+        assert "NOT changed" in resp.json()["detail"]
+        modify.assert_not_called()
 
     def test_stripe_repush_is_forced_when_account_present(self, test_client, super_admin_override):
         sin = _mk_valid_sin()

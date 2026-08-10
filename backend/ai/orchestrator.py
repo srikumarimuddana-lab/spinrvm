@@ -120,19 +120,73 @@ async def _pinned_quote_context(conversation_id: str) -> str:
     return "\n".join(bits)
 
 
+# Process-local fallback counters, used ONLY on the Redis-error path below.
+# Not shared across replicas or persisted — Redis is the source of truth
+# whenever it's reachable. Keyed the same as the Redis key (so it's
+# naturally per-user/per-day) with a ":degraded" suffix. AI1: this replaces
+# the old fail-OPEN behavior, where a single Redis error removed the daily
+# cap entirely for every user until Redis recovered (the kill switch was
+# the only remaining backstop). A dict, not a bounded cache, because entries
+# are pruned inline below whenever the degraded path runs — see _prune.
+_degraded_daily_counts: Dict[str, int] = {}
+
+# Ceiling applied while Redis is unreachable. Deliberately not derived from
+# the admin-configured `cap` (get_app_settings() may itself be degraded
+# during a wider outage) — a fixed, generous floor so a brief Redis blip
+# doesn't hard-block every user's next message, while a sustained outage
+# still bounds LLM spend per user per replica rather than removing the cap.
+_DEGRADED_CAP_FLOOR = 200
+
+
+def _prune_degraded_counts(today_suffix: str) -> None:
+    """Drop stale (yesterday-or-older) degraded-mode entries.
+
+    Only runs on the already-rare Redis-error path, so an O(n) sweep here
+    doesn't touch the hot path. Without this the process-local dict would
+    grow by one entry per distinct user per day for the life of the process.
+    """
+    stale = [k for k in _degraded_daily_counts if not k.endswith(today_suffix)]
+    for k in stale:
+        _degraded_daily_counts.pop(k, None)
+
+
 async def _over_daily_cap(user_id: str, cap: int) -> bool:
-    """Per-user daily message cap via Redis INCR. Fails OPEN with a loud log
-    (mirrors the non-OTP rate-limit policy) — the kill switch remains the
-    hard stop when Redis is down."""
+    """Per-user daily message cap via Redis INCR.
+
+    Fails CLOSED-with-a-floor on a Redis error (AI1, ACTION_ITEMS.md). The
+    previous behavior failed OPEN — a Redis blip silently removed the
+    per-user cost cap for every user, with only the global kill switch left
+    as a backstop. That is too wide a hole for a cost/abuse control on a
+    paid-LLM path. A hard fail-closed (block everyone instantly) is also
+    wrong here: this is a cost-control cap, not a security boundary like
+    OTP lockout, so a transient blip shouldn't 503 every rider/driver
+    mid-conversation. Instead: fall back to a process-local counter bounded
+    by _DEGRADED_CAP_FLOOR, matching this codebase's existing "Redis
+    transparency" pattern (utils/redis_client.py's in-process-dict
+    fallback) but applied defensively here since redis_incr/redis_expire
+    themselves re-raise (they only fall back silently when REDIS_URL is
+    unset entirely, not when it's set but erroring)."""
     key = f"ai:daily:{user_id}:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
     try:
         count = await redis_incr(key)
         if count == 1:
             await redis_expire(key, 86400)
         return count > cap
-    except Exception:
-        logger.error("ai daily-cap check failed — failing open", exc_info=True, extra={"user_id": user_id})
-        return False
+    except Exception as exc:
+        logger.error(
+            "ai daily-cap check failed — Redis unavailable; failing CLOSED with a "
+            "%s/day process-local floor (was previously fail-open) for user_id=%s: %s",
+            _DEGRADED_CAP_FLOOR,
+            user_id,
+            exc,
+            exc_info=exc,
+        )
+        today_suffix = key.rsplit(":", 1)[-1] + ":degraded"
+        _prune_degraded_counts(today_suffix)
+        degraded_key = f"{key}:degraded"
+        count = _degraded_daily_counts.get(degraded_key, 0) + 1
+        _degraded_daily_counts[degraded_key] = count
+        return count > _DEGRADED_CAP_FLOOR
 
 
 async def run_chat_turn(

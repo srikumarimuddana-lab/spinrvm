@@ -4117,12 +4117,22 @@ driver-persona-secrecy prompt rules, per-tool timeouts for the Maps fan-out
 tools, `/mcp` read-only enforcement + per-user daily cap, truncation-preserves-
 guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 
-- [ ] **AI1. `/ai/chat` rate limit is per-IP, not per-user** —
-  `backend/routes/ai.py:130` uses `ai_chat_limit` keyed on client IP
-  (`utils/rate_limiter.py:111-118`); the per-user daily cap fails OPEN on
-  Redis errors (`backend/ai/orchestrator.py:82-84`). One user on many IPs, or
-  a Redis blip, removes the LLM-cost ceiling (kill switch remains the hard
-  stop). Consider a user-keyed limiter + fail-closed above a generous floor.
+- [x] **AI1. `/ai/chat` rate limit is per-IP, not per-user** — Done
+  (2026-08-10). Added a second, independent user-keyed limiter
+  (`ai_chat_user_limit`, `utils/rate_limiter.get_authenticated_user_key`,
+  unverified-JWT-decode-for-bucketing only, mirrors `middleware.py`'s
+  `_extract_user_id` pattern) stacked alongside the existing IP-keyed
+  `ai_chat_limit` on `/ai/chat` — additive, nothing removed. Separately,
+  `orchestrator._over_daily_cap`'s Redis-error path now fails
+  CLOSED-with-a-floor (process-local counter bounded by
+  `_DEGRADED_CAP_FLOOR = 200`/user/day) instead of fully open; error now
+  logged with the underlying exception per CLAUDE.md's "do not silently
+  swallow errors." 16 new tests
+  (`backend/tests/test_ai_rate_limiting.py`); known sibling gap in
+  `mcp_server.py`'s `_over_mcp_daily_cap` (same fail-open pattern, separate
+  `/mcp` surface) intentionally left out of scope — flagged for a follow-up
+  item. Full detail:
+  `docs/change-log/2026-08-10-ai1-chat-rate-limit-fail-closed.md`.
 - [x] **AI2. Assistant output is persisted un-scrubbed** — only the user
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with

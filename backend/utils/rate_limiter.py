@@ -14,6 +14,7 @@ import time
 from functools import wraps
 from typing import Callable, Dict
 
+import jwt
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from limits.aio.storage import MemoryStorage
@@ -180,6 +181,42 @@ def get_company_booking_key(request: Request) -> str:
     company_id = request.path_params.get("company_id")
     if company_id:
         return f"company_booking:{company_id}"
+    return f"ip:{get_real_client_ip(request)}"
+
+
+def get_authenticated_user_key(request: Request) -> str:
+    """Key rate limiting by the authenticated caller's user id, not IP (AI1).
+
+    /ai/chat's original ai_chat_limit is keyed on get_real_client_ip — a
+    single authenticated user spread across many IPs (rotating mobile
+    networks, a VPN, a scripted client) is not actually bounded by it. This
+    key function closes that gap without removing the IP-based limiter,
+    which still guards a different case: many distinct callers hammering
+    the endpoint from one IP/network before auth-layer identity is even
+    relevant.
+
+    The token is decoded WITHOUT signature verification — this is only ever
+    used to pick a bucket, never to authorize anything. If the signature is
+    invalid, get_current_user (which DOES verify it) rejects the request
+    with 401 downstream regardless of which bucket absorbed the hit, so a
+    forged claim cannot get a caller anything beyond wasting one rate-limit
+    slot in a bucket nobody else uses. Firebase ID tokens and Spinr's legacy
+    JWTs both carry the id in "user_id" (Firebase) with "sub" as a fallback
+    (see core/middleware.py's _extract_user_id, which uses the same
+    unverified-decode approach for log correlation).
+    """
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[len("Bearer ") :]
+        try:
+            payload = jwt.decode(token, options={"verify_signature": False})
+            uid = payload.get("user_id") or payload.get("sub")
+            if uid:
+                return f"user:{uid}"
+        except Exception:
+            logger.debug("get_authenticated_user_key: token decode failed; falling back to IP")
+    # Unauthenticated / undecodable token: fall back to IP so the request
+    # still gets rate-limited by *something* rather than bypassing the check.
     return f"ip:{get_real_client_ip(request)}"
 
 
@@ -352,6 +389,15 @@ admin_statement_download_limit = default_limiter.limit("60/hour")
 # AI assistant chat — each message triggers LLM spend; per-user daily cap
 # (ai_daily_message_cap) is enforced separately in backend/ai/orchestrator.py
 ai_chat_limit = default_limiter.limit("10/minute")
+
+# AI assistant chat, per-user (AI1) — ai_chat_limit above keys on IP, so a
+# single authenticated user rotating IPs is not actually bounded by it.
+# Applied as a second, independent decorator alongside ai_chat_limit (not a
+# replacement) so both dimensions are covered: this catches one identity
+# spread across many source IPs, ai_chat_limit still catches many distinct
+# short-lived callers hammering one IP. Same 10/minute value as the
+# IP-keyed limit — no reason for the per-identity ceiling to be looser.
+ai_chat_user_limit = default_limiter.limit("10/minute", key_func=get_authenticated_user_key)
 
 # In-ride messaging — generous but bounded to prevent SMS relay abuse
 ride_message_limit = default_limiter.limit("30/minute")

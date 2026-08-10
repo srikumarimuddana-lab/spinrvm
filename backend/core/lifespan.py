@@ -128,7 +128,7 @@ async def lifespan(app: FastAPI):
 
         configure_stripe()
     except Exception as e:
-        logger.error(f"Failed to configure Stripe SDK: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to configure Stripe SDK: {e}")
         if settings.ENV.lower() == "production":
             raise
 
@@ -145,7 +145,7 @@ async def lifespan(app: FastAPI):
 
         startup_verify_sgi_templates()
     except Exception as e:
-        logger.error(f"SGI template checksum verification failed: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"SGI template checksum verification failed: {e}")
         if settings.ENV.lower() == "production":
             raise
 
@@ -183,10 +183,7 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.error(
-                    f"Background task {name!r} crashed — restarting in 5s",
-                    exc_info=True,
-                )
+                logger.opt(exception=True).error(f"Background task {name!r} crashed — restarting in 5s")
                 await asyncio.sleep(5)
 
     def _spawn(name: str, coro_factory):
@@ -198,7 +195,7 @@ async def lifespan(app: FastAPI):
             background_tasks.append(task)
             logger.info(f"Started background task: {name}")
         except Exception as e:
-            logger.error(f"Failed to start background task {name}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"Failed to start background task {name}: {e}")
 
     # G5: Subscription expiry warning — checks every 6h for subscriptions
     # expiring within 24h and sends push notifications.
@@ -207,7 +204,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("subscription_expiry (6h)", check_expiring_subscriptions)
     except Exception as e:
-        logger.error(f"Failed to import subscription expiry checker: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import subscription expiry checker: {e}")
 
     # Automated surge pricing — recalculates demand/supply ratio every 2 min
     # and updates service_areas.surge_multiplier for auto-managed areas.
@@ -216,7 +213,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("surge_engine (2min)", surge_recalculation_loop)
     except Exception as e:
-        logger.error(f"Failed to import surge pricing engine: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import surge pricing engine: {e}")
 
     # Scheduled ride dispatcher — checks every 60s for rides due for dispatch
     # and sends 10-minute reminder notifications.
@@ -225,7 +222,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("scheduled_dispatcher (60s)", scheduled_ride_dispatcher_loop)
     except Exception as e:
-        logger.error(f"Failed to import scheduled ride dispatcher: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import scheduled ride dispatcher: {e}")
 
     # Payment retry — retries failed Stripe payments every 5 minutes
     try:
@@ -233,7 +230,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("payment_retry (5min)", payment_retry_loop)
     except Exception as e:
-        logger.error(f"Failed to import payment retry service: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import payment retry service: {e}")
 
     # Pre-auth capture sweeper — captures booking-time card holds whose tip
     # window has elapsed, so a hold never lapses uncaptured. Every 5 minutes.
@@ -242,7 +239,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("preauth_capture (5min)", preauth_capture_loop)
     except Exception as e:
-        logger.error(f"Failed to import pre-auth capture sweeper: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import pre-auth capture sweeper: {e}")
 
     # Referral reward payouts — pays referrer/referee rewards once a referee
     # hits the ride threshold. Idempotent via referral_payouts UNIQUE claim.
@@ -253,7 +250,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("referral_payout (5min)", referral_payout_loop)
     except Exception as e:
-        logger.error(f"Failed to import referral payout loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import referral payout loop: {e}")
 
     # Driver claim reaper — releases drivers claimed by dispatch whose offer
     # insert never landed (crash/restart), recovering orphaned is_available
@@ -263,7 +260,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("driver_claim_reaper (60s)", driver_claim_reaper_loop)
     except Exception as e:
-        logger.error(f"Failed to import driver claim reaper: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import driver claim reaper: {e}")
 
     # Document expiry alerts — notifies drivers about expiring docs every 12h
     try:
@@ -271,7 +268,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("document_expiry (12h)", document_expiry_loop)
     except Exception as e:
-        logger.error(f"Failed to import document expiry checker: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import document expiry checker: {e}")
 
     # Driver onboarding reminders — daily 08:00 local-time pushes for drivers
     # who registered from the driver app but still need vehicle info or docs.
@@ -281,7 +278,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("driver_onboarding_reminders (15min)", driver_onboarding_reminder_loop)
     except Exception as e:
-        logger.error(f"Failed to import driver onboarding reminder loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import driver onboarding reminder loop: {e}")
 
     # Corporate wallet auto-top-up — kicks off off-session Stripe charges
     # every 10 minutes for wallets that have dropped below their threshold.
@@ -290,7 +287,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("corporate_autotopup (10min)", corporate_autotopup_loop)
     except Exception as e:
-        logger.error(f"Failed to import corporate autotopup loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import corporate autotopup loop: {e}")
 
     # Corporate wallet low-balance email — for accounts with auto-topup OFF,
     # sends a reminder once every 12h while the balance stays below threshold.
@@ -299,7 +296,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("corporate_low_balance (1h)", corporate_low_balance_loop)
     except Exception as e:
-        logger.error(f"Failed to import corporate low-balance loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import corporate low-balance loop: {e}")
 
     # Monthly allowance reset — rolls fixed_recurring periods forward and
     # zeroes `used` for non-rollover employee allowances once per hour.
@@ -308,7 +305,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("allowance_reset (1h)", allowance_reset_loop)
     except Exception as e:
-        logger.error(f"Failed to import allowance reset loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import allowance reset loop: {e}")
 
     # Corporate KYB re-verification staleness reminder — flags (log + metric,
     # never auto-status-change) active companies whose KYB approval predates
@@ -318,7 +315,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("kyb_reverification (24h)", kyb_reverification_loop)
     except Exception as e:
-        logger.error(f"Failed to import KYB re-verification loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import KYB re-verification loop: {e}")
 
     # Versioned actual-route finalizer — claims one pending route every 15s,
     # retaining observed GPS gaps and never touching fare settlement.
@@ -327,7 +324,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("route_finalizer (15s)", route_finalizer_loop)
     except Exception as e:
-        logger.error(f"Failed to import route finalizer loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import route finalizer loop: {e}")
 
     # GPS capture-gap monitor — records timestamp-only, idempotent audit
     # events for active trips that stop reporting location. It never changes a
@@ -337,7 +334,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("route_gap_monitor (15s)", route_gap_monitor_loop)
     except Exception as e:
-        logger.error(f"Failed to import route gap monitor loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import route gap monitor loop: {e}")
 
     # Presence sweeper REMOVED — Uber/Lyft-style presence model.
     # We no longer flip drivers.is_online=False from a background loop.
@@ -358,7 +355,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("stale_intent_reconciler (15min)", stale_intent_reconciler_loop)
     except Exception as e:
-        logger.error(f"Failed to import stale intent reconciler: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import stale intent reconciler: {e}")
 
     # Safety check-in — every 30s: sends a push to riders whose trip has been
     # in_progress for ≥ 20 minutes.  If the rider does not respond within 90s,
@@ -381,7 +378,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("retention_purge (24h)", retention_purge_loop)
     except Exception as e:
-        logger.error(f"Failed to import retention purge loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import retention purge loop: {e}")
 
     # Data-export object purge — hourly deletion of DSAR export ZIPs from the
     # private data-exports Storage bucket after their 7-day signed-link TTL
@@ -391,7 +388,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("data_export_purge (1h)", data_export_purge_loop)
     except Exception as e:
-        logger.error(f"Failed to import data export purge loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import data export purge loop: {e}")
 
     # Daily Stripe ↔ DB ↔ wallet reconciliation — 20-2 (PCI-DSS, SOC2 CC9.1,
     # CRA). Polls every 60 s, runs the actual reconciliation once per day at
@@ -414,6 +411,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
+    # Double-entry leg projection — derives financial_event_entries rows from
+    # financial_events headers (oldest first, via the missing-legs RPC,
+    # migration 287). No-op until ledger_double_entry_enabled is on. Replay-safe
+    # via the UNIQUE(event_id, account, side) constraint + whole-batch insert;
+    # the Redis lock is only a throttle.
+    try:
+        from utils.ledger_projection import ledger_projection_loop
+
+        _spawn("ledger_projection (15min)", ledger_projection_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import ledger projection loop: {e}")
+
     # Distance reconciliation — daily 04:00 UTC, one replica via Redis leader
     # lock. Compares each completed ride's quoted vs measured distance; opens a
     # per-ride integrity event on outliers and logs at ERROR (→ Sentry) on a
@@ -423,7 +432,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("distance_reconciliation (daily 04:00 UTC)", distance_reconciliation_loop)
     except Exception as e:
-        logger.error(f"Failed to import distance reconciliation loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import distance reconciliation loop: {e}")
 
     # Period-1 (deadhead) distance finalizer — drains completed online-no-ride
     # accumulators into the append-only driver_period_distances audit (period=1)
@@ -434,7 +443,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("period1_distance_finalizer (5min)", period1_distance_finalizer_loop)
     except Exception as e:
-        logger.error(f"Failed to import period1 distance finalizer loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import period1 distance finalizer loop: {e}")
 
     # T4A annual issuance — runs on the last day of February each year at
     # 08:00 UTC. Identifies drivers with ≥ $500 prior-year earnings, sends
@@ -445,7 +454,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("t4a_annual_job (yearly Feb 28)", t4a_annual_job_loop)
     except Exception as e:
-        logger.error(f"Failed to import T4A annual job loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import T4A annual job loop: {e}")
 
     # Driver earnings statements — weekly (Mon-Sun) + monthly periodic
     # statement emails with a branded PDF, Uber-style. Insert-claim on the
@@ -456,7 +465,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("driver_statements (30min)", driver_statement_loop)
     except Exception as e:
-        logger.error(f"Failed to import driver statement loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import driver statement loop: {e}")
 
     # Stuck ride sweeper — cancels rides that have been in 'searching' for
     # more than 5 minutes. Recovers rides whose in-process asyncio timeout
@@ -467,7 +476,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("stuck_ride_sweeper (60s)", stuck_ride_sweeper_loop)
     except Exception as e:
-        logger.error(f"Failed to import stuck ride sweeper: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import stuck ride sweeper: {e}")
 
     # Orphaned card-hold reconciler — releases booking-time authorizations left open
     # on rides that are cancelled and will never be billed. Two populations: the
@@ -482,7 +491,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("orphaned_hold_reconciler (15m)", orphaned_hold_reconciler_loop)
     except Exception as e:
-        logger.error(f"Failed to import orphaned hold reconciler: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import orphaned hold reconciler: {e}")
 
     # Durable offer-expiry reaper — restart-safe backstop for offer timeouts.
     # In-process asyncio offer/search timers are lost on a pod restart; this loop
@@ -494,7 +503,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("offer_expiry_reaper (10s)", offer_expiry_reaper_loop)
     except Exception as e:
-        logger.error(f"Failed to import offer expiry reaper: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import offer expiry reaper: {e}")
 
     # Auto-reactivation of expired temporary rider suspensions — flips status
     # back to active once suspended_until passes so the admin list isn't stale.
@@ -504,7 +513,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("suspension_reactivation (10min)", suspension_reactivation_loop)
     except Exception as e:
-        logger.error(f"Failed to import suspension reactivation loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import suspension reactivation loop: {e}")
 
     # Push notification retry loop — re-attempts FCM/Expo deliveries for
     # dispatch and safety priority pushes that failed on first attempt.
@@ -514,7 +523,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("push_retry (30s)", push_retry_loop)
     except Exception as e:
-        logger.error(f"Failed to import push retry loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import push retry loop: {e}")
 
     # Zoho Desk mirror sync — upserts recent tickets into zoho_desk_tickets so
     # the Help Desk serves lists/dashboards/trends from our DB (saves Zoho API
@@ -524,7 +533,20 @@ async def lifespan(app: FastAPI):
 
         _spawn("zoho_desk_sync (10min)", zoho_desk_sync_loop)
     except Exception as e:
-        logger.error(f"Failed to import Zoho Desk sync loop: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to import Zoho Desk sync loop: {e}")
+
+    # Capacity watchdog — samples DB thread-pool saturation, DB call
+    # rejections, and rate-limit violation rate every 60 s and alerts via
+    # ALERT_WEBHOOK_URL. Read-only (no DB/Redis writes), so it is replay-safe
+    # on every replica by construction; per-replica alerting is intentional
+    # because pool saturation is a per-process condition.
+    # See docs/runbooks/capacity-scaling.md.
+    try:
+        from utils.capacity_watchdog import capacity_watchdog_loop
+
+        _spawn("capacity_watchdog (60s)", capacity_watchdog_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import capacity watchdog loop: {e}")
 
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
@@ -544,11 +566,13 @@ async def lifespan(app: FastAPI):
             "retention_purge (24h)",
             "data_export_purge (1h)",
             "stripe_reconcile (24h)",
+            "ledger_projection (15min)",
             "t4a_annual_job (yearly Feb 28)",
             "driver_statements (30min)",
             "stuck_ride_sweeper (60s)",
             "offer_expiry_reaper (10s)",
             "push_retry (30s)",
+            "capacity_watchdog (60s)",
         ]
     )
 
@@ -570,7 +594,7 @@ async def lifespan(app: FastAPI):
                 )
                 record_heartbeat("loop_watchdog (5min)")
             except Exception:
-                logger.error("loop_watchdog tick failed", exc_info=True)
+                logger.opt(exception=True).error("loop_watchdog tick failed")
             await _asyncio.sleep(300)
 
     _spawn("loop_watchdog (5min)", _loop_watchdog)
@@ -636,7 +660,7 @@ async def lifespan(app: FastAPI):
                 "cross-machine delivery."
             )
     except Exception as e:
-        logger.error(f"Failed to start WS pub/sub: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to start WS pub/sub: {e}")
 
     # Start the MCP streamable-HTTP session manager if /mcp was mounted
     # (no-op when the mcp SDK is absent). Never a boot-blocker — the AI chat
@@ -648,7 +672,7 @@ async def lifespan(app: FastAPI):
             from ..ai.mcp_server import start_mcp
         await start_mcp()
     except Exception as e:
-        logger.error(f"Failed to start MCP session manager: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to start MCP session manager: {e}")
 
     # Perform startup checks
     logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")

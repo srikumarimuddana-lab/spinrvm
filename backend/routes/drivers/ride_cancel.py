@@ -387,6 +387,11 @@ async def mark_rider_noshow(
                 data={"type": "ride_noshow", "ride_id": str(ride_id)},
             )
         )
+        # A charge the rider did not choose to make needs a written record they
+        # can find later and dispute against — the push says the amount once and
+        # then it is gone. total_fee stays a Decimal all the way to the email;
+        # the float() above is only for the WS payload's JSON encoding.
+        spawn(_deps.send_no_show_fee_email(rider_id, total_fee, ride=ride))
 
     await _deps.manager.broadcast_ride_status(
         ride_id,

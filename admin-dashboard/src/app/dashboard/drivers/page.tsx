@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshAllDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -598,6 +598,38 @@ export default function DriversPage() {
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
+    const [bulkKycRunning, setBulkKycRunning] = useState(false);
+    const handleBulkKycRefresh = async () => {
+        // Report-only by design: account_not_on_key drivers are counted but
+        // NOT detached. Retiring in bulk stays a deliberate per-driver action
+        // (the slideout button), never one click across the fleet.
+        if (!window.confirm(
+            "Refresh Stripe verification for ALL drivers with a Stripe account?\n\n" +
+            "This reads live state from Stripe and updates each driver's row. " +
+            "Nothing is detached or changed on Stripe."
+        )) return;
+        setBulkKycRunning(true);
+        try {
+            const res = await refreshAllDriverStripeKyc();
+            const parts = [
+                `${res.ok ?? 0} synced`,
+                res.account_not_on_key ? `${res.account_not_on_key} not on this Stripe key (need re-onboarding)` : null,
+                res.no_stripe_account ? `${res.no_stripe_account} without a Stripe account` : null,
+                res.stripe_error ? `${res.stripe_error} failed (retry)` : null,
+            ].filter(Boolean).join(" · ");
+            toast({
+                title: `KYC refresh: ${res.total} driver${res.total === 1 ? "" : "s"}`,
+                description: parts || "No drivers with a Stripe account.",
+                ...(res.stripe_error || res.account_not_on_key ? { variant: "destructive" as const } : {}),
+            });
+            loadDrivers(); // re-pull the table so mirrored columns show fresh state
+        } catch (e: any) {
+            toast({ title: "Bulk refresh failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkKycRunning(false);
+        }
+    };
+
     const handleExport = async () => {
         try {
             const res = await exportDrivers();
@@ -744,6 +776,9 @@ export default function DriversPage() {
                     </div>
                     {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
+                    <Button variant="outline" size="sm" onClick={handleBulkKycRefresh} disabled={bulkKycRunning} title="Pull live Stripe verification state for every driver with a Stripe account (super admin)">
+                        {bulkKycRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh Stripe KYC
+                    </Button>
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={sorted.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
             </div>
@@ -1372,10 +1407,20 @@ export default function DriversPage() {
                                         onRefreshKyc={async () => {
                                             setRefreshingKyc(true);
                                             try {
-                                                await refreshDriverStripeKyc(selected.id);
+                                                // The endpoint returns 200 for several distinct
+                                                // outcomes (synced / no account / account retired).
+                                                // Toasting a blanket "Synced from Stripe" for all of
+                                                // them is how a detached account looked like a
+                                                // successful refresh — branch on `synced` and show
+                                                // the backend's own explanation.
+                                                const res = await refreshDriverStripeKyc(selected.id);
                                                 const fresh = await getDriverPayoutsSummary(selected.id);
                                                 setPayoutSummary(fresh);
-                                                toast({ title: "Synced from Stripe" });
+                                                toast({
+                                                    title: res.synced ? "Synced from Stripe" : "Not synced",
+                                                    description: res.message,
+                                                    ...(res.synced ? {} : { variant: "destructive" as const }),
+                                                });
                                             } catch (e: any) {
                                                 toast({ title: "Refresh failed", description: e?.message || "Unknown error", variant: "destructive" });
                                             } finally {
@@ -1468,7 +1513,7 @@ export default function DriversPage() {
                                                             {expiryMissing && counts.pending === 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">Approved · expiry not recorded</Badge>}
                                                             {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Re-upload needed</Badge>}
                                                         </div>
-                                                        {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
+                                                        {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                         : <div className="bg-muted/20 border border-dashed rounded-xl p-6 text-center text-muted-foreground"><Image className="h-8 w-8 mx-auto mb-2 opacity-20" /><p className="text-sm">No {reqDoc.label} uploaded yet</p></div>}
                                                     </div>
                                                 );
@@ -1486,7 +1531,7 @@ export default function DriversPage() {
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">Other Documents</h4>
                                                             <Badge variant="outline" className="text-[10px]">{unmatched.length} uploaded</Badge>
                                                         </div>
-                                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                     </div>
                                                 );
                                             })()}
@@ -1495,7 +1540,7 @@ export default function DriversPage() {
                                         <div className="space-y-3">
                                             <p className="text-xs text-muted-foreground">No service area configured — showing all uploaded documents</p>
                                             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                                                {activeDocs.map(d => <DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}
+                                                {activeDocs.map(d => <DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}
                                             </div>
                                         </div>
                                     ) : (
@@ -2955,7 +3000,23 @@ function DocExpirySummaryCard({ label, summary }: { label: string; summary: DocS
     );
 }
 
-function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string | null; onPreview: (url: string) => void; onReview: (id: string, action: "approved" | "rejected") => void }) {
+function DocCard({ d, docBusy, driverName, onPreview, onReview }: { d: any; docBusy: string | null; driverName: string; onPreview: (url: string) => void; onReview: (id: string, action: "approved" | "rejected") => void }) {
+    const { toast } = useToast();
+    const [downloading, setDownloading] = useState(false);
+
+    const onDownload = async () => {
+        setDownloading(true);
+        try {
+            await downloadDriverDocument(d.id, driverName, d.document_type || "document");
+        } catch (e: any) {
+            // Surfaced, not swallowed: a document that won't download is the
+            // difference between filing a regulator submission and not.
+            toast({ title: "Download failed", description: e?.message ?? "Unknown error", variant: "destructive" });
+        } finally {
+            setDownloading(false);
+        }
+    };
+
     const exp = d.expiry_date || d.expires_at;
     const expired = exp && new Date(exp) < new Date();
     const isImage = d.document_url && /\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)/i.test(d.document_url);
@@ -2977,9 +3038,16 @@ function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string 
                 </div>
                 {d.rejection_reason && <p className="text-[11px] text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1"><AlertTriangle className="h-3 w-3 inline mr-1" />{d.rejection_reason}</p>}
                 <div className="flex items-center gap-1.5 pt-1">
-                    <Button variant="outline" size="xs" className="flex-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
-                    <Button variant="outline" size="xs" className="flex-1 text-red-600 border-red-200 hover:bg-red-50" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
+                    <Button variant="outline" size="xs" className="flex-1 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
+                    <Button variant="outline" size="xs" className="flex-1 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
                 </div>
+                {/* Saving the file to disk had no affordance at all — the card
+                    could only preview, approve, or reject. Admins need the
+                    actual file to attach to a regulator email (e.g. sending a
+                    criminal record check to SGI). */}
+                <Button variant="outline" size="xs" className="w-full" disabled={!d.document_url || downloading} onClick={onDownload}>
+                    {downloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} Download file
+                </Button>
             </div>
         </div>
     );

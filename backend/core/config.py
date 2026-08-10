@@ -178,10 +178,54 @@ class Settings(BaseSettings):
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
 
+    # Sentry Web API — powers the super-admin "Sentry Issues" viewer in the
+    # admin dashboard (routes/admin/sentry.py). Optional: the route reports
+    # "not configured" cleanly when the token / org / all project slugs are
+    # unset. Kept as deploy secrets alongside sentry_dsn (not app_settings)
+    # because this is a read/resolve credential for an external service, the
+    # same posture as the DSN.
+    #   - SENTRY_API_TOKEN needs `event:read` + `event:write` (write is only
+    #     used to mark an issue resolved) plus `project:read`. Use an INTERNAL
+    #     INTEGRATION token — Organization Auth Tokens have fixed CI-only scopes
+    #     with no permission picker and cannot grant event:read/event:write.
+    #   - SENTRY_ORG_SLUG is the organization slug (e.g. "spinr").
+    #   - SENTRY_API_BASE_URL defaults to sentry.io; must match the region the
+    #     Sentry ORG was created in ("https://de.sentry.io" for EU) or every
+    #     read 404s. Spinr's org is US, for which the default is correct.
+    #
+    # The viewer resolves a surface for each issue in one of two mutually
+    # exclusive modes:
+    #   - PROJECT MODE: SENTRY_PROJECT_* map each surface to its own Sentry
+    #     project. An issue's surface is implied by which project it came from.
+    #   - TAG MODE: SENTRY_PROJECT_ALL names a SINGLE project that every surface
+    #     reports into, and surfaces are told apart by the `surface` tag each
+    #     SDK sets at init. Used when one Sentry project backs all four surfaces.
+    # Per-surface slugs win if both are set, so SENTRY_PROJECT_ALL is additive
+    # and splitting into four projects later is an env change, not a code change.
+    SENTRY_API_TOKEN: Optional[str] = None
+    SENTRY_ORG_SLUG: Optional[str] = None
+    SENTRY_API_BASE_URL: str = "https://sentry.io"
+    SENTRY_PROJECT_BACKEND: Optional[str] = None
+    SENTRY_PROJECT_RIDER: Optional[str] = None
+    SENTRY_PROJECT_DRIVER: Optional[str] = None
+    SENTRY_PROJECT_ADMIN: Optional[str] = None
+    SENTRY_PROJECT_ALL: Optional[str] = None
+
     # Operational alerting — Slack-compatible incoming webhook URL.
     # When set, the loop watchdog posts a message here whenever a background
     # loop goes stale.  Leave unset in development; required in production.
     ALERT_WEBHOOK_URL: Optional[str] = None
+
+    # Operational alerting — ops inbox for capacity/saturation alerts, sent via
+    # the same SES/Resend path as receipts (utils/email_provider). Comma-separated
+    # for multiple recipients. Independent of ALERT_WEBHOOK_URL: set either, both,
+    # or neither. Both channels are attempted for every alert, so a dead Slack
+    # workspace does not cost you the page.
+    #
+    # Prefer a distribution list / shared inbox over one person's address — a
+    # single recipient that hard-bounces gets added to the email suppression
+    # list, after which capacity alerts are silently dropped.
+    ALERT_EMAIL_TO: Optional[str] = None
 
     # Corporate ops inbox — notified on self-serve company signups (new KYB
     # queue entries). Optional: when unset the signup still succeeds and the

@@ -109,7 +109,7 @@ async def _count_demand_in_area(area_id: str) -> int:
         }
         return sum(1 for r in rides if r.get("status") in active_statuses)
     except Exception as e:
-        logger.error(f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Surge: failed to count demand for area {area_id}: {e}")
         return 0
 
 
@@ -154,8 +154,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
             return await _count_supply_spatial(poly)
         except Exception as exc:
             logger.warning(
-                f"Surge: spatial supply count failed for area {area.get('id')}, falling back to Python scan: {exc}",
-                exc_info=False,
+                f"Surge: spatial supply count failed for area {area.get('id')}, falling back to Python scan: {exc}"
             )
 
     try:
@@ -195,10 +194,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
                     count += 1
         return count
     except Exception as e:
-        logger.error(
-            f"Surge: failed to count supply for area {area.get('id')}: {e}",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"Surge: failed to count supply for area {area.get('id')}: {e}")
         return 0
 
 
@@ -304,7 +300,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
 
             results.append(metrics)
         except Exception as e:
-            logger.error(f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"Surge: failed to update area {area.get('id')}: {e}")
 
     return results
 

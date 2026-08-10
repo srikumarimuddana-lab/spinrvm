@@ -34,7 +34,7 @@ async def create_saved_address(request: SavedAddressCreate, current_user: dict =
     # fails open on anything ambiguous (see utils/address_verification.py
     # docstring); only rejects a confident mismatch so a saved address can't
     # silently replay a wrong pin forever (Glide Crescent incident).
-    ok, mismatch_reason = await verify_address_matches_coordinate(sanitized_address, request.lat, request.lng)
+    ok, mismatch_reason, place_id = await verify_address_matches_coordinate(sanitized_address, request.lat, request.lng)
     if not ok:
         raise HTTPException(status_code=400, detail=f"Address and location don't match: {mismatch_reason}")
 
@@ -45,6 +45,7 @@ async def create_saved_address(request: SavedAddressCreate, current_user: dict =
         lat=request.lat,
         lng=request.lng,
         icon=request.icon,
+        place_id=place_id,
     )
     await db_supabase.insert_one("saved_addresses", address.dict())
     return address.dict()

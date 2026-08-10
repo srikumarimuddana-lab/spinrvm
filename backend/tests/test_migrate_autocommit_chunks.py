@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from backend.scripts.migrate import _apply_migration_autocommit
+from backend.scripts.migrate import _apply_migration_autocommit, _split_sql_statements
 
 MIGRATION_138_STYLE = """-- 999_example_concurrent_index.sql
 -- Rationale comment block, several lines long.
@@ -47,7 +47,9 @@ def _conn_capturing(executed: list):
 
 def test_comment_prefixed_create_index_chunk_executes():
     executed: list = []
-    ok = _apply_migration_autocommit(_conn_capturing(executed), "999_example.sql", MIGRATION_138_STYLE)
+    ok = _apply_migration_autocommit(
+        _conn_capturing(executed), "999_example.sql", _split_sql_statements(MIGRATION_138_STYLE)
+    )
     assert ok is True
     create_stmts = [s for s in executed if "CREATE INDEX CONCURRENTLY" in s]
     assert create_stmts, "the comment-prefixed CREATE INDEX chunk must execute, not be skipped"
@@ -61,7 +63,9 @@ def test_comment_only_chunks_are_still_skipped():
     ok = _apply_migration_autocommit(
         _conn_capturing(executed),
         "998_comments_only.sql",
-        "-- only a comment, no statement\n-- another line;\n-- CONCURRENTLY mentioned to route here;",
+        _split_sql_statements(
+            "-- only a comment, no statement\n-- another line;\n-- CONCURRENTLY mentioned to route here;"
+        ),
     )
     assert ok is True
     assert all("schema_migrations" in s for s in executed), "nothing but the version INSERT should run"

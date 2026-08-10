@@ -13,6 +13,7 @@ try:
     from ._base import (
         DatabaseError,
         _serialize_for_api,
+        _write_skipped,
         run_sync,
         supabase,
     )
@@ -20,6 +21,7 @@ except ImportError:
     from repositories._base import (  # type: ignore
         DatabaseError,
         _serialize_for_api,
+        _write_skipped,
         run_sync,
         supabase,
     )
@@ -279,6 +281,7 @@ async def release_promo_user_slot(promo_id: str, user_id: str) -> None:
     """Release a per-user promo slot claimed by claim_promo_user_slot when a
     later step of the same redemption fails (migration 257). Best-effort."""
     if not supabase:
+        _write_skipped("release_promo_user_slot", "promo_user_slots")
         return
 
     def _fn():
@@ -380,11 +383,11 @@ async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, 
                 )
                 if existing.data and existing.data[0].get("processed_at") is None:
                     logger.critical(
-                        "Stripe event %s is STUCK: claimed but never marked processed. Manual reconciliation required.",
+                        "Stripe event {} is STUCK: claimed but never marked processed. Manual reconciliation required.",
                         event_id,
                     )
                 else:
-                    logger.info("Stripe event %s already processed — deduplicating", event_id)
+                    logger.info("Stripe event {} already processed — deduplicating", event_id)
                 return False
             raise
 
@@ -406,6 +409,7 @@ async def mark_stripe_event_processed(event_id: str) -> None:
     the daily sweep is the backstop in case that signal is ever missed.
     """
     if not supabase:
+        _write_skipped("mark_stripe_event_processed", "stripe_events")
         return
 
     def _fn():
@@ -443,6 +447,7 @@ async def unclaim_stripe_event(event_id: str) -> bool:
     manual replay via the admin endpoint).
     """
     if not supabase:
+        _write_skipped("unclaim_stripe_event", "stripe_events")
         return False
 
     def _fn():

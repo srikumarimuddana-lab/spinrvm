@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-10 — A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -662,9 +662,29 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   acceptance was never defined and now lives under A1c, not here.
 
 ### A1c. Backend test-coverage floor — Track 2 (breadth, lower priority, in progress)
-- [ ] **Status:** open — spun off from A1b (2026-08-01) when A1b's Track 1
-  work closed out. One file already done (below, picked up under A1b before
-  the split); the rest of Track 2 is unscoped.
+- [x] **Status:** CLOSED (2026-08-10) — spun off from A1b (2026-08-01) when
+  A1b's Track 1 work closed out. All three sub-tiers itemized below are
+  done (Sub-tier A closed 2026-08-01/02, Sub-tier B closed 2026-08-02 in a
+  full 26-file sweep, Sub-tier C closed 2026-08-03 across all 39 files in
+  the 60-80% band). Verified against the actual latest `main` CI run
+  ([job `93335534234`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/31348756297/job/93335534234),
+  commit `64a720e`, 2026-08-10): full-suite backend coverage is
+  **46448 stmts, 4531 missed → 90%** (up from the 78.5% aggregate recorded
+  when this item was first scoped), 10592 passed, 6 skipped, 1 xfailed. Also
+  spot-checked the 19 brand-new backend files added since the 2026-08-03
+  snapshot (Stripe payouts/Connect ledger sync, corporate Stripe
+  identity-drift repair, email-branding retrofit, admin Sentry viewer) —
+  every one already shipped with a dedicated test file in its own PR, no new
+  gap found. Closing rather than leaving open with no acceptance criteria:
+  the item's own **Acceptance** note below explicitly rejected "cover
+  everything to 80%" as a goal, and there is no unscoped remainder left to
+  define one against. If a future session finds a real file below the CI
+  floor, re-open as a new dated entry rather than reusing this one.
+  **Not part of this closure** (found during the same check, filed
+  separately): the 1 test failing on this same `main` run
+  (`test_snap_to_road_returns_none_without_any_provider_configured`, fixed
+  same day, see git history) and the Codecov tokenless-upload gap (**C12**,
+  new).
 - **Why:** same logic as A1/A1b (higher-risk code deserves a higher bar),
   but for everything *outside* the money/safety/compliance-adjacent set
   Track 1 already covers — utils/services with no explicit coverage target,
@@ -2251,8 +2271,10 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
     no bugs found. Full suite re-run after: 6801 passed (was 6782), 0
     failed, 0 new warnings. See
     `docs/change-log/2026-08-01-a1c-reconciliation-coverage.md`.
-  - Rest of Sub-tier A/B/C above: not yet started — pick one file/PR at a
-    time, ≤3 files per subtask, per the same pattern Track 1 followed.
+  - ~~Rest of Sub-tier A/B/C above: not yet started~~ — stale as of
+    2026-08-10: this line was never updated after Sub-tier B (2026-08-02)
+    and Sub-tier C (2026-08-03) both closed above. Left struck through
+    rather than deleted so the correction is visible in-place.
 - **Approach:** everything currently below the 60% CI floor or in the
   60-80% band with no explicit target, that Track 1 didn't already touch.
   Only worth picking up once a specific file becomes a live incident source,
@@ -2269,9 +2291,10 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   DB, not this repo, and needs a live DB read to answer, not a coverage
   pass). Real, separate asks — track as their own items if/when wanted,
   don't fold into A1c.
-- **Acceptance:** not yet defined — pick a file list with the user before
-  starting; don't assume "cover everything to 80%" is the goal without
-  confirming.
+- **Acceptance:** met (2026-08-10) — no fixed target was ever set (deliberately,
+  see above); closed instead on the combination of all three scoped
+  sub-tiers being done and the measured 90% full-suite aggregate. See
+  Status line above for the verification run.
 
 ### A2. Post-deploy smoke test in CI
 - [x] **Status:** done — already implemented before this checklist was last
@@ -2598,22 +2621,30 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
-- [x] **Status:** done (2026-08-10) — replaced the naive `sql.split(";")`
-  splitter with a comment/literal-aware tokenizer (`_tokenize_sql` in
-  `backend/scripts/migrate.py`) that skips semicolons inside `--`/`/* */`
-  comments, `'...'`/`"..."` literals, and `$tag$...$tag$` dollar-quoted
-  bodies. `CONCURRENTLY` routing now checks parsed executable statements
-  instead of raw file text, so a mention inside a comment no longer
-  misroutes a migration. `_KNOWN_UNSPLITTABLE` removed entirely;
-  `test_migration_concurrently_splitting.py`'s exhaustive property test now
-  runs over every migration file in the repo (362 tests passing, up from a
-  subset). Full detail + what was NOT verified (no live DB to apply
-  end-to-end against):
-  `docs/change-log/2026-08-10-b0-migration-concurrently-splitting.md`.
-- **Original finding (2026-07-30, kept for record):** found while adding
-  migration 275. Migration 274 itself was clean (verified by simulating the
-  runner's splitter); this was a pre-existing defect in the runner affecting
-  **34 already-merged migrations**.
+- [x] **Status:** done — `scripts/migrate.py` now has `_split_sql_statements`,
+  a lexical scanner (comment/`'...'`-string/`$tag$...$tag$`-dollar-quote
+  aware) replacing the naive `sql.split(";")`. `needs_autocommit` routing now
+  checks the comment-free split statements instead of raw text, so a file
+  whose only "CONCURRENTLY" is inside a comment correctly runs through the
+  normal transactional path instead of the no-transaction autocommit path.
+  Validated against all 44 CONCURRENTLY-mentioning migrations in the repo —
+  zero produce a non-SQL-looking fragment (was 34 broken before the fix); 14
+  of them are now correctly reclassified out of the autocommit path.
+  `_KNOWN_UNSPLITTABLE` in `test_migration_concurrently_splitting.py` is now
+  empty (kept as a frozenset, not deleted, so a future regression has
+  somewhere obvious to record a real unsplittable file). Two new direct
+  regression tests pin the original failure modes (mid-line semicolon inside
+  a comment; a `$$`-quoted function body) plus one pinning the
+  comment-only-CONCURRENTLY routing fix. `test_migrate_autocommit_chunks.py`
+  updated for `_apply_migration_autocommit`'s new signature (takes
+  pre-split `statements: list[str]` instead of raw `sql: str`, since the
+  split now happens once in `apply_migration` rather than being redone
+  inside the autocommit path). All 51 tests in both files pass. **Not yet
+  verified:** an actual fresh-database `python scripts/migrate.py` run
+  end-to-end against a real Postgres instance — this fix was validated by
+  running the real splitter against every migration file's text and by unit
+  tests with a mocked connection, not by applying the full migration set to
+  a live throwaway schema.
 - **Files:** `backend/scripts/migrate.py:195` (`_apply_migration_autocommit`),
   frozen list in `backend/tests/test_migration_concurrently_splitting.py`
   (`_KNOWN_UNSPLITTABLE`)
@@ -2934,15 +2965,35 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   favorites dedupe (`favorites.py`) to compare both lat AND lng of both
   pickup and dropoff, not latitude only.
 - **Explicitly deferred:**
-  - `place_id` storage + re-resolve-on-save — needs a new
-    `saved_addresses.place_id` migration column; the write-time verification
-    above is the actual safety net, so this is an enhancement on top, not
-    required to close the core gap. Left for a follow-up.
-  - `CreateRideRequest` cross-field validation in `schemas.py` — ride
-    creation is a live, state-machine-critical, money-adjacent surface;
-    changing what it accepts needs its own dedicated pass (dry run against
-    `mock_supabase_client`, feature-flag consideration) rather than bundling
-    into this PR per CLAUDE.md's pre-merge release gates.
+  - `place_id` storage — **done**: migration `284_saved_addresses_place_id.sql`
+    adds a nullable `saved_addresses.place_id` column;
+    `verify_address_matches_coordinate` (`utils/address_verification.py`)
+    now returns `(ok, reason, place_id)` — the `place_id` is already present
+    in the same Geocoding API response used for the mismatch check, so this
+    is a free capture, not a second API call. `POST /addresses`
+    (`routes/addresses.py`) stores it on the `SavedAddress` row;
+    `POST /favorites` (`routes/favorites.py`) unpacks and discards the third
+    value (favorites are a separate `favorite_routes` table with two
+    endpoints per row — storing pickup/dropoff `place_id` there wasn't part
+    of what this item named and would be its own follow-up, not folded in
+    here). **Re-resolve-on-save** (using the stored `place_id` to confirm a
+    saved address still points at the same real-world place on subsequent
+    use) is a separate, larger follow-up — this pass only captures and
+    stores the identifier, it doesn't yet do anything with it after save.
+    Updated `tests/test_address_verification.py` (3-tuple return, `place_id`
+    asserted in every branch) and
+    `tests/test_p3_addresses_favorites_safety_disputes.py` (2 new tests:
+    `place_id` persisted on success, `None` when verification fails open) —
+    **verification of these tests is deferred to the end-of-batch full-suite
+    run**, per this session's token-budget constraint; not run individually.
+  - `CreateRideRequest` cross-field validation in `schemas.py` — **still not
+    attempted**, deliberately. Ride creation is a live, state-machine-critical,
+    money-adjacent surface; changing what it accepts needs its own dedicated
+    pass (dry run against `mock_supabase_client`, feature-flag consideration)
+    per CLAUDE.md's pre-merge release gates — which itself conflicts with
+    this session's "no testing until the end of the batch" instruction, so
+    attempting it blind here would violate the item's own stated
+    prerequisite. Left open for a dedicated pass with its own dry run.
 - **Files:** `backend/routes/addresses.py`, `backend/routes/favorites.py`,
   `backend/utils/address_verification.py` (new),
   `backend/tests/test_address_verification.py` (new),
@@ -3460,6 +3511,171 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   build.
 - **Acceptance:** not yet defined — pending the dedicated follow-up
   scoping (b)/(c) above into concrete acceptance criteria.
+
+### B17. `purge_pii_retention` Step B will FK-abort the entire daily retention purge once any paid ride crosses 7 years
+- [ ] **Status:** open — found 2026-08-07 during the PR #3464 regulatory audit,
+  as an adjacent finding while fixing the *same shape of bug* in Step H
+  (migration 289). Dormant, but on a fuse that starts burning 7 years after the
+  first paid ride — no user action required to trigger it.
+- **What breaks:** `financial_events.ride_id` references `rides(id)` with the
+  Postgres default `NO ACTION` (`backend/migrations/58_financial_events.sql:28`
+  — no `ON DELETE` clause). Step B runs a bare
+  `DELETE FROM rides WHERE created_at < now() - 7y` with **no exception handler
+  at all** (contrast Step H, which isolates per-account with
+  `EXCEPTION WHEN foreign_key_violation`). Every paid ride has a retained
+  `stripe_charge` header pointing at it, and **no purge step ever deletes
+  non-DSAR `financial_events` rows** — so the first ride to cross 7 years raises
+  `foreign_key_violation`, aborts the whole transaction, and rolls back Step A
+  too, never reaching Steps C–M.
+- **Why it matters more than the Step H bug this PR just fixed:** (1) *certain*
+  to fire on the passage of time alone, where Step H needed a deletion request
+  plus 7 years; (2) same total blast radius — GPS anonymization, ride deletion,
+  chat/token/stripe-event cleanup, audit-log purge and every other regulatory
+  window silently stop, repeating daily; (3) *less* protected — Step H at least
+  had per-row isolation, Step B has none.
+- **Options (needs a design call, not a one-liner):** NULL the `ride_id` on
+  affected `financial_events` rows before Step B; or migrate the FK to
+  `ON DELETE SET NULL`; or give Step B per-batch exception isolation. Each has a
+  different consequence for the 7-year tax record's ability to link a charge
+  back to its trip, so this is a retention-policy decision as much as a schema
+  one. Note migration 289's change-log records this too, but a dated markdown
+  file is not tracking — hence this entry.
+- **Acceptance:** a decision recorded on which option is taken; the fix applied
+  with a test that proves a 7-year-old paid ride can be purged without aborting
+  the run; `docs/runbooks/data-retention.md` updated to describe Steps H–M,
+  which it currently omits entirely.
+
+### B18. Retention docs promise anonymize-not-delete; migration 216 implements hard-delete, and 289 makes it operative
+- [ ] **Status:** open — found 2026-08-07 in the PR #3464 regulatory audit.
+  **Needs a legal/product decision, not a code change** — filed here rather than
+  "reconciled" unilaterally, because rewriting the policy docs to match the code
+  would be deciding the question rather than surfacing it.
+- **The divergence:** three governing documents state that records are
+  *anonymized* after the retention window —
+  `.claude/context/regulatory-sk.md:45,87` ("rows are anonymized (user_id
+  nulled, coordinates rounded to city centroid), **not deleted** — preserves
+  statistical continuity for regulatory reporting"), `CLAUDE.md` §Compliance
+  →"Deletion" ("Ride records become anonymized"), and
+  `docs/runbooks/data-retention.md`, which additionally omits Steps H–M
+  altogether. `backend/migrations/216_deletion_hard_delete_no_anonymize.sql:1-4`
+  instead implements "the Uber/Lyft attributable-retention model — **NO
+  anonymization**", hard-deleting DSAR accounts at 7 years.
+- **Why now:** Step H has been inert since 216 shipped (it aborted on the
+  migration-58 trigger). Migration 289 fixes that abort, so this PR is what
+  makes the hard-delete path **operative in production for the first time**.
+- **Note on substance:** hard-delete is not *less* PIPEDA-compliant than
+  anonymize — arguably it is a stronger privacy outcome — and the 7-year floor
+  is honored either way. The exposure is (a) the repo's own docs promise a
+  different outcome than what ships, and (b) `data-retention.md:42-47` requires
+  legal + founder sign-off for exactly this kind of change, recorded in the same
+  PR, and no such sign-off is visible for 216 or 289. The anonymize rationale
+  ("statistical continuity for SGI regulatory reporting") is a real tradeoff
+  being foreclosed without a recorded decision.
+- **Acceptance:** a recorded legal/founder decision on anonymize-vs-delete; the
+  three documents reconciled with whichever is chosen; `data-retention.md`
+  extended to cover Steps H–M.
+
+### B19. `payment_retry`'s `requires_capture` hold-recovery still uses the non-atomic two-write settlement
+- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- **What:** `backend/utils/payment_retry.py` (the `requires_capture` branch) still
+  does `Stripe capture → record_payment_event → separate update_ride` — the exact
+  sequence PR #3464 replaced in `settle_card`'s two success paths with the atomic
+  `settle_ride_card_payment` RPC. It was not wired to `_finalize_card_settlement`.
+- **Severity:** low-moderate. It *does* inherit the durable-retry + Sentry
+  escalation for free (it goes through the now-centralized
+  `ledger_service.record_event`), so a lost header there is no longer silently
+  swallowed — but the process-death window between the capture and the two writes
+  is still open on this path. PR #3464 declared its blast radius as "the two
+  settle_card success paths only", so this is a known partial close, not a
+  regression.
+- **Acceptance:** route the branch through `_finalize_card_settlement` so it picks
+  up the flagged atomic path, with a test mirroring `test_atomic_settle.py`'s
+  exactly-one-header matrix.
+
+### B20. Ledger projection can misclassify a tip when a ride is stuck unpaid
+- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- **What:** `backend/utils/ledger_projection.py::_decompose` (default fare branch)
+  reads `rides.driver_earnings` / `tax_amount` at projection time without checking
+  `rides.payment_status`. Migration 287's 30-minute grace window covers the normal
+  header-before-`update_ride` gap, but not a ride whose post-charge DB update failed
+  and wasn't recovered within ~30-45 min (the path that returns 503 + a Sentry page).
+  In that case the projection reads pre-tip earnings and books the tip to
+  `platform_revenue` instead of `driver_payable`.
+- **Severity:** low, and confined to the internal accounting overlay.
+  `rides.driver_earnings` (the actual payout figure feeding T4A and driver
+  statements) and `financial_events.delta_cents` (the tax record) are both
+  unaffected, and the resulting legs still balance — so no unbalanced-legs alert
+  fires and no driver is underpaid. It is a mis-attribution inside the double-entry
+  view only.
+- **Why not fixed inline:** the obvious fix (add `rides.payment_status = 'paid'` to
+  migration 287's work-queue filter) is wrong as stated — cancellation-fee and
+  notice-fee events legitimately point at rides that are cancelled, not paid, and a
+  blanket filter would exclude them from projection permanently. A correct fix has
+  to be source-aware, and the Python-side alternative (skip and retry next tick)
+  reintroduces the head-of-queue starvation risk the degraded-legs design exists to
+  avoid. Needs a deliberate design pass, not a one-liner.
+- **Acceptance:** source-aware settlement check with no starvation regression, plus
+  a projection test covering a stuck-`processing` fare ride.
+
+### B21. Background-loop lock TTL is longer than the sleep, halving several loops' cadence
+- [ ] **Status:** open — found 2026-08-08 reviewing PR #3464. Fixed in
+  `ledger_projection.py` only; the other loops are untouched.
+- **What:** the shared loop-shell idiom sets the Redis throttle lock with
+  `TTL = interval * 1.5` and then sleeps `interval` (± jitter). The pod that ran
+  the last tick therefore wakes while its OWN key is still alive, fails `SET NX`,
+  and sleeps another full interval — so the loop actually runs every ~2 intervals.
+  `payment_retry.py:629` states the intent explicitly and gets the arithmetic
+  backwards: *"TTL is 1.5× interval so a real lock expires before the next
+  election."* It does not.
+- **Where:** `utils/payment_retry.py` (5 min → ~10), `utils/driver_claim_reaper.py`,
+  `utils/offer_expiry_reaper.py`, `utils/orphaned_hold_reconciler.py`
+  (`interval * 2` → ~3 intervals). Not audited beyond this list.
+- **Severity:** low individually, but it silently halves throughput on sweeps
+  whose whole purpose is bounded recovery latency — `payment_retry` is the one to
+  look at first, since a failed payment waits ~10 min per attempt rather than 5.
+  With several replicas the aggregate cadence lands nearer 1.5× than 2×, so it
+  degrades quietly rather than visibly.
+- **Why not fixed here:** each loop has its own interval, jitter, and multi-replica
+  behaviour, and shortening the TTL trades exclusivity for cadence — safe only
+  where the tick is idempotent by construction (as the projection's is, via
+  `UNIQUE(event_id, account, side)`). `payment_retry` has the atomic
+  `payment_status → retrying` claim so it is very likely also safe, but that is a
+  money path and deserves its own change, not a drive-by.
+- **Acceptance:** per-loop TTL below the minimum sleep, each with a test pinning
+  the invariant (see `test_lock_ttl_expires_before_the_earliest_next_wake` and
+  `test_projection_loop_reacquires_its_own_lock_on_the_next_wake`), and
+  `payment_retry.py`'s misleading comment corrected.
+
+### B22. `G4a · pip-audit` is red on four advisories in three backend dependencies
+- [ ] **Status:** open — observed 2026-08-09 on PR #3464, which changed **no** dependency
+  manifest (`git diff origin/main...HEAD -- '*requirements*'` is empty), so these are
+  pre-existing on `main`. Filed rather than fixed in that PR, per release gate 8: a red
+  gate left unexplained decays into one people stop reading.
+- **What:**
+
+  | Package | Pinned | Advisory | Fixed in |
+  |---|---|---|---|
+  | `cryptography` | 49.0.0 | PYSEC-2026-3552 | 50.0.0 |
+  | `h2` | 4.3.0 | CVE-2026-71554 | 4.4.1 |
+  | `pypdf` | 6.14.2 | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
+
+- **Why it was not bumped inline:** gate 8 also says not to force a fix that breaks
+  something else to turn a check green. Each of these needs its own verification:
+  - **`h2`** is the riskiest. `repositories/_base.py` has bespoke retry handling for
+    HTTP/2 `GOAWAY` and `httpx.NetworkError` (`run_sync`'s `_HTTPX_NETWORK_EXC` path) —
+    the entire DB layer's transient-failure behaviour sits on top of this library. A
+    version bump needs the DB retry/circuit-breaker tests run deliberately, not
+    incidentally.
+  - **`cryptography`** is pulled in via `google-auth` and `pyjwt`; a major bump
+    (49 → 50) can move JWT signing/verification behaviour, which is the auth path.
+  - **`pypdf`** is the mildest (document generation), and is the one worth doing first
+    as a standalone change to confirm the gate goes green for the right reason.
+- **Severity:** unknown until each advisory is read. The exploitability of an `h2` or
+  `cryptography` CVE in *our* usage may well be nil, but "probably fine" is not the same
+  as a documented accepted risk — which is the other outcome gate 8 allows, via a `[CR]`
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`).
+- **Acceptance:** either each dependency bumped with its affected tests actually run, or
+  a `[CR]` per advisory recording the accepted risk and why. Not a silent red check.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
@@ -4107,7 +4323,228 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   (or a new standalone app) + Grafana Cloud config (external, not in this
   repo).
 
+### C12. Codecov uploads on `main` pushes silently fail — no token configured
+- [ ] **Status:** open — found 2026-08-10 while checking A1c's current
+  coverage number against the latest `main` CI run.
+- **What's wrong:** `.github/workflows/ci.yml`'s `backend-test` job uploads
+  to Codecov via `codecov/codecov-action@v6` with no `token:` input (tokenless
+  upload) and `continue-on-error: true`. On push-triggered runs (as opposed to
+  PRs from within the same repo) Codecov's tokenless mode rejects the upload:
+  the job log shows `error - Upload queued for processing failed: {"message":
+  "Token required - not valid tokenless upload"}` — but because of
+  `continue-on-error: true`, the step itself still reports `conclusion:
+  success` in the GitHub UI. Nothing about the green checkmark tells you the
+  upload was rejected. Confirmed on run
+  [`31348756297`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/31348756297/job/93335534234)
+  (commit `64a720e`, 2026-08-10).
+- **Impact:** the Codecov dashboard has no current data for `main`-branch
+  pushes (only whatever tokenless PR uploads succeeded, if any) — anyone
+  checking Codecov instead of a live CI log for "what's our coverage right
+  now" gets stale or missing numbers with no error surfaced. The same
+  `codecov-action@v6` step (same tokenless/`continue-on-error` pattern)
+  appears 4 times in `ci.yml` (once per test job:
+  backend/rider-app/driver-app/admin), so this likely affects all four, not
+  just backend — not independently re-verified here, flagging as an unknown.
+- **Root cause:** no `CODECOV_TOKEN` repository secret is configured, and the
+  workflow doesn't pass one via `with: token:`.
+- **Why not fixed here:** requires a human with GitHub repo-admin access to
+  generate a Codecov upload token (Codecov project settings → General →
+  Repository Upload Token) and add it as `GitHub → repo → Settings → Secrets
+  and variables → Actions → CODECOV_TOKEN` — no dev session/sandbox can do
+  this. Once the secret exists, add `token: ${{ secrets.CODECOV_TOKEN }}` to
+  each of the 4 `codecov-action@v6` steps in `ci.yml`.
+- **Also worth doing alongside the token fix:** drop `continue-on-error:
+  true` (or add a step afterward that great-greps the codecov CLI output for
+  `"Upload queued for processing failed"` and fails loudly) so a *future*
+  upload failure — token expiry, Codecov outage, config drift — surfaces as
+  a red check instead of silently passing again. As written today, fixing
+  the token alone reduces the immediate symptom but leaves the same
+  false-green failure mode dormant for next time.
+- **Not blocking:** actual test pass/fail and coverage-floor enforcement
+  (the `--cov-fail-under` gate inside `pytest`) are unaffected — this is
+  purely the external Codecov *reporting* path, not CI's own gate.
+
+### C13. Required `pull_request`-triggered workflows silently never fire on some PRs
+- [ ] **Status:** open — found 2026-08-10 on PR #3494. `CI/CD Pipeline`
+  (`ci.yml`), `Security Gates`, `CI Guard Rails`, and `PR Checks` — all
+  confirmed `active` workflows, all normally triggering on `pull_request`
+  events per their own `on:` blocks — showed **zero runs** against either of
+  two consecutive commits on that PR (the PR-open commit, and a follow-up
+  empty commit pushed specifically to force a `synchronize` event). Verified
+  directly against the Actions API (`list_workflow_runs`), not just the PR's
+  check-runs view, which can lag. Nothing was stuck in `action_required`
+  (rules out a first-time-contributor approval gate), and every workflow's
+  `state` is `active` (rules out a disabled workflow). The only thing that
+  did run was Vercel's own bot-posted status (expected — always fires, not
+  a `pull_request`-triggered GitHub Actions workflow).
+- **Why it matters:** this is the same failure *shape* as the already-tracked
+  C9 (Codex auto-review going silent) and C7 (Claude review off by design) —
+  a third, independent instance of "no automated PR review/gate signal
+  arrives," this time hitting native GitHub Actions rather than a
+  third-party bot. A PR whose required checks never even run cannot show a
+  legitimate green state and risks being merged on manual override with zero
+  automated verification, or blocked indefinitely with no actionable error.
+- **What was tried:** pushing an empty commit to force a `synchronize`
+  `pull_request` event — did not retrigger the workflows either. This rules
+  out "the PR was opened as a draft and workflows correctly skip drafts" as
+  the sole explanation (the PR was later marked ready for review, which is
+  itself a `pull_request` event type `ci-guardrails.yml`/`pr-checks.yml`
+  explicitly listen for, and still nothing fired).
+- **Not resolvable from an engineering session** — no repo-admin access to
+  check the two likely causes: (1) **Settings → Actions → General** — a
+  "require approval for all outside collaborators" or similar restriction
+  that doesn't surface as `action_required` in the API the way a
+  fork-PR approval gate normally would, or an org-level Actions policy; (2)
+  **Settings → Webhooks** — a failed/disabled delivery for the
+  `pull_request` event specifically (other event types, e.g. this repo's
+  own push-triggered workflows, were observed firing normally on the same
+  commits).
+- **Files:** none — this is a GitHub App/repo-configuration issue, not a
+  workflow YAML defect. No `.github/workflows/*.yml` change is implicated;
+  all four workflows' `on:` blocks are correctly configured.
+- **Acceptance:** a repo admin confirms (or rules out) an Actions/webhook
+  restriction via the two settings pages above; once addressed, a fresh PR's
+  `CI/CD Pipeline` run should appear within the workflow's normal start
+  latency (observed elsewhere in this file as low-minutes) of PR
+  open/synchronize/ready-for-review.
+
 ## P3 — Post-launch backlog (tracked, not gating)
+
+### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
+
+Full scenario-by-scenario matrix with file:line for all 45 rider/driver events:
+`docs/notification-channel-coverage.md`. Change Impact Log for what was fixed:
+`docs/change-log/2026-08-08-driver-lifecycle-email-channel.md`.
+
+_Closed by that branch (do not redo): the shared branded email layout + logo
+route, the lifecycle-email policy layer with its `app_settings` kill switch,
+driver approval/rejection/suspension/ban emails, document-expiry emails on all
+four tiers, the silent document-approval reactivation (D5), the verify/unverify
+policy bypass (D7/D8), the expiry-suspension priority tier (D13), and
+`email_enabled` becoming a real preference for OPTIONAL-class mail (X1)._
+
+_Also closed by the rider follow-up (`utils/rider_emails.py`, change log
+`docs/change-log/2026-08-08-rider-lifecycle-emails.md`): welcome email (R4),
+email-address-change security notice to the old address (R7), account-deletion
+confirmation (R9), no-show fee receipt (R21), corporate guest receipt (R26,
+formerly N2), refund (R29), wallet top-up (R30), and telling the blocked rider
+when payment retries are exhausted (R32, formerly N4)._
+
+Remaining, roughly in order of user impact:
+
+- [ ] **N1. Rider DSAR export assembles no data and sends no email (R10)** —
+  `POST /users/data-export` (`routes/users.py:152`) inserts a
+  `data_export_requests` row with a 30-day SLA and stops. Nothing builds the
+  export, nothing emails it, and the admin status-change endpoint
+  (`routes/admin/users.py:486`) notifies nobody either. A working export exists
+  driver-side (`routes/drivers/tax_exports.py:668`, handles rider-only
+  accounts at `:721`) but the rider app never calls it. **This is a PIPEDA
+  access-right obligation, not a nice-to-have** — own change, own review.
+  Now the largest open item in this group.
+- [x] ~~**N2. Corporate guest rides get no receipt (R26)**~~ — done: the
+  receipt hook now sits beside the Meta conversion hook in
+  `auto_settle_guest_corporate`, gated on `not already_paid` so a replayed
+  settlement does not re-send. A phone-only guest still has no email on file
+  and is skipped silently.
+- [ ] **N3. Two push call sites pass the wrong ID and are silently dropped (X6)**
+  — `utils/payment_retry.py:183` passes `drivers.id` and `:412` passes
+  `ride["driver_id"]` where `user_id` is required; `features.py:1659` then finds
+  no user and drops the push at `:1661`. Every "Payout failed" notice from
+  `retry_stuck_payouts` is lost. Same defect shape at
+  `routes/admin/vehicle_fleet.py:541`, which passes `fcm_token`.
+- [x] ~~**N4. Rider blocked from booking is never told (R32)**~~ — done:
+  `_alert_admins_payment_exhausted` now emails the rider first, before the
+  admin WS broadcast and pushes, and is self-swallowing so those still fire.
+- [ ] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
+  (D29)** — `routes/rides/cancellation.py:356`. A driver en route to pickup
+  with a backgrounded app is not notified.
+- [ ] **N6. Stripe Connect KYC blocking payouts notifies nobody (D24)** —
+  `routes/webhooks.py:1297` → `services/stripe_kyc_sync.apply_account_update`
+  persists the cache columns and stops. A driver whose payouts Stripe has
+  blocked learns nothing.
+- [ ] **N7. Auto-reactivation after `suspended_until` lapses is silent (D21)** —
+  `utils/suspension_reactivation.py` writes an audit row; the driver is never
+  told they can work again.
+- [ ] **N8. Delete dead `utils/receipt_email.py` (X4)** — no production callers
+  (only `tests/test_receipt_email.py`), and it hardcodes `_GST_RATE = 0.05` /
+  `_PST_RATE = 0.06` (`:18-19`) instead of reading the service area, so it will
+  silently mis-tax if anyone wires it up. The name collision with the live
+  `utils/email_receipt.py` is itself a trap.
+- [ ] **N9. Five notification preferences are still dead columns (X2)** —
+  `sms_enabled`, `ride_updates`, `promotions`, `safety_alerts`,
+  `earnings_summary` are persisted, surfaced in the app, and read by nothing.
+  `earnings_summary` in particular is ignored by the statement job
+  (`utils/driver_statement_job.py`). Either wire them or remove them from the UI.
+- [ ] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
+  through to the legacy `users.fcm_token` column (`features.py:1664-1670`)
+  rather than `fcm_token_rider`. Works today only because registration still
+  mirrors both (`routes/notifications.py:329-336`); breaks silently if that
+  mirroring is ever removed.
+- [ ] **N16. Consolidate the two copies of the company-address assembly** —
+  `utils/company_details.py` and `utils/marketing_email.py` both carry
+  `_coalesce` / `_postal_address`. Deliberately not merged: marketing's copy
+  sits on a CASL consent-critical path and produces a legally-required footer,
+  so touching it needs its own review rather than being folded into an
+  unrelated change.
+- [x] ~~**N11. Retrofit the ride receipt and Spinr Pass invoice**~~ — done:
+  both now use the shared header/footer, the real logo, `#FF3B30`, and the
+  company name and address from the admin Settings page, in the email **and**
+  in the attached PDFs. The receipt gained a plain-text alternative carrying
+  the same GST/PST breakdown. Behind `branded_receipt_enabled` (migration
+  288, defaults on); the pre-retrofit shell is kept verbatim and pinned by
+  `tests/test_receipt_shell_snapshot.py`. See
+  `docs/change-log/2026-08-08-receipt-invoice-branding-retrofit.md`.
+- [x] ~~**N11b. Remaining un-retrofitted emails**~~ — done: corporate OTP,
+  member invite, KYB decision, signup ops alert, admin broadcast and the
+  T4A/DSAR export emails now render through `utils/email_layout`. Driver
+  statements, corporate low-balance and the safety-team alert are branded
+  indirectly — `features.send_email` now wraps a plain-text `body` in the
+  shared shell when the caller supplies no `html`, so the next sender added
+  that way is branded by default. Enforced by
+  `tests/test_all_emails_are_branded.py`, which fails if any send site
+  bypasses the layout without an argued allowlist entry. The admin broadcast
+  additionally now **escapes** admin-authored free text, which the previous
+  bare `<h2>`/`<p>` interpolation did not. See
+  `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
+- [ ] **N17. Product name in email copy is still literal "Spinr"** — "Open the
+  Spinr driver app", "your Spinr wallet", "— The Spinr Team". Deliberate, not
+  an oversight: the `company_name` setting holds the *legal entity* name, and
+  "Open the Spinr Technologies Inc. driver app" reads badly, so settings drive
+  the footer identity, mailing address, logo, logo alt text and sentence-final
+  legal-name usage only. A rebrand of the product name itself needs a separate
+  `company_app_name` setting plus a copy sweep across `utils/rider_emails.py`,
+  `utils/driver_status_notifications.py`, `utils/document_expiry.py` and
+  `routes/drivers/tax_exports.py`. Worth doing before, not after, any rename.
+- [ ] **N11c. Delete the pre-retrofit receipt/invoice shell and its flag** —
+  once the branded version has been seen in real inboxes. Two shells and a
+  switch are a real carrying cost; both `_LEGACY_*` constants are commented
+  to say so.
+- [ ] **N12. No visual/snapshot regression tooling for email** — standing gap.
+  `tests/test_email_layout.py` asserts the logo URL, brand colour and footer
+  lines are present, but nothing catches a layout that renders badly in Gmail,
+  Apple Mail or Outlook. Client rendering is verified by hand or not at all.
+- [x] ~~**N13. Rider-side lifecycle emails**~~ — done for welcome (R4),
+  email-address-change security notice (R7), account-deletion confirmation
+  (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
+  `utils/rider_emails.py` and go through the policy layer, so the
+  `lifecycle_emails_enabled` kill switch covers them.
+- [ ] **N14. Rider email addresses are never verified (R5)** — `email_verified`
+  is written `false` at `routes/users.py` and nothing ever flips it for a
+  rider; the only `verify-email-otp` endpoint (`routes/auth.py:744`) belongs to
+  the corporate business portal. The welcome email is now a *de facto*
+  deliverability signal — a hard bounce lands the address on the suppression
+  list — but that is not a verification flow, and nothing surfaces the
+  difference to the rider or to support.
+- [ ] **N15. Remaining silent rider surfaces** — grouped rather than split,
+  since they share one cause (no notification call of any kind at the site):
+  rider-initiated ride completion sends the rider nothing while the
+  driver-initiated path does (R19, `routes/rides/lifecycle.py:126`); wallet
+  debits/credits, promos and loyalty tier changes have zero notification calls
+  (R31/R33/R34); scheduled rides have one reminder tier and no booking
+  confirmation (R35/R37); rider SOS sends the rider no confirmation that help
+  was alerted (R38); corporate allowance reset and exhaustion are silent, with
+  exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
+  "new device signed in" alert (R8).
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 
@@ -4117,22 +4554,43 @@ driver-persona-secrecy prompt rules, per-tool timeouts for the Maps fan-out
 tools, `/mcp` read-only enforcement + per-user daily cap, truncation-preserves-
 guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 
-- [x] **AI1. `/ai/chat` rate limit is per-IP, not per-user** — Done
-  (2026-08-10). Added a second, independent user-keyed limiter
-  (`ai_chat_user_limit`, `utils/rate_limiter.get_authenticated_user_key`,
-  unverified-JWT-decode-for-bucketing only, mirrors `middleware.py`'s
-  `_extract_user_id` pattern) stacked alongside the existing IP-keyed
-  `ai_chat_limit` on `/ai/chat` — additive, nothing removed. Separately,
-  `orchestrator._over_daily_cap`'s Redis-error path now fails
-  CLOSED-with-a-floor (process-local counter bounded by
-  `_DEGRADED_CAP_FLOOR = 200`/user/day) instead of fully open; error now
-  logged with the underlying exception per CLAUDE.md's "do not silently
-  swallow errors." 16 new tests
-  (`backend/tests/test_ai_rate_limiting.py`); known sibling gap in
-  `mcp_server.py`'s `_over_mcp_daily_cap` (same fail-open pattern, separate
-  `/mcp` surface) intentionally left out of scope — flagged for a follow-up
-  item. Full detail:
-  `docs/change-log/2026-08-10-ai1-chat-rate-limit-fail-closed.md`.
+- [x] **AI1. `/ai/chat` rate limit is per-IP, not per-user** — done: the
+  IP-keying half is fixed. `ai_chat_limit` (`utils/rate_limiter.py`) now uses
+  a new `get_ai_chat_key`, which keys on the bearer token's `user_id`/`sub`
+  claim (signature not verified for keying purposes — the real,
+  signature-verified `get_current_user` dependency still gates the request
+  itself downstream, so a forged token can only land in a throwaway bucket
+  for a request that then 401s, never impersonate another user's bucket;
+  mirrors the existing unverified-extraction pattern already established in
+  `core/middleware.py::_extract_user_id` for log correlation) and falls back
+  to IP only when no bearer token is present. 12 new unit tests in
+  `tests/test_coverage_boost.py::TestGetAiChatKey` cover the user-id/sub
+  claim paths, the two-IPs-one-token-one-bucket property, and every
+  IP-fallback branch (no token, garbage token, no user claim). The
+  **daily-cap fail-open** half was deliberately left alone: it's an
+  existing, already-documented, cross-referenced design decision
+  (`ai/orchestrator.py::_over_daily_cap`'s own docstring: "Fails OPEN with a
+  loud log — the kill switch remains the hard stop when Redis is down"),
+  not an oversight — changing an accepted trade-off wasn't this fix's call
+  to make silently. **Not yet verified:** no live-Redis integration test
+  exercising the actual distributed counter across two rotated IPs with the
+  same token — the unit tests confirm the key function's own logic, not the
+  full rate-limit-storage round trip (that's the same level of verification
+  every other key-function in this file has, per existing test coverage).
+- [ ] **AI1b. Daily-cap fail-open on Redis error — revisit as its own decision.**
+  Spun off 2026-08-10 while reconciling a merge conflict: a parallel session
+  independently built a fail-closed-with-a-floor alternative for
+  `orchestrator._over_daily_cap` (process-local counter, generous fixed
+  floor instead of the admin-configured cap, since `get_app_settings()`
+  could itself be degraded) — discarded during reconciliation in favor of
+  AI1's already-merged, deliberate "leave it alone, don't change an accepted
+  trade-off silently" call, not because the alternative was wrong. Logged
+  here rather than dropped: worth an explicit product/eng decision on
+  whether a bounded fail-closed floor should replace the current fail-open
+  policy, same treatment AI1 itself already got. Also flagging the sibling
+  fail-open gap the same investigation found in `mcp_server.py`'s
+  `_over_mcp_daily_cap` (same pattern, separate `/mcp` surface) — not yet
+  tracked anywhere.
 - [x] **AI2. Assistant output is persisted un-scrubbed** — only the user
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with
@@ -4160,22 +4618,96 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   before building the card, returning a structured `{"error": ...}` result
   on failure (same shape as the existing out-of-area refusal); the
   Confirm-time validator in `schemas.py` is unchanged (defense in depth).
-- [ ] **AI5. `find_place` offers out-of-service-area street addresses** —
-  the area filter is skipped for street-address-shaped queries
-  (`tools_booking.py:538-539`), so a rider can pick a location the booking
-  step later refuses. Filter (or visibly mark) out-of-area candidates for
-  street queries too.
-- [ ] **AI6. No handling for pasted Google Maps URLs / raw coordinates** —
-  bare `lat,lng` is scrubbed to `[COORDS]` before the model sees it
-  (`pii.py:33`) with no prompt rule for the token; short links carry no
-  coordinates and get text-searched as URL strings.
-- [ ] **AI7. Multilingual gap** — no language rule in prompts; Maps calls
-  hard-code `language: "en"`; FAQ keyword matching is English-only.
-- [ ] **AI8. Stale action cards never expire client-side** — every past
-  quote/suggestion/map-pin card stays tappable
-  (`rider-app/app/ai-assistant.tsx`); backend self-contained messages
-  mitigate, but a stale-yet-consistent quote re-books at a possibly different
-  price. Consider disabling cards older than the latest assistant turn.
+- [x] **AI5. `find_place` offers out-of-service-area street addresses** —
+  done: chose **visibly mark** over **filter** — a hard filter risked
+  silently returning zero results for a legitimate numbered address just
+  outside the boundary (unlike a named-place search, a street address
+  usually has no in-area fallback candidate to substitute), so the
+  candidate stays in the result but `find_place` now checks
+  `best.get("in_service_area")` for street-address-shaped queries and, when
+  false, sets `result["out_of_service_area"] = True` plus an explicit note
+  telling the model not to quote/book it and to tell the rider it's outside
+  coverage — same warning-note pattern already used right above it for the
+  imprecise-address case. 3 new tests in `tests/test_ai_tools_booking.py::TestFindPlace`
+  (out-of-area street address marked but not dropped, in-area street
+  address unflagged, named-place search keeps its pre-existing hard
+  filter unchanged). Full `test_ai_tools_booking.py` suite (97 tests)
+  passes.
+- [x] **AI6. No handling for pasted Google Maps URLs / raw coordinates** —
+  done, two independent fixes: (1) raw coordinates — did NOT extend
+  `keep_trip_pins`'s bracketed-pin exemption to bare/unbracketed
+  coordinates (that would redefine what `keep_trip_pins` means — currently
+  documented as app-generated pins specifically — a bigger privacy-tradeoff
+  decision than this item asked for); instead added a `GROUND RULES` line
+  in `ai/prompts.py` telling the model the literal `[COORDS]` token means
+  the rider pasted coordinates that were removed before it ever saw them,
+  and to ask for the address or offer `request_map_pin`. (2) Maps URLs —
+  new `_looks_like_a_url` regex guard in `tools_booking.py::find_place`
+  (checks for `http(s)://`, `goo.gl/`, `maps.app.goo.gl`, or
+  `google.<tld>/maps`) short-circuits with a clear note *before* any Maps
+  API call — defense-in-depth in case the model ignores the matching new
+  prompt rule (also added) telling it not to pass a pasted link to
+  `find_place`. 6 new tests in `tests/test_ai_tools_booking.py::TestFindPlace`
+  (4 URL shapes rejected with zero HTTP calls made, an ordinary query
+  unaffected). Full `test_ai_tools_booking.py`/`test_ai_orchestrator.py`
+  (127 tests) pass. Did not attempt URL-unshortening/parsing to actually
+  resolve a Maps link's destination — out of scope for "lightweight";
+  the fix makes the assistant ask the rider instead of silently mishandling
+  it, not resolve the link itself.
+- [x] **AI7. Multilingual gap** — done, scoped to the reply-language half
+  only: new `STYLE` rule in both `_RIDER_CORE` and `_DRIVER_CORE`
+  (`ai/prompts.py`) telling the model to mirror the rider/driver's own
+  language for every reply, not just the first one, and never switch on its
+  own. **Deliberately left unchanged:** the hardcoded `language: "en"` /
+  `"languageCode": "en"` params on the four Maps API call sites
+  (`tools_booking.py` geocode calls, `google_places_new.py`'s Places API
+  (New) requests) — those control what language Google returns *address
+  text* in (e.g. street/place names), not what language the assistant
+  replies in; Saskatchewan addresses/street names aren't meaningfully
+  "translated" the way conversational text is (same convention as Google
+  Maps itself, which shows local-language street names regardless of app
+  UI language), and re-plumbing a `language` parameter through 4 call sites
+  for uncertain benefit is a bigger, separate change than this item's
+  "lightweight" framing. FAQ keyword matching stays English-only too, per
+  the item's own framing — translating FAQ content is a data/content
+  problem, not a prompt fix. New `test_prompts_mirror_the_users_language`
+  in `tests/test_ai_tools_booking.py` pins both personas' new rule text.
+  Full `test_ai_tools_booking.py`/`test_ai_orchestrator.py` (128 tests)
+  pass. **Not verified:** no live LLM call was made to confirm the model
+  actually follows this instruction in practice (e.g. correctly detects
+  and sustains French across a multi-turn conversation) — this pins the
+  prompt text only, the same level of verification every other prompt-rule
+  fix in this backlog has (prompt content isn't executable, so there's no
+  unit-testable "does the model comply" assertion).
+- [x] **AI8. Stale action cards never expire client-side** — done: a card
+  is now "live" only while no USER message has been sent after it — the
+  moment the rider sends any new message, every earlier
+  `fare_quote`/`location_suggestions`/`map_picker` card becomes visibly
+  dimmed (opacity 0.45) and its `TouchableOpacity`(s) `disabled`, with an
+  italic "The conversation has moved on — ask again if you still need
+  this." note. New pure helper `rider-app/utils/staleAiCard.ts::lastUserMessageIndex`
+  (mirrors the existing `activeRideRoute.ts` pattern: small, focused,
+  independently testable) computes the boundary once per render via
+  `useMemo`; `renderMessage` compares each item's FlatList `index` against
+  it. **Deliberately excluded:** `support_action` (an older "Contact
+  support"/cancel-ride link is still a valid way to reach support — no
+  staleness risk in the same sense) and `booking_proposal` (the item's own
+  text names "quote/suggestion/map-pin" specifically, not the proposal
+  card; the real safety boundary for that one is server-side
+  re-validation at `POST /rides`, a separate, higher-risk change out of
+  scope here). Prop threading: `FareQuoteCard`/`LocationSuggestionsCard`
+  gained a `disabled?: boolean` prop each. **Verification actually
+  performed** (more than prior frontend fixes in this batch): ran the
+  project's own `tsc --noEmit` (0 new errors — the only 7 project-wide
+  errors are a pre-existing, unrelated `expo-router/react-navigation`
+  missing-module issue also affecting one existing test suite) and the
+  full `yarn jest` suite (434/434 individual tests pass; the one failing
+  *suite* fails to even load, same pre-existing missing-module issue, not
+  a regression) — plus a new dedicated `staleAiCard.test.ts` (4 cases:
+  empty conversation, no user message yet, single user message, several
+  turns with the boundary comparison itself pinned). **Not verified:** no
+  running dev server / simulator — the visual dimming and disabled-tap
+  behavior were reasoned through and type/logic-tested, not seen rendered.
 - [x] **AI9. Admin AI console quote-card tap still prose-only** — same
   defect class fixed for suggestions;
   `admin-dashboard/.../ai-console/page.tsx:125-131` drops `[lat,lng]` and
@@ -4188,13 +4720,66 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   unchanged); the admin console's quote-card `onClick` now calls the shared
   builder instead of its own prose-only template. See
   `docs/change-log/2026-08-01-ai9-admin-quote-card-coords.md`.
-- [ ] **AI10. No conversation-level concurrency lock server-side** — two
-  clients on one `conversation_id` interleave `append_message` writes and
-  race history snapshots (client is single-flight only).
-- [ ] **AI11. Cancel-ride escalation UX** — the assistant correctly refuses
-  to cancel rides, but there is no `cancel`/`ride_issue` escalation category
-  and no deep link to the ride screen — riders get a support ticket for a
-  self-serve action.
+- [x] **AI10. No conversation-level concurrency lock server-side** — done:
+  `orchestrator.py::run_chat_turn` is now a thin locking wrapper
+  (`ai:conv_lock:{conversation_id}`, `redis_set_nx`/`redis_delete`, 90s TTL
+  — a generous ceiling for a full multi-iteration tool-calling turn) around
+  the renamed original implementation, `_run_chat_turn` (both
+  `routes/ai.py` and `routes/admin/ai_console.py` still import the public
+  `run_chat_turn` name unchanged). A second turn on the same
+  `conversation_id` while the first is still in flight gets a clean
+  `conversation_busy` error frame instead of silently racing; a brand-new
+  conversation (`conversation_id is None`) has no shared id yet to race on,
+  so it skips the lock entirely — verified by
+  `test_new_conversation_skips_the_lock` asserting `redis_set_nx` is never
+  called on that path. New `TestConversationLock` class in
+  `tests/test_ai_orchestrator.py` (3 tests): a real interleaved-concurrency
+  test using a blocking fake adapter + `asyncio.Event` handshake (not just
+  a unit test of the lock function in isolation) confirms the second
+  concurrent call is rejected while the first completes normally; a
+  sequential-reuse test confirms the lock is released after completion, not
+  left stale; the skip-lock test above. Full existing
+  `test_ai_orchestrator.py`/`test_ai_pii.py`/`test_ai_admin_console.py`/
+  `test_ai_tools_booking.py` suites (196 tests) still pass unchanged. **Not
+  yet verified:** behavior against a real Redis instance under actual
+  network-level concurrency — the concurrency test exercises the in-process
+  fallback store (`REDIS_URL` unset in the test env, per this repo's
+  documented Redis-transparency convention), not the real `SET NX EX`
+  round-trip against Redis itself.
+- [x] **AI11. Cancel-ride escalation UX** — done: added one new
+  `escalate_to_support` category, `cancel_ride` (not a separate `ride_issue`
+  category too — the item's concretely-described gap was specifically
+  cancellation requests getting a generic ticket instead of a self-serve
+  deep link; a broader `ride_issue` category wasn't scoped by this item and
+  wasn't added to avoid inventing an undefined feature). Backend
+  (`ai/tools_support.py`): `cancel_ride` maps to `/ride-status` in
+  `_CATEGORY_LINKS` and gets its own response message ("You can cancel from
+  your ride screen — tap below to go there.") instead of the default
+  "handoff to human support" phrasing, which was actively misleading for a
+  self-serve action. `ai/prompts.py`'s rider-only cancel-refusal rule now
+  tells the model to use `category="cancel_ride"` for cancel requests
+  specifically. Frontend (`rider-app/app/ai-assistant.tsx`): the
+  `open_support` action card, on a `cancel_ride` category, now resolves the
+  actual ride-owning screen via the same `activeRideRouteFor(status)`
+  resolver the screen's own header back-button already uses (searching/
+  driver_assigned/driver_accepted → `/driver-arriving`, driver_arrived →
+  `/driver-arrived`, in_progress → `/ride-in-progress`), falling back to the
+  backend's static `/ride-status` link only if there's no live ride state to
+  resolve from (e.g. the ride already ended by the time the rider taps it) —
+  reusing the existing resolver instead of hardcoding a second, possibly-
+  inconsistent path. 6 new backend unit tests
+  (`tests/test_ai_tools_support.py::TestEscalation::test_cancel_ride_links_to_ride_status_not_a_ticket_message`
+  plus the existing suite unaffected); full
+  `test_ai_tools_support.py`/`test_ai_orchestrator.py`/`test_ai_pii.py`/
+  `test_ai_tools_booking.py`/`test_ai_admin_console.py` (232 tests) pass.
+  **Not verified:** the `rider-app/app/ai-assistant.tsx` frontend change has
+  no dedicated component test (none existed for this screen before this
+  change either) and was not visually tested in a running app/simulator —
+  reasoned through by reading the existing `activeRideRouteFor` +
+  `useRideStore` usage pattern already in the same file (the header
+  back-button handler), not executed. Flagging per this repo's own
+  "state what was NOT verified" convention, not silently claiming full
+  coverage.
 - [x] **AI12. Admin console endpoint has no rate limiter and a stale
   docstring** — `routes/admin/ai_console.py` claims turns count against the
   daily cap; the orchestrator deliberately exempts them, and the endpoint has
@@ -4222,11 +4807,28 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `precise=False` on the card and let the assistant quote immediately while
   offering the map pin as an optional refinement (the "quote + note" option),
   rather than gating the quote.
-- [ ] **AI13. No output-side leakage filter** — prompt rules (added
-  2026-07-28) are the only defense against the model printing tool names /
-  internal jargon; nothing greps the reply stream. A lightweight post-filter
-  for snake_case tool names in assistant text would make the secrecy rule
-  structural.
+- [x] **AI13. No output-side leakage filter** — done: new
+  `backend/ai/pii.py::filter_tool_leakage` regexes for snake_case-shaped
+  tokens (`\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b`) generally, not just the
+  current tool registry, so the backstop stays structural against a
+  hallucinated or future internal-identifier name too. Wired into
+  `orchestrator.py`'s existing `stored_text = scrub_pii(...)` line
+  (`stored_text = filter_tool_leakage(scrub_pii(...))`), the same call site
+  AI2's PII scrub already uses — **same scope decision as AI2**: this
+  filters the persisted/replayed copy (`ai_messages`, the FAQ
+  cross-user cache) only. The raw text has already streamed to the client
+  live by the time this runs (SSE token-by-token), matching the existing,
+  already-documented convention at that exact call site ("the raw text has
+  already streamed to the client this turn... only stored/replayed copies
+  change") — a true live-stream filter would need per-token buffering,
+  which is an architectural change this item's own "lightweight" framing
+  didn't ask for and wasn't attempted. 6 new unit tests in
+  `tests/test_ai_pii.py::TestFilterToolLeakage` (registered + hypothetical
+  future tool names, normal prose unaffected, multi-leak, idempotent, no
+  cross-contamination with `scrub_pii`'s own uppercase placeholder tokens)
+  plus 1 orchestrator-level regression test
+  (`test_assistant_text_has_tool_leakage_filtered_before_persistence`)
+  pinning the real call site the same way AI2's own regression test does.
 - [x] **AI15. `backend/ai/pii.py` had no card-number or government-ID/SIN
   scrubbing** — `scrub_pii()` covered phones, emails, GPS coordinates, and
   postal codes but had zero regex coverage for payment card numbers, and zero
@@ -4250,31 +4852,107 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `test_ai_pii.py` + `test_log_guard.py`, including 16 new tests). See
   `docs/change-log/2026-08-01-ai-pii-card-govid-coverage.md`.
 
-- [ ] **D1. PostGIS surge query** — `surge_engine.py` caps at 500 drivers with Python
-  point-in-polygon; move the count server-side when driver count approaches the cap.
+- [x] **D1. PostGIS surge query** — stale, already substantially done by
+  another session before this pass. `utils/surge_engine.py` already: (1)
+  raised the fetch cap 500 → 5000 and made truncation loud (metric +
+  warning) so a hit can never silently mis-price surge; (2) implemented
+  `_count_supply_spatial()` — the actual PostGIS `ST_Covers` + GIST-index
+  server-side count this item asked for (migration 170); (3) gated it
+  behind `SURGE_SPATIAL_COUNT` (env flag, off by default, fallback-safe on
+  any error) exactly per CLAUDE.md's "ship dark, verify in staging, then
+  flip on" convention for anything touching a live-tested, money-adjacent
+  path. **Deliberately not flipped on here**: turning the flag on is an
+  ops decision gated on an actual staging rehearsal this session cannot
+  perform (no staging environment — see C1/E1), not an engineering task
+  left undone. No code change needed; correcting the stale item.
 - [ ] **D2. Distributed tracing** — request-ID propagation exists (`X-Request-ID`);
   full OpenTelemetry only if multi-replica latency debugging becomes painful.
-- [ ] **D3. Driver destination mode** — biggest driver-retention feature gap vs industry.
-- [ ] **D4. Driver heatmap UI** — `utils/demand_forecast.py` exists server-side; surface
-  it in the driver app.
+- [x] **D3. Driver destination mode** — backend was already fully built
+  (`backend/routes/drivers/profile.py` L428-497: `POST/GET/DELETE
+  /drivers/destination`; `backend/services/dispatch_service.py` L151-209
+  already filters ride offers by `destination_mode`/`destination_lat`/
+  `destination_lng`, gated no-op when off). The only real gap was the
+  driver-app UI — added `driver-app/app/driver/destination-mode.tsx`, a
+  new settings screen (status card, address input, activate/update/clear
+  actions) reusing `addresses.tsx`'s geocode-on-save pattern (Places
+  autocomplete+details via the backend proxy, not direct Google calls) to
+  turn a free-text address into lat/lng before `POST /drivers/destination`.
+  Linked from Settings → Account. i18n strings added to en/fr/es (no
+  fallback-to-English exists in this app's `t()`, so all three needed
+  entries to avoid a raw key showing in fr/es UI). Not run against a
+  simulator/device and no `tsc`/`yarn jest` pass performed for this
+  change, per the standing no-test-suite instruction — deferred to the
+  end-of-batch verification pass.
+- [x] **D4. Driver heatmap UI** — stale, already done. Backend
+  `GET /drivers/demand-heatmap` (`backend/routes/drivers/profile.py` ~L235-260)
+  is gated on the `service_area.show_demand_heatmap` admin setting and returns
+  the heatmap cells. Driver-app already consumes it: `driver-app/app/driver/
+  (tabs)/index.tsx` renders a `react-native-maps` `Heatmap` component fed from
+  this endpoint. No code change needed; correcting the stale item.
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.
-- [ ] **D7. Admin analytics Redis cache** — 5-min cache on cancellation-breakdown
-  (`routes/admin/analytics.py:72`), drops dashboard DB load ~98%.
-- [ ] **D8. Payment-retry admin alert via WS broadcast** — replace per-admin push loop
-  (`utils/payment_retry.py:80`) with one `broadcast_to_admins`.
-- [ ] **D9. `compliance_export_events` has no purge job for its claimed 7-year
-  retention** — `backend/migrations/263_compliance_export_events.sql`'s table
-  comment states "7-year retention" but no background loop or scheduled job
-  enforces it; rows accumulate forever today. Long time horizon (first purge
-  wouldn't be due until 2033), so not urgent, but the claim in the migration
-  comment currently overstates what the system actually does — nothing
-  deletes a row past 7 years yet. Migration itself is append-only and merged
-  (can't be edited per `backend/migrations/CLAUDE.md`); the fix is a new
-  migration/cron adding a scheduled purge (mirror the pattern in
-  `utils/retention_purge.py`) before 2033, not a comment edit. Tracked here
-  as gap G8 from `reports/audits/2026-07-28-compliance-reporting-module-lifecycle-audit-v1.md`.
+- [x] **D7. Admin analytics Redis cache** — done: `GET /admin/analytics/cancellation-reasons`
+  now caches its response for 5 minutes (`_OVERVIEW_CACHE_TTL`, same TTL
+  constant `/overview` already used — reused rather than duplicated), exact
+  same `redis_get`/corrupt-cache-fallthrough/`redis_set`-with-fail-open
+  pattern as the existing `/overview` endpoint (F-50). Cache key includes
+  both `date_range` and `service_area_id` (`analytics:cancellation-reasons:{date_range}:{service_area_id or 'all'}`)
+  so two different service-area filters don't collide on one cached entry.
+  Updated the 3 existing tests in
+  `tests/test_admin_analytics_coverage.py::TestCancellationReasons` to
+  explicitly patch `redis_get`/`redis_set` (matching `TestAnalyticsOverview`'s
+  own established convention) — without this, the module-level in-memory
+  redis fallback (no `REDIS_URL` in the test env) would have let one test's
+  cached result leak into a later test with the same default-params cache
+  key and silently skip exercising its mocked RPC path, the same class of
+  test-pollution bug already tracked as A8. Added 4 new tests mirroring
+  `TestAnalyticsOverview`'s own cache-specific cases (cache hit skips the
+  RPC entirely, corrupt cache falls through, different `service_area_id`
+  values get different cache keys, a `redis_set` failure doesn't turn a
+  200 into a 500). **Verification deferred to the end-of-batch run.**
+- [x] **D8. Payment-retry admin alert via WS broadcast** — stale, already
+  done by another session before this pass. `utils/payment_retry.py::_alert_admins_payment_exhausted`
+  already calls `manager.broadcast_to_admins({...})` once for the real-time
+  in-dashboard WS alert — the exact fix this item asked for. The remaining
+  per-admin loop right below it is a **different, legitimately separate**
+  channel: native mobile push notifications (`send_push_notification`) to
+  reach admins who don't have the dashboard open, not a second redundant WS
+  mechanism. FCM/APNs push delivery is inherently per-device-token, so that
+  loop isn't the same kind of "one broadcast call replaces N per-admin
+  calls" optimization WS pub/sub allows — collapsing it further (e.g. an
+  FCM multicast batch call) would be a different, separate item, not what
+  this one's own text asked for. No code change needed.
+- [x] **D9. `compliance_export_events` has no purge job for its claimed 7-year
+  retention** — done: new migration
+  `285_retention_purge_compliance_export_events.sql`. Found the real blocker
+  while implementing: migration 263's own `compliance_export_events_no_mutate`
+  trigger blocks DELETE **unconditionally** (no session-flag bypass, unlike
+  `audit_logs`'s equivalent trigger) — so a purge job literally could not
+  have deleted a row even if one had been written, regardless of the
+  migration comment's "7-year retention" claim. Fixed by mirroring migration
+  56's exact `audit_logs` pattern: `_compliance_export_events_immutable()`
+  now gates DELETE behind a new session-local flag
+  (`spinr.compliance_export_events.allow_delete`) instead of blocking it
+  outright — UPDATE stays unconditionally blocked, unchanged. Forked
+  `purge_pii_retention()` verbatim from migration 228 (the current
+  authoritative definition, confirmed via `grep` across all migrations —
+  no later one replaces it) and added Step M: deletes
+  `compliance_export_events` rows older than 7 years, setting/clearing the
+  flag immediately around the DELETE (including on exception), exactly
+  mirroring Step G's `audit_logs` handling. `utils/retention_purge.py`
+  needed **no Python change** — it already logs whatever keys
+  `purge_pii_retention()` returns generically; verified via
+  `_split_sql_statements` (the B0 fix) that the new migration parses into 7
+  clean top-level statements with no CONCURRENTLY. No dedicated Python test
+  added: `tests/test_retention_purge.py`'s own docstring states this
+  function is "exercised via migration + integration tests" — the Python
+  suite only pins the generic RPC-response-passthrough wrapper, which is
+  unchanged by this migration, matching the existing convention for every
+  prior Step (A through L) added by migrations 56/117/141/143/216/228.
+  **Verification deferred to the end-of-batch run** — like every SQL-only
+  migration in this backlog, this needs an actual Postgres apply to fully
+  confirm, not just static parsing.
 - [x] **D10. `compliance_export_events` rollback command not re-verified
   against real staging** — `DROP TABLE IF EXISTS compliance_export_events;`
   (the migration's documented rollback) was verified by applying the
@@ -4307,11 +4985,24 @@ how much they de-risk a public launch._
   GPS pings, SLA gates from the CLAUDE.md table. **Execution still open** —
   blocked on E1 (no staging env). First run: seed bot accounts per
   `loadtest/README.md`, run the ramp scenario, record the breaking point.
-- [ ] **E3. Forced-upgrade gate for mobile apps** — no minimum-supported-version
-  check exists. Old app binaries in the wild will eventually hit removed/changed
-  APIs. Add `min_supported_version` to `app_settings`, a version header from the
-  apps, a 426-style backend response, and an "update required" screen in both apps.
-  Cheap now, impossible to retrofit onto clients that are already old.
+- [x] **E3. Forced-upgrade gate for mobile apps** — done. `app_settings` gained
+  `min_rider_app_version`/`min_driver_app_version` (empty = off, `schemas.py` +
+  `routes/admin/settings.py` semver-pattern-validated). New
+  `ForcedUpgradeMiddleware` (`core/middleware.py`) reads `X-App-Version`/
+  `X-App-Platform` and returns 426 `upgrade_required` when a client is below
+  the configured floor — soft-fails open on missing/unparseable headers or an
+  unset minimum, mounted unconditionally (no ENV branch needed). Shared API
+  client (`shared/api/client.ts`) gained `setAppIdentity()` (sends the two
+  headers on every call) and `onForceUpgrade()` (fires on 426, mirrors the
+  existing `setSignOutCallback` pattern). Both apps call `setAppIdentity()` at
+  module load with `Constants.nativeApplicationVersion` and mount a new shared
+  `ForceUpdateOverlay` (full-screen, non-dismissible) at their root, driven by
+  `onForceUpgrade()`. Store links reuse the placeholder App Store/Play Store
+  IDs already in `rider-app/app/become-driver.tsx`. Ships fully dark today —
+  zero effect until an admin sets a non-empty minimum. Not run against a
+  simulator/device, no `tsc`/`yarn jest`/pytest pass performed, per the
+  standing no-test-suite instruction — deferred to the end-of-batch
+  verification pass.
 - [ ] **E4. Synthetic monitoring + SLO alerting** — nothing external probes the
   platform; a total outage is currently discovered by users. Add an external
   monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and
@@ -4330,21 +5021,89 @@ how much they de-risk a public launch._
   (like the failover runbook) has never been exercised. Restore a Supabase PITR
   snapshot into a scratch project, verify row counts + a sample ride lifecycle,
   record actual RTO in the runbook. A backup is only real after a restore.
-- [ ] **E8. CODEOWNERS + review routing** — no `.github/CODEOWNERS`. Route
-  `backend/routes/payments*`/`services/fare*`/`migrations/` to designated
-  reviewers so money/schema changes can't merge on a drive-by approval.
-- [ ] **E9. Blameless postmortem template** — `data-breach.md` has one for
-  breaches; generalize to `docs/templates/postmortem.md` (timeline, impact,
-  5-whys, action items with owners) and link it from the incident runbooks.
-- [ ] **E10. License compliance scan** — dependency *vulnerability* audit exists;
-  add license checking (`pip-licenses` + `license-checker` in CI, fail on
-  GPL/AGPL in shipped surfaces). Matters for SOC 2 and any future diligence.
-- [ ] **E11. a11y checks in CI** — WCAG 2.1 AA is a stated regulatory mandate and
-  axe is already in admin-dashboard devDeps, but nothing runs it in CI. Wire
-  axe into the Playwright E2E suite for the customer-facing surfaces.
-- [ ] **E12. On-call & escalation policy doc** — PagerDuty is referenced by
-  alerts, but there is no rotation/escalation/severity-matrix document. One page:
-  who is paged, when P0 vs P1, response-time expectations (support SLA says <2h P1).
+- [ ] **E8. CODEOWNERS + review routing** — partially done. Added
+  `.github/CODEOWNERS` routing payments/corporate/wallet/surge, migrations,
+  auth/security-sensitive files, dispatch, and safety paths to distinct
+  owner groups, bottom-up-specific per GitHub's matching rules. **Still
+  blocked**: the owner handles are placeholders
+  (`@spinr-org/TBD-payments-reviewers` etc.) — this session has no real
+  GitHub org/team roster to assign, and GitHub CODEOWNERS entries must
+  resolve to actual org members/teams to have any effect. Also still open:
+  enabling "Require review from Code Owners" in branch protection, which
+  needs GitHub repo-admin access this session doesn't have. File the real
+  team slugs in once eng leadership assigns owners, then flip the branch
+  protection setting.
+- [x] **E9. Blameless postmortem template** — done: new
+  `docs/templates/postmortem.md` (mirrors `docs/templates/CHANGE_IMPACT_LOG.md`'s
+  style) — summary, timeline, impact, root cause via 5-whys, what went
+  well/wrong, action items table (owner + due date required per row),
+  lessons for the framework. Found while building it: the four existing
+  incident runbooks each specified a **different output path/timing** for
+  their own postmortems (`docs/audit/postmortem-YYYY-MM-DD-<slug>.md` @ 5
+  business days in `data-breach.md`; `reports/postmortems/YYYY-MM-DD-slug.md`
+  @ 72h in `incident-response.md`; `reports/incidents/YYYY-MM-DD-sos.md` @
+  72h in `sos-incident.md`; no explicit path in `security-incident.md`) —
+  deliberately did **not** unify these (an existing, possibly intentional
+  per-incident-class convention, not something this item asked to change);
+  the template's own "Where this gets saved" section documents all four
+  paths side by side instead. All four runbooks
+  (`docs/runbooks/data-breach.md` §7, `docs/incident-response.md`'s
+  Post-Mortem section, `docs/runbooks/security-incident.md` §9 checklist,
+  `docs/runbooks/sos-incident.md`'s Post-Incident checklist) now reference
+  the shared template for structure while keeping their own path/timing.
+  Docs-only change, no code/tests to run.
+- [x] **E10. License compliance scan** — done, and found half of this was
+  already stale: `pip-licenses` (Python deps) was **already wired into CI**
+  as `security-gates.yml`'s `G7 · pip-licenses (Python deps)` job (denylist
+  strategy: GPL/AGPL/SSPL/Elastic/Commons Clause/BUSL) — the item's own text
+  implied both halves were missing, only the JS half actually was. New
+  `G7b · license-checker (JS deps)` job added right after G7, mirroring the
+  existing `G4b · yarn audit (JS deps)` matrix job's exact structure
+  (`fail-fast: false` across `[rider-app, driver-app, admin-dashboard,
+  shared]` so one module's failure doesn't mask the others' unknown state —
+  same rationale, same historical incident class this repo already hit once
+  on G4b). Scoped to `--production --excludePrivatePackages` (shipped
+  surfaces only, per the item's own framing — not devDependencies), same
+  denylist family as G7 (`GPL;AGPL;LGPL;SSPL;Elastic;Commons-Clause;BUSL`).
+  **Verification deferred to the end-of-batch run** (this session's
+  token-budget constraint) — the new job's YAML syntax was reviewed by eye
+  against the G4b job it mirrors, but was not dry-run through `act` or an
+  actual GitHub Actions run, and the current dependency trees across the
+  four JS modules were not audited for a real copyleft/proprietary license
+  that would fail the new gate on first run. If it does fail on first run,
+  that's real signal the gate is working, not a bug in the job — resolve
+  per-package (swap, pin an alternate version, or get a documented CR
+  exception), don't loosen the denylist to make it pass.
+- [x] **E11. a11y checks in CI** — stale, already done by another session
+  before this pass. `admin-dashboard/e2e/crawl-audit.spec.ts` already runs
+  `@axe-core/playwright`'s `AxeBuilder` against every crawled route, with a
+  per-route baseline-ratchet in `e2e/a11y-baseline.json` (64 pre-existing
+  violations across 41 routes tracked as debt, but any route regressing
+  past its own baseline fails the E2E suite; a route with no baseline entry
+  defaults to 0 tolerance) — the code's own comment already cites this
+  exact item ("WCAG 2.1 AA a11y ratchet (ACTION_ITEMS.md E11)"). No code
+  change needed; correcting the stale checkbox.
+- [x] **E12. On-call & escalation policy doc** — done: new
+  `docs/runbooks/on-call.md`. Found while writing it: this repo already had
+  a substantial Severity Ladder + escalation flow + roles table inside
+  `docs/incident-response.md` — the genuinely missing piece was "who" (a
+  rotation roster) and a single page a newly-paged engineer can read
+  standalone, not a from-scratch severity matrix. Explicitly reconciles the
+  **two separate severity vocabularies already in this codebase** that the
+  item's own "P0 vs P1" phrasing conflates: engineering-incident SEV-1..4
+  (`docs/incident-response.md`) vs support-ticket P0..P3
+  (`CLAUDE.md`'s KPI table) — states plainly that a P1 support ticket does
+  not auto-page, only a SEV-1/SEV-2 does, plus a support→engineering
+  escalation path for the case where a ticket turns out to be a live
+  incident. Restates (does not redefine) the existing escalation ladder and
+  response-time targets from `docs/incident-response.md`/
+  `docs/runbooks/sos-incident.md`/`CLAUDE.md`, explicitly marked as
+  secondary to those sources so they can't silently drift apart. **The
+  rotation roster itself is left as an explicit fillable table (cadence,
+  handoff time, PagerDuty schedule link, escalation-policy name), not
+  invented** — no real names/schedule exist in this repo to draw from, and
+  fabricating them would be actively misleading in an ops document. Linked
+  from `docs/incident-response.md`'s Runbook Index. Docs-only, no code.
 
 ## Recently completed (do not redo)
 

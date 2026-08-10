@@ -96,11 +96,14 @@ from .promotions import router as promotions_router
 from .rider_import import router as rider_import_router
 from .rides import router as rides_router
 from .safety import router as safety_router
+from .sentry import router as sentry_router
 from .service_areas import router as service_areas_router
 from .settings import router as settings_router
 from .sgi_forms import router as sgi_forms_router
 from .staff import router as staff_router
+from .stripe_connect_ledger import router as stripe_connect_ledger_router
 from .stripe_import import router as stripe_import_router
+from .stripe_mode_audit import router as stripe_mode_audit_router
 from .stripe_payout_sync import router as stripe_payout_sync_router
 from .subscriptions import offer_analytics_router
 from .subscriptions import router as subscriptions_router
@@ -145,6 +148,17 @@ admin_router.include_router(stripe_import_router, dependencies=[Depends(require_
 # Transfer truth). Writes to payouts, so it takes the booking-import posture:
 # require_super_admin at the mount AND re-checked inside each handler.
 admin_router.include_router(stripe_payout_sync_router, dependencies=[Depends(require_super_admin)])
+# Connected-account ledger sync (bank payouts + balance transactions into
+# driver_stripe_payouts / driver_stripe_ledger). Reads every driver's full
+# financial history from Stripe and spends API quota per account, so it
+# takes the same super_admin posture as the payout sync above.
+admin_router.include_router(stripe_connect_ledger_router, dependencies=[Depends(require_super_admin)])
+# Stripe key-mode drift diagnostic. Read-mostly (its only write is stamping an
+# identity's observed mode), but it reports which drivers have an unreachable
+# payout destination and spends Stripe API quota, so it takes the same
+# super_admin posture as the mapping import: gated at the mount AND re-checked
+# inside each handler.
+admin_router.include_router(stripe_mode_audit_router, dependencies=[Depends(require_super_admin)])
 # Data Transfer module (export/import users+drivers with docs/history between
 # Spinr's own environments) — gated on require_super_admin, not a module flag.
 # Previously gated on require_module("bulk_operations"); that module string
@@ -197,5 +211,11 @@ admin_router.include_router(wallet_router, dependencies=[Depends(require_module(
 admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])
+# Live Sentry issue viewer (read production errors across surfaces + resolve
+# them). Raw production error data is super_admin-only — same posture as the
+# data-transfer / booking-import surfaces above. As with stripe_payout_sync,
+# require_super_admin is declared BOTH here and on each handler, so the gate
+# travels with the handler if the router is ever remounted or reused.
+admin_router.include_router(sentry_router, dependencies=[Depends(require_super_admin)])
 
 __all__ = ["admin_router", "admin_auth_router"]

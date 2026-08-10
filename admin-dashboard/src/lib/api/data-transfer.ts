@@ -80,12 +80,19 @@ export interface ExportApprovalRequiredResult {
     row_count: number;
 }
 export interface DataTransferExportScopeOptions {
+    /** Which document types appear in the bundle at all (as metadata rows).
+     * Omit for every type. */
     docTypes?: string[];
     // PIA recommendation R-B (ACTION_ITEMS.md B11) — default true (current
     // full-fidelity behavior) on both; the backend's ExportRequest defaults
     // match, so omitting these entirely is still safe/backward-compatible.
     includeRideGps?: boolean;
     includeDocumentBytes?: boolean;
+    /** Which document types have their actual FILE (scan/image/PDF) bundled,
+     * as opposed to a metadata row only. Overrides includeDocumentBytes on
+     * the backend when present; pass `[]` for metadata-only. Omit entirely to
+     * keep the older all-or-nothing includeDocumentBytes behavior. */
+    docFileTypes?: string[];
 }
 export const exportDataTransferEntities = (
     entities: DataTransferExportEntityRef[],
@@ -102,6 +109,10 @@ export const exportDataTransferEntities = (
             reason,
             include_ride_gps: options?.includeRideGps ?? true,
             include_document_bytes: options?.includeDocumentBytes ?? true,
+            // null (not undefined) so an explicit empty array survives
+            // JSON.stringify and reaches the backend as "metadata only"
+            // rather than being dropped from the payload entirely.
+            doc_file_types: options?.docFileTypes ?? null,
         }),
     });
 
@@ -197,6 +208,78 @@ export async function generateSgiForm(
         throw new Error(body.detail || `Could not generate form (${res.status})`);
     }
     return res.blob();
+}
+
+export interface SgiSupportingDocumentsResult {
+    blob: Blob;
+    /** Documents listed in the bundle, and how many of those actually have a
+     *  file in it. Read from the response headers so the caller can say
+     *  "12 of 14 included" without unzipping; the ZIP's own documents.csv
+     *  carries the per-document reason. */
+    listed: number;
+    included: number;
+}
+
+/** ZIP of the selected drivers' supporting scans, for filing alongside a
+ *  D00032/D00033 submission. Binary response, so same manual authed-fetch
+ *  pattern as generateSgiForm above. */
+export async function downloadSgiSupportingDocuments(
+    driverIds: string[],
+    reason: string,
+    docTypes?: string[],
+): Promise<SgiSupportingDocumentsResult> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/documents", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds, reason, doc_types: docTypes ?? null }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not download documents (${res.status})`);
+    }
+    return {
+        blob: await res.blob(),
+        listed: Number(res.headers.get("X-Documents-Listed") ?? 0),
+        included: Number(res.headers.get("X-Documents-Included") ?? 0),
+    };
+}
+
+export interface SgiPackageResult {
+    blob: Blob;
+    checksIncluded: number;
+    checksMissing: number;
+}
+
+/** The complete SGI submission: both filled forms plus each driver's criminal
+ *  record check, in one ZIP. Binary response, so same manual authed-fetch
+ *  pattern as generateSgiForm. */
+export async function downloadSgiSubmissionPackage(
+    driverIds: string[],
+    reason: string,
+    action: "add" | "remove" | "change" = "add",
+): Promise<SgiPackageResult> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/package", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds, reason, action }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not build the submission package (${res.status})`);
+    }
+    return {
+        blob: await res.blob(),
+        checksIncluded: Number(res.headers.get("X-Checks-Included") ?? 0),
+        checksMissing: Number(res.headers.get("X-Checks-Missing") ?? 0),
+    };
 }
 
 // ─── Compliance & Tax Reporting ────────────────────────────────────────

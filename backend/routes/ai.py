@@ -25,13 +25,13 @@ try:
     from ai.orchestrator import run_chat_turn
     from dependencies import get_current_user
     from settings_loader import get_app_settings
-    from utils.rate_limiter import ai_chat_limit, ai_chat_user_limit
+    from utils.rate_limiter import ai_chat_limit
 except ImportError:
     from ..ai import conversations  # type: ignore
     from ..ai.orchestrator import run_chat_turn  # type: ignore
     from ..dependencies import get_current_user  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
-    from ..utils.rate_limiter import ai_chat_limit, ai_chat_user_limit  # type: ignore
+    from ..utils.rate_limiter import ai_chat_limit  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +127,7 @@ async def ai_config(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post("/chat")
-@ai_chat_limit  # IP-keyed (AI1: catches many callers behind one IP)
-@ai_chat_user_limit  # user-keyed (AI1: catches one user across many IPs)
+@ai_chat_limit
 async def ai_chat(
     body: AiChatRequest,
     request: Request,

@@ -1021,6 +1021,43 @@ export default function SettingsPage() {
                                     placeholder="123 Example St, Saskatoon, SK S7K 1A1"
                                     className="min-h-[70px]"
                                 />
+                                <p className="text-xs text-muted-foreground">
+                                    Name and address above also appear in the footer of every
+                                    transactional email (welcome, receipts, account notices).
+                                </p>
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
+                                <Label>Email logo URL</Label>
+                                <Input
+                                    value={settings.company_logo_url || ""}
+                                    onChange={(e) => update("company_logo_url", e.target.value)}
+                                    placeholder="Leave blank to use the built-in Spinr logo"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Shown in the header of transactional emails. Leave blank to use
+                                    the built-in Spinr logo — that is the normal setting, not a
+                                    placeholder. Must be a full https:// link to a publicly
+                                    reachable image; anything else falls back to the built-in logo.
+                                    Does not affect report PDFs.
+                                </p>
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
+                                <div className="flex items-center justify-between gap-4">
+                                    <Label htmlFor="branded_receipt_enabled">
+                                        Branded receipts &amp; invoices
+                                    </Label>
+                                    <Switch
+                                        id="branded_receipt_enabled"
+                                        checked={settings.branded_receipt_enabled !== false}
+                                        onCheckedChange={(v) => update("branded_receipt_enabled", v)}
+                                    />
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Renders ride receipts and Spinr Pass invoices with the logo and
+                                    company details above. Turn off to go back to the older plain
+                                    layout if something looks wrong in a real inbox — fare lines,
+                                    GST/PST and totals are unaffected either way.
+                                </p>
                             </div>
                         </CardContent>
                     </Card>

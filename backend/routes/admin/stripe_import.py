@@ -347,3 +347,48 @@ async def stripe_import_status(batch: str, admin: dict = Depends(get_admin_user)
         "payouts_enabled": sum(1 for r in rows if r.get("stripe_payouts_enabled")),
         "details_submitted": sum(1 for r in rows if r.get("stripe_details_submitted")),
     }
+
+
+@router.post("/stripe/import/discover")
+async def discover_stripe_driver_accounts(admin: dict = Depends(get_admin_user)):
+    """Propose driver ↔ Stripe-account links by exact email match (read-only).
+
+    Answers the operator question "I can SEE this driver's account in the
+    Stripe dashboard — why does the app say they have none?": the app only
+    follows ``drivers.stripe_account_id``, and until that column is filled the
+    account in the dashboard is invisible to every refresh/sync tool.
+
+    This endpoint lists the connected accounts on the running key, matches
+    them to unlinked drivers by exact case-insensitive email, and returns the
+    proposals plus a ready-made ``stripe_account_id,phone`` CSV for the
+    validate → commit import above. It never writes: ambiguous emails are
+    reported, not guessed, and the import re-validates every row live against
+    Stripe before filling only NULL columns.
+    """
+    _require_super_admin(admin)
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(status_code=503, detail="Stripe is not configured.")
+
+    try:
+        report = await import_svc.discover_driver_accounts_by_email(stripe_secret)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[STRIPE-DISCOVER] failed", exc_info=True)
+        raise HTTPException(status_code=502, detail="Could not list Stripe accounts. Please try again.") from e
+
+    await log_admin_action(
+        admin,
+        "stripe_account_discovery",
+        "drivers",
+        f"matched:{report['matched']}",
+        {
+            "matched": report["matched"],
+            "ambiguous": len(report["ambiguous"]),
+            "unmatched_drivers": report["unmatched_drivers"],
+            "unmatched_accounts": report["unmatched_accounts"],
+        },
+    )
+    return report

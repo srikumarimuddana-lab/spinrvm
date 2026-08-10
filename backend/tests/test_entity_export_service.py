@@ -284,3 +284,242 @@ async def test_gather_entity_bundles_skips_a_failing_entity_and_keeps_the_rest(m
 
     assert len(bundles) == 1
     assert bundles[0]["entity_id"] == "u1"
+
+
+def _two_document_db(monkeypatch):
+    """A driver with a background check and a licence, both readable."""
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "drivers": [{"id": "drv1", "user_id": "u1"}],
+            "notification_preferences": [],
+            "rides": [],
+            "driver_documents": [
+                {
+                    "id": "doc-bg",
+                    "driver_id": "drv1",
+                    "document_type": "background_check",
+                    "document_url": "https://x.supabase.co/storage/v1/object/sign/driver-documents/bg.jpg",
+                },
+                {
+                    "id": "doc-dl",
+                    "driver_id": "drv1",
+                    "document_type": "drivers_license",
+                    "document_url": "https://x.supabase.co/storage/v1/object/sign/driver-documents/dl.jpg",
+                },
+            ],
+            "driver_insurance_periods": [],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+    _install_fake_storage(monkeypatch, {"bg.jpg": b"BGBYTES", "dl.jpg": b"DLBYTES"})
+
+
+@pytest.mark.anyio
+async def test_doc_file_types_bundles_only_the_selected_type_s_file(monkeypatch):
+    """The point of per-document selection: pull the background check's actual
+    scan while the licence stays a metadata row."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_file_types=["background_check"])
+
+    by_id = {d["id"]: d for d in bundle["documents"]}
+    assert by_id["doc-bg"]["_content"] == b"BGBYTES"
+    assert by_id["doc-bg"]["_content_status"] == svc.DOC_STATUS_INCLUDED
+    # Still listed, still full metadata — just no file.
+    assert by_id["doc-dl"]["_content"] is None
+    assert by_id["doc-dl"]["_content_status"] == svc.DOC_STATUS_EXCLUDED
+    assert by_id["doc-dl"]["document_type"] == "drivers_license"
+
+
+@pytest.mark.anyio
+async def test_empty_doc_file_types_is_metadata_only_not_everything(monkeypatch):
+    """An explicit empty list must mean "no files", NOT fall through to the
+    include_document_bytes=True default — otherwise a UI sending [] would
+    silently export every document's file."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", include_document_bytes=True, doc_file_types=[])
+
+    assert all(d["_content"] is None for d in bundle["documents"])
+    assert all(d["_content_status"] == svc.DOC_STATUS_EXCLUDED for d in bundle["documents"])
+
+
+@pytest.mark.anyio
+async def test_doc_file_types_overrides_include_document_bytes(monkeypatch):
+    """When both are supplied the per-type list wins — it is always the
+    narrower of the two, so this can only ever reduce what is exported."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle(
+        "driver", "u1", include_document_bytes=False, doc_file_types=["background_check"]
+    )
+
+    by_id = {d["id"]: d for d in bundle["documents"]}
+    assert by_id["doc-bg"]["_content"] == b"BGBYTES"
+    assert by_id["doc-dl"]["_content"] is None
+
+
+@pytest.mark.anyio
+async def test_doc_file_types_none_keeps_all_or_nothing_behavior(monkeypatch):
+    """Back-compat: API callers predating this field send no doc_file_types
+    and must keep getting every file when include_document_bytes is true."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", include_document_bytes=True)
+
+    assert all(d["_content"] is not None for d in bundle["documents"])
+
+
+@pytest.mark.anyio
+async def test_gather_entity_bundles_threads_doc_file_types_through(monkeypatch):
+    _two_document_db(monkeypatch)
+
+    bundles = await svc.gather_entity_bundles([("driver", "u1")], doc_file_types=["background_check"])
+
+    by_id = {d["id"]: d for d in bundles[0]["documents"]}
+    assert by_id["doc-bg"]["_content"] == b"BGBYTES"
+    assert by_id["doc-dl"]["_content"] is None
+
+
+@pytest.mark.anyio
+async def test_empty_doc_types_selects_no_documents(monkeypatch):
+    """Regression: `if doc_types:` treated [] as falsy and skipped the filter,
+    returning EVERY document type when the admin had deselected them all —
+    the opposite of the request, and over-collection under PIPEDA."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_types=[])
+
+    assert bundle["documents"] == []
+
+
+@pytest.mark.anyio
+async def test_none_doc_types_still_means_every_type(monkeypatch):
+    """The other half of the contract: None is "no filter", not "nothing"."""
+    _two_document_db(monkeypatch)
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_types=None)
+
+    assert {d["document_type"] for d in bundle["documents"]} == {"background_check", "drivers_license"}
+
+
+@pytest.mark.anyio
+async def test_zero_byte_download_is_a_failure_not_an_include(monkeypatch):
+    """A 0-byte object produces no file in the ZIP, so it must not be
+    reported as included — the manifest would name a file that isn't there."""
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "drivers": [{"id": "drv1", "user_id": "u1"}],
+            "notification_preferences": [],
+            "rides": [],
+            "driver_documents": [
+                {
+                    "id": "doc-empty",
+                    "driver_id": "drv1",
+                    "document_type": "background_check",
+                    "document_url": "https://x.supabase.co/storage/v1/object/sign/driver-documents/empty.jpg",
+                }
+            ],
+            "driver_insurance_periods": [],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+    _install_fake_storage(monkeypatch, {"empty.jpg": b""})
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_file_types=["background_check"])
+
+    assert bundle["documents"][0]["_content_status"] == svc.DOC_STATUS_FETCH_FAILED
+
+
+# ---------------------------------------------------------------------------
+# Document-type matching — display name vs. canonical key
+# ---------------------------------------------------------------------------
+
+
+def _docs_db(monkeypatch, documents):
+    _install_fake_db(
+        monkeypatch,
+        {
+            "users": [{"id": "u1"}],
+            "drivers": [{"id": "drv1", "user_id": "u1"}],
+            "notification_preferences": [],
+            "rides": [],
+            "driver_documents": documents,
+            "driver_insurance_periods": [],
+        },
+    )
+    _install_fake_decrypt(monkeypatch)
+    _install_fake_storage(monkeypatch, {"bg.jpg": b"CRC-SCAN"})
+
+
+def _doc(document_type, requirement_key=None, key="bg.jpg"):
+    return {
+        "id": "doc-bg",
+        "driver_id": "drv1",
+        "document_type": document_type,
+        "requirement_key": requirement_key,
+        "document_url": f"https://x.supabase.co/storage/v1/object/sign/driver-documents/{key}",
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "stored_document_type",
+    [
+        "Background Check",  # documents.py stores req["name"], the DISPLAY name
+        "background_check",  # canonical key, if a row ever holds it
+        "Criminal Record Check",  # what the bulk-import source sheet calls it
+        "criminal_record_check",
+        "  BACKGROUND   CHECK  ",  # whitespace/case noise
+    ],
+)
+async def test_selecting_background_check_matches_however_it_is_stored(monkeypatch, stored_document_type):
+    """The reported bug: driver_documents.document_type holds the requirement's
+    DISPLAY name ("Background Check") while every selector is snake_case
+    ("background_check"). Comparing them directly matched nothing, so filtering
+    by type excluded every document and produced CSVs with no files."""
+    _docs_db(monkeypatch, [_doc(stored_document_type)])
+
+    bundle = await svc.gather_entity_bundle(
+        "driver", "u1", doc_types=["background_check"], doc_file_types=["background_check"]
+    )
+
+    assert len(bundle["documents"]) == 1, f"{stored_document_type!r} was filtered out"
+    assert bundle["documents"][0]["_content"] == b"CRC-SCAN"
+    assert bundle["documents"][0]["_content_status"] == svc.DOC_STATUS_INCLUDED
+
+
+@pytest.mark.anyio
+async def test_requirement_key_is_matched_when_display_name_is_unrecognized(monkeypatch):
+    """Older/imported rows can carry a free-text display name; the canonical
+    slug lives in requirement_key. Either one matching is enough."""
+    _docs_db(monkeypatch, [_doc("Police Clearance Letter", requirement_key="background_check")])
+
+    bundle = await svc.gather_entity_bundle(
+        "driver", "u1", doc_types=["background_check"], doc_file_types=["background_check"]
+    )
+
+    assert len(bundle["documents"]) == 1
+    assert bundle["documents"][0]["_content"] == b"CRC-SCAN"
+
+
+@pytest.mark.anyio
+async def test_an_unrelated_document_type_is_still_excluded(monkeypatch):
+    """Canonicalization must not turn the filter into a pass-through."""
+    _docs_db(monkeypatch, [_doc("Vehicle Inspection", requirement_key="vehicle_inspection")])
+
+    bundle = await svc.gather_entity_bundle("driver", "u1", doc_types=["background_check"])
+
+    assert bundle["documents"] == []
+
+
+def test_canonical_doc_type_normalizes_and_applies_aliases():
+    assert svc._canonical_doc_type("Background Check") == "background_check"
+    assert svc._canonical_doc_type("Criminal Record Check") == "background_check"
+    assert svc._canonical_doc_type("Car Insurance") == "insurance"
+    assert svc._canonical_doc_type("Driving License") == "drivers_license"
+    assert svc._canonical_doc_type(None) == ""

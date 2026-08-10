@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import unquote as _unquote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from loguru import logger
@@ -298,31 +299,92 @@ def _extract_signed_url(res: Any) -> str:
     if isinstance(res, dict):
         url = res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
         if not url:
-            raise RuntimeError(f"create_signed_url returned no URL: {res!r}")
+            raise RuntimeError(f"create_signed_url returned no URL: {_shape_of(res)}")
         return url
     data = getattr(res, "data", None)
     if data is None:
-        raise RuntimeError(f"create_signed_url returned unexpected shape: {res!r}")
+        raise RuntimeError(f"create_signed_url returned unexpected shape: {_shape_of(res)}")
     if isinstance(data, dict):
         url = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
     else:
         url = getattr(data, "signed_url", None) or getattr(data, "signedURL", None)
     if not url:
-        raise RuntimeError(f"create_signed_url missing URL field: {res!r}")
+        raise RuntimeError(f"create_signed_url missing URL field: {_shape_of(res)}")
     return url
 
 
-_STORAGE_KEY_RE = _re.compile(r"/storage/v1/object/(?:sign|public)/driver-documents/([^?#]+)")
+def _shape_of(res: Any) -> str:
+    """Describe a Supabase response for an error message WITHOUT its contents.
+
+    The three RuntimeErrors above used to interpolate `{res!r}`. Every one of
+    them fires on the "shape I don't recognise" path — which is precisely the
+    case where the signed URL is present but under a key this function doesn't
+    know yet (that is what happened when supabase-py flipped the return type).
+    So the repr could carry a live, hour-long credential for a driver's
+    identity document, and both callers log the exception text:
+    `regenerate_signed_url` at the warning below, and the upload handler via
+    `logger.exception("Supabase Storage upload failed: {}", e)`.
+
+    The shape is what a maintainer actually needs to fix the extractor; the
+    values are what must never reach a log sink.
+    """
+    if isinstance(res, dict):
+        return f"dict(keys={sorted(res)})"
+    data = getattr(res, "data", None)
+    if isinstance(data, dict):
+        return f"{type(res).__name__}(data=dict(keys={sorted(data)}))"
+    if data is not None:
+        return f"{type(res).__name__}(data={type(data).__name__})"
+    return type(res).__name__
+
+
+# ``authenticated`` belongs here alongside sign/public: Supabase serves
+# RLS-scoped objects from that path, and omitting it silently produced
+# "no storage key" for those rows.
+_STORAGE_KEY_RE = _re.compile(r"/storage/v1/object/(?:sign|public|authenticated)/driver-documents/([^?#]+)")
+
+# services/driver_import_service.py records documents as
+# ``storage://driver-documents/<key>`` while building an import plan. The
+# happy path overwrites that with a real signed URL at commit time, but any
+# row where that did not happen keeps the custom scheme — which no HTTP-URL
+# pattern will ever match, so the document silently exported as metadata
+# with no file.
+_STORAGE_SCHEME_RE = _re.compile(r"^storage://driver-documents/(.+)$")
 
 
 def _extract_storage_key(stored_url: str) -> Optional[str]:
-    """Extract the bare storage-object key from a Supabase Storage URL.
+    """Extract the bare storage-object key from a stored document URL.
 
-    Handles both signed and public URL shapes, regardless of which Supabase
-    project host they were originally generated for.
+    Handles every shape this codebase writes: signed, public, and
+    authenticated Supabase URLs (absolute or host-relative, any project
+    host), plus the ``storage://driver-documents/<key>`` scheme the bulk
+    driver import uses.
+
+    The returned key is percent-DECODED. Storage keys travel through the URL
+    percent-encoded, but ``storage.download()`` expects the raw key — feeding
+    it an encoded one 404s. Bulk-import keys are built from spreadsheet
+    values (``saskatoon-import/<batch>/<old_id>/<requirement>/...``), so a
+    space or ``#`` in a source cell is enough to trigger it.
     """
-    m = _STORAGE_KEY_RE.search(stored_url or "")
-    return m.group(1) if m else None
+    raw = (stored_url or "").strip()
+    if not raw:
+        return None
+
+    m = _STORAGE_SCHEME_RE.match(raw)
+    if m:
+        return _unquote(m.group(1))
+
+    m = _STORAGE_KEY_RE.search(raw)
+    if m:
+        return _unquote(m.group(1))
+
+    # A value with no scheme and no path structure is already a bare key
+    # (some callers store just the object name). Anything containing "://"
+    # is a URL we failed to parse — return None so the caller reports it
+    # rather than fabricating a key from a hostname.
+    if "://" not in raw and "/storage/v1/" not in raw:
+        return _unquote(raw)
+    return None
 
 
 def regenerate_signed_url(stored_url: str, expires_in: int = 3600) -> str:
@@ -343,7 +405,7 @@ def regenerate_signed_url(stored_url: str, expires_in: int = 3600) -> str:
         res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, expires_in)
         return _extract_signed_url(res)
     except Exception as exc:
-        logger.warning("regenerate_signed_url failed for key=%s: %s", storage_key, exc)
+        logger.warning("regenerate_signed_url failed for key={}: {}", storage_key, exc)
         return stored_url
 
 
@@ -941,10 +1003,16 @@ async def upload_file(
     returns the public URL. The previous base64-in-DB approach caused
     2+ minute timeouts for large images.
     """
+    # The original filename is deliberately NOT logged. These are driver
+    # identity documents (licence, insurance, registration) and the uploaded
+    # name routinely carries the driver's name or licence number — the same
+    # reason `safe_name` below never echoes it back to the caller (12-8).
+    # The extension is the only part with diagnostic value here, since the
+    # next failure mode is the ALLOWED_EXTENSIONS check.
     logger.info(
-        "[upload] hit /api/v1/upload user=%s filename=%s content_type=%s",
+        "[upload] hit /api/v1/upload user={} ext={} content_type={}",
         (current_user or {}).get("id"),
-        getattr(file, "filename", None),
+        Path(getattr(file, "filename", None) or "").suffix.lower() or "none",
         getattr(file, "content_type", None),
     )
     try:
@@ -980,22 +1048,24 @@ async def upload_file(
         safe_name = f"document_{upload_ts}{ext}"
 
         try:
-            logger.info("[upload] storage.upload begin key=%s size=%s", storage_key, size)
+            logger.info("[upload] storage.upload begin key={} size={}", storage_key, size)
             upload_res = supabase.storage.from_("driver-documents").upload(
                 file=content,
                 path=storage_key,
                 file_options={"content-type": content_type},
             )
-            logger.info("[upload] storage.upload done type=%s", type(upload_res).__name__)
+            logger.info("[upload] storage.upload done type={}", type(upload_res).__name__)
             signed_res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600)
-            logger.info(
-                "[upload] create_signed_url returned type=%s repr=%r",
-                type(signed_res).__name__,
-                signed_res,
-            )
+            # Type only — never the response body. `signed_res` contains the
+            # signed URL itself, a working hour-long credential for a driver's
+            # identity document; putting it in the log stream hands document
+            # access to anyone who can read logs. The type name is what this
+            # line is actually for (the extractor below has to cope with
+            # several Supabase client response shapes).
+            logger.info("[upload] create_signed_url returned type={}", type(signed_res).__name__)
             public_url = _extract_signed_url(signed_res)
         except Exception as e:
-            logger.exception("Supabase Storage upload failed: %s", e)
+            logger.exception("Supabase Storage upload failed: {}", e)
             raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e
 
         return {

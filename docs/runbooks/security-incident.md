@@ -254,7 +254,7 @@ For CRITICAL CVEs with no available fix: disable the affected feature behind a f
 [ ] Affected users notified (if PII involved)
 [ ] PIPEDA report filed if required (72-hour window)
 [ ] Pre-commit hook and CI checks updated to prevent recurrence
-[ ] Post-mortem written: timeline, impact, root cause, remediation, preventive actions
+[ ] Post-mortem written using docs/templates/postmortem.md (timeline, impact, root cause via 5-whys, remediation, preventive actions)
 [ ] Post-mortem shared with team within 5 business days
 ```
 

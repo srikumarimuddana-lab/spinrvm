@@ -80,7 +80,7 @@ def _is_security_scope(scope: str) -> bool:
 
 def _record_storage_error(scope: str, error: Exception, fail_closed: bool) -> None:
     policy = "fail_closed" if fail_closed else "fallback"
-    logger.error(f"Async rate-limit storage failed; policy={policy}; scope={scope}", exc_info=error)
+    logger.opt(exception=error).error(f"Async rate-limit storage failed; policy={policy}; scope={scope}")
     _metric_inc("spinr_rate_limit_storage_errors_total", {"policy": policy})
 
 
@@ -105,6 +105,113 @@ def get_real_client_ip(request: Request) -> str:
     if real_ip:
         return real_ip.strip()
     return get_ipaddr(request)
+
+
+def _extract_unverified_user_id(request: Request) -> str | None:
+    """Best-effort user id from the bearer token, signature NOT verified.
+
+    Mirrors `core/middleware.py::_extract_user_id` (used there for log
+    correlation only) — safe for rate-limit *keying* because it never grants
+    authorization: the same request still has to pass the real,
+    signature-verified `get_current_user` dependency before any handler code
+    runs, so a forged/garbage token can only ever land in a throwaway bucket
+    for a request that then 401s, not impersonate another user's bucket.
+    """
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    try:
+        payload = jwt.decode(auth[len("Bearer ") :], options={"verify_signature": False})
+    except Exception:
+        return None
+    uid = payload.get("user_id") or payload.get("sub")
+    return str(uid) if uid is not None else None
+
+
+def _metric_path_label(request: Request) -> str:
+    """Bounded path label for metrics — the route TEMPLATE, not the live URL.
+
+    ``request.url.path`` embeds ride and user UUIDs, so labelling a counter with
+    it creates one permanent label set per entity. ``utils/metrics.py`` has no
+    eviction, so that map only grows — fastest during exactly the burst these
+    metrics exist to diagnose — and the capacity watchdog now scans it once a
+    minute per replica. It also makes the counter useless for triage: thousands
+    of one-hit rows instead of a rate per endpoint.
+
+    Starlette stores the matched route on the request scope, whose ``path`` is
+    the template (``/rides/{ride_id}/cancel``), giving one label per endpoint.
+
+    Falls back to a literal ``"unmatched"`` rather than the raw path when no
+    route matched (404s, and some middleware-level rejections) — an unmatched
+    request is attacker-controlled input, and echoing it into a label is the
+    same unbounded-cardinality problem with a hostile author.
+
+    Defensive by design: this runs inside the 429 exception handler, so raising
+    here would turn a rate-limit response into a 500. Any unexpected request
+    shape degrades to the fallback label instead of propagating.
+    """
+    try:
+        route = request.scope.get("route")
+        template = getattr(route, "path", None)
+        if isinstance(template, str) and template:
+            return template
+    except (AttributeError, TypeError) as exc:
+        # Narrow on purpose: only a missing/odd `scope` can land here. Debug
+        # rather than warning — this is a label-quality degradation on a request
+        # that is already being rejected, not a failure worth paging on. It is
+        # logged rather than swallowed so an unexpected request shape is
+        # discoverable instead of silently becoming "unmatched" forever.
+        logger.debug(f"rate-limit metric label fell back to 'unmatched': {exc}")
+    return "unmatched"
+
+
+def get_user_or_ip_key(request: Request) -> str:
+    """Key rate limiting by authenticated user, falling back to IP.
+
+    Mobile carriers put hundreds of subscribers behind one carrier-grade NAT
+    egress IP. Under IP keying every rider on a given carrier in a given city
+    shares ONE bucket, so a burst of legitimate users 429s itself: 5 bookings
+    per minute across an entire carrier, and — worse — an SOS that can be
+    refused because unrelated strangers on the same egress IP happened to tap
+    ride actions. That is a correctness bug on a safety surface, not a tuning
+    nit.
+
+    Keying on the user makes the limit mean what its name says: N per minute
+    *per user*. It is also strictly harder to evade than IP keying, which an
+    abuser defeats for free by rotating through a proxy pool.
+
+    Safety of the unverified decode: see `_extract_unverified_user_id`. On
+    these routes `Depends(get_current_user)` resolves BEFORE the limiter-wrapped
+    handler body, so a forged token 401s regardless — the worst a bad token can
+    do is land in a throwaway bucket for a request that then fails auth.
+
+    Anonymous requests (no bearer token) keep IP keying, which is the only
+    identity available for them.
+
+    Kill switch: set ``RATE_LIMIT_USER_KEYING=off`` to revert to pure IP keying
+    without a code deploy (``fly secrets set`` rolls machines with the new
+    value). See docs/runbooks/capacity-scaling.md §3.
+    """
+    if os.environ.get("RATE_LIMIT_USER_KEYING", "on").strip().lower() in ("off", "0", "false", "no"):
+        return f"ip:{get_real_client_ip(request)}"
+    user_id = _extract_unverified_user_id(request)
+    if user_id:
+        return f"user:{user_id}"
+    return f"ip:{get_real_client_ip(request)}"
+
+
+def get_ai_chat_key(request: Request) -> str:
+    """Key AI-chat rate limiting by user, not IP (ACTION_ITEMS.md AI1).
+
+    An IP-keyed limit is defeated for free by rotating source IPs (cheap via
+    any VPN/proxy pool), which removes the per-minute ceiling on LLM spend
+    for a single account. Falls back to IP only when no bearer token is
+    present (the request will 401 downstream regardless).
+    """
+    user_id = _extract_unverified_user_id(request)
+    if user_id:
+        return f"user:{user_id}"
+    return f"ip:{get_real_client_ip(request)}"
 
 
 # Default limiter — keyed on the authoritative client IP (CF-Connecting-IP when
@@ -144,7 +251,7 @@ def get_client_identifier(request: Request) -> str:
         # Note: This is a best-effort attempt, body may already be consumed
         # For actual phone-based limiting, apply decorator directly with phone param
     except Exception:  # noqa: S110
-        logger.warning("rate_limiter: get_rate_limit_key: body parse failed; falling back to IP", exc_info=True)
+        logger.opt(exception=True).warning("rate_limiter: get_rate_limit_key: body parse failed; falling back to IP")
 
     # Fallback to the authoritative client IP (CF-Connecting-IP when present).
     return f"ip:{get_real_client_ip(request)}"
@@ -181,42 +288,6 @@ def get_company_booking_key(request: Request) -> str:
     company_id = request.path_params.get("company_id")
     if company_id:
         return f"company_booking:{company_id}"
-    return f"ip:{get_real_client_ip(request)}"
-
-
-def get_authenticated_user_key(request: Request) -> str:
-    """Key rate limiting by the authenticated caller's user id, not IP (AI1).
-
-    /ai/chat's original ai_chat_limit is keyed on get_real_client_ip — a
-    single authenticated user spread across many IPs (rotating mobile
-    networks, a VPN, a scripted client) is not actually bounded by it. This
-    key function closes that gap without removing the IP-based limiter,
-    which still guards a different case: many distinct callers hammering
-    the endpoint from one IP/network before auth-layer identity is even
-    relevant.
-
-    The token is decoded WITHOUT signature verification — this is only ever
-    used to pick a bucket, never to authorize anything. If the signature is
-    invalid, get_current_user (which DOES verify it) rejects the request
-    with 401 downstream regardless of which bucket absorbed the hit, so a
-    forged claim cannot get a caller anything beyond wasting one rate-limit
-    slot in a bucket nobody else uses. Firebase ID tokens and Spinr's legacy
-    JWTs both carry the id in "user_id" (Firebase) with "sub" as a fallback
-    (see core/middleware.py's _extract_user_id, which uses the same
-    unverified-decode approach for log correlation).
-    """
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[len("Bearer ") :]
-        try:
-            payload = jwt.decode(token, options={"verify_signature": False})
-            uid = payload.get("user_id") or payload.get("sub")
-            if uid:
-                return f"user:{uid}"
-        except Exception:
-            logger.debug("get_authenticated_user_key: token decode failed; falling back to IP")
-    # Unauthenticated / undecodable token: fall back to IP so the request
-    # still gets rate-limited by *something* rather than bypassing the check.
     return f"ip:{get_real_client_ip(request)}"
 
 
@@ -275,17 +346,22 @@ otp_rate_limit = default_limiter.limit("3/minute")
 # Login endpoints - moderately restrictive
 login_rate_limit = default_limiter.limit("5/minute")
 
-# General API endpoints - more permissive
-api_rate_limit = default_limiter.limit("30/minute")
+# General API endpoints - more permissive. Keyed per user (get_user_or_ip_key),
+# not per IP: carrier-grade NAT put a whole carrier's riders in one bucket.
+# The limit is unchanged because 30/minute is generous *per user* — and the
+# limiter scope includes the URL path, so each route gets its own bucket.
+api_rate_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)
 
 # Ride creation - prevent spam ride requests (max 5 per minute per user)
-ride_request_limit = default_limiter.limit("5/minute")
+ride_request_limit = default_limiter.limit("5/minute", key_func=get_user_or_ip_key)
 
 # Ride cancellation - max 10 per hour per user (prevents cancellation farming)
-cancel_ride_limit = default_limiter.limit("10/hour")
+cancel_ride_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
 
-# Ride read endpoints — generous ceiling covers 3 s polling without churn
-ride_read_limit = default_limiter.limit("120/minute")
+# Ride read endpoints — generous ceiling covers 3 s polling without churn.
+# Per-user keyed: under IP keying a carrier NAT's riders shared this bucket, so
+# ~6 simultaneously-polling riders on one carrier exhausted it between them.
+ride_read_limit = default_limiter.limit("120/minute", key_func=get_user_or_ip_key)
 
 # Corporate guest bookings: each one fires 2-3 customer SMS, so this is an
 # SMS-cost/abuse bound as much as a booking bound. 30/hour comfortably covers
@@ -301,14 +377,18 @@ promo_available_limit = default_limiter.limit("20/minute")
 # Promo brute-force guard - max 10 per minute
 promo_validate_limit = default_limiter.limit("10/minute")
 
-# Location updates - allow frequent updates for drivers
-location_update_limit = default_limiter.limit("60/minute")
+# Location updates - allow frequent updates for drivers. Applied to
+# POST /drivers/location-batch (routes/drivers/location.py). This limiter was
+# defined but decorated NOTHING until 2026-08-07, leaving the driver GPS
+# ingestion path entirely unlimited. Per-user keyed so one runaway device
+# cannot spend the budget of other drivers behind the same carrier NAT.
+location_update_limit = default_limiter.limit("60/minute", key_func=get_user_or_ip_key)
 
 # Payment actions (tip, process-payment) — sensitive financial ops, tight limit
-payment_action_limit = default_limiter.limit("5/minute")
+payment_action_limit = default_limiter.limit("5/minute", key_func=get_user_or_ip_key)
 
 # Ride rating — once per completed ride, extra friction prevents spam
-ride_rating_limit = default_limiter.limit("5/hour")
+ride_rating_limit = default_limiter.limit("5/hour", key_func=get_user_or_ip_key)
 
 # Data export (DSAR) — each call fans out 6 DB reads, builds a ZIP, uploads to
 # Storage, and sends an email. Tight cap prevents storage fill / SES exhaustion.
@@ -387,23 +467,23 @@ admin_statement_email_limit = default_limiter.limit("20/hour")
 admin_statement_download_limit = default_limiter.limit("60/hour")
 
 # AI assistant chat — each message triggers LLM spend; per-user daily cap
-# (ai_daily_message_cap) is enforced separately in backend/ai/orchestrator.py
-ai_chat_limit = default_limiter.limit("10/minute")
-
-# AI assistant chat, per-user (AI1) — ai_chat_limit above keys on IP, so a
-# single authenticated user rotating IPs is not actually bounded by it.
-# Applied as a second, independent decorator alongside ai_chat_limit (not a
-# replacement) so both dimensions are covered: this catches one identity
-# spread across many source IPs, ai_chat_limit still catches many distinct
-# short-lived callers hammering one IP. Same 10/minute value as the
-# IP-keyed limit — no reason for the per-identity ceiling to be looser.
-ai_chat_user_limit = default_limiter.limit("10/minute", key_func=get_authenticated_user_key)
+# (ai_daily_message_cap) is enforced separately in backend/ai/orchestrator.py.
+# Keyed by user (ACTION_ITEMS.md AI1), not IP — an IP-keyed limit is defeated
+# by rotating source IPs, multiplying one account's effective per-minute
+# budget by however many IPs it rotates through.
+ai_chat_limit = default_limiter.limit("10/minute", key_func=get_ai_chat_key)
 
 # In-ride messaging — generous but bounded to prevent SMS relay abuse
-ride_message_limit = default_limiter.limit("30/minute")
+ride_message_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)
 
-# Ride state transitions (start, complete, emergency) — ride lifecycle ops
-ride_action_limit = default_limiter.limit("20/minute")
+# Ride state transitions (start, complete, emergency) — ride lifecycle ops.
+# Per-user keyed, and this one is a safety fix as much as a capacity one: it
+# guards POST /rides/{id}/emergency (routes/rides/safety.py:38), so under IP
+# keying an SOS could be refused because unrelated strangers behind the same
+# carrier NAT had spent the bucket on ordinary ride actions. Note the SOS route
+# uses get_current_user_allow_expired; _extract_unverified_user_id ignores
+# expiry too, so an expired-but-valid token still keys to its real user.
+ride_action_limit = default_limiter.limit("20/minute", key_func=get_user_or_ip_key)
 
 # Document uploads - restrictive to prevent abuse
 document_upload_limit = default_limiter.limit("5/minute")
@@ -517,7 +597,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         f"Limit: {limit_amount} | "
         f"Retry-After: {retry_after}s"
     )
-    _metric_inc("spinr_rate_limit_violation_total", {"path": request.url.path})
+    _metric_inc("spinr_rate_limit_violation_total", {"path": _metric_path_label(request)})
 
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,

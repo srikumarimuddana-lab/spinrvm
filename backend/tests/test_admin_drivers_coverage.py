@@ -359,23 +359,27 @@ class TestVerifyDriver:
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("routes.admin.drivers.log_admin_action", AsyncMock()),
-            # admin_verify_driver still sends directly, not through the
-            # lifecycle policy module — so its binding is the local one.
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()) as push,
+            # admin_verify_driver now routes through the lifecycle policy
+            # module (for the deleted_at recipient guard and the email
+            # channel), so the local send_push_notification binding is no
+            # longer the one that fires — patch the shared sender instead.
+            patch("routes.admin.drivers.notify_driver_status_change", AsyncMock()) as notify,
             patch("routes.admin.drivers._fire_driver_approved", lambda d: None),
         ):
             resp = test_client.post("/api/admin/drivers/drv-1/verify", json={"verified": True})
         assert resp.status_code == 200, resp.text
         updates = upd.await_args.args[2]
         assert updates == {"is_verified": True, "needs_review": False}
-        push.assert_awaited_once()
+        notify.assert_awaited_once()
+        # Copy must stay byte-identical to what shipped before the reroute.
+        assert notify.await_args.args[1]["title"] == "Account Verified! ✅"
 
     def test_verify_false_does_not_clear_needs_review(self, test_client, super_admin_override):
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch("db_supabase.update_one", AsyncMock()) as upd,
             patch("routes.admin.drivers.log_admin_action", AsyncMock()),
-            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+            patch("routes.admin.drivers.notify_driver_status_change", AsyncMock()),
         ):
             resp = test_client.post("/api/admin/drivers/drv-1/verify", json={"verified": False})
         assert resp.status_code == 200, resp.text
@@ -814,13 +818,19 @@ class TestRefreshStripeKyc:
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch(
                 "services.stripe_kyc_sync.refresh_driver_kyc",
-                AsyncMock(return_value={"status": "verified"}),
+                AsyncMock(return_value={"status": "ok", "updates": {}}),
             ),
             patch("routes.admin.drivers.log_admin_action", AsyncMock()) as log,
         ):
             resp = test_client.post("/api/admin/drivers/drv-1/refresh-stripe-kyc")
         assert resp.status_code == 200, resp.text
-        assert resp.json() == {"status": "verified"}
+        body = resp.json()
+        # The endpoint now annotates the raw sync result: `synced` is the flag
+        # the dashboard branches on, `message` is what it shows. The old bare
+        # status pass-through let every outcome toast "Synced from Stripe".
+        assert body["status"] == "ok"
+        assert body["synced"] is True
+        assert "message" in body
         log.assert_awaited_once()
 
 

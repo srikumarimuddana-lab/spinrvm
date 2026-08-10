@@ -154,3 +154,27 @@ def scrub_pii(text: str, *, keep_trip_pins: bool = False) -> str:
     for index, original in enumerate(protected):
         text = text.replace(f"\x00{index}\x00", original)
     return text
+
+
+# ACTION_ITEMS.md AI13: the driver-persona-secrecy prompt rule (2026-07-28)
+# tells the model never to print tool names or internal jargon, but a prompt
+# rule alone isn't enforced -- nothing greps the reply text for a leak.
+# Matches snake_case-shaped tokens generally (not just the current tool
+# registry) so the backstop stays structural against a hallucinated or
+# future tool/internal-identifier name too, not just today's known list.
+# Natural assistant prose essentially never produces a multi-word
+# underscore-joined lowercase token on its own, so this is low false-positive
+# risk for a rider-facing chat reply.
+_SNAKE_CASE_LEAK_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+
+
+def filter_tool_leakage(text: str) -> str:
+    """Replace snake_case-shaped tokens (tool-name / internal-jargon leakage)
+    with a neutral placeholder.
+
+    Applied to the persisted/replayed copy only (mirrors scrub_pii's own
+    convention at its call site) -- the raw text has already streamed to the
+    client this turn by the time this runs, so this doesn't retroactively
+    change what the rider saw, only what gets stored/cached/replayed.
+    """
+    return _SNAKE_CASE_LEAK_RE.sub("[internal]", text)

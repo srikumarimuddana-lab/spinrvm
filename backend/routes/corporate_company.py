@@ -55,6 +55,7 @@ try:
     )
     from ..services.corporate_allowance_service import apply_grant  # type: ignore
     from ..services.corporate_membership_service import invite_member  # type: ignore
+    from ..services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
         add_allowed_domain,
@@ -93,6 +94,7 @@ except ImportError:
     )
     from services.corporate_allowance_service import apply_grant  # type: ignore
     from services.corporate_membership_service import invite_member  # type: ignore
+    from services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
 
 try:
     from ..services.corporate_member_offboarding_service import cancel_pre_pickup_rides_for_member  # type: ignore
@@ -211,16 +213,31 @@ async def invite(
 
             company = await get_corporate_account_by_id(company_id) or {}
             company_name = company.get("name") or "your company"
+            try:
+                from ..utils.email_layout import render_email
+            except ImportError:
+                from utils.email_layout import render_email  # type: ignore
+
+            _invite_subject = f"You're invited to {company_name} on Spinr for Business"
+            # A branded shell matters more here than on most: this is an
+            # unsolicited email containing a sign-in link, which is exactly the
+            # shape of a phishing attempt. The logo and the configured company
+            # details are what make it look like us.
+            _invite_rendered = await render_email(
+                heading=_invite_subject,
+                paragraphs=[
+                    f"You've been invited to join {company_name} on Spinr for Business "
+                    f"as {'an admin' if body.role.value in ('admin', 'owner') else 'a member'}.",
+                    "The link below signs you in with a one-time code sent to this address — no password needed.",
+                ],
+                cta=("Accept the invite", web_invite_url),
+                footnote="If you weren't expecting this invitation, you can ignore this email.",
+            )
             email_sent = await send_transactional_email(
                 to=body.email,
-                subject=f"You're invited to {company_name} on Spinr for Business",
-                text=(
-                    f"You've been invited to join {company_name} on Spinr for Business "
-                    f"as {'an admin' if body.role.value in ('admin', 'owner') else 'a member'}.\n\n"
-                    f"Accept the invite and sign in with this email address:\n{web_invite_url}\n\n"
-                    "The link signs you in with a one-time code sent to this address — "
-                    "no password needed."
-                ),
+                subject=_invite_subject,
+                text=_invite_rendered.text,
+                html=_invite_rendered.html,
                 log_id=member.get("id") or company_id,
                 email_type="corporate_member_invite",
             )
@@ -1140,8 +1157,11 @@ async def self_serve_wallet_topup(
         raise HTTPException(status_code=404, detail="Company not found")
     if company.get("status") != "active":
         raise HTTPException(status_code=409, detail="Company is not active")
-    if not company.get("stripe_customer_id"):
-        raise HTTPException(status_code=409, detail="Company has no Stripe customer on file")
+    # No 409 on a missing stripe_customer_id — with_corporate_customer_repair
+    # below provisions one. Since the auto-topup loop NULLs this column when it
+    # retires a customer stranded by a key rotation, a 409 here would leave the
+    # company permanently unable to fund its own wallet. They still get a clean
+    # 422 from the repair path if no card is on file.
 
     wallet = await get_corporate_wallet_by_company(company_id)
     if not wallet:
@@ -1152,39 +1172,47 @@ async def self_serve_wallet_topup(
     if not stripe_secret:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    payment_method_id = body.payment_method_id
-    if not payment_method_id:
-        payment_method_id = await get_default_payment_method(company["stripe_customer_id"], stripe_secret)
-    if not payment_method_id:
-        raise HTTPException(
-            status_code=422,
-            detail="No payment method on file — provide payment_method_id or save a default card first",
-        )
+    # The payment-method lookup and the PaymentIntent both address the customer,
+    # so both live inside the repair wrapper: a company billing admin is present,
+    # so a customer stranded by a test→live key rotation is replaced here rather
+    # than 500ing their top-up. If the company's card lived on the replaced
+    # customer, the retry surfaces the honest 422 below.
+    async def _create_intent(customer_id: str):
+        payment_method_id = body.payment_method_id
+        if not payment_method_id:
+            payment_method_id = await get_default_payment_method(customer_id, stripe_secret)
+        if not payment_method_id:
+            raise HTTPException(
+                status_code=422,
+                detail="No payment method on file — provide payment_method_id or save a default card first",
+            )
 
-    intent_kwargs = dict(
-        amount=dollars_to_cents(body.amount),
-        currency="cad",
-        customer=company["stripe_customer_id"],
-        payment_method=payment_method_id,
-        off_session=True,
-        confirm=True,
-        # Server-side off_session confirm: disable redirect-based payment
-        # methods so Stripe doesn't demand a return_url — same reasoning as
-        # the internal-admin manual_topup this mirrors.
-        automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
-        metadata={
-            "scope": "corporate_topup",
-            "company_id": company_id,
-            "wallet_id": wallet["id"],
-            "initiated_by": guard["user"]["id"],
-        },
-        api_key=stripe_secret,
-        idempotency_key=(
-            body.client_idempotency_key
-            or f"corp-selfserve-topup-{wallet['id']}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
-        ),
-    )
-    intent = await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**intent_kwargs))
+        intent_kwargs = dict(
+            amount=dollars_to_cents(body.amount),
+            currency="cad",
+            customer=customer_id,
+            payment_method=payment_method_id,
+            off_session=True,
+            confirm=True,
+            # Server-side off_session confirm: disable redirect-based payment
+            # methods so Stripe doesn't demand a return_url — same reasoning as
+            # the internal-admin manual_topup this mirrors.
+            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+            metadata={
+                "scope": "corporate_topup",
+                "company_id": company_id,
+                "wallet_id": wallet["id"],
+                "initiated_by": guard["user"]["id"],
+            },
+            api_key=stripe_secret,
+            idempotency_key=(
+                body.client_idempotency_key
+                or f"corp-selfserve-topup-{wallet['id']}-{customer_id}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
+            ),
+        )
+        return await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**intent_kwargs))
+
+    _, intent = await with_corporate_customer_repair(company, stripe_secret, _create_intent)
 
     try:
         await log_user_action(

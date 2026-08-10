@@ -71,9 +71,28 @@ area:money:
           - 'backend/utils/surge_engine.py'
           - 'backend/utils/payment_retry.py'
           # drivers.py holds Stripe Transfer/Payout + leaderboard earnings;
-          # rides.py holds process_payment settlement + cancellation fees.
+          # rides.py held process_payment settlement + cancellation fees.
           - 'backend/routes/drivers.py'
           - 'backend/routes/rides.py'
+          # routes/rides.py and routes/drivers.py were split into packages by
+          # the god-object decomposition, so the two single-file globs above
+          # can no longer match anything — settlement now lives in
+          # routes/rides/payments.py and cancellation fees in
+          # routes/rides/cancellation.py. Keeping the old entries for any
+          # branch that still has the flat files, and adding the packages.
+          # Found 2026-08-07: the money-auditor pass on PR #3464 reported that
+          # a PR touching settlement, the ledger, and four money migrations
+          # matched ZERO area:money globs.
+          - 'backend/routes/rides/**'
+          - 'backend/routes/drivers/**'
+          - 'backend/services/payment_service.py'
+          - 'backend/services/ledger_service.py'
+          - 'backend/repositories/ledger_repo.py'
+          - 'backend/repositories/wallet_repo.py'
+          - 'backend/utils/ledger_projection.py'
+          - 'backend/utils/reconciliation.py'
+          - 'backend/utils/stripe_charge.py'
+          - 'backend/utils/stripe_reconcile.py'
 
 area:auth:
   - changed-files:

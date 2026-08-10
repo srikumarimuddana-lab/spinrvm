@@ -20,6 +20,10 @@ type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 interface Props {
   quote: FareQuoteAction;
   onSelect: (option: FareQuoteOption) => void;
+  /** ACTION_ITEMS.md AI8: true once a newer conversation turn has started —
+   * dims the card and disables its options so a stale-but-still-consistent
+   * quote can't be tapped and booked at a possibly different price. */
+  disabled?: boolean;
 }
 
 /** Line-item fare details for the recommended (cheapest) option, plus its
@@ -58,7 +62,7 @@ function FareBreakdown({
   );
 }
 
-export default function FareQuoteCard({ quote, onSelect }: Props) {
+export default function FareQuoteCard({ quote, onSelect, disabled }: Props) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
 
@@ -70,12 +74,15 @@ export default function FareQuoteCard({ quote, onSelect }: Props) {
     .join(' · ');
 
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, disabled && styles.staleCard]}>
       <View style={styles.headerRow}>
         <Ionicons name="pricetags-outline" size={17} color={colors.primary} />
         <Text style={styles.headerText}>Your ride options</Text>
       </View>
       {meta ? <Text style={styles.metaText}>{meta}</Text> : null}
+      {disabled ? (
+        <Text style={styles.staleCardNote}>The conversation has moved on — ask again if you still need this.</Text>
+      ) : null}
 
       {quote.quotes.map((option, index) => {
         const hasSavings = !!option.promo_savings && option.final_total !== option.total;
@@ -93,6 +100,7 @@ export default function FareQuoteCard({ quote, onSelect }: Props) {
             key={option.vehicle_type_id ?? `${option.vehicle_type}-${index}`}
             style={styles.option}
             onPress={() => onSelect(option)}
+            disabled={disabled}
             accessibilityRole="button"
             accessibilityLabel={`Book ${option.vehicle_type ?? 'this option'} for $${option.final_total}`}
           >
@@ -143,6 +151,8 @@ const createStyles = (colors: ThemeColors) =>
     headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     headerText: { fontSize: 15, fontWeight: '700', color: colors.text },
     metaText: { fontSize: 12, color: colors.textDim },
+    staleCard: { opacity: 0.45 },
+    staleCardNote: { fontSize: 12, color: colors.textDim, fontStyle: 'italic' },
     option: {
       flexDirection: 'row',
       alignItems: 'center',

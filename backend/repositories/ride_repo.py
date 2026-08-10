@@ -13,6 +13,7 @@ try:
         _rows_from_res,
         _serialize_for_api,
         _single_row_from_res,
+        _write_skipped,
         run_sync,
         supabase,
     )
@@ -21,6 +22,7 @@ except ImportError:
         _rows_from_res,
         _serialize_for_api,
         _single_row_from_res,
+        _write_skipped,
         run_sync,
         supabase,
     )
@@ -176,7 +178,7 @@ async def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> 
                 # thumbnail, never fail the whole authorized ride read (rider
                 # receipt / admin detail). The segmented geometry above already
                 # conveys the route; the signed image is best-effort.
-                logger.exception("route snapshot signing failed for ride_id=%s", ride.get("id"))
+                logger.exception("route snapshot signing failed for ride_id={}", ride.get("id"))
                 ride.pop("route_snapshot_url", None)
         else:
             ride.pop("route_snapshot_url", None)
@@ -236,6 +238,7 @@ async def insert_ride(payload: Dict[str, Any]):
 
 async def update_ride(ride_id: str, updates: Dict[str, Any]):
     if not supabase:
+        _write_skipped("update_ride", "rides")
         return None
     # Strip MongoDB-style $set wrapper if present
     updates = updates.get("$set", updates)
@@ -731,6 +734,7 @@ async def create_complaint(complaint_data: Dict[str, Any]) -> Optional[Dict[str,
 async def resolve_complaint(complaint_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Resolve or dismiss a complaint."""
     if not supabase:
+        _write_skipped("resolve_complaint", "complaints")
         return None
     update_data = _serialize_for_api(update_data)
     return await run_sync(
@@ -749,6 +753,7 @@ async def create_lost_and_found(item_data: Dict[str, Any]) -> Optional[Dict[str,
 async def update_lost_and_found(item_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update a lost and found item status."""
     if not supabase:
+        _write_skipped("update_lost_and_found", "lost_and_found")
         return None
     update_data = _serialize_for_api(update_data)
     return await run_sync(

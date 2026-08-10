@@ -181,6 +181,10 @@ class SettingsUpdateRequest(BaseModel):
     stripe_webhook_secret: Optional[str] = None
     # Connected-accounts endpoint signing secret (account.updated, payout.*).
     stripe_connect_webhook_secret: Optional[str] = None
+    # Kill switch for re-provisioning Stripe identities stranded by a
+    # test→live key rotation (see AppSettings for the full rationale).
+    # Settable here so it can be turned off without a redeploy.
+    stripe_reprovision_stale_ids: Optional[bool] = None
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_from_number: Optional[str] = None
@@ -208,6 +212,16 @@ class SettingsUpdateRequest(BaseModel):
     company_phone: Optional[str] = None
     company_email: Optional[str] = None
     company_website: Optional[str] = None
+    # Logo for transactional-email headers. Empty = the bundled Spinr asset
+    # served at /api/v1/branding/spinr-logo.png, which is the normal setting.
+    # Validated at render time by utils/company_details._safe_logo_url, which
+    # falls back to the bundled asset for anything that is not an absolute
+    # http(s) URL. Does NOT affect report PDF/Excel/Word headers.
+    company_logo_url: Optional[str] = None
+    # Renders the ride receipt and Spinr Pass invoice with the shared branded
+    # shell and the company details above. Presentation only — never the fare
+    # rows, GST/PST line items or totals. See migration 288.
+    branded_receipt_enabled: Optional[bool] = None
     # Locks the rider's quoted fare at booking time so the receipt can't
     # drift if Maps changes the route mid-trip. Toggle on the Settings page.
     fare_lock_enabled: Optional[bool] = None
@@ -342,6 +356,13 @@ class SettingsUpdateRequest(BaseModel):
     # status, just a log line + metric an admin can act on manually.
     corporate_kyb_reverification_enabled: Optional[bool] = None
     corporate_kyb_reverify_after_months: Optional[int] = Field(default=None, ge=1, le=60)
+    # Forced-upgrade gate (ACTION_ITEMS.md E3) — core/middleware.py's
+    # ForcedUpgradeMiddleware rejects any request whose X-App-Version header
+    # is below this with 426. Empty string (default) = enforcement off for
+    # that app. Semver only — free text here would silently disable the
+    # comparison for every client.
+    min_rider_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
+    min_driver_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
 
     @field_validator("lms_api_base_url")
     @classmethod

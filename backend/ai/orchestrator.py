@@ -24,7 +24,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 try:
     from . import conversations, response_cache
-    from .pii import scrub_pii
+    from .pii import filter_tool_leakage, scrub_pii
     from .prompts import build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
@@ -32,7 +32,7 @@ try:
     from .tools import execute_tool, tool_defs_for
 except ImportError:
     from ai import conversations, response_cache
-    from ai.pii import scrub_pii
+    from ai.pii import filter_tool_leakage, scrub_pii
     from ai.prompts import build_system_prompt
     from ai.providers import get_adapter
     from ai.providers.base import AIConfigError
@@ -42,11 +42,11 @@ except ImportError:
 try:
     from ..settings_loader import get_app_settings
     from ..utils.metrics import inc as _metric_inc
-    from ..utils.redis_client import redis_expire, redis_incr
+    from ..utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
 except ImportError:
     from settings_loader import get_app_settings
     from utils.metrics import inc as _metric_inc
-    from utils.redis_client import redis_expire, redis_incr
+    from utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
 
 logger = logging.getLogger(__name__)
 
@@ -120,76 +120,85 @@ async def _pinned_quote_context(conversation_id: str) -> str:
     return "\n".join(bits)
 
 
-# Process-local fallback counters, used ONLY on the Redis-error path below.
-# Not shared across replicas or persisted — Redis is the source of truth
-# whenever it's reachable. Keyed the same as the Redis key (so it's
-# naturally per-user/per-day) with a ":degraded" suffix. AI1: this replaces
-# the old fail-OPEN behavior, where a single Redis error removed the daily
-# cap entirely for every user until Redis recovered (the kill switch was
-# the only remaining backstop). A dict, not a bounded cache, because entries
-# are pruned inline below whenever the degraded path runs — see _prune.
-_degraded_daily_counts: Dict[str, int] = {}
-
-# Ceiling applied while Redis is unreachable. Deliberately not derived from
-# the admin-configured `cap` (get_app_settings() may itself be degraded
-# during a wider outage) — a fixed, generous floor so a brief Redis blip
-# doesn't hard-block every user's next message, while a sustained outage
-# still bounds LLM spend per user per replica rather than removing the cap.
-_DEGRADED_CAP_FLOOR = 200
-
-
-def _prune_degraded_counts(today_suffix: str) -> None:
-    """Drop stale (yesterday-or-older) degraded-mode entries.
-
-    Only runs on the already-rare Redis-error path, so an O(n) sweep here
-    doesn't touch the hot path. Without this the process-local dict would
-    grow by one entry per distinct user per day for the life of the process.
-    """
-    stale = [k for k in _degraded_daily_counts if not k.endswith(today_suffix)]
-    for k in stale:
-        _degraded_daily_counts.pop(k, None)
-
-
 async def _over_daily_cap(user_id: str, cap: int) -> bool:
-    """Per-user daily message cap via Redis INCR.
-
-    Fails CLOSED-with-a-floor on a Redis error (AI1, ACTION_ITEMS.md). The
-    previous behavior failed OPEN — a Redis blip silently removed the
-    per-user cost cap for every user, with only the global kill switch left
-    as a backstop. That is too wide a hole for a cost/abuse control on a
-    paid-LLM path. A hard fail-closed (block everyone instantly) is also
-    wrong here: this is a cost-control cap, not a security boundary like
-    OTP lockout, so a transient blip shouldn't 503 every rider/driver
-    mid-conversation. Instead: fall back to a process-local counter bounded
-    by _DEGRADED_CAP_FLOOR, matching this codebase's existing "Redis
-    transparency" pattern (utils/redis_client.py's in-process-dict
-    fallback) but applied defensively here since redis_incr/redis_expire
-    themselves re-raise (they only fall back silently when REDIS_URL is
-    unset entirely, not when it's set but erroring)."""
+    """Per-user daily message cap via Redis INCR. Fails OPEN with a loud log
+    (mirrors the non-OTP rate-limit policy) — the kill switch remains the
+    hard stop when Redis is down."""
     key = f"ai:daily:{user_id}:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
     try:
         count = await redis_incr(key)
         if count == 1:
             await redis_expire(key, 86400)
         return count > cap
-    except Exception as exc:
-        logger.error(
-            "ai daily-cap check failed — Redis unavailable; failing CLOSED with a "
-            "%s/day process-local floor (was previously fail-open) for user_id=%s: %s",
-            _DEGRADED_CAP_FLOOR,
-            user_id,
-            exc,
-            exc_info=exc,
-        )
-        today_suffix = key.rsplit(":", 1)[-1] + ":degraded"
-        _prune_degraded_counts(today_suffix)
-        degraded_key = f"{key}:degraded"
-        count = _degraded_daily_counts.get(degraded_key, 0) + 1
-        _degraded_daily_counts[degraded_key] = count
-        return count > _DEGRADED_CAP_FLOOR
+    except Exception:
+        logger.error("ai daily-cap check failed — failing open", exc_info=True, extra={"user_id": user_id})
+        return False
+
+
+_CONV_LOCK_TTL_SECONDS = 90  # generous ceiling for a full multi-iteration tool-calling turn
 
 
 async def run_chat_turn(
+    *,
+    user: Dict[str, Any],
+    conversation_id: Optional[str],
+    user_message: str,
+    audience: str = "rider",
+    admin_actor_id: Optional[str] = None,
+    client_location: Optional[Dict[str, float]] = None,
+    client_capabilities: Optional[list] = None,
+) -> AsyncIterator[Frame]:
+    """Public entry point — adds a conversation-level lock around _run_chat_turn.
+
+    AI10: two clients (or two tabs/devices) sending turns on the same
+    conversation_id concurrently would otherwise interleave append_message
+    writes and race history snapshots — each turn's LLM call is built from
+    a load_history() read at its own start, so a second turn that starts
+    before the first finishes doesn't see the first's messages yet. A new
+    conversation (conversation_id is None) has no shared id for another
+    request to race against, so it skips the lock entirely.
+    """
+    if not conversation_id:
+        async for frame in _run_chat_turn(
+            user=user,
+            conversation_id=conversation_id,
+            user_message=user_message,
+            audience=audience,
+            admin_actor_id=admin_actor_id,
+            client_location=client_location,
+            client_capabilities=client_capabilities,
+        ):
+            yield frame
+        return
+
+    lock_key = f"ai:conv_lock:{conversation_id}"
+    acquired = await redis_set_nx(lock_key, "1", _CONV_LOCK_TTL_SECONDS)
+    if not acquired:
+        _metric_inc("spinr_ai_chat_turns_total", {"outcome": "conversation_busy"})
+        yield (
+            "error",
+            {
+                "code": "conversation_busy",
+                "message": "This conversation has another reply in progress — please wait a moment and try again.",
+            },
+        )
+        return
+    try:
+        async for frame in _run_chat_turn(
+            user=user,
+            conversation_id=conversation_id,
+            user_message=user_message,
+            audience=audience,
+            admin_actor_id=admin_actor_id,
+            client_location=client_location,
+            client_capabilities=client_capabilities,
+        ):
+            yield frame
+    finally:
+        await redis_delete(lock_key)
+
+
+async def _run_chat_turn(
     *,
     user: Dict[str, Any],
     conversation_id: Optional[str],
@@ -444,7 +453,10 @@ async def run_chat_turn(
     # so the rider still sees the real reply; only stored/replayed copies
     # change. keep_trip_pins mirrors the user-side call in case the model
     # echoes a bracketed trip-endpoint pair back.
-    stored_text = scrub_pii(final_text, keep_trip_pins=True)
+    # AI13: also strip snake_case-shaped tool-name/internal-jargon leakage
+    # from the persisted/replayed copy -- same live-stream-unchanged
+    # convention as the PII scrub immediately above.
+    stored_text = filter_tool_leakage(scrub_pii(final_text, keep_trip_pins=True))
 
     assistant_row = await conversations.append_message(
         conversation,

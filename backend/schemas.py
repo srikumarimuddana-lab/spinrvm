@@ -143,6 +143,19 @@ class AppSettings(BaseModel):
     # cannot verify those — see construct_event dual-secret logic in
     # routes/webhooks.py.
     stripe_connect_webhook_secret: str = ""
+    # ── Stripe identity re-provisioning (test → live cutover) ─────────────
+    # Stripe object IDs are mode-scoped, so rotating stripe_secret_key across
+    # modes strands every stored customer/Connect-account ID: the new key
+    # answers `resource_missing` for all of them. With this on, the backend
+    # mints a replacement under the running key and archives the dead ID
+    # (migration 286) instead of failing the rider's cards screen or the
+    # driver's payout setup forever.
+    #
+    # Default True because the alternative is a permanently broken payment
+    # surface with no in-app recovery. This is the kill switch: turning it
+    # off stops all re-provisioning within the 60 s settings cache and needs
+    # no redeploy — the rollback path for this feature.
+    stripe_reprovision_stale_ids: bool = True
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""
@@ -191,6 +204,27 @@ class AppSettings(BaseModel):
     # return no driver positions at all. Riders still see availability counts
     # from /rides/estimate, which never carried coordinates.
     driver_map_show_locations: bool = True
+    # ── Double-entry ledger legs (migration 286) ─────────────────────────
+    # When on, every financial_events row also writes balanced debit/credit
+    # rows to financial_event_entries. Default OFF so the schema ships dark:
+    # flip it here (DB-backed app_settings, no redeploy) once the table is
+    # confirmed present in the target environment, and flip it back to stop
+    # all leg writes instantly if anything looks wrong.
+    #
+    # Turning it off is the rollback: financial_events — the tax record and
+    # the input to the daily Stripe reconciliation — is completely unaffected
+    # either way. Nothing reads the legs to make a money decision.
+    ledger_double_entry_enabled: bool = False
+    # ── Atomic card settlement (migration 288) ──────────────────────────
+    # When on, settle_card finalizes via the settle_ride_card_payment RPC:
+    # rides.payment_status flip + financial_events header in ONE Postgres
+    # transaction, closing the process-death window between them. Default
+    # OFF; requires migration 288 applied first (absent function → automatic
+    # fallback to the legacy two-write path, logged at warning). Flipping it
+    # back off is the rollback — rows written by either path are identical
+    # to every reader. Independent of ledger_double_entry_enabled: the RPC
+    # never writes legs and the projection never reads this flag.
+    ledger_atomic_settle_enabled: bool = False
     # Grid cell for coarsening, in metres. 500m keeps the map useful at city
     # zoom ("cars are around me, roughly there") while destroying the
     # resolution needed to follow one vehicle. 0 would mean exact — deliberately
@@ -279,6 +313,13 @@ class AppSettings(BaseModel):
     company_phone: str = ""
     company_email: str = ""
     company_website: str = ""
+    # Logo rendered in transactional-email headers. Empty = use the bundled
+    # asset at backend/static/branding/spinr_logo.png, served by
+    # routes/branding.py — which is the correct default, not a placeholder.
+    # Must be an absolute http(s) URL: it lands in an <img src> inside mail
+    # read outside any origin, so a relative path cannot resolve and anything
+    # non-http(s) is rejected by utils/company_details._safe_logo_url.
+    company_logo_url: str = ""
     # Postal address parts for the CASL-required marketing footer (migration
     # 192). Public info, not masked. company_address holds the street line;
     # these complete it into a full, legally-valid mailing address.
@@ -297,6 +338,27 @@ class AppSettings(BaseModel):
     # Distribution list for safety-incident transactional emails. See
     # migration 95 + the _notify_safety_team helper in features.py.
     safety_alert_emails: str = ""
+    # ── Lifecycle-email kill switch ──────────────────────────────────────
+    # Single off switch for every email sent through
+    # utils/email_notifications.py (driver approval/rejection/suspension,
+    # document expiry, …). Push is unaffected — flipping this false leaves
+    # every existing notification path exactly as it was before those emails
+    # were added, without a redeploy. Receipts, statements, invoices, tax and
+    # DSAR mail do NOT route through that module and are not covered here.
+    lifecycle_emails_enabled: bool = True
+    # ── Branded receipt / invoice retrofit ────────────────────────────────
+    # The ride receipt and Spinr Pass invoice predate the shared email layout
+    # and shipped their own bespoke shell: legacy #ee2b2b, a text wordmark,
+    # a hardcoded company footer and no plain-text alternative. True renders
+    # them with the real logo, the documented brand red, and the company name
+    # and address from the Company Info card above.
+    #
+    # Defaults TRUE because the point of the retrofit is that a receipt should
+    # show the company details an admin actually configured. False restores the
+    # previous shell byte-for-byte, without a redeploy, if it renders badly in
+    # a real inbox. The fare rows, GST/PST line items and totals are outside
+    # this switch entirely — the flag only governs the wrapper.
+    branded_receipt_enabled: bool = True
     # ── SOS on-call paging (ACTION_ITEMS.md B15(b)) ───────────────────────
     # Real on-call paging for rider/driver SOS, on top of the admin WS
     # broadcast + safety_alert_emails above. Lives here (not .env) for the
@@ -377,6 +439,13 @@ class AppSettings(BaseModel):
     # admin-dashboard routes. Read by the frontend's useFeatureFlag() hook
     # via GET /api/admin/settings; effective within the 60s settings TTL.
     admin_theme_v2_enabled: bool = False
+    # ── Forced-upgrade gate (ACTION_ITEMS.md E3) ──────────────────────────
+    # Minimum app version each client must report via the X-App-Version
+    # header (see core/middleware.py::ForcedUpgradeMiddleware). Empty string
+    # = enforcement off for that app (the safe default — an unset minimum
+    # must never lock out every build). Semver "MAJOR.MINOR.PATCH" only.
+    min_rider_app_version: str = ""
+    min_driver_app_version: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -424,6 +493,10 @@ class SavedAddress(BaseModel):
     lat: float
     lng: float
     icon: str = "location"
+    # B9 enhancement (ACTION_ITEMS.md): captured from the write-time
+    # geocode-verify check when a result was returned; None when
+    # verification failed open (no API key, budget exhausted, no match).
+    place_id: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

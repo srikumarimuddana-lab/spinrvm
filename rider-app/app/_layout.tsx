@@ -68,7 +68,8 @@ import {
   onTokenRefresh,
   getAppCheckToken,
 } from '@shared/services/firebase';
-import { setAppCheckTokenProvider } from '@shared/api/client';
+import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
+import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 
 import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
@@ -80,6 +81,16 @@ import Toast from '../components/Toast';
 // (public settings, active-ride hydration, and login OTP) wait for Firebase
 // App Check instead of racing ahead without X-Firebase-AppCheck.
 setAppCheckTokenProvider(getAppCheckToken);
+
+// Forced-upgrade gate (ACTION_ITEMS.md E3): tag every request with this
+// build's platform + native version so the backend can reject stale
+// binaries with 426. nativeApplicationVersion reflects the installed
+// binary (stable across OTA updates); expoConfig?.version is the
+// build-time fallback for environments where that's unset (e.g. web).
+setAppIdentity('rider', Constants.nativeApplicationVersion || Constants.expoConfig?.version || '0.0.0');
+
+const RIDER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr/id0000000000';
+const RIDER_APP_STORE_ANDROID = 'https://play.google.com/store/apps/details?id=com.spinr.user';
 
 
 function routeFromNotificationData(data: Record<string, string> | undefined) {
@@ -230,6 +241,10 @@ function RootLayout() {
   useVehicleTypesSync();
   const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
   const [isOffline, setIsOffline] = useState(false);
+  const [forceUpdate, setForceUpdate] = useState<{ visible: boolean; minVersion?: string }>({ visible: false });
+  useEffect(() => {
+    onForceUpgrade((minVersion) => setForceUpdate({ visible: true, minVersion }));
+  }, []);
   // Hold the branded splash for a minimum duration so the logo + tagline are
   // actually seen — auth/location init can finish in <400ms, cutting off the
   // tagline before it animates in. The loading gate below waits on this too.
@@ -798,7 +813,7 @@ function RootLayout() {
       }}
     >
       <ThemeProvider>
-        <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} />
+        <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
       </ThemeProvider>
     </PersistQueryClientProvider>
   );
@@ -831,6 +846,7 @@ function RootLayoutInner({
   wsState,
   confirmSheet,
   setConfirmSheet,
+  forceUpdate,
 }: {
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
@@ -839,11 +855,17 @@ function RootLayoutInner({
   wsState: import('../hooks/useRiderSocket').RiderSocketState;
   confirmSheet: { visible: boolean; title: string; message: string; variant: 'info' | 'warning' | 'danger' | 'success'; buttons: ConfirmSheetButton[] };
   setConfirmSheet: React.Dispatch<React.SetStateAction<typeof confirmSheet>>;
+  forceUpdate: { visible: boolean; minVersion?: string };
 }) {
   const { isDark } = useTheme();
   useRideStatusNotification();
   return (
     <ErrorBoundary>
+      <ForceUpdateOverlay
+        visible={forceUpdate.visible}
+        minVersion={forceUpdate.minVersion}
+        storeUrl={Platform.OS === 'ios' ? RIDER_APP_STORE_IOS : RIDER_APP_STORE_ANDROID}
+      />
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
       <GestureRootWrapper>
         <SafeAreaProvider>

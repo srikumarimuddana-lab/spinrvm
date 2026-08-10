@@ -5,6 +5,7 @@ try:
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
     from ..utils.audit_logger import log_admin_action  # type: ignore
+    from ..utils.background import spawn  # type: ignore
     from ..utils.error_handling import ErrorCode, SpinrException  # type: ignore
     from ..utils.error_keys import ErrorKeys  # type: ignore
     from ..utils.insurance_periods import record_period_transition  # type: ignore
@@ -16,11 +17,17 @@ try:
         resolve_referral_terms,
     )
     from ..utils.refresh_tokens import revoke_all_for_user  # type: ignore
+    from ..utils.rider_emails import (  # type: ignore
+        send_account_deletion_notice,
+        send_email_changed_notice,
+        send_welcome_email,
+    )
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
+    from utils.background import spawn  # type: ignore  # noqa: F811
     from utils.error_handling import ErrorCode, SpinrException  # type: ignore  # noqa: F811
     from utils.error_keys import ErrorKeys  # type: ignore  # noqa: F811
     from utils.insurance_periods import record_period_transition  # type: ignore  # noqa: F811
@@ -32,6 +39,11 @@ except ImportError:
         resolve_referral_terms,
     )
     from utils.refresh_tokens import revoke_all_for_user  # type: ignore  # noqa: F811
+    from utils.rider_emails import (  # type: ignore  # noqa: F811
+        send_account_deletion_notice,
+        send_email_changed_notice,
+        send_welcome_email,
+    )
 import asyncio
 import base64
 import logging
@@ -88,6 +100,9 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
 
     old_email = (current_user.get("email") or "").lower()
     email_changed = email_lower != old_email
+    # This endpoint serves both first-time setup and later profile edits, and
+    # they warrant different mail: a welcome once, a security notice thereafter.
+    first_time_setup = not bool(current_user.get("profile_complete"))
 
     update_data = {
         "first_name": request.first_name.strip(),
@@ -117,6 +132,19 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
             status_code=500,
             detail="Database error: Could not retrieve updated user profile. Check server logs for DB connection issues.",
         )
+
+    # Backgrounded: profile setup is a user-facing request and neither of these
+    # is worth adding provider latency to it. Both senders swallow their own
+    # failures — the profile write above is already committed.
+    if first_time_setup:
+        # Nothing in the rider flow ever confirmed the address we hold actually
+        # works; this is the first and only check.
+        spawn(send_welcome_email(updated_user))
+    elif email_changed and old_email:
+        # Security notice to the address that was just replaced. If someone else
+        # made this change, that address is the only way to reach the person who
+        # owned the account.
+        spawn(send_email_changed_notice(updated_user, old_email))
 
     return UserProfile(**updated_user)
 
@@ -353,6 +381,11 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
             details={"grace_period_end": grace_period_end, "pipeda": True},
         )
         logger.info(f"Account deletion scheduled for user {user_id} (grace period until {grace_period_end})")
+        # Confirm in writing what was deleted, what is kept and why, and when it
+        # finally goes. The in-app message says this too, but the account is now
+        # locked — the rider cannot go back and re-read it. Backgrounded and
+        # self-swallowing; the tombstone above is already committed.
+        spawn(send_account_deletion_notice(current_user, grace_period_end))
         return {
             "success": True,
             "message": (

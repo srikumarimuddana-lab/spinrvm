@@ -371,9 +371,22 @@ jobs:
             // Appends per-area subsection templates to the PR body based on
             // which files changed. Each section carries an idempotency
             // marker so this step never double-appends.
-
+            //
+            // #2672: this job used to read pr.body straight off
+            // context.payload.pull_request, which is a snapshot taken when
+            // the triggering webhook fired. When a body edit lands right
+            // before this job runs (e.g. the author fills in Tier 5/7 by
+            // hand), that snapshot can already be stale relative to what's
+            // actually on GitHub by the time this step checks for a marker
+            // — every marker check below then runs against old content and
+            // re-appends a second, blank copy on top of what the author
+            // just filled in. Fetching the PR fresh here closes that race:
+            // this step always sees whatever body is live right now.
             const pr = context.payload.pull_request;
             const { owner, repo } = context.repo;
+            const fresh = (await github.rest.pulls.get({
+              owner, repo, pull_number: pr.number,
+            })).data;
 
             // ---- Detect diff shape --------------------------------------
             const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -399,7 +412,7 @@ jobs:
             const hasSafety = touched(SAFETY_RE);
 
             // ---- Detect type/risk from body ----------------------------
-            const body = pr.body || '';
+            const body = fresh.body || '';
             const typeLine = body.match(/\*\*Type\*\*[^\n]*/i)?.[0] || '';
             const typeMatch = typeLine.match(/:\s*`?([a-z]+)`?/i);
             const type = typeMatch ? typeMatch[1].toLowerCase() : null;

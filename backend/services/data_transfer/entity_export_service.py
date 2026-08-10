@@ -9,17 +9,20 @@ Document bytes are fetched too (self-export only lists document metadata).
 
 import asyncio
 import logging
+import re as _re
 from typing import Any, Optional
 
 try:
     from ... import db_supabase
     from ...documents import _extract_storage_key
     from ...routes.drivers._shared import _decrypt_driver_pii
+    from ...services.driver_import_service import DOCUMENT_REQUIREMENT_ALIASES
     from ...supabase_client import supabase
 except ImportError:
     import db_supabase
     from documents import _extract_storage_key
     from routes.drivers._shared import _decrypt_driver_pii
+    from services.driver_import_service import DOCUMENT_REQUIREMENT_ALIASES
     from supabase_client import supabase
 
 logger = logging.getLogger(__name__)
@@ -31,11 +34,30 @@ class EntityNotFoundError(Exception):
     pass
 
 
+# Per-document outcome recorded on every payload and surfaced in the ZIP's
+# documents.csv / raw_data.json. A document with no file in the bundle is
+# NEVER silently absent — the manifest always says which of these it was, so
+# "the admin opted out" can't be mistaken for "storage is broken" (they
+# previously produced an identical, unexplained metadata-only ZIP).
+DOC_STATUS_INCLUDED = "included"
+DOC_STATUS_EXCLUDED = "excluded_by_request"
+DOC_STATUS_NO_KEY = "unavailable_no_storage_key"
+DOC_STATUS_FETCH_FAILED = "unavailable_fetch_failed"
+
+
 async def _fetch_document_bytes(storage_key: str) -> Optional[bytes]:
     """Download a document's raw bytes. Returns None (not raised) on failure so a
     single unreadable document doesn't abort the whole bundle — the caller
-    records the miss in the bundle's manifest instead."""
+    records the miss in the bundle's manifest instead.
+
+    Logged at error, not warning: these bundles back regulatory/insurer-facing
+    transfers, so a document the operator asked for and did not get is
+    actionable, not a recoverable anomaly (CLAUDE.md "do not silently swallow
+    errors"). The bundle continues deliberately — aborting would lose the
+    other 99 entities over one bad object — and the miss is reported in the
+    manifest rather than dropped."""
     if not supabase:
+        logger.error("data-transfer export: no storage client; cannot fetch document key=%s", storage_key)
         return None
     loop = asyncio.get_running_loop()
     try:
@@ -43,7 +65,7 @@ async def _fetch_document_bytes(storage_key: str) -> Optional[bytes]:
             None, lambda: supabase.storage.from_(DOCUMENT_STORAGE_BUCKET).download(storage_key)
         )
     except Exception as exc:
-        logger.warning("data-transfer export: failed to fetch document key=%s: %s", storage_key, exc)
+        logger.error("data-transfer export: failed to fetch document key=%s: %s", storage_key, exc, exc_info=True)
         return None
 
 
@@ -54,12 +76,64 @@ def _strip_ride_gps(ride: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in ride.items() if k not in _RIDE_GPS_FIELDS}
 
 
+def _canonical_doc_type(value: Optional[str]) -> str:
+    """Canonical snake_case key for a document type.
+
+    ``driver_documents.document_type`` stores the requirement's DISPLAY NAME,
+    not its key -- ``documents.py`` inserts ``req.get("name")`` ("Background
+    Check", "Criminal Record Check"), while every selector in the product
+    (the Export tab's checkboxes, SGI_SUPPORTING_DOC_TYPES) is snake_case
+    ("background_check"). Comparing the two directly never matched, so
+    filtering by document type silently excluded EVERY document and produced
+    a bundle of CSVs with no files -- the reported bug.
+
+    Normalizes case and separators, then applies the import service's alias
+    map so a sheet that says "Criminal Record Check" lands on the same key as
+    an in-app upload. Reusing that map rather than copying it keeps one
+    definition of what counts as the same document.
+    """
+    slug = _re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
+    return DOCUMENT_REQUIREMENT_ALIASES.get(slug, slug)
+
+
+def _doc_type_matches(doc: dict[str, Any], wanted: set[str]) -> bool:
+    """Whether this document is one of the wanted types.
+
+    Checks ``requirement_key`` as well as ``document_type``: the key is the
+    canonical slug where it's populated, and the display name is all the
+    older rows have.
+    """
+    return bool(
+        {_canonical_doc_type(doc.get("document_type")), _canonical_doc_type(doc.get("requirement_key"))} & wanted
+    )
+
+
+def _wants_file(doc: dict[str, Any], include_document_bytes: bool, doc_file_types: Optional[set]) -> bool:
+    """Whether this document's raw file belongs in the bundle.
+
+    ``doc_file_types`` (when not None) is the per-document-type allowlist and
+    takes precedence: only the types in it get their file, everything else is
+    metadata only. ``None`` means "no per-type opinion" and falls back to the
+    all-or-nothing ``include_document_bytes`` flag, which is what pre-existing
+    API callers send.
+
+    Takes the whole row and reuses ``_doc_type_matches`` so it resolves types
+    exactly as the metadata filter above does. Matching on ``document_type``
+    alone here meant a row whose canonical key lives in ``requirement_key``
+    passed the filter (listed in the manifest) but was denied its file —
+    metadata present, scan missing, for no stated reason."""
+    if doc_file_types is not None:
+        return _doc_type_matches(doc, doc_file_types)
+    return include_document_bytes
+
+
 async def gather_entity_bundle(
     entity_type: str,
     entity_id: str,
     doc_types: Optional[list[str]] = None,
     include_ride_gps: bool = True,
     include_document_bytes: bool = True,
+    doc_file_types: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Collect everything needed to reconstruct a user/driver in another environment.
 
@@ -74,6 +148,16 @@ async def gather_entity_bundle(
     document metadata are still included either way (only the specific
     high-sensitivity fields are dropped), so record counts and structure
     stay consistent regardless of these flags.
+
+    ``doc_file_types`` narrows document *files* to specific document types
+    while still listing every type selected by ``doc_types`` as metadata —
+    e.g. export the background check's actual scan but only the metadata row
+    for the driver's licence. It overrides ``include_document_bytes`` when
+    provided; ``None`` (the default) keeps the older all-or-nothing behavior
+    so existing API callers are unaffected. Narrowing files to the specific
+    types an operator actually needs is the data-minimizing choice, so this
+    is strictly a finer-grained version of the PIA R-B control, not a way
+    around it.
     """
     if entity_type not in ("driver", "rider"):
         raise ValueError(f"Unknown entity_type: {entity_type!r}")
@@ -110,25 +194,64 @@ async def gather_entity_bundle(
     else:
         rides = await db_supabase.get_rows("rides", {"rider_id": entity_id}, limit=500, order="created_at", desc=True)
 
-    if doc_types:
-        documents = [d for d in documents if d.get("document_type") in doc_types]
+    # `is not None`, not truthiness: an EMPTY list means "no document types
+    # selected" and must yield no documents. Treating [] as falsy (the
+    # previous behavior) skipped the filter entirely and returned EVERY
+    # document type -- the exact opposite of what was asked, and an
+    # over-collection bug under PIPEDA data minimization. Reachable from the
+    # UI by unticking every document type. `None` still means "no filter".
+    if doc_types is not None:
+        wanted = {_canonical_doc_type(t) for t in doc_types}
+        documents = [d for d in documents if _doc_type_matches(d, wanted)]
 
     if not include_ride_gps:
         rides = [_strip_ride_gps(r) for r in rides]
 
     # Attach raw bytes for each document that resolves to a storage key. A
     # document whose bytes can't be fetched still appears in the manifest
-    # (metadata intact) but with document_bytes=None — the ZIP builder skips
+    # (metadata intact) but with _content=None — the ZIP builder skips
     # writing a file for it and the import side must not assume every listed
-    # document has a payload. When include_document_bytes is False, every
-    # document is deliberately left content=None the same way a fetch
-    # failure would — the ZIP builder's existing "no payload" handling
-    # covers this without any new branch there.
+    # document has a payload.
+    #
+    # Each payload also carries _content_status explaining WHY there is or
+    # isn't a file. Opting out (include_document_bytes=False) and a genuine
+    # storage failure both leave _content=None, and until this was recorded
+    # they produced byte-identical metadata-only ZIPs with no way to tell
+    # them apart — the reported "export gives me metadata, not the document"
+    # bug was the opt-out case, indistinguishable from a broken bucket.
+    file_types = {_canonical_doc_type(t) for t in doc_file_types} if doc_file_types is not None else None
     doc_payloads = []
     for doc in documents:
         storage_key = _extract_storage_key(doc.get("document_url") or "")
-        content = await _fetch_document_bytes(storage_key) if (storage_key and include_document_bytes) else None
-        doc_payloads.append({**doc, "_storage_key": storage_key, "_content": content})
+        if not _wants_file(doc, include_document_bytes, file_types):
+            content, status = None, DOC_STATUS_EXCLUDED
+        elif not storage_key:
+            # An unparseable document_url is a data defect, not an opt-out:
+            # the row claims a document exists but points nowhere we can read.
+            logger.error(
+                "data-transfer export: no storage key for document id=%s type=%s (document_url unparseable)",
+                doc.get("id"),
+                doc.get("document_type"),
+            )
+            content, status = None, DOC_STATUS_NO_KEY
+        else:
+            content = await _fetch_document_bytes(storage_key)
+            # Truthiness, not `is not None`: a zero-byte download is not a
+            # usable document, and the ZIP builder writes no file for it
+            # either. Calling it "included" would put a row in the manifest
+            # claiming a file that isn't in the bundle.
+            if content:
+                status = DOC_STATUS_INCLUDED
+            else:
+                if content is not None:
+                    logger.error(
+                        "data-transfer export: storage returned 0 bytes for document id=%s type=%s key=%s",
+                        doc.get("id"),
+                        doc.get("document_type"),
+                        storage_key,
+                    )
+                status = DOC_STATUS_FETCH_FAILED
+        doc_payloads.append({**doc, "_storage_key": storage_key, "_content": content, "_content_status": status})
 
     return {
         "entity_type": entity_type,
@@ -147,12 +270,16 @@ async def gather_entity_bundles(
     doc_types: Optional[list[str]] = None,
     include_ride_gps: bool = True,
     include_document_bytes: bool = True,
+    doc_file_types: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     """Batch gather for multi-entity export. A single entity failing to resolve
     does not abort the batch — it's reported by omission (caller can diff
     requested vs. returned entity_ids) so one bad row doesn't block the rest."""
     results = await asyncio.gather(
-        *(gather_entity_bundle(t, eid, doc_types, include_ride_gps, include_document_bytes) for t, eid in entities),
+        *(
+            gather_entity_bundle(t, eid, doc_types, include_ride_gps, include_document_bytes, doc_file_types)
+            for t, eid in entities
+        ),
         return_exceptions=True,
     )
     bundles = []

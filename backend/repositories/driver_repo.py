@@ -19,6 +19,7 @@ try:
         _rows_from_res,
         _single_row_from_res,
         _write_cached_row,
+        _write_skipped,
         invalidate_driver_cache,
         run_sync,
         supabase,
@@ -33,6 +34,7 @@ except ImportError:
         _rows_from_res,
         _single_row_from_res,
         _write_cached_row,
+        _write_skipped,
         invalidate_driver_cache,
         run_sync,
         supabase,
@@ -101,7 +103,7 @@ async def get_service_area_for_point(lat: float, lng: float) -> Optional[Dict[st
     try:
         return await run_sync(_call)
     except Exception as exc:
-        logger.error(f"get_service_area_for_point failed: {exc}", exc_info=True)
+        logger.opt(exception=True).error(f"get_service_area_for_point failed: {exc}")
         return None
 
 
@@ -119,6 +121,7 @@ async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> L
 
 async def update_driver_location(driver_id: str, lat: float, lng: float, heading=None):
     if not supabase:
+        _write_skipped("update_driver_location", "drivers")
         return None
 
     def _update():
@@ -140,7 +143,7 @@ async def update_driver_location(driver_id: str, lat: float, lng: float, heading
 
 async def set_driver_available(driver_id: str, available: bool = True, total_rides_inc: int = 0):
     if not supabase:
-        logger.warning("[GO-ONLINE] set_driver_available: supabase client is None!")
+        _write_skipped("set_driver_available", "drivers")
         return None
 
     await invalidate_driver_cache(driver_id=driver_id)
@@ -206,6 +209,7 @@ async def match_and_claim_driver(
     Uses SELECT ... FOR UPDATE SKIP LOCKED in the DB — safe under concurrent dispatch.
     """
     if not supabase:
+        _write_skipped("match_and_claim_driver", "drivers")
         return None
 
     def _call():
@@ -237,6 +241,12 @@ async def match_and_claim_driver(
 async def claim_driver_atomic(driver_id: str) -> bool:
     """Atomically set is_available = false for driver if currently available."""
     if not supabase:
+        # Returning False is the SAFE direction here — an unclaimed driver is
+        # simply not offered the ride, so dispatch degrades rather than
+        # double-offering. It is still a write that silently did not happen,
+        # and this is the fifth helper named in _base.update_one's deferred
+        # note; it logs for the same reason as the other four.
+        _write_skipped("claim_driver_atomic", "drivers")
         return False
 
     await invalidate_driver_cache(driver_id=driver_id)
@@ -279,6 +289,7 @@ async def update_acceptance_rate(driver_id: str, accepted: bool) -> None:
     cratering the score.  new = alpha * outcome + (1-alpha) * old.
     """
     if not supabase:
+        _write_skipped("update_acceptance_rate", "drivers")
         return
     try:
         row = await run_sync(
@@ -293,7 +304,7 @@ async def update_acceptance_rate(driver_id: str, accepted: bool) -> None:
             lambda: supabase.table("drivers").update({"acceptance_rate": new_rate}).eq("id", driver_id).execute()
         )
     except Exception as exc:
-        logger.error(f"update_acceptance_rate failed for {driver_id}: {exc}", exc_info=True)
+        logger.opt(exception=True).error(f"update_acceptance_rate failed for {driver_id}: {exc}")
 
 
 async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
@@ -315,6 +326,7 @@ async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
                 the caller should surface a "ride already taken" UX.
     """
     if not supabase:
+        _write_skipped("claim_ride_atomic", "rides")
         return False
 
     now_iso = datetime.now(timezone.utc).isoformat()

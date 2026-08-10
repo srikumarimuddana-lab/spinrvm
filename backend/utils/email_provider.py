@@ -53,6 +53,115 @@ async def _load_settings() -> Dict[str, Any]:
     return await get_app_settings()
 
 
+# ── Ops alerting: a deliberately DB-free send path ──────────────────────────
+# Provider credentials cached from the last successful settings load, so an
+# operational alert can be sent when the database is unavailable. Populated by
+# prime_ops_email_settings(); read by send_ops_alert_email().
+_ops_settings_cache: Dict[str, Any] = {}
+
+
+async def prime_ops_email_settings() -> bool:
+    """Cache provider credentials while the database is healthy.
+
+    Call this at startup (and opportunistically thereafter). It is the only
+    part of the ops-alert path that touches the DB, and it runs at a moment of
+    our choosing rather than mid-incident.
+
+    Returns True if credentials are now cached.
+    """
+    try:
+        settings = await _load_settings()
+    except Exception as exc:
+        logger.warning("[EMAIL] ops settings prime failed: %s", exc)
+        return False
+    if settings:
+        _ops_settings_cache.update(settings)
+    return bool(_ops_settings_cache)
+
+
+async def send_ops_alert_email(
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    log_id: str = "ops",
+) -> bool:
+    """Send an operational alert **without touching the database**.
+
+    `send_transactional_email` performs three DB operations per send: it loads
+    `app_settings`, queries `email_suppressions`, and INSERTs `email_send_log`.
+    That is correct for a receipt and wrong for an alert whose entire purpose
+    may be to report that the database is saturated or unreachable — the alert
+    would queue on the very pool it is complaining about, and fail exactly when
+    it is most needed.
+
+    So this path deliberately drops all three:
+
+    * **Settings** come from the cache primed by `prime_ops_email_settings()`.
+      A cold cache falls back to one DB read, which is the best available
+      option on a first-ever alert and still better than three.
+    * **Suppression check skipped.** Recipients are internal ops addresses, not
+      users. Silently suppressing an infrastructure alert because the inbox
+      once bounced is a worse failure than sending to a dead address.
+    * **`email_send_log` insert skipped.** No audit row is written for ops
+      alerts. This is an accepted trade: the delivery outcome is logged to
+      stdout instead, and the log table exists for user-facing mail (PIPEDA
+      auditability), which this is not.
+
+    Returns True if either provider accepted the message.
+    """
+    if not to or not text:
+        logger.error("[EMAIL] ops alert skipped log_id=%s — missing recipient or body", log_id)
+        return False
+
+    settings = dict(_ops_settings_cache)
+    if not settings:
+        # Cold cache (e.g. first alert after a restart). One DB read is still
+        # far better than three, and if the DB is down this simply fails and we
+        # fall through to logging — the webhook channel is unaffected.
+        try:
+            settings = await _load_settings() or {}
+            if settings:
+                _ops_settings_cache.update(settings)
+        except Exception as exc:
+            logger.error(
+                "[EMAIL] ops alert log_id=%s — no cached credentials and settings "
+                "load failed (DB likely unavailable): %s",
+                log_id,
+                exc,
+            )
+            return False
+
+    message_id = await _try_ses(
+        settings,
+        to=to,
+        subject=subject,
+        html=None,
+        text=text,
+        default_from=_DEFAULT_FROM,
+        log_id=log_id,
+    )
+    provider = "ses"
+    if message_id is None:
+        message_id = await _try_resend(
+            settings,
+            to=to,
+            subject=subject,
+            html=None,
+            text=text,
+            default_from=_DEFAULT_FROM,
+            log_id=log_id,
+        )
+        provider = "resend"
+
+    if message_id is None:
+        logger.error("[EMAIL] ops alert log_id=%s — no provider accepted the message", log_id)
+        return False
+
+    logger.info("[EMAIL] ops alert sent log_id=%s provider=%s to=%s", log_id, provider, redact_email(to))
+    return True
+
+
 def _send_ses_sync(
     *,
     region: str,

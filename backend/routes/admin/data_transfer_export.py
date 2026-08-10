@@ -93,6 +93,14 @@ class ExportRequest(BaseModel):
     # separate low-fidelity export path.
     include_ride_gps: bool = True
     include_document_bytes: bool = True
+    # Per-document-type file selection: which document types have their
+    # actual file (scan/image/PDF) bundled, versus being listed as a metadata
+    # row only. Overrides include_document_bytes when provided; None keeps
+    # the all-or-nothing behavior for API callers that predate this field.
+    # Narrower than include_document_bytes=True by construction, so it only
+    # ever reduces what a bundle carries — see _gate_params on why it is
+    # still bound into the dual-approval signature.
+    doc_file_types: Optional[list[str]] = None
 
 
 def _entity_type_summary(entities: list[ExportEntityRef]) -> str:
@@ -103,13 +111,26 @@ def _entity_type_summary(entities: list[ExportEntityRef]) -> str:
 def _gate_params(body: "ExportRequest") -> dict:
     """JSON-safe, order-independent representation of the request this
     approval is bound to -- selecting the same entities in a different
-    order must still match an existing grant/pending request."""
+    order must still match an existing grant/pending request.
+
+    Every field that changes what the bundle CONTAINS must appear here.
+    doc_file_types included for that reason: without it, an approval granted
+    for a metadata-only export would also satisfy a re-run that pulls the
+    document files, letting the second request widen what the first was
+    approved for. Adding the key means grants issued before this field
+    existed no longer match — those exports need re-approval, which is the
+    safe direction to fail."""
     return {
         "entities": sorted([[e.entity_type, e.entity_id] for e in body.entities]),
-        "doc_types": sorted(body.doc_types) if body.doc_types else None,
+        # `is not None`, matching the export service: [] (no document types)
+        # and None (every document type) are opposite requests and must not
+        # collapse to the same signature, or an approval granted for a
+        # no-documents export would satisfy an all-documents one.
+        "doc_types": sorted(body.doc_types) if body.doc_types is not None else None,
         "format": body.format,
         "include_ride_gps": body.include_ride_gps,
         "include_document_bytes": body.include_document_bytes,
+        "doc_file_types": sorted(body.doc_file_types) if body.doc_file_types is not None else None,
     }
 
 
@@ -196,6 +217,7 @@ async def _run_export_job(
     reason: str,
     include_ride_gps: bool,
     include_document_bytes: bool,
+    doc_file_types: Optional[list[str]],
 ) -> None:
     """Background task: gather, build, upload, and update the job row.
     Any failure here is recorded on the job row (status=failed,
@@ -208,7 +230,7 @@ async def _run_export_job(
     t0 = time.monotonic()
     try:
         bundles = await entity_export_service.gather_entity_bundles(
-            pairs, doc_types, include_ride_gps, include_document_bytes
+            pairs, doc_types, include_ride_gps, include_document_bytes, doc_file_types
         )
         if not bundles:
             raise RuntimeError("None of the requested entities could be found")
@@ -259,6 +281,13 @@ async def _run_export_job(
             "reason": reason,
             "include_ride_gps": include_ride_gps,
             "include_document_bytes": include_document_bytes,
+            # Recorded in the audit trail rather than on the job row:
+            # data_transfer_export_jobs has no column for it and adding one
+            # would need a migration for what is purely accountability
+            # metadata. Which document FILES left the system is exactly the
+            # kind of thing an auditor asks about, so it must be captured
+            # somewhere -- log_admin_action's details payload is that place.
+            "doc_file_types": doc_file_types,
         },
     )
 
@@ -322,6 +351,7 @@ async def export_entities(
         body.reason,
         body.include_ride_gps,
         body.include_document_bytes,
+        body.doc_file_types,
     )
 
     return {

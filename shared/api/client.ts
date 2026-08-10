@@ -218,6 +218,41 @@ async function appCheckHeader(): Promise<Record<string, string>> {
   }
 }
 
+// ── Forced-upgrade gate (ACTION_ITEMS.md E3) ─────────────────────────
+// Each app calls setAppIdentity() once at startup with its own platform tag
+// and installed version so every /api/v1 request carries X-App-Platform /
+// X-App-Version. The backend's ForcedUpgradeMiddleware compares that
+// version against an admin-configured floor and returns 426 when the
+// client is too old. Until an app calls this, both headers are simply
+// omitted and the backend's soft-fail-open behaviour applies.
+let _appIdentity: { platform: 'rider' | 'driver'; version: string } | null = null;
+
+export function setAppIdentity(platform: 'rider' | 'driver', version: string): void {
+  _appIdentity = { platform, version };
+}
+
+function appVersionHeader(): Record<string, string> {
+  if (!_appIdentity) return {};
+  return { 'X-App-Platform': _appIdentity.platform, 'X-App-Version': _appIdentity.version };
+}
+
+// Fired once per process when a 426 'upgrade_required' response is seen.
+// The app registers a callback at startup (e.g. to navigate to a blocking
+// "update required" screen) via onForceUpgrade(). Unlike the 401 handler,
+// this never retries the request — there is nothing to retry until the
+// user installs a new build.
+let _onForceUpgradeCallback: ((minVersion: string | undefined) => void) | null = null;
+
+export function onForceUpgrade(fn: (minVersion: string | undefined) => void): void {
+  _onForceUpgradeCallback = fn;
+}
+
+function checkForceUpgrade(response: Response, data: ApiErrorBody | undefined): void {
+  if (response.status === 426 && _onForceUpgradeCallback) {
+    _onForceUpgradeCallback((data as { min_version?: string } | undefined)?.min_version);
+  }
+}
+
 /**
  * True if an App Check token is currently obtainable — or if App Check is not
  * wired into this build (e.g. dev, where backend enforcement is off anyway).
@@ -879,6 +914,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
   }
 
   const errorData = await response.json().catch(() => ({}));
+  checkForceUpgrade(response, errorData);
   const extracted = extractError(errorData, response.status);
   const message = extracted.message;
   // Phase 4 (P1-9): prefer body request_id, fall back to header. Header
@@ -991,6 +1027,7 @@ const client = {
       ...deadlineHeader(),
       ...traceparentHeader(),
       ...(await appCheckHeader()),
+      ...appVersionHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -1016,6 +1053,7 @@ const client = {
       ...deadlineHeader(),
       ...traceparentHeader(),
       ...(await appCheckHeader()),
+      ...appVersionHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -1046,6 +1084,7 @@ const client = {
       ...deadlineHeader(),
       ...traceparentHeader(),
       ...(await appCheckHeader()),
+      ...appVersionHeader(),
       ...config?.headers,
     };
     // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
@@ -1079,6 +1118,7 @@ const client = {
       ...deadlineHeader(),
       ...traceparentHeader(),
       ...(await appCheckHeader()),
+      ...appVersionHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -1108,6 +1148,7 @@ const client = {
       ...deadlineHeader(),
       ...traceparentHeader(),
       ...(await appCheckHeader()),
+      ...appVersionHeader(),
       ...config?.headers,
     };
     if (token) {

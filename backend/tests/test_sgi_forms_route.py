@@ -318,3 +318,302 @@ def test_removal_queue_flags_drivers_with_no_linked_user(admin_client):
     with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[orphan])):
         resp = admin_client.get("/api/admin/data-transfer/sgi-forms/removal-queue")
     assert resp.json()["unresolvable"] == 1
+
+
+# ---------------------------------------------------------------------------
+# POST /sgi-forms/documents — supporting-document bundle
+# ---------------------------------------------------------------------------
+
+_DOC_REASON = "Q3 SGI driver eligibility submission"
+_DOCS_PATH = "/api/admin/data-transfer/sgi-forms/documents"
+
+
+def _bundle(status="included", content=b"SCAN"):
+    return {
+        "entity_type": "driver",
+        "entity_id": "user-1",
+        "user": {"id": "user-1"},
+        "driver_profile": {"id": "driver-record-1"},
+        "notification_preferences": [],
+        "rides": [],
+        "documents": [
+            {
+                "id": "doc-bg",
+                "document_type": "background_check",
+                "_storage_key": "bg.jpg",
+                "_content": content,
+                "_content_status": status,
+            }
+        ],
+        "driver_insurance_periods": [],
+    }
+
+
+def test_documents_endpoint_returns_a_zip_containing_the_scan(admin_client):
+    """The reported gap: the SGI tab could only produce filled PDFs, never the
+    drivers' actual documents. This endpoint is what closes that."""
+    import zipfile
+    from io import BytesIO
+
+    with (
+        patch("backend.routes.admin.sgi_forms.db_supabase.get_rows", AsyncMock(return_value=[dict(_DRIVER_ROW)])),
+        patch(
+            "backend.routes.admin.sgi_forms.entity_export_service.gather_entity_bundles",
+            AsyncMock(return_value=[_bundle()]),
+        ),
+        patch("backend.routes.admin.sgi_forms.log_admin_action", AsyncMock()),
+    ):
+        resp = admin_client.post(_DOCS_PATH, json={"driver_ids": ["user-1"], "reason": _DOC_REASON})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    zf = zipfile.ZipFile(BytesIO(resp.content))
+    doc_files = [n for n in zf.namelist() if "/documents/" in n]
+    assert len(doc_files) == 1
+    assert zf.read(doc_files[0]) == b"SCAN"
+    assert resp.headers["X-Documents-Included"] == "1"
+    assert resp.headers["X-Documents-Listed"] == "1"
+
+
+def test_documents_endpoint_requests_files_not_just_metadata(admin_client):
+    """Regression guard for the original bug: asking for the documents but not
+    their bytes yields a metadata-only ZIP, which is what sent this whole
+    investigation sideways. doc_file_types must be populated."""
+    gather = AsyncMock(return_value=[_bundle()])
+    with (
+        patch("backend.routes.admin.sgi_forms.db_supabase.get_rows", AsyncMock(return_value=[dict(_DRIVER_ROW)])),
+        patch("backend.routes.admin.sgi_forms.entity_export_service.gather_entity_bundles", gather),
+        patch("backend.routes.admin.sgi_forms.log_admin_action", AsyncMock()),
+    ):
+        admin_client.post(_DOCS_PATH, json={"driver_ids": ["user-1"], "reason": _DOC_REASON})
+
+    kwargs = gather.await_args.kwargs
+    assert kwargs["doc_file_types"], "files must be requested, not just metadata rows"
+    assert "background_check" in kwargs["doc_file_types"]
+    # An SGI eligibility package has no business carrying trip coordinates.
+    assert kwargs["include_ride_gps"] is False
+
+
+def test_documents_endpoint_reports_a_missing_scan_in_the_headers(admin_client):
+    """A document that couldn't be retrieved must be counted, not silently
+    absent — the admin is filing this with a regulator."""
+    with (
+        patch("backend.routes.admin.sgi_forms.db_supabase.get_rows", AsyncMock(return_value=[dict(_DRIVER_ROW)])),
+        patch(
+            "backend.routes.admin.sgi_forms.entity_export_service.gather_entity_bundles",
+            AsyncMock(return_value=[_bundle(status="unavailable_fetch_failed", content=None)]),
+        ),
+        patch("backend.routes.admin.sgi_forms.log_admin_action", AsyncMock()),
+    ):
+        resp = admin_client.post(_DOCS_PATH, json={"driver_ids": ["user-1"], "reason": _DOC_REASON})
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Documents-Listed"] == "1"
+    assert resp.headers["X-Documents-Included"] == "0"
+
+
+def test_documents_endpoint_requires_a_reason(admin_client):
+    resp = admin_client.post(_DOCS_PATH, json={"driver_ids": ["user-1"], "reason": "short"})
+    assert resp.status_code == 422
+
+
+def test_documents_endpoint_rejects_an_empty_selection(admin_client):
+    resp = admin_client.post(_DOCS_PATH, json={"driver_ids": [], "reason": _DOC_REASON})
+    assert resp.status_code == 400
+
+
+def test_documents_endpoint_caps_the_batch_size(admin_client):
+    from backend.routes.admin.sgi_forms import MAX_DOCUMENT_BUNDLE_DRIVERS
+
+    too_many = [f"user-{n}" for n in range(MAX_DOCUMENT_BUNDLE_DRIVERS + 1)]
+    resp = admin_client.post(_DOCS_PATH, json={"driver_ids": too_many, "reason": _DOC_REASON})
+    assert resp.status_code == 422
+    assert str(MAX_DOCUMENT_BUNDLE_DRIVERS) in resp.json()["detail"]
+
+
+def test_documents_endpoint_blocks_non_sgi_drivers(admin_client):
+    """Same hard block as form generation — a non-SGI driver's documents must
+    not be assembled into an SGI submission package either."""
+    alberta = {**_DRIVER_ROW, "regulatory_authority": "AB"}
+    with patch("backend.routes.admin.sgi_forms.db_supabase.get_rows", AsyncMock(return_value=[alberta])):
+        resp = admin_client.post(_DOCS_PATH, json={"driver_ids": ["user-1"], "reason": _DOC_REASON})
+
+    assert resp.status_code == 422
+    assert "not SGI" in resp.json()["detail"]
+
+
+def test_documents_endpoint_404s_when_no_driver_resolves(admin_client):
+    with patch("backend.routes.admin.sgi_forms.db_supabase.get_rows", AsyncMock(return_value=[])):
+        resp = admin_client.post(_DOCS_PATH, json={"driver_ids": ["nope"], "reason": _DOC_REASON})
+    assert resp.status_code == 404
+
+
+def test_documents_endpoint_requires_admin_auth(test_client):
+    resp = test_client.post(_DOCS_PATH, json={"driver_ids": ["user-1"], "reason": _DOC_REASON})
+    assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# POST /sgi-forms/package — the actual SGI submission
+# ---------------------------------------------------------------------------
+
+_PKG_PATH = "/api/admin/data-transfer/sgi-forms/package"
+_PKG_REASON = "Q3 SGI driver eligibility filing"
+
+
+def _check_bundle(entity_id="user-1", content=b"CRC-PDF", key="crc.pdf"):
+    return {
+        "entity_type": "driver",
+        "entity_id": entity_id,
+        "user": {"id": entity_id},
+        "driver_profile": {"id": "driver-record-1"},
+        "notification_preferences": [],
+        "rides": [],
+        "documents": (
+            [
+                {
+                    "id": "doc-bg",
+                    "document_type": "Background Check",
+                    "_storage_key": key,
+                    "_content": content,
+                    "_content_status": "included" if content else "unavailable_fetch_failed",
+                }
+            ]
+            if content is not None
+            else []
+        ),
+        "driver_insurance_periods": [],
+    }
+
+
+def _patch_package(bundles, driver_rows=None):
+    rows = driver_rows if driver_rows is not None else [dict(_DRIVER_ROW)]
+    return (
+        patch("backend.routes.admin.sgi_forms.db_supabase.get_rows", AsyncMock(return_value=rows)),
+        patch("backend.routes.admin.sgi_forms._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        patch("backend.routes.admin.sgi_forms.sgi_form_filler.fill_driver_details_form", lambda rows: b"%PDF-D00032"),
+        patch("backend.routes.admin.sgi_forms.sgi_form_filler.fill_vehicle_details_form", lambda rows: b"%PDF-D00033"),
+        patch(
+            "backend.routes.admin.sgi_forms.entity_export_service.gather_entity_bundles",
+            AsyncMock(return_value=bundles),
+        ),
+        patch("backend.routes.admin.sgi_forms.log_admin_action", AsyncMock()),
+    )
+
+
+def test_package_contains_both_forms_and_the_criminal_record_check(admin_client):
+    """What actually gets emailed to SGI: D00032, D00033, and the driver's
+    criminal record check — and nothing else."""
+    import zipfile
+    from io import BytesIO
+
+    p = _patch_package([_check_bundle()])
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        resp = admin_client.post(_PKG_PATH, json={"driver_ids": ["user-1"], "reason": _PKG_REASON})
+
+    assert resp.status_code == 200
+    names = zipfile.ZipFile(BytesIO(resp.content)).namelist()
+    assert "SGI_D00032_Driver_Details.pdf" in names
+    assert "SGI_D00033_Vehicle_Details.pdf" in names
+    assert "criminal_record_checks/Jane_Driver_background_check.pdf" in names
+    # No data-transfer scaffolding — this is a filing, not a bundle.
+    assert not [n for n in names if n.endswith(".csv")]
+    assert not [n for n in names if n.endswith("raw_data.json")]
+    assert "README.txt" not in names
+
+
+def test_package_keeps_a_jpeg_check_as_a_jpeg(admin_client):
+    """The file is not re-encoded — a regulator-facing document should be
+    exactly what the driver submitted."""
+    import zipfile
+    from io import BytesIO
+
+    p = _patch_package([_check_bundle(content=b"\xff\xd8\xff JPEG", key="crc.jpg")])
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        resp = admin_client.post(_PKG_PATH, json={"driver_ids": ["user-1"], "reason": _PKG_REASON})
+
+    zf = zipfile.ZipFile(BytesIO(resp.content))
+    assert "criminal_record_checks/Jane_Driver_background_check.jpg" in zf.namelist()
+    assert zf.read("criminal_record_checks/Jane_Driver_background_check.jpg") == b"\xff\xd8\xff JPEG"
+
+
+def test_package_names_drivers_missing_a_check_inside_the_zip(admin_client):
+    """A driver on the forms with no clearance on file must not be discovered
+    by SGI — it is called out in the ZIP and in the headers."""
+    import zipfile
+    from io import BytesIO
+
+    p = _patch_package([_check_bundle(content=None)])
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        resp = admin_client.post(_PKG_PATH, json={"driver_ids": ["user-1"], "reason": _PKG_REASON})
+
+    assert resp.headers["X-Checks-Missing"] == "1"
+    assert resp.headers["X-Checks-Included"] == "0"
+    zf = zipfile.ZipFile(BytesIO(resp.content))
+    assert "MISSING_CRIMINAL_RECORD_CHECKS.txt" in zf.namelist()
+    assert "Jane_Driver" in zf.read("MISSING_CRIMINAL_RECORD_CHECKS.txt").decode()
+    # The forms are still produced — the filing is not blocked, just flagged.
+    assert "SGI_D00032_Driver_Details.pdf" in zf.namelist()
+
+
+def test_package_requests_only_the_background_check(admin_client):
+    """Data minimization: a submission needs clearance proof, not the driver's
+    whole document file."""
+    gather = AsyncMock(return_value=[_check_bundle()])
+    p = _patch_package([])
+    with (
+        p[0],
+        p[1],
+        p[2],
+        p[3],
+        patch("backend.routes.admin.sgi_forms.entity_export_service.gather_entity_bundles", gather),
+        p[5],
+    ):
+        admin_client.post(_PKG_PATH, json={"driver_ids": ["user-1"], "reason": _PKG_REASON})
+
+    kwargs = gather.await_args.kwargs
+    assert kwargs["doc_types"] == ["background_check"]
+    assert kwargs["doc_file_types"] == ["background_check"]
+    assert kwargs["include_ride_gps"] is False
+
+
+def test_package_blocks_non_sgi_drivers(admin_client):
+    alberta = {**_DRIVER_ROW, "regulatory_authority": "AB"}
+    with patch("backend.routes.admin.sgi_forms.db_supabase.get_rows", AsyncMock(return_value=[alberta])):
+        resp = admin_client.post(_PKG_PATH, json={"driver_ids": ["user-1"], "reason": _PKG_REASON})
+    assert resp.status_code == 422
+    assert "not SGI" in resp.json()["detail"]
+
+
+def test_package_requires_a_reason(admin_client):
+    resp = admin_client.post(_PKG_PATH, json={"driver_ids": ["user-1"], "reason": "short"})
+    assert resp.status_code == 422
+
+
+def test_package_rejects_an_empty_selection(admin_client):
+    resp = admin_client.post(_PKG_PATH, json={"driver_ids": [], "reason": _PKG_REASON})
+    assert resp.status_code == 400
+
+
+def test_package_requires_admin_auth(test_client):
+    resp = test_client.post(_PKG_PATH, json={"driver_ids": ["user-1"], "reason": _PKG_REASON})
+    assert resp.status_code in (401, 403)
+
+
+def test_package_splits_forms_past_their_row_limits(admin_client):
+    """D00032 holds 10 driver rows and D00033 holds 16 — a larger selection
+    becomes consecutive documents rather than being refused."""
+    import zipfile
+    from io import BytesIO
+
+    rows = [{**_DRIVER_ROW, "id": f"drv-{n}", "user_id": f"user-{n}", "name": f"D {n}"} for n in range(12)]
+    p = _patch_package([], driver_rows=rows)
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        resp = admin_client.post(
+            _PKG_PATH, json={"driver_ids": [f"user-{n}" for n in range(12)], "reason": _PKG_REASON}
+        )
+
+    names = zipfile.ZipFile(BytesIO(resp.content)).namelist()
+    assert "SGI_D00032_Driver_Details_1.pdf" in names  # 12 drivers > 10 rows
+    assert "SGI_D00032_Driver_Details_2.pdf" in names
+    assert "SGI_D00033_Vehicle_Details.pdf" in names  # 12 <= 16, single doc

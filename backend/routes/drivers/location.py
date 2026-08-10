@@ -18,6 +18,7 @@ from ._deps import (  # noqa: F401
     HTTPException,
     List,
     Query,
+    Request,
     Union,
     calculate_distance,
     datetime,
@@ -27,6 +28,7 @@ from ._deps import (  # noqa: F401
     get_current_user,
     get_token_session_id,
     intent_online,
+    location_update_limit,
     logger,
     parse_iso_utc,
     present_driver_ids_checked,
@@ -402,12 +404,21 @@ async def _guard_revoked_session(token_session_id: str | None) -> None:
 
 
 @router.post("/location-batch")
+@location_update_limit
 async def update_location_batch(
     batch: Union[List[dict], dict, LocationBatchRequest],
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
     token_session_id: str | None = Depends(get_token_session_id),
 ):
-    """Update driver location in batch (from background tracking)."""
+    """Update driver location in batch (from background tracking).
+
+    Rate limited at 60/minute per driver (`location_update_limit`). The driver
+    app's outbox flushes every 5-15 s, i.e. ~4-12 requests/minute, so this is
+    roughly 5x headroom over normal operation and only bites on a runaway
+    client. It is keyed per user, so one misbehaving device cannot exhaust the
+    budget for other drivers sharing a carrier NAT egress IP.
+    """
     # Ahead of both the v1 and v2 paths so neither can persist a signed-out
     # driver's coordinates.
     await _guard_revoked_session(token_session_id)

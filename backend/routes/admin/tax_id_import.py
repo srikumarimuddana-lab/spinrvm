@@ -33,7 +33,6 @@ router mount adds ``require_super_admin``; the per-handler check below is
 defence in depth, matching stripe_import.py.
 """
 
-import asyncio
 import csv
 import io
 import logging
@@ -50,6 +49,7 @@ try:
     from ...services.stripe_mapping_import_service import _phone_lookup_keys
     from ...settings_loader import get_app_settings
     from ...utils.audit_logger import log_admin_action
+    from ...utils.background import spawn
     from ...utils.sin import sin_last4, validate_sin
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     import db_supabase  # type: ignore
@@ -59,6 +59,7 @@ except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from services.stripe_mapping_import_service import _phone_lookup_keys  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore # noqa: F401
+    from utils.background import spawn  # type: ignore
     from utils.sin import sin_last4, validate_sin  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -327,8 +328,11 @@ async def commit_tax_id_import(
 
     stripe_push = "not_applicable"
     if stripe_pushes:
-        # Never inline: up to MAX_ROWS Stripe round-trips.
-        asyncio.create_task(_push_sins_to_stripe(stripe_pushes, batch))
+        # Never inline: up to MAX_ROWS Stripe round-trips. spawn(), not a bare
+        # create_task — the loop holds only a weak reference to tasks, and an
+        # unreferenced push could be garbage-collected mid-flight, silently
+        # dropping SIN pushes with no log evidence (see utils/background.py).
+        spawn(_push_sins_to_stripe(stripe_pushes, batch))
         stripe_push = "started"
 
     # Audit carries counts + batch only — never CSV contents.

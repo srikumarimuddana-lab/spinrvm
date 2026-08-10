@@ -6,7 +6,7 @@ encrypt, audit logger, and background Stripe push are stubbed.
 """
 
 import re
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -236,6 +236,22 @@ class TestNoSinLeaks:
             resp = _post(test_client, VALIDATE, _csv(f"{PHONE},{VALID_SIN},"))
         text_without_gst = resp.text.replace("123456789RT0001", "")
         assert not re.search(re.escape(VALID_SIN), text_without_gst)
+
+
+class TestCommitBackgroundPush:
+    def test_push_goes_through_spawn_not_a_bare_create_task(self, test_client, super_admin_override):
+        """asyncio.create_task keeps only a weak reference — an unreferenced
+        push task can be garbage-collected mid-flight, silently dropping SIN
+        pushes. spawn() (utils/background.py) retains a strong reference."""
+        spawned = MagicMock()
+        ps = _patches([_driver(stripe_account_id="acct_9")])
+        with ps[0], ps[1], ps[2], ps[3], ps[4], patch("routes.admin.tax_id_import.spawn", spawned):
+            resp = _post(test_client, COMMIT, _csv(f"{PHONE},{VALID_SIN},"))
+        assert resp.json()["stripe_push"] == "started"
+        spawned.assert_called_once()
+        # The spawned coroutine never runs under the MagicMock; close it so
+        # the test doesn't emit a "never awaited" warning.
+        spawned.call_args.args[0].close()
 
 
 class TestCommitRaceGuard:

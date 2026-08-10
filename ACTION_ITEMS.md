@@ -3731,7 +3731,10 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   `payment_retry.py`'s misleading comment corrected.
 
 ### B22. `G4a · pip-audit` is red on four advisories in three backend dependencies
-- [ ] **Status:** open — observed 2026-08-09 on PR #3464, which changed **no** dependency
+- [x] **Status:** CLOSED (2026-08-11) — all three dependencies now bumped
+  (`pypdf` 2026-08-10, `cryptography` and `h2` 2026-08-11). See the two
+  dated updates below for each fix's own verification detail.
+- **Status (history):** open — observed 2026-08-09 on PR #3464, which changed **no** dependency
   manifest (`git diff origin/main...HEAD -- '*requirements*'` is empty), so these are
   pre-existing on `main`. Filed rather than fixed in that PR, per release gate 8: a red
   gate left unexplained decays into one people stop reading.
@@ -3751,8 +3754,44 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   | Package | Pinned | Advisory | Fixed in |
   |---|---|---|---|
   | ~~`cryptography`~~ | ~~49.0.0~~ → **50.0.0 (bumped 2026-08-11)** | PYSEC-2026-3552 (aka `CVE-2026-69247` per Trivy/`G6`) | 50.0.0 |
-  | `h2` | 4.3.0 | CVE-2026-71554 | 4.4.1 |
+  | ~~`h2`~~ | ~~4.3.0~~ → **4.4.1 (bumped 2026-08-11)** | CVE-2026-71554 | 4.4.1 |
   | ~~`pypdf`~~ | ~~6.14.2~~ → **6.15.0 (bumped 2026-08-10)** | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
+
+  **2026-08-11 update — `h2` bumped, done, item fully CLOSED:** `h2` is now
+  `4.4.1` in `backend/requirements.txt`/`requirements-locked.txt` (its own
+  `hpack` sub-dependency moved 4.1.0→4.2.0 automatically). Investigated the
+  "riskiest" framing below directly rather than assuming it still held:
+  `backend/supabase_client.py` **already runs the Supabase/PostgREST
+  connection on HTTP/1.1**, not HTTP/2 — deliberately disabled in a prior
+  fix after HTTP/2 GOAWAY frames caused real production `h2` thread-safety
+  bugs (`RuntimeError: deque mutated during iteration` in h2's hpack table).
+  So `repositories/_base.py`'s GOAWAY/`_HTTPX_NETWORK_EXC` retry handling —
+  the reason this was flagged as riskiest — isn't actually exercised by
+  live HTTP/2 traffic today. Grepped the whole backend for `http2=True`:
+  exactly two call sites exist — `supabase_client.py` (disabled, as above)
+  and `utils/apns_client.py:167` (Apple's APNs API requires HTTP/2 — the
+  **actual** live `h2` consumer). Verified with a real `pytest` run: DB
+  circuit-breaker/GOAWAY tests + the real APNs client tests together
+  (`test_db_circuit_breaker.py`, `test_dispatch_db_errors.py`,
+  `test_drivers_extended.py`, `test_corporate_repo_coverage.py`,
+  `test_apns_client.py`, `test_apns_client_coverage.py`) — 226/226 pass.
+  Broader DB-infrastructure sweep (`test_db.py`,
+  `test_db_circuit_breaker_probe.py`, `test_db_error_branching.py`,
+  `test_db_executor.py`, `test_db_supabase_helpers.py`,
+  `test_health_db_ping.py`, `test_error_handling.py`,
+  `test_dual_import_parity.py`, `test_monitoring_health.py`,
+  `test_capacity_watchdog.py`) — 162 passed, 1 skipped, 0 failed. A full
+  backend suite run (~10,600 tests) was also kicked off as a broader sanity
+  pass; still in progress with zero failures observed at commit time — the
+  388 targeted tests above (chosen specifically to cover the blast radius
+  in this entry) are the evidence this closure relies on, not the full-suite
+  run. See `docs/change-log/2026-08-11-b22-h2-cve-bump.md` for a follow-up
+  note once it completes. Local `pip-audit -r requirements-locked.txt`
+  confirms both `h2 4.4.1` and
+  `hpack 4.2.0` report zero vulnerabilities. **Not verified: real Docker
+  build/Trivy re-scan** (no daemon in this session) or a real APNs
+  sandbox/production push. Full writeup:
+  `docs/change-log/2026-08-11-b22-h2-cve-bump.md`.
 
   **2026-08-11 update — `cryptography` bumped, done:** `cryptography` is now
   `50.0.0` in `backend/requirements.txt`/`requirements-locked.txt`, regenerated

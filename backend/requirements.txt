@@ -48,8 +48,8 @@ googleapis-common-protos==1.74.0  # via google-api-core, grpcio-status
 grpcio==1.80.0            # via google-api-core, google-cloud-firestore, grpcio-status
 grpcio-status==1.71.2     # via google-api-core
 h11==0.16.0               # via httpcore, uvicorn
-h2==4.3.0                 # via httpx
-hpack==4.1.0              # via h2
+h2==4.4.1                 # via httpx
+hpack==4.2.0              # via h2
 httpcore==1.0.9           # via httpx
 httplib2==0.32.0          # via google-api-python-client, google-auth-httplib2
 httptools==0.7.1          # via uvicorn

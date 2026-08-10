@@ -1654,6 +1654,47 @@ class TestPayoutsSummary:
         assert summary["legacy_stripe_transfers"] == 200.0
         assert summary["pending_balance"] == 10.0
 
+    def test_stuck_intermediate_statuses_still_count_as_money_out(self, test_client, super_admin_override):
+        """'reserved' and 'transfer_completed' are persistent statuses (an
+        instant payout whose Transfer succeeded but whose bank payout step
+        failed stays at transfer_completed — routes/drivers/payouts.py). The
+        driver's own balance deducts them; the admin view must too, or an
+        operator reconciling from pending_balance pays the driver twice."""
+
+        def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                return [{"driver_earnings": "100.00", "tip_amount": "0", "ride_completed_at": "2026-07-01T00:00:00Z"}]
+            if table == "payouts":
+                return [
+                    {"id": "p1", "amount": "30.00", "status": "completed", "created_at": "2026-07-02T00:00:00Z"},
+                    {
+                        "id": "p2",
+                        "amount": "10.00",
+                        "status": "transfer_completed",
+                        "created_at": "2026-07-03T00:00:00Z",
+                    },
+                    {"id": "p3", "amount": "5.00", "status": "reserved", "created_at": "2026-07-04T00:00:00Z"},
+                    {"id": "p4", "amount": "20.00", "status": "pending", "created_at": "2026-07-05T00:00:00Z"},
+                    {"id": "p5", "amount": "7.00", "status": "failed", "created_at": "2026-07-06T00:00:00Z"},
+                    {"id": "p6", "amount": "3.00", "status": "reversed", "created_at": "2026-07-07T00:00:00Z"},
+                ]
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["summary"]
+        # money-out = 30 + 10 + 5 + 20 = 65 (failed/reversed excluded)
+        # total_paid_out = 65 - 20 in flight = 45 (includes stuck statuses)
+        assert summary["total_paid_out"] == 45.0
+        assert summary["pending_in_flight"] == 20.0
+        assert summary["on_hold"] == 7.0
+        # 100 earned - 65 money-out = 35 owed — matches earnings.py exactly.
+        assert summary["pending_balance"] == 35.0
+
 
 # ---------------------------------------------------------------------------
 # admin_refresh_driver_stripe_payouts -- per-driver full Stripe financial sync

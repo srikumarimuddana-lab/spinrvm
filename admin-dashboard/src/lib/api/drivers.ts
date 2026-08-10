@@ -298,6 +298,10 @@ export interface DriverPayoutSummary {
         lifetime_tips: number;
         ytd_earnings: number;
         total_paid_out: number;
+        /** Completed payout_type='stripe_sync' rows — legacy-app money paid
+         * via Stripe Transfers, shown separately because it must not deduct
+         * from pending_balance (the earnings it cashed out predate this DB). */
+        legacy_stripe_transfers?: number;
         pending_in_flight: number;
         pending_balance: number;
         on_hold: number;

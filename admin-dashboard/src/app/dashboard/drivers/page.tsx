@@ -1436,12 +1436,16 @@ export default function DriversPage() {
                                         onRefreshPayouts={async () => {
                                             setRefreshingPayouts(true);
                                             try {
+                                                // Failures raise non-2xx (handled in catch); still
+                                                // branch on `synced` like onRefreshKyc so a future
+                                                // partial-success response can't toast as success.
                                                 const res = await refreshDriverStripePayouts(selected.id);
                                                 const fresh = await getDriverPayoutsSummary(selected.id);
                                                 setPayoutSummary(fresh);
                                                 toast({
-                                                    title: "Payouts synced from Stripe",
+                                                    title: res.synced ? "Payouts synced from Stripe" : "Not synced",
                                                     description: res.message,
+                                                    ...(res.synced ? {} : { variant: "destructive" as const }),
                                                 });
                                             } catch (e: any) {
                                                 toast({ title: "Payout sync failed", description: e?.message || "Unknown error", variant: "destructive" });
@@ -1969,7 +1973,9 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     label="Total paid out"
                     value={fmtMoney(summary.total_paid_out)}
                     tone="emerald"
-                    sub={`${payouts.filter(p => p.status === "completed").length} completed payouts`}
+                    sub={(summary.legacy_stripe_transfers ?? 0) > 0
+                        ? `+ ${fmtMoney(summary.legacy_stripe_transfers ?? 0)} legacy Stripe transfers`
+                        : `${payouts.filter(p => p.status === "completed").length} completed payouts`}
                 />
                 <PayoutMetric
                     label="Lifetime earnings"
@@ -2288,7 +2294,12 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                         ) : sortedPayouts.map((p) => {
                             const style = PAYOUT_STATUS_STYLE[p.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: p.status };
                             const isRetrying = retryingPayoutId === p.id;
-                            const typeLabel = p.payout_type === "stripe_sync" ? "Stripe Transfer" : p.payout_type === "instant" ? "Instant" : "Standard";
+                            const typeLabel =
+                                p.payout_type === "stripe_sync" ? "Stripe Transfer"
+                                : p.payout_type === "instant" ? "Instant"
+                                : p.payout_type === "legacy_import" ? "Legacy import"
+                                : !p.payout_type || p.payout_type === "standard" ? "Standard"
+                                : p.payout_type;
                             return (
                                 <TableRow key={p.id} className="hover:bg-muted/20">
                                     <TableCell className="text-xs whitespace-nowrap">

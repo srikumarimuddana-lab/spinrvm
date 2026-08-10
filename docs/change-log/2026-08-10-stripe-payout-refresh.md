@@ -95,3 +95,12 @@ pending_balance = max(lifetime_earnings - total_paid_out - pending_in_flight, De
 - [x] Rollback plan is concrete and testable
 - [x] Blast radius is stated, not assumed
 - [x] No silent behavior change to an already-shipped flow without the UX field filled in
+
+---
+
+## Addendum — round-2 review + production hotfix (same day)
+
+- **Prod 500 fixed** (`85d17ba`): `stripe.Transfer.list().auto_paging_iter()` yields StripeObjects that are not Mappings on the deployed SDK build; `.get()` on the raw object raised `AttributeError: get`. Paged objects now go through `stripe_object_to_dict` (same rule the connect-ledger service documents). Regression test uses a non-Mapping StripeObject fake.
+- **Admin money-out now mirrors `earnings.py` exactly**: deduct-by-default (everything except `reversed`/`failed`, minus `stripe_sync`), so persistent stuck statuses (`reserved`, `transfer_completed`) no longer inflate `pending_balance` — previously an operator reconciling from that number could double-pay a driver whose instant payout stalled after the Transfer step.
+- **Payout aggregation fetch raised 200 → 5000 rows** (mirror of `earnings.py`) so lifetime deduction isn't computed over a truncated window for drivers with long cash-out histories; display list still capped by `limit`.
+- **"Refresh Payouts from Stripe" button hidden for non-super-admins** — matches the endpoint's 403 gate instead of toasting a guaranteed failure.

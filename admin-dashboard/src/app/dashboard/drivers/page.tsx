@@ -69,11 +69,13 @@ function matchesRequirement(
 export default function DriversPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
-    // SIN reveal is gated to super_admin only — matches the backend
-    // check in admin_reveal_driver_sin. Plain `admin` users see only
-    // the last-4 from the cache columns.
+    // SIN reveal and the Stripe payout sync are both gated to super_admin
+    // server-side (admin_reveal_driver_sin / admin_refresh_driver_stripe_payouts)
+    // — gate the UI the same way so lower roles never see a button that can
+    // only 403. Plain `admin` users see only the last-4 from cache columns.
     const currentUserRole = useAuthStore((s) => s.user?.role);
-    const canRevealSin = (currentUserRole || "").toLowerCase() === "super_admin";
+    const isSuperAdmin = (currentUserRole || "").toLowerCase() === "super_admin";
+    const canRevealSin = isSuperAdmin;
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -1403,6 +1405,7 @@ export default function DriversPage() {
                                         refreshingPayouts={refreshingPayouts}
                                         revealedSin={revealedSin}
                                         canRevealSin={canRevealSin}
+                                        canRefreshPayouts={isSuperAdmin}
                                         onRetry={async (payoutId) => {
                                             setRetryingPayoutId(payoutId);
                                             try {
@@ -1893,7 +1896,7 @@ function PayoutMetric({ label, value, tone, sub }: { label: string; value: strin
     );
 }
 
-function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRefreshPayouts, onRevealSin, refreshingKyc, refreshingPayouts, revealedSin, canRevealSin, notify }: {
+function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRefreshPayouts, onRevealSin, refreshingKyc, refreshingPayouts, revealedSin, canRevealSin, canRefreshPayouts, notify }: {
     data: DriverPayoutSummary | null;
     loading: boolean;
     driverId: string;
@@ -1907,6 +1910,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
     refreshingPayouts: boolean;
     revealedSin: { sin: string; expiresAt: number } | null;
     canRevealSin: boolean;
+    canRefreshPayouts: boolean;
     notify: (opts: { title: string; description?: string; variant?: "destructive" }) => void;
 }) {
     const fmtDateTime = (iso?: string | null) => {
@@ -1946,20 +1950,23 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
 
     return (
         <div className="space-y-5">
-            {/* Refresh Payouts from Stripe */}
-            <div className="flex items-center justify-end">
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={refreshingPayouts}
-                    onClick={onRefreshPayouts}
-                    title="Pull all Transfers, bank payouts, and balance transactions from Stripe for this driver"
-                >
-                    {refreshingPayouts ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
-                    Refresh Payouts from Stripe
-                </Button>
-            </div>
+            {/* Refresh Payouts from Stripe — super_admin only, matching the
+                backend gate; lower roles never see a button that can only 403. */}
+            {canRefreshPayouts && (
+                <div className="flex items-center justify-end">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={refreshingPayouts}
+                        onClick={onRefreshPayouts}
+                        title="Pull all Transfers, bank payouts, and balance transactions from Stripe for this driver"
+                    >
+                        {refreshingPayouts ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                        Refresh Payouts from Stripe
+                    </Button>
+                </div>
+            )}
 
             {/* Top 4 metric cards: Pending / Paid out / Lifetime / YTD */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

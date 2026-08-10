@@ -62,11 +62,13 @@ from typing import Any
 
 try:
     from ..supabase_client import supabase
+    from ..utils.stripe_config import stripe_object_to_dict
     from ..utils.stripe_mode import is_missing_on_key
     from .driver_import_service import _select_in
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
     from services.driver_import_service import _select_in
     from supabase_client import supabase  # type: ignore  # noqa: F401
+    from utils.stripe_config import stripe_object_to_dict  # type: ignore
     from utils.stripe_mode import is_missing_on_key  # type: ignore
 
 try:
@@ -229,7 +231,13 @@ async def _list_transfers_for_account(
 
     def _list() -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        for t in stripe.Transfer.list(**params).auto_paging_iter():
+        for obj in stripe.Transfer.list(**params).auto_paging_iter():
+            # stripe_object_to_dict, never .get() on the raw paged object:
+            # StripeObject is not a Mapping on all SDK builds, so `t.get`
+            # resolves through __getattr__ → KeyError 'get' → AttributeError
+            # (crashed in production on this exact loop; the connect-ledger
+            # service documents the same rule for dict()).
+            t = stripe_object_to_dict(obj)
             out.append(
                 {
                     "id": t["id"],

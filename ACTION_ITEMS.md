@@ -3681,11 +3681,22 @@ _Last updated: 2026-08-10 — B19 and B21 CLOSED: `payment_retry.py`'s `requires
   manifest (`git diff origin/main...HEAD -- '*requirements*'` is empty), so these are
   pre-existing on `main`. Filed rather than fixed in that PR, per release gate 8: a red
   gate left unexplained decays into one people stop reading.
+- **Also explains `G6 · Trivy container scan` failures, not just `G4a`** — confirmed
+  2026-08-10 on PR #3494: pulled the actual failing Trivy job log rather than
+  assuming, and its one blocking finding is `cryptography` 49.0.0, `CVE-2026-69247`,
+  HIGH, fixed in `50.0.0` — same package/pinned-version/fix-version triple as the
+  `cryptography`/`PYSEC-2026-3552` row below, just surfaced under Trivy's own CVE
+  alias rather than the PYSEC id `pip-audit` uses. Same root cause, same fix, same
+  "needs deliberate JWT-path verification before bumping" caution — not a second,
+  separate gap. Matches the precedent already noted in C6 (a PyJWT bump "also
+  clearing the overlapping `G6 · Trivy container scan` findings") — one dependency
+  pin, two scanners, two red gates. Do not file a new item if `G6` shows red on
+  `cryptography` again; it's this one.
 - **What:**
 
   | Package | Pinned | Advisory | Fixed in |
   |---|---|---|---|
-  | `cryptography` | 49.0.0 | PYSEC-2026-3552 | 50.0.0 |
+  | `cryptography` | 49.0.0 | PYSEC-2026-3552 (aka `CVE-2026-69247` per Trivy/`G6`) | 50.0.0 |
   | `h2` | 4.3.0 | CVE-2026-71554 | 4.4.1 |
   | ~~`pypdf`~~ | ~~6.14.2~~ → **6.15.0 (bumped 2026-08-10)** | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
 
@@ -3722,6 +3733,9 @@ _Last updated: 2026-08-10 — B19 and B21 CLOSED: `payment_retry.py`'s `requires
   (`.github/ISSUE_TEMPLATE/ci_change_request.yml`).
 - **Acceptance:** either each dependency bumped with its affected tests actually run, or
   a `[CR]` per advisory recording the accepted risk and why. Not a silent red check.
+  For `cryptography` specifically, both `G4a` and `G6` going green together is the
+  signal the fix is real (same finding, two gates) — one clearing without the other
+  would mean the fix didn't actually reach the built image.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

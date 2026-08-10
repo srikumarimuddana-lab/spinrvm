@@ -4622,6 +4622,43 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   clearing a real red check the way the other two fixes were confirmed
   against the full migrations corpus.
 
+### C15. `bulk-operations` admin page: `useState` called after a conditional early return
+- [x] **Status:** done (2026-08-10).
+- **Why:** `BulkOperationsPage` (`admin-dashboard/src/app/dashboard/bulk-
+  operations/page.tsx`) called `useState` for `discovering`/`setDiscovering`
+  at line 348, **after** the component's `if (!isSuperAdmin) { return (...)
+  }` early return at line 320. A genuine React `rules-of-hooks` violation
+  (`G2 · ESLint security plugin` / `admin-test`), not a lint false positive:
+  if `isSuperAdmin` ever changes without a full remount of this component,
+  React's hook-call-count-per-render invariant breaks — the classic
+  "Rendered more hooks than during the previous render" failure mode. Found
+  2026-08-10 while investigating PR #3508 (which correctly identified this
+  failure as pre-existing and unrelated to its own diff, and was right not
+  to fix it inline — confirmed via `git diff` that the file is byte-
+  identical to `main` before and after that PR). Untracked anywhere until
+  now.
+- **Fix:** moved the `useState(false)` declaration up to join the other 10
+  hook calls at the top of the component, before the early return. One-line
+  move, no behavior change to any hook's value or setter.
+- **Files:**
+  `admin-dashboard/src/app/dashboard/bulk-operations/page.tsx`
+- **Verification:** `npx eslint` on the file — `rules-of-hooks` error gone,
+  the one remaining warning (`RiderImportSection` unused-var) is unrelated
+  and pre-existing. `npx tsc --noEmit` — 27 pre-existing errors elsewhere in
+  the admin-dashboard test suite (matches PR #3508's own count of "28
+  pre-existing," off by one, unrelated to this file), zero in this file
+  before or after. **Real production build** (`npm run build`, not just
+  `tsc --noEmit`) passes, `bulk-operations` route builds. No automated test
+  exists for this component (same standing gap #3508 itself flagged for the
+  admin dashboard) — verified by lint + build + manual code read, not by a
+  regression test.
+- **What was NOT verified:** not exercised in a running browser — no visual
+  regression tooling exists for this surface (standing gap, same one
+  `ACTION_ITEMS.md`/change-logs elsewhere in this file already flag for
+  admin-dashboard UI changes). The scenario this fix actually protects
+  against (a super-admin's role changing mid-session without a remount) was
+  not manually reproduced.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

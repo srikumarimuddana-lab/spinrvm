@@ -432,14 +432,14 @@ export default function ServiceAreasPage() {
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                 <div>
                                   <label className="block text-xs font-semibold text-blue-800 mb-1">Airport Zone Name *</label>
-                                  <input className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm bg-white"
+                                  <input className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
                                     value={airportForm.name}
                                     onChange={e => setAirportForm({ ...airportForm, name: e.target.value })}
                                     placeholder={`e.g. ${area.city || area.name} Airport`} />
                                 </div>
                                 <div>
                                   <label className="block text-xs font-semibold text-blue-800 mb-1">Airport Fee ($)</label>
-                                  <input className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm bg-white"
+                                  <input className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
                                     type="number" step="0.50" min="0"
                                     value={airportForm.airport_fee}
                                     onChange={e => setAirportForm({ ...airportForm, airport_fee: parseFloat(e.target.value) || 0 })} />
@@ -788,7 +788,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
                   Surge above 2.5× requires documented justification (regulatory + reputational risk).
                 </p>
                 <textarea
-                  className="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  className="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm"
                   rows={2}
                   placeholder="e.g. Major event surge — approved by ops lead @name on 2026-05-21"
                   value={form.surge_justification}
@@ -2002,26 +2002,26 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs font-semibold text-amber-800 mb-1">Name *</label>
-              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
                 value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
                 placeholder="e.g. Peak Hour Bonus" />
             </div>
             <div>
               <label className="block text-xs font-semibold text-amber-800 mb-1">Type</label>
-              <select className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+              <select className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
                 value={form.incentive_type} onChange={e => setForm({ ...form, incentive_type: e.target.value })}>
                 {INCENTIVE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label} — {t.desc}</option>)}
               </select>
             </div>
             <div>
               <label className="block text-xs font-semibold text-amber-800 mb-1">Bonus Amount ($)</label>
-              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
                 type="number" step="0.50" min="0.50" max="500"
                 value={form.bonus_amount} onChange={e => setForm({ ...form, bonus_amount: parseFloat(e.target.value) || 0 })} />
             </div>
             <div>
               <label className="block text-xs font-semibold text-amber-800 mb-1">Vehicle Type (optional)</label>
-              <select className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+              <select className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
                 value={form.vehicle_type_id} onChange={e => setForm({ ...form, vehicle_type_id: e.target.value })}>
                 <option value="">All vehicle types</option>
                 {vehicleTypes.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
@@ -2029,13 +2029,13 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
             </div>
             <div>
               <label className="block text-xs font-semibold text-amber-800 mb-1">Description</label>
-              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
                 value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
                 placeholder="Shown to drivers on ride offer" />
             </div>
             <div>
               <label className="block text-xs font-semibold text-amber-800 mb-1">Budget Cap ($ optional)</label>
-              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
                 type="number" step="100" min="0"
                 value={form.max_budget} onChange={e => setForm({ ...form, max_budget: e.target.value })}
                 placeholder="Leave empty for unlimited" />

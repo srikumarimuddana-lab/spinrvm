@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed to `ON DELETE SET NULL` (migration 294) so `purge_pii_retention()` Step B no longer FK-aborts the entire daily retention purge once a paid ride crosses 7 years; `docs/runbooks/data-retention.md` extended to cover Steps H–M. Prior same-day (2026-08-10): B19 and B21 CLOSED: `payment_retry.py`'s `requires_capture` branch now routes through `_finalize_card_settlement` (picking up the atomic RPC + Sentry escalation + WS notify the other two settlement paths already had), and all 4 background loops (`payment_retry.py`, `driver_claim_reaper.py`, `offer_expiry_reaper.py`, `orphaned_hold_reconciler.py`) now have correct throttle-lock TTL arithmetic (`interval * 0.85` instead of `1.5x`/`2x`), each with the same two regression tests `ledger_projection.py` already used to catch this class of bug. 165 + 113 tests pass across the affected surfaces. Prior same-day (2026-08-10): A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed to `ON DELETE SET NULL` (migration 294) so `purge_pii_retention()` Step B no longer FK-aborts the entire daily retention purge once a paid ride crosses 7 years; `docs/runbooks/data-retention.md` extended to cover Steps H–M. Prior same-day (2026-08-10): B20 CLOSED: `ledger_projection.py`'s `_decompose` now degrades (whole amount to `platform_revenue`, Sentry-escalated) instead of silently decomposing from stale `driver_earnings`/`tax_amount` when a fare-settlement event's ride isn't yet `payment_status='paid'` — source-aware by construction (cancellation-fee/notice-fee events never reach the check). Also found and fixed in the same change: `_RIDE_COLUMNS` omitted `payment_status` entirely, which would have made the new check degrade *every* fare charge unconditionally had it shipped alone — added a column-membership regression test for it, mirroring the existing `discount_amount` one. 23 + 122 tests pass. Prior same-day (2026-08-10): B19 and B21 CLOSED: `payment_retry.py`'s `requires_capture` branch now routes through `_finalize_card_settlement` (picking up the atomic RPC + Sentry escalation + WS notify the other two settlement paths already had), and all 4 background loops (`payment_retry.py`, `driver_claim_reaper.py`, `offer_expiry_reaper.py`, `orphaned_hold_reconciler.py`) now have correct throttle-lock TTL arithmetic (`interval * 0.85` instead of `1.5x`/`2x`), each with the same two regression tests `ledger_projection.py` already used to catch this class of bug. 165 + 113 tests pass across the affected surfaces. Prior same-day (2026-08-10): A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -3640,7 +3640,35 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   exactly-one-header matrix.
 
 ### B20. Ledger projection can misclassify a tip when a ride is stuck unpaid
-- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- [x] **Status:** CLOSED (2026-08-10) — found 2026-08-07 by the money-auditor pass on PR #3464.
+  Fixed with the source-aware settlement check the Acceptance line specifies:
+  `_decompose`'s default (fare-settlement) branch now checks
+  `ride.get("payment_status") != "paid"` and books DEGRADED (whole amount to
+  `platform_revenue`, escalated to Sentry via the existing `escalate()` call)
+  instead of silently decomposing from possibly-stale `driver_earnings`/
+  `tax_amount` — reason `"ride_not_yet_settled"`. Deliberately **not**
+  skip-and-retry, per this item's own warning: a skip would leave the event
+  with no legs, sitting at the head of `financial_events_missing_legs`'
+  oldest-first queue forever if the ride is never recovered, reintroducing
+  the exact starvation the RPC's own filters exist to avoid. Source-aware by
+  construction (not by an extra branch condition): `cancellation_fee` and
+  `scheduled_cancel_notice_fee` events return earlier in `_decompose` and
+  never reach this check, so a legitimately-cancelled (never `'paid'`) ride
+  is unaffected — added a test proving exactly that
+  (`test_cancellation_fee_on_unpaid_ride_is_not_affected_by_the_paid_check`).
+  **Found and fixed in the same change:** `_RIDE_COLUMNS` (the projection's
+  ride `SELECT`) omitted `payment_status` entirely — without adding it, the
+  new check would have read `None != "paid"` and degraded **every** fare
+  charge unconditionally, the opposite of the intended fix, with no
+  in-memory `_decompose` unit test able to catch it (they build their own
+  ride dicts, independent of what the SELECT fetches) — added a dedicated
+  membership test (`test_ride_columns_fetch_payment_status`) mirroring the
+  existing `discount_amount` one, which was added for the same reason after
+  a prior promo-ride regression. 23 tests in `test_ledger_projection.py`
+  pass (18 pre-existing + 5 new), plus 122 across the payment/loop test
+  surface (`test_replay_safety_payment_loops.py`, `test_atomic_settle.py`,
+  `test_payment_retry.py`, `test_payment_retry_coverage.py`,
+  `test_coverage_payments.py`). See git history for the commit.
 - **What:** `backend/utils/ledger_projection.py::_decompose` (default fare branch)
   reads `rides.driver_earnings` / `tax_amount` at projection time without checking
   `rides.payment_status`. Migration 287's 30-minute grace window covers the normal
@@ -3707,11 +3735,22 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   manifest (`git diff origin/main...HEAD -- '*requirements*'` is empty), so these are
   pre-existing on `main`. Filed rather than fixed in that PR, per release gate 8: a red
   gate left unexplained decays into one people stop reading.
+- **Also explains `G6 · Trivy container scan` failures, not just `G4a`** — confirmed
+  2026-08-10 on PR #3494: pulled the actual failing Trivy job log rather than
+  assuming, and its one blocking finding is `cryptography` 49.0.0, `CVE-2026-69247`,
+  HIGH, fixed in `50.0.0` — same package/pinned-version/fix-version triple as the
+  `cryptography`/`PYSEC-2026-3552` row below, just surfaced under Trivy's own CVE
+  alias rather than the PYSEC id `pip-audit` uses. Same root cause, same fix, same
+  "needs deliberate JWT-path verification before bumping" caution — not a second,
+  separate gap. Matches the precedent already noted in C6 (a PyJWT bump "also
+  clearing the overlapping `G6 · Trivy container scan` findings") — one dependency
+  pin, two scanners, two red gates. Do not file a new item if `G6` shows red on
+  `cryptography` again; it's this one.
 - **What:**
 
   | Package | Pinned | Advisory | Fixed in |
   |---|---|---|---|
-  | `cryptography` | 49.0.0 | PYSEC-2026-3552 | 50.0.0 |
+  | `cryptography` | 49.0.0 | PYSEC-2026-3552 (aka `CVE-2026-69247` per Trivy/`G6`) | 50.0.0 |
   | `h2` | 4.3.0 | CVE-2026-71554 | 4.4.1 |
   | ~~`pypdf`~~ | ~~6.14.2~~ → **6.15.0 (bumped 2026-08-10)** | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
 
@@ -3748,6 +3787,9 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   (`.github/ISSUE_TEMPLATE/ci_change_request.yml`).
 - **Acceptance:** either each dependency bumped with its affected tests actually run, or
   a `[CR]` per advisory recording the accepted risk and why. Not a silent red check.
+  For `cryptography` specifically, both `G4a` and `G6` going green together is the
+  signal the fix is real (same finding, two gates) — one clearing without the other
+  would mean the fix didn't actually reach the built image.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
@@ -4480,6 +4522,106 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   latency (observed elsewhere in this file as low-minutes) of PR
   open/synchronize/ready-for-review.
 
+### C14. `Migration Safety Check` false positives, and a blank-template PR merged with no compliance flags ticked
+- [x] **Status:** the checker bugs are fixed (2026-08-10); the merged-PR
+  process gap below is logged, not fixable after the fact.
+- **Found on PR #3497** ("Claude/stripe card sync issue gepad1" — the title
+  and PR body were stale/blank; the PR actually collected and Vault-encrypted
+  driver SINs for T4A filing, added a Stripe-onboarding SIN gate, and closed
+  two TOCTOU races a security audit found in the SIN writes — a real,
+  well-reasoned 12-commit change). Investigated its 3 `Migration Safety
+  Check` failures before assuming any were genuine:
+  1. **11 "append-only: never edit a merged migration" failures — false
+     positive, checker bug, now fixed.** Root cause:
+     `.github/workflows/migration-check.yml`'s "Detect changed migration
+     files" step diffed the PR against `github.event.pull_request.base.sha`
+     directly (two-dot diff) instead of the actual merge-base. `base.sha` is
+     the base branch's **current, continuously-moving** tip, not a fixed
+     fork point — so any PR branch that falls behind `main` (hasn't
+     merged/rebased in a while) sees every migration `main` gained since as
+     "deleted by this PR" (present in the two-dot diff's base side, absent
+     on head), which the per-file check then reports as an append-only
+     violation even though the PR never touched those files. Confirmed by
+     diffing the 11 flagged files between `main` and the PR branch: **byte-
+     identical**, simply absent on the stale branch. Fixed: the "Detect
+     changed migration files" step now diffs from `git merge-base BASE
+     HEAD` instead of raw `BASE`, so only files the PR branch itself
+     actually added/modified/deleted since it diverged are considered.
+  2. **Rollback-comment check — false negative, checker bug, now fixed.**
+     `^--\s+[Rr]ollback:` required an exact "Rollback:"/"rollback:"
+     immediately after `-- `. PR #3497's new migration
+     (`289_driver_sin_encrypted.sql`) documented rollback thoroughly under
+     an all-caps `-- ROLLBACK` section header (including the non-obvious
+     `vault.secrets` orphan-cleanup step) — didn't match. Grepped this
+     repo's own 369 migration files: the strict regex only matched 248 of
+     them; real usage varies a lot (`Rollback plan:`, `-- ROLLBACK (on
+     paper):`, `/* Rollback: ... */`), none of which the old regex covered.
+     `backend/migrations/CLAUDE.md` itself only requires "the rollback plan
+     in a top comment," no specific phrasing. Loosened to `(?:--|/\*)\s*
+     rollback\b`, case-insensitive, matched against comment text only (see
+     #3 below) — re-run against all 369 migrations: 306 now pass (up from
+     248), **zero regressions** (nothing that passed the old regex fails
+     the new one).
+  3. **Dangerous-ops warning — false positive, checker bug, now fixed.**
+     Scanned the whole raw file text for `DROP TABLE`/`TRUNCATE`/`ALTER
+     TABLE ... DROP COLUMN`, so a rollback *comment* describing exactly
+     those statements (to undo the migration) tripped the same warning as
+     if the migration executed them. Same root-cause shape as the
+     `migrate.py` `CONCURRENTLY` misdetection fixed for B0 — a raw-text
+     scan that doesn't distinguish comments from executable SQL. Added a
+     simple line-based comment stripper (deliberately not the full
+     tokenizer `migrate.py` needed — this script only ever reads comment
+     *text*, never re-executes SQL, so a naive strip's worst failure mode
+     is a missed/over-eager warning, not a broken apply) and scan only the
+     remaining code. Re-run against all 369 migrations: dropped from 155
+     flagged files to 7, and the 7 that remain are genuine executable
+     `TRUNCATE`/`DROP COLUMN` statements (spot-checked) — zero newly-flagged
+     files, zero regressions.
+- **Real, small, still-open item this surfaced (not fixed here, informational
+  only):** PR #3497's new migration is `289_driver_sin_encrypted.sql`, but
+  `main` already has an unrelated `289_financial_events_purge_delete_gate.sql`
+  — a genuine duplicate numeric prefix, now merged. Per this repo's own
+  migration convention ("Duplicate numeric prefixes exist from history and
+  are handled by full-filename keying — do not introduce new duplicates"),
+  the runner is unaffected (its idempotency key is the full filename, which
+  differs), but it's exactly the drift the convention says to avoid going
+  forward. **Deliberately not renamed** — root CLAUDE.md's migration rules
+  are explicit that "already-applied migrations must never be renamed" since
+  the runner's idempotency key is the filename; renaming a merged migration
+  risks a runner in any environment that already recorded
+  `289_driver_sin_encrypted.sql` as applied re-attempting it under a new
+  name. No functional fix needed; noted here so the next duplicate-prefix
+  sighting isn't re-investigated from scratch.
+- **Process gap this PR also exposed, not fixable retroactively:** #3497
+  merged with its PR template completely blank — every Tier 1/2/4 field
+  still the raw placeholder text, including Tier 3's `Money-touching` and
+  `PIPEDA-relevant` compliance checkboxes unticked on a PR whose entire
+  purpose is collecting and encrypting a government ID. Per root CLAUDE.md,
+  this repo currently has **no automated PR review running** (see C7/C9) —
+  nothing else was positioned to catch this before merge. Logged rather than
+  silently passed over; no corrective action possible on an already-merged
+  PR beyond noting it. If a `Required PR fields filled`-style gate (already
+  proven out on PR #3494/#3501, this session) doesn't already block merge on
+  a blank template repo-wide, that's worth confirming — it clearly should
+  have stopped this one.
+- **Files:** `.github/workflows/migration-check.yml` (all 3 fixes).
+- **Verification:** re-ran the fixed rollback-comment and dangerous-ops
+  logic against every one of the 369 files currently in
+  `backend/migrations/` (not just the one PR that surfaced the bugs) — zero
+  regressions on either check, confirmed via direct comparison against the
+  old regex's pass/fail sets. The append-only merge-base fix was verified by
+  confirming the 11 previously-flagged files are byte-identical between
+  `main` and the PR branch (root-cause diagnosis), not by re-running the
+  workflow itself (no open PR currently reproduces the stale-branch
+  condition to test against live). Embedded Python script syntax-checked
+  (`ast.parse`) after edits; YAML re-validated.
+- **What was NOT verified:** the merge-base fix specifically, end-to-end
+  against a real GitHub Actions run with a genuinely stale PR branch — the
+  fix is a straightforward, well-understood `git merge-base` substitution
+  with no ambiguity in what it should do, but it hasn't been observed
+  clearing a real red check the way the other two fixes were confirmed
+  against the full migrations corpus.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
@@ -4963,6 +5105,13 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   this endpoint. No code change needed; correcting the stale item.
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
+- [ ] **D8. No rate limiting on SIN-touching admin endpoints** — flagged by the
+  2026-08-10 security audit of the SIN-enforcement branch: `reveal-sin`
+  (pre-existing), `update-sin`, and `/tax-ids/import/{validate,commit}` are
+  all absent from `utils/rate_limiter.py`. Not exploitable past the
+  super_admin gate + audit rows, but three SIN surfaces with zero throttling
+  should be a deliberate decision, not an inherited omission. Decide a limit
+  (e.g. reveal/update: 10/hour per admin) and wire it, or document why not.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.
 - [x] **D7. Admin analytics Redis cache** — done: `GET /admin/analytics/cancellation-reasons`
   now caches its response for 5 minutes (`_OVERVIEW_CACHE_TTL`, same TTL

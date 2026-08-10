@@ -109,6 +109,7 @@ from .subscriptions import offer_analytics_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
 from .support_tickets import router as support_tickets_router
+from .tax_id_import import router as tax_id_import_router
 from .users import router as users_router
 from .vehicle_fleet import router as vehicle_fleet_router
 from .venues import router as venues_router
@@ -187,6 +188,10 @@ admin_router.include_router(export_approvals_router, dependencies=[Depends(requi
 # get_driver_balance reads to bound a Stripe payout Transfer. The handlers
 # re-check the role themselves so the guard survives a future re-mount.
 admin_router.include_router(booking_import_router, dependencies=[Depends(require_super_admin)])
+# Bulk driver tax-ID import (SIN + GST BN migration for drivers who predate
+# in-app collection). Writes Vault-encrypted SINs, so it takes the reveal-sin
+# posture: require_super_admin at the mount AND re-checked in each handler.
+admin_router.include_router(tax_id_import_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])

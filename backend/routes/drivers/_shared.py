@@ -130,6 +130,21 @@ def _ride_income(r: dict) -> Decimal:
 
 _VAULT_PII_FIELDS: frozenset = frozenset({"license_number"})
 
+# Encrypted on write like the set above, but deliberately NOT decrypted on
+# read — `_decrypt_driver_pii` ignores these.
+#
+# `license_number` is decrypted back into the driver's own profile response
+# because a driver may legitimately re-read their own licence. A SIN is not
+# that: it is collected once for T4A filing and has no reason to travel back
+# over the wire on every profile poll. Collection and disclosure are separate
+# decisions and only collection has been made — so there is no read path at
+# all, rather than a read path nobody is watching. Admins see `sin_last4` and
+# an on-file boolean, never the number.
+#
+# Adding a field here is the ONLY safe way to store write-once PII; putting it
+# in `_VAULT_PII_FIELDS` instead would silently start returning it.
+_VAULT_WRITE_ONLY_PII_FIELDS: frozenset = frozenset({"sin"})
+
 
 async def _vault_encrypt(value: str, hint: str = "") -> str:
     """Encrypt a PII string via Supabase Vault (encrypt_driver_pii RPC).
@@ -201,16 +216,26 @@ async def _vault_decrypt(value: str, hint: str = "") -> str:
 
 
 async def _encrypt_driver_pii(payload: dict) -> dict:
-    """Encrypt vault PII fields in a write payload before sending to the DB."""
+    """Encrypt vault PII fields in a write payload before sending to the DB.
+
+    Covers both the round-trip set and the write-only set — every field that
+    must never reach a database column as plaintext. `_vault_encrypt` is
+    fail-closed, so a Vault outage raises 503 instead of writing a bare SIN.
+    """
     out = dict(payload)
-    for field in _VAULT_PII_FIELDS:
+    for field in _VAULT_PII_FIELDS | _VAULT_WRITE_ONLY_PII_FIELDS:
         if field in out and out[field]:
             out[field] = await _vault_encrypt(str(out[field]), field)
     return out
 
 
 async def _decrypt_driver_pii(driver: dict) -> dict:
-    """Decrypt vault PII fields in a driver record returned from the DB."""
+    """Decrypt vault PII fields in a driver record returned from the DB.
+
+    Round-trip set ONLY. `_VAULT_WRITE_ONLY_PII_FIELDS` is excluded on
+    purpose — this function feeds the driver's own profile response, and a
+    SIN has no business being in it.
+    """
     out = dict(driver)
     for field in _VAULT_PII_FIELDS:
         if field in out and out[field]:
@@ -608,4 +633,8 @@ def serialize_ride_for_driver(ride):
     return {k: v for k, v in ride.items() if k not in _DRIVER_RIDE_SECRET_FIELDS}
 
 
-_STRIP_FROM_SELF_RESPONSE = {"stripe_account_id", "bank_account", "fcm_token"}
+# `sin` here is belt-and-braces: it is already excluded from
+# `_decrypt_driver_pii`, so the value in the row is a vault token rather than
+# a number. Stripped anyway, because the token is still an unnecessary handle
+# to regulated data and any future decrypt would otherwise leak silently.
+_STRIP_FROM_SELF_RESPONSE = {"stripe_account_id", "bank_account", "fcm_token", "sin"}

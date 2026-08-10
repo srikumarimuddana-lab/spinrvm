@@ -55,6 +55,11 @@ def generate_t4a_pdf(summary: dict) -> bytes:
         - gst_registered (bool)
         - gst_bn (str) – GST/HST Business Number, if gst_registered
         Optional:
+        - sin_last4 (str) – last 4 digits of the driver's SIN. This document is
+          the DRIVER'S copy, so the SIN is shown masked: enough for them to
+          confirm we hold the right number, and useless to anyone who picks the
+          PDF up. The unmasked value CRA requires for the actual filing comes
+          from the audited admin reveal path, never from here.
         - driver_name (str)
         - generated_at (str ISO-8601)
         - total_earnings (str) – falls back to net_earnings
@@ -71,6 +76,7 @@ def generate_t4a_pdf(summary: dict) -> bytes:
     total_trips = int(summary.get("total_trips") or 0)
     gst_registered = bool(summary.get("gst_registered", False))
     gst_bn = str(summary.get("gst_bn") or "").strip()
+    sin_last4 = str(summary.get("sin_last4") or "").strip()
     driver_name = str(summary.get("driver_name") or "See driver profile").strip()
     generated_at_raw = summary.get("generated_at") or datetime.now(timezone.utc).isoformat()
     # Trim microseconds for human-readable display.
@@ -138,6 +144,15 @@ def generate_t4a_pdf(summary: dict) -> bytes:
     # ═══════════════════════════════════════════════════════════════════════════
     section_heading("RECIPIENT INFORMATION")
     label_value("Driver Name", driver_name)
+    # Masked, and phrased rather than punctuated: the core Helvetica font is
+    # latin-1 only, so a bullet (U+2022) would not render. "Ending in" also
+    # avoids implying a 3-3-3 SIN grouping that 4 digits do not line up with.
+    if sin_last4:
+        label_value("SIN", f"Ending in {sin_last4}")
+    else:
+        # Silence would read as "nothing needed". This slip cannot be filed
+        # without a SIN, so the driver has to know to supply one.
+        label_value("SIN", "Not on file - add it in the app before filing")
     if gst_registered and gst_bn:
         label_value("GST/HST Business Number", gst_bn)
     elif gst_registered:

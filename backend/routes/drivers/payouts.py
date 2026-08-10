@@ -31,6 +31,7 @@ from ._deps import (  # noqa: F401
 )
 from ._shared import (  # noqa: F401
     _money_str,
+    _vault_decrypt,
     serialize_doc,
 )
 
@@ -140,7 +141,68 @@ async def _ensure_stripe_account(driver: dict, user: dict, stripe_secret: str) -
     return await _create_stripe_account(driver, user, stripe_secret, superseded=superseded)
 
 
-async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op):
+async def prefill_sin_to_stripe(driver: dict, account_id: str, stripe_secret: str) -> str:
+    """Give Stripe the SIN we already hold, so its form stops asking for it.
+
+    Without this the driver types their SIN twice — once into Stripe's hosted
+    page, once into ours — because the AccountLink below deliberately requests
+    ``eventually_due`` fields to pull ``individual.id_number`` forward. Being
+    asked twice for the single most sensitive number a driver has is the kind
+    of thing that costs trust, so we supply it and Stripe stops asking:
+    onboarding only collects what is still in ``currently_due``.
+
+    Write-only cuts one way. We cannot *read* ``individual.id_number`` back
+    (that is why Spinr had to start collecting it), but it has always been a
+    valid *request* parameter — see ``params/_account_update_params.py``.
+
+    This is the second and last place that decrypts ``drivers.sin``, and it is
+    materially different from the admin reveal: the plaintext goes straight to
+    Stripe over TLS and is never returned to a client, logged, or re-stored.
+
+    Best-effort by design. A driver setting up payouts must not be blocked
+    because a pre-fill failed — the worst case is Stripe asking them for it,
+    which is exactly where we were before. Returns a short status string for
+    the caller to report; never raises.
+    """
+    if not driver.get("sin"):
+        return "no_sin_on_file"
+
+    try:
+        account = await asyncio.to_thread(stripe.Account.retrieve, account_id, api_key=stripe_secret)
+        if ((account.get("individual") or {}).get("id_number_provided")) is True:
+            # Stripe already has one — from its own form, or from a previous
+            # run of this. Writing again would be a pointless round-trip.
+            return "already_provided"
+
+        plain = await _vault_decrypt(str(driver["sin"]), "sin_stripe_prefill")
+        # _vault_decrypt hands back its input when it cannot decrypt, so an
+        # unchecked call would send Stripe a UUID as somebody's SIN.
+        if not plain or plain == str(driver["sin"]) or not (len(plain.strip()) == 9 and plain.strip().isdigit()):
+            logger.error(
+                "[SIN-PREFILL] stored SIN did not decrypt to a canonical 9-digit value; skipping Stripe pre-fill",
+                extra={"driver_id": driver["id"]},
+            )
+            return "decrypt_failed"
+
+        await asyncio.to_thread(
+            stripe.Account.modify,
+            account_id,
+            individual={"id_number": plain.strip()},
+            api_key=stripe_secret,
+        )
+        return "prefilled"
+    except Exception:
+        # Loud, but not fatal. exc_info carries the Stripe error; the SIN is
+        # never in it because we never put it in a message.
+        logger.error(
+            "[SIN-PREFILL] could not pre-fill individual.id_number; the driver will be asked by Stripe",
+            exc_info=True,
+            extra={"driver_id": driver["id"], "stripe_account_id": account_id},
+        )
+        return "failed"
+
+
+async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op, *, before=None):
     """Run ``op(account_id)``, retiring and re-creating a stranded account once.
 
     Shared by both onboarding entry points (hosted AccountLink and embedded
@@ -154,6 +216,11 @@ async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op):
     do nothing about. Any other Stripe error propagates untouched.
     """
     account_id = await _ensure_stripe_account(driver, user, stripe_secret)
+    # `before` runs against whichever account the op will actually address —
+    # including the replacement below, which is a brand-new account and needs
+    # the pre-fill just as much as the original did.
+    if before is not None:
+        await before(account_id)
     try:
         return account_id, op(account_id)
     except Exception as exc:
@@ -167,6 +234,8 @@ async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op):
         fresh = await _create_stripe_account(
             {**driver, "stripe_account_id": None}, user, stripe_secret, superseded=account_id
         )
+        if before is not None:
+            await before(fresh)
         # One retry only. If the fresh account also fails, the key or the
         # platform is wrong, not this row — let it surface.
         return fresh, op(fresh)
@@ -270,7 +339,16 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
                 api_key=stripe_secret,
             )
 
-        account_id, account_link = await with_account_repair(driver, user, stripe_secret, _account_link)
+        # Hand Stripe the SIN we already hold BEFORE minting the link, so the
+        # `eventually_due` collection above no longer surfaces id_number and
+        # the driver is not asked for it a second time.
+        account_id, account_link = await with_account_repair(
+            driver,
+            user,
+            stripe_secret,
+            _account_link,
+            before=lambda acct: prefill_sin_to_stripe(driver, acct, stripe_secret),
+        )
         # The real onboarded gate is now stripe_details_submitted, set by
         # the account.updated webhook handler in services/stripe_kyc_sync.py.
         # We used to flip stripe_account_onboarded=True here optimistically,
@@ -445,7 +523,13 @@ async def stripe_account_session(current_user: dict = Depends(get_current_user))
         # Same repair posture as the hosted-link flow: an unstamped account
         # stranded by a key rotation is retired and re-created here rather than
         # 502ing a driver who is actively trying to set up payouts.
-        _, session = await with_account_repair(driver, user, stripe_secret, _account_session)
+        _, session = await with_account_repair(
+            driver,
+            user,
+            stripe_secret,
+            _account_session,
+            before=lambda acct: prefill_sin_to_stripe(driver, acct, stripe_secret),
+        )
         return {"client_secret": session.client_secret}
     except HTTPException:
         raise

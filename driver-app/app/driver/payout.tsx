@@ -134,8 +134,10 @@ function PayoutScreen() {
         // browser. A bare WebView dead-ends at Stripe's popup-based KYC step
         // (the popup has no window.opener and the page hangs); the system
         // browser supports the popup + redirect + camera/identity steps, so
-        // onboarding can actually complete. Stripe still collects and holds the
-        // SIN / government ID / bank account — we only ever mirror status. The
+        // onboarding can actually complete. Stripe collects the government ID
+        // and bank account here; the SIN is NOT among them if the driver
+        // already gave us one, because the backend pre-fills
+        // individual.id_number just before minting this link. The
         // backend return_url bounces back to spinr-driver://driver/payout.
         try {
             setStripeOnboarding(true);
@@ -298,6 +300,13 @@ function PayoutScreen() {
     // Guided-setup checklist. Every payout prerequisite lives here as a single
     // ordered list so the driver sees exactly what's done vs. what still needs a
     // tap — instead of the same requirement repeated across scattered cards.
+    //
+    // ORDER IS LOAD-BEARING: the SIN step comes FIRST, before Stripe onboarding.
+    // The backend hands our stored SIN to Stripe just before minting the
+    // onboarding link, which takes id_number out of what Stripe's form asks
+    // for. Put Stripe first and there is nothing to hand over yet, so Stripe
+    // asks — and then our form asks again. Being asked twice for a SIN is
+    // exactly what this ordering exists to prevent.
     const allReady = isStripeReady && sinOnFile && gstOnFile;
     const setupSteps: {
         key: string;
@@ -309,6 +318,27 @@ function PayoutScreen() {
         onPress: () => void;
     }[] = [
         {
+            key: 'sin',
+            icon: 'shield-checkmark',
+            title: 'Add your SIN for tax slips',
+            // Copy corrected: this used to read "Added securely through Stripe
+            // — we never see or store it". Stripe does collect one for its own
+            // identity checks, but it never returns it, so Spinr could not file
+            // a T4A from it. We now collect and encrypt our own copy, and
+            // saying otherwise to a driver would be untrue.
+            // Says where it goes, because it goes to two places. Telling a
+            // driver it is "only" for our T4A while also sending it to Stripe
+            // would be the same kind of untruth as the line this replaced.
+            subtitle: sinOnFile
+                ? `On file · ••••${driverMe?.sin_last4}`
+                : 'Encrypted for your T4A, and passed to Stripe so you are only asked once',
+            done: sinOnFile,
+            // Not gated on Stripe: this is our own record for tax filing, and a
+            // driver can supply it before or after payouts onboarding.
+            locked: false,
+            onPress: () => setShowSinForm(true),
+        },
+        {
             key: 'stripe',
             icon: 'card',
             title: 'Connect payout account',
@@ -318,24 +348,6 @@ function PayoutScreen() {
             done: isStripeReady,
             locked: false,
             onPress: handleStripeOnboarding,
-        },
-        {
-            key: 'sin',
-            icon: 'shield-checkmark',
-            title: 'Add your SIN for tax slips',
-            // Copy corrected: this used to read "Added securely through Stripe
-            // — we never see or store it". Stripe does collect one for its own
-            // identity checks, but it never returns it, so Spinr could not file
-            // a T4A from it. We now collect and encrypt our own copy, and
-            // saying otherwise to a driver would be untrue.
-            subtitle: sinOnFile
-                ? `On file · ••••${driverMe?.sin_last4}`
-                : 'Encrypted and used only for your year-end T4A slip',
-            done: sinOnFile,
-            // Not gated on Stripe: this is our own record for tax filing, and a
-            // driver can supply it before or after payouts onboarding.
-            locked: false,
-            onPress: () => setShowSinForm(true),
         },
         {
             key: 'gst',

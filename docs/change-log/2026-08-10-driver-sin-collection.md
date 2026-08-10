@@ -356,3 +356,143 @@ downstream depends on the new fields, and no collected SIN is altered or lost.
   always have typed one into the AI chat) and `prompts.py` never asks for one,
   but SIN collection being a first-class flow makes the gap more reachable than
   it was. Worth revisiting separately — not silently, and not in this change.
+
+---
+
+## Addendum 2 — one SIN form, passed through to Stripe
+
+### Issue/gap identified
+
+Addendum 1 left the driver typing their SIN **twice**: once into Stripe's
+hosted onboarding, once into Spinr's form. Two prompts for the single most
+sensitive number a driver holds reads as carelessness and costs trust, whatever
+the internal justification.
+
+### Root cause
+
+Not an accident — two deliberate decisions collided. The AccountLink is created
+with `collection_options={"fields": "eventually_due", "future_requirements":
+"include"}` specifically to drag `individual.id_number` forward, because for a
+CA Express individual account Stripe otherwise defers it past a payout-volume
+threshold (comment at `payouts.py:260`, citing Income Tax Act Part XX
+reporting). Spinr then added its own collection because Stripe never returns
+what it collects. Each was right on its own; together they ask twice.
+
+### Fix/remediation
+
+Collect once, in Spinr's form, and hand it to Stripe.
+
+`prefill_sin_to_stripe()` runs immediately before the onboarding link or
+embedded session is minted: it decrypts our stored SIN and writes it with
+`Account.modify(individual={"id_number": …})`. Stripe's hosted flow only
+collects what remains in `currently_due`, so a supplied `id_number` is no
+longer asked for. **Write-only cuts one way** — we cannot read `id_number`
+back, but it has always been a valid *request* parameter
+(`params/_account_update_params.py:1521`).
+
+**Ordering is now load-bearing.** The SIN step moved ahead of Stripe onboarding
+in the driver checklist. Reversed, there is nothing to hand over when the link
+is minted, Stripe asks, and our form asks again — the exact problem this
+removes. The comment in `payout.tsx` says so, because the next person to
+reorder that list will not otherwise know.
+
+`with_account_repair` gained an optional `before` hook rather than a second
+`_ensure_stripe_account` call — that double-call was a bug fixed earlier on
+this branch and would have created two Express accounts. The hook fires for the
+**replacement** account too, so the stranded-account recovery path does not
+silently reintroduce the double prompt.
+
+**Best-effort, loudly.** A failed pre-fill never blocks a driver setting up
+payouts; the worst case is Stripe asking them, which is where we already were.
+Failures are `logger.error` with the Stripe exception and a returned status —
+not swallowed, not silent, and never carrying the number.
+
+### Risk & impact on existing functionality
+
+**This adds a second decrypt of `drivers.sin`** — the previous addendum said
+the admin reveal was the only one, and that is no longer true. It is materially
+different: server-side, the plaintext goes straight to Stripe over TLS, and it
+is never returned to a client, logged, or re-stored. Both call sites are now
+documented as the complete set.
+
+**It also creates a new egress path for regulated data** that did not exist
+before: a SIN now travels Spinr → Stripe. Previously it went driver → Stripe
+directly, never touching our servers. This is the deliberate trade accepted to
+remove the second prompt.
+
+| Changed | Other consumers | Effect |
+|---|---|---|
+| `with_account_repair` | hosted link, embedded session — both pass the hook | `before` defaults to `None`; behaviour identical without it (pinned by test) |
+| `prefill_sin_to_stripe` | new, two call sites | Cannot raise |
+| Checklist order | driver payout screen | SIN first, Stripe second, GST third |
+
+Guarded against sending garbage: `_vault_decrypt` returns its input when it
+cannot decrypt, so an unchecked call would have registered a **UUID as
+somebody's SIN with Stripe**. The result is checked for 9 digits before it is
+sent; a failure logs and skips.
+
+### User experience effect
+
+**Driver-facing, visible immediately.** The payouts checklist reorders — "Add
+your SIN for tax slips" is now the first step, before "Connect payout account".
+A driver who supplies it there should not be asked for it again inside Stripe's
+flow. Copy updated to say where it goes: *"Encrypted for your T4A, and passed
+to Stripe so you are only asked once."* Claiming it was "only" for our T4A
+while also sending it to Stripe would repeat the untruth this whole thread
+started with.
+
+**Drivers who already onboarded** (including the ~111 imported) gave Stripe a
+SIN we cannot read. They enter it into our form once; the pre-fill then sees
+`id_number_provided: true` and skips. One prompt, not two.
+
+### Files modified
+
+| file path | what changed | why |
+|---|---|---|
+| `backend/routes/drivers/payouts.py` | `prefill_sin_to_stripe`; `before` hook on `with_account_repair`; both onboarding entry points pass it | Collect once |
+| `driver-app/app/driver/payout.tsx` | SIN step moved first; copy states Stripe pass-through; stale "Stripe holds the SIN" comment corrected | Ordering is required for the pre-fill to work |
+| `backend/tests/test_driver_sin_collection.py` | `TestStripePrefill` (8 cases) | Below |
+
+### Rollback plan
+
+Code-only; no migration, no schema change. `git revert` restores the previous
+behaviour — Stripe asks for the SIN during onboarding, our form asks separately,
+double entry returns. Nothing is lost: our encrypted copy is untouched by the
+revert, and SINs already pushed to Stripe stay on the Stripe account (they
+cannot be un-sent, which is the one part of this that is **not** reversible —
+see below).
+
+### Verification performed
+
+- `test_driver_sin_collection.py` — **41 passed**, including the 8 new
+  pre-fill cases: no-SIN is a no-op with **no Stripe round-trip**; pre-fills
+  when Stripe still needs it and sends exactly `{"id_number": <sin>}`; skips
+  (and does not even decrypt) when `id_number_provided` is already true; a
+  failed decrypt **never sends a UUID to Stripe**; a malformed plaintext is not
+  sent; a Stripe outage returns `"failed"` rather than raising; the **repaired**
+  account is pre-filled too; the hook is optional so other callers are
+  unaffected.
+- **Driver app: real production build run** — `npx tsc --noEmit` (exit 0) and
+  `npm run build:web` (`expo export --platform web`), which bundled and exported
+  successfully.
+- `ruff check` + `ruff format` clean.
+
+### What was NOT verified
+
+- **The half that matters most is unverified: whether Stripe's hosted form
+  actually stops asking.** That `Account.modify` accepts `individual.id_number`
+  is checked against the SDK's parameter model; that a supplied `id_number`
+  then drops out of `currently_due` for a **CA Express** account is Stripe's
+  documented pre-fill behaviour but has **not** been observed. `docs.stripe.com`
+  is blocked by this environment's egress proxy and no live call was made.
+  **Test this with one driver before announcing it.** If Stripe still asks, the
+  code is harmless — but the double prompt remains and the added egress path
+  bought nothing, which would be a reason to revert.
+- **Whether Stripe accepts the write on an Express account at all.** Pre-fill is
+  documented for Express, but Stripe restricts some `individual` writes once it
+  has verified an account. The `already_provided` short-circuit avoids the
+  common case; a rejection lands in the `"failed"` branch and is logged.
+- **Not reversible in one direction.** A revert stops future pushes but cannot
+  retract a SIN already sent to Stripe.
+- **No real Vault decrypt**, as throughout — `_vault_decrypt` is mocked.
+- **No legal review** of the new copy stating the Stripe pass-through.

@@ -13,7 +13,7 @@ they pin are the ones that make holding a SIN defensible at all:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -280,9 +280,7 @@ class TestT4AWiring:
         problem."""
         from backend.utils.t4a_pdf import generate_t4a_pdf
 
-        pdf = generate_t4a_pdf(
-            {"year": 2026, "net_earnings": "1200.00", "total_trips": 40, "gst_registered": False}
-        )
+        pdf = generate_t4a_pdf({"year": 2026, "net_earnings": "1200.00", "total_trips": 40, "gst_registered": False})
         assert isinstance(pdf, (bytes, bytearray)) and len(pdf) > 500
 
     def test_pdf_label_is_latin1_safe(self):
@@ -293,7 +291,7 @@ class TestT4AWiring:
         from backend.utils import t4a_pdf
 
         src = inspect.getsource(t4a_pdf)
-        sin_lines = [ln for ln in src.splitlines() if "label_value(\"SIN\"" in ln]
+        sin_lines = [ln for ln in src.splitlines() if 'label_value("SIN"' in ln]
         assert sin_lines
         for line in sin_lines:
             line.encode("latin-1")  # raises if we ever put a bullet in there
@@ -317,3 +315,125 @@ class TestT4AWiring:
         assert summary["sin_last4"] == "6789"
         assert summary["sin_on_file"] is True
         assert "sin" not in summary or summary.get("sin") != "vault-uuid"
+
+
+class TestStripePrefill:
+    """Hand Stripe the SIN we hold so its form stops asking, and the driver is
+    never asked twice for the most sensitive number they have."""
+
+    @staticmethod
+    def _mod():
+        from backend.routes.drivers import payouts
+
+        return payouts
+
+    @pytest.mark.anyio
+    async def test_no_sin_on_file_is_a_no_op(self):
+        mod = self._mod()
+        with patch.object(mod.stripe.Account, "retrieve", MagicMock()) as ret:
+            out = await mod.prefill_sin_to_stripe({"id": "d1"}, "acct_1", "sk_test_x")
+        assert out == "no_sin_on_file"
+        ret.assert_not_called()  # no pointless Stripe round-trip
+
+    @pytest.mark.anyio
+    async def test_prefills_when_stripe_still_needs_it(self):
+        mod = self._mod()
+        with (
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
+            patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
+        ):
+            out = await mod.prefill_sin_to_stripe({"id": "d1", "sin": "vault-uuid"}, "acct_1", "sk_test_x")
+        assert out == "prefilled"
+        assert modify.call_args.kwargs["individual"] == {"id_number": VALID_SIN}
+
+    @pytest.mark.anyio
+    async def test_skips_when_stripe_already_has_one(self):
+        """Stripe collected it in its own flow, or a previous run did this."""
+        mod = self._mod()
+        with (
+            patch.object(
+                mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {"id_number_provided": True}})
+            ),
+            patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
+            patch.object(mod, "_vault_decrypt", AsyncMock()) as dec,
+        ):
+            out = await mod.prefill_sin_to_stripe({"id": "d1", "sin": "vault-uuid"}, "acct_1", "sk_test_x")
+        assert out == "already_provided"
+        modify.assert_not_called()
+        dec.assert_not_awaited()  # not even decrypted when there is nothing to do
+
+    @pytest.mark.anyio
+    async def test_failed_decrypt_never_sends_a_uuid_to_stripe(self):
+        """_vault_decrypt returns its input when it cannot decrypt. Unchecked,
+        that would register a UUID as somebody's SIN with Stripe."""
+        mod = self._mod()
+        with (
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
+            patch.object(mod, "_vault_decrypt", AsyncMock(return_value="vault-uuid")),
+        ):
+            out = await mod.prefill_sin_to_stripe({"id": "d1", "sin": "vault-uuid"}, "acct_1", "sk_test_x")
+        assert out == "decrypt_failed"
+        modify.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_malformed_plaintext_is_not_sent(self):
+        mod = self._mod()
+        with (
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
+            patch.object(mod, "_vault_decrypt", AsyncMock(return_value="12345")),
+        ):
+            out = await mod.prefill_sin_to_stripe({"id": "d1", "sin": "vault-uuid"}, "acct_1", "sk_test_x")
+        assert out == "decrypt_failed"
+        modify.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_stripe_failure_never_blocks_onboarding(self):
+        """A driver trying to set up payouts must not be stopped by a failed
+        pre-fill. The worst case is Stripe asking them — where we were before."""
+        mod = self._mod()
+        with (
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(side_effect=RuntimeError("stripe down"))),
+            patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
+        ):
+            out = await mod.prefill_sin_to_stripe({"id": "d1", "sin": "vault-uuid"}, "acct_1", "sk_test_x")
+        assert out == "failed"  # returned, not raised
+
+    @pytest.mark.anyio
+    async def test_repaired_account_is_prefilled_too(self):
+        """When a stranded account is retired and replaced mid-flow, the fresh
+        account needs the SIN as much as the original did — otherwise the
+        recovery path silently reintroduces the double prompt."""
+        mod = self._mod()
+        seen: list = []
+
+        async def _before(acct):
+            seen.append(acct)
+
+        calls = {"n": 0}
+
+        def _op(acct):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("No such account: acct_old")
+            return "link"
+
+        with (
+            patch.object(mod, "_ensure_stripe_account", AsyncMock(return_value="acct_old")),
+            patch.object(mod, "is_missing_on_key", MagicMock(return_value=True)),
+            patch.object(mod._kyc, "retire_stripe_account", AsyncMock()),
+            patch.object(mod, "_create_stripe_account", AsyncMock(return_value="acct_new")),
+        ):
+            acct, result = await mod.with_account_repair({"id": "d1"}, {"id": "u1"}, "sk_test_x", _op, before=_before)
+        assert (acct, result) == ("acct_new", "link")
+        assert seen == ["acct_old", "acct_new"]
+
+    @pytest.mark.anyio
+    async def test_before_hook_is_optional(self):
+        """Every other caller of with_account_repair passes no hook."""
+        mod = self._mod()
+        with patch.object(mod, "_ensure_stripe_account", AsyncMock(return_value="acct_1")):
+            acct, result = await mod.with_account_repair({"id": "d1"}, {"id": "u1"}, "sk_x", lambda a: "ok")
+        assert (acct, result) == ("acct_1", "ok")

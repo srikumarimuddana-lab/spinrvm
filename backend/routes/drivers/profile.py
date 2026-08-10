@@ -170,6 +170,20 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     # ValueError message describes what is wrong and never echoes the value,
     # so it is safe to return to the client.
     if updates.get("sin"):
+        # Immutable after first entry. A SIN change post-collection is either
+        # a typo (needs a human to verify against the CRA-issued document) or
+        # someone else's number (needs a human, full stop) — both go through
+        # an admin, never a self-serve overwrite. The T4A and Stripe both key
+        # off this value, so a silent swap would corrupt the tax record.
+        if driver and driver.get("sin"):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Your SIN is already on file and cannot be changed from "
+                    "the app. Contact support to request a correction — an "
+                    "admin will verify and update it."
+                ),
+            )
         try:
             from ...utils.sin import sin_last4, validate_sin
         except ImportError:  # pragma: no cover - dual-import pattern

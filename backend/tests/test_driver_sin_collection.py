@@ -518,3 +518,57 @@ class TestSinOnboardingGate:
             with pytest.raises(HTTPException) as exc:
                 fn({"id": "d1"})
             assert not re.search(r"\d{9}", exc.value.detail)
+
+
+class TestSinImmutability:
+    """After first entry the SIN is locked. Self-serve overwrites are how a
+    typo'd (or someone else's) number silently corrupts the T4A record —
+    corrections go through an admin who verifies the CRA-issued document."""
+
+    @pytest.mark.anyio
+    async def test_second_write_is_403(self):
+        from fastapi import HTTPException
+
+        captured: dict = {}
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active", "sin": "vault-token-old"}
+        with pytest.raises(HTTPException) as exc:
+            await TestUpdateProfileRoute._call(TestUpdateProfileRoute._body(sin=VALID_SIN), driver, captured)
+        assert exc.value.status_code == 403
+        assert "update" not in captured  # nothing written
+
+    @pytest.mark.anyio
+    async def test_first_write_still_allowed(self):
+        captured: dict = {}
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active"}
+        await TestUpdateProfileRoute._call(TestUpdateProfileRoute._body(sin=VALID_SIN), driver, captured)
+        assert captured["update"]["sin"] == "vault-token"
+
+    @pytest.mark.anyio
+    async def test_first_write_on_auto_created_row_allowed(self):
+        """No drivers row yet (brand-new driver) — the auto-create branch must
+        accept the first SIN, not trip over the immutability check."""
+        captured: dict = {}
+        await TestUpdateProfileRoute._call(TestUpdateProfileRoute._body(sin=VALID_SIN), None, captured)
+        assert captured["insert"]["sin"] == "vault-token"
+
+    @pytest.mark.anyio
+    async def test_other_fields_still_editable_when_sin_locked(self):
+        """The lock is on the SIN alone — a driver with a SIN on file can
+        still update GST, language, etc."""
+        captured: dict = {}
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active", "sin": "vault-token-old"}
+        await TestUpdateProfileRoute._call(
+            TestUpdateProfileRoute._body(gst_bn="123456789RT0001"), driver, captured
+        )
+        assert captured["update"]["gst_bn"] == "123456789RT0001"
+
+    @pytest.mark.anyio
+    async def test_403_detail_never_contains_digits(self):
+        import re
+
+        from fastapi import HTTPException
+
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active", "sin": "vault-token-old"}
+        with pytest.raises(HTTPException) as exc:
+            await TestUpdateProfileRoute._call(TestUpdateProfileRoute._body(sin=VALID_SIN), driver, {})
+        assert not re.search(r"\d{4}", exc.value.detail)

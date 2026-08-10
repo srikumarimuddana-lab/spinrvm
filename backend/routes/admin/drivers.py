@@ -5,7 +5,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -3019,6 +3019,133 @@ async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admi
         "sin_last4": plain[-4:],
         "audit_log_id": audit_id,
         "warning": "Shown once and not stored by the browser. Every reveal is audit-logged.",
+    }
+
+
+class AdminUpdateSinRequest(BaseModel):
+    sin: str
+    # A change to a filed tax identifier without a recorded reason is
+    # indistinguishable from tampering in an audit. Mandatory, and stored in
+    # the audit row — never the number itself.
+    reason: str = Field(..., min_length=5, max_length=500)
+
+
+@router.post("/drivers/{driver_id}/update-sin")
+async def admin_update_driver_sin(driver_id: str, body: AdminUpdateSinRequest, admin: dict = Depends(get_admin_user)):
+    """Admin-approved SIN correction — the only way to change a SIN once set.
+
+    Drivers enter their SIN exactly once; `PUT /drivers/me` rejects any
+    second write (403). When the number on file is wrong — a typo caught at
+    T4A time, or a support ticket with the CRA document in hand — a
+    super_admin corrects it here. The same validation, encryption, and
+    never-in-a-response rules as the driver path apply, plus:
+
+      1. super_admin only, same posture as reveal-sin.
+      2. A mandatory `reason`, stored in the audit row.
+      3. Audit BEFORE the write — metadata carries old/new last-4 only.
+      4. Best-effort re-push to Stripe (Account.modify) so Stripe's copy
+         doesn't keep the wrong number; the outcome is reported in the
+         response, never silently dropped.
+    """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="update_sin requires super_admin role")
+
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    try:
+        from ...utils.sin import sin_last4, validate_sin
+    except ImportError:  # pragma: no cover - dual-import pattern
+        from utils.sin import sin_last4, validate_sin  # type: ignore
+
+    try:
+        validated = validate_sin(body.sin)
+    except ValueError as exc:
+        # validate_sin messages never echo the digits, so this is safe to
+        # return (and to let FastAPI log).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Audit BEFORE the write, same as reveal: a failed attempt still leaves a
+    # record of the intent. Last-4 only on both sides of the change.
+    audit_id = await log_admin_action(
+        admin,
+        "driver_sin_update",
+        "drivers",
+        driver_id,
+        {
+            "old_sin_last4": driver.get("sin_last4"),
+            "new_sin_last4": sin_last4(validated),
+            "had_sin_on_file": bool(driver.get("sin")),
+            "reason": body.reason,
+        },
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    updates = {
+        "sin": validated,
+        "sin_last4": sin_last4(validated),
+        "sin_collected_at": now,
+        "updated_at": now,
+    }
+    # _encrypt_driver_pii is fail-closed: Vault down -> 503, never plaintext.
+    await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(updates))
+
+    # Push the correction to Stripe so its copy doesn't keep the wrong
+    # number. Unlike the onboarding prefill this must FORCE the write —
+    # id_number_provided is True precisely because the old (wrong) value is
+    # there — so it calls Account.modify directly rather than reusing
+    # prefill_sin_to_stripe. Best-effort: our record is already corrected
+    # (that is what the T4A reads); a Stripe failure is reported to the
+    # operator, not hidden and not fatal.
+    stripe_push = "skipped_no_account"
+    account_id = driver.get("stripe_account_id")
+    if account_id:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings()
+        stripe_secret = settings.get("stripe_secret_key", "")
+        if not stripe_secret:
+            stripe_push = "skipped_stripe_not_configured"
+        else:
+            import asyncio
+
+            import stripe
+
+            try:
+                await asyncio.to_thread(
+                    stripe.Account.modify,
+                    account_id,
+                    individual={"id_number": validated},
+                    api_key=stripe_secret,
+                )
+                stripe_push = "updated"
+            except Exception:
+                # Loud but not fatal; the exc carries Stripe's error, never
+                # the SIN (we never put it in a message).
+                logger.error(
+                    "[SIN-UPDATE] could not push corrected SIN to Stripe",
+                    exc_info=True,
+                    extra={"driver_id": driver_id, "stripe_account_id": account_id, "audit_log_id": audit_id},
+                )
+                stripe_push = "failed"
+
+    return {
+        "success": True,
+        "sin_last4": sin_last4(validated),
+        "stripe_push": stripe_push,
+        "audit_log_id": audit_id,
+        "message": (
+            "SIN updated and re-encrypted."
+            + {
+                "updated": " Stripe's copy was updated too.",
+                "failed": " WARNING: Stripe still holds the old number — retry from the Payouts tab.",
+                "skipped_stripe_not_configured": " Stripe was not updated (no key configured).",
+                "skipped_no_account": " No Stripe account on file, nothing to push.",
+            }[stripe_push]
+        ),
     }
 
 

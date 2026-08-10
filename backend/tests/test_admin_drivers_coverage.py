@@ -1573,3 +1573,130 @@ class TestPayoutsSummary:
         assert body["payment_method"]["stripe_connected"] is True
         assert body["payment_method"]["stripe_account_hint"] == "ABCDEFGHIJ"[-6:]
         assert body["payment_method"]["bank_name"] == "Bank of X"
+
+
+# ---------------------------------------------------------------------------
+# admin_update_driver_sin -- admin-approved SIN correction
+# ---------------------------------------------------------------------------
+
+
+def _mk_valid_sin() -> str:
+    """Brute-force the Luhn check digit so no real SIN appears in the repo."""
+    from utils.sin import validate_sin
+
+    for d in "0123456789":
+        try:
+            return validate_sin("12345678" + d)
+        except ValueError:
+            continue
+    raise AssertionError("unreachable")
+
+
+class TestAdminUpdateSin:
+    """The only path that changes a SIN once set (PUT /drivers/me 403s a
+    second write). Same validation/encryption/never-echo rules as the driver
+    path, plus a mandatory reason and a forced Stripe re-push."""
+
+    def _post(self, test_client, sin=None, reason="Typo confirmed against CRA document", driver_id="drv-1"):
+        return test_client.post(
+            f"/api/admin/drivers/{driver_id}/update-sin",
+            json={"sin": sin or _mk_valid_sin(), "reason": reason},
+        )
+
+    def test_regular_admin_forbidden(self, test_client, regular_admin_override):
+        resp = self._post(test_client)
+        assert resp.status_code == 403
+
+    def test_driver_not_found_404(self, test_client, super_admin_override):
+        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
+            resp = self._post(test_client, driver_id="nope")
+        assert resp.status_code == 404
+
+    def test_invalid_sin_422_and_writes_nothing(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock()) as upd,
+        ):
+            resp = self._post(test_client, sin="123456789")  # fails Luhn
+        assert resp.status_code == 422
+        upd.assert_not_awaited()
+        assert "123456789" not in resp.text  # never echo the digits
+
+    def test_missing_reason_rejected(self, test_client, super_admin_override):
+        resp = test_client.post("/api/admin/drivers/drv-1/update-sin", json={"sin": _mk_valid_sin()})
+        assert resp.status_code == 422
+
+    def test_success_audits_before_write_and_never_echoes(self, test_client, super_admin_override):
+        sin = _mk_valid_sin()
+        driver = {**DRIVER, "sin": "vault-old", "sin_last4": "1111"}
+        calls: list = []
+
+        async def _log(*a, **k):
+            calls.append("audit")
+            return "audit-upd-1"
+
+        async def _upd(*a, **k):
+            calls.append("write")
+
+        async def _enc(d):
+            return {**d, "sin": "vault-new"}
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.update_one", AsyncMock(side_effect=_upd)) as upd,
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(side_effect=_log)) as log,
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=_enc)),
+        ):
+            resp = self._post(test_client, sin=sin)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["success"] is True
+        assert body["sin_last4"] == sin[-4:]
+        assert body["stripe_push"] == "skipped_no_account"
+        assert sin not in resp.text  # full number never in the response
+        # Audit precedes the write, and its metadata carries last-4s + reason
+        # only, never the number.
+        assert calls == ["audit", "write"]
+        metadata = log.await_args.args[4]
+        assert metadata["old_sin_last4"] == "1111"
+        assert metadata["new_sin_last4"] == sin[-4:]
+        assert metadata["reason"]
+        assert sin not in str(metadata)
+        # The encrypted token — not the number — is what reaches the column.
+        written = upd.await_args.args[2]
+        assert written["sin"] == "vault-new"
+        assert written["sin_last4"] == sin[-4:]
+
+    def test_stripe_repush_is_forced_when_account_present(self, test_client, super_admin_override):
+        sin = _mk_valid_sin()
+        driver = {**DRIVER, "sin": "vault-old", "sin_last4": "1111", "stripe_account_id": "acct_9"}
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.update_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="a")),
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: {**d, "sin": "t"})),
+            patch("settings_loader.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
+            patch("stripe.Account.modify") as modify,
+        ):
+            resp = self._post(test_client, sin=sin)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["stripe_push"] == "updated"
+        # Forced write — no id_number_provided pre-check; the whole point is
+        # that Stripe holds the old (wrong) number.
+        assert modify.call_args.kwargs["individual"] == {"id_number": sin}
+
+    def test_stripe_failure_is_reported_not_hidden(self, test_client, super_admin_override):
+        driver = {**DRIVER, "sin": "vault-old", "stripe_account_id": "acct_9"}
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.update_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="a")),
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: {**d, "sin": "t"})),
+            patch("settings_loader.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
+            patch("stripe.Account.modify", side_effect=RuntimeError("stripe down")),
+        ):
+            resp = self._post(test_client)
+        assert resp.status_code == 200  # our record IS corrected
+        body = resp.json()
+        assert body["stripe_push"] == "failed"
+        assert "old number" in body["message"]

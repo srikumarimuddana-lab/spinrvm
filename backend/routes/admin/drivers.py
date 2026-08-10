@@ -3078,7 +3078,21 @@ async def admin_update_driver_sin(driver_id: str, body: AdminUpdateSinRequest, a
         "updated_at": now,
     }
     # _encrypt_driver_pii is fail-closed: Vault down -> 503, never plaintext.
-    await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(updates))
+    result = await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(updates))
+    if result is None:
+        # 0 rows matched: the driver row vanished between the read above and
+        # this write (deleted, or id reassigned). Returning success here would
+        # leave an audit row claiming a correction that never landed — and
+        # push the new SIN to Stripe against a stale account. Fail loudly;
+        # the audit row correctly records the *attempt*.
+        logger.error(
+            "[SIN-UPDATE] driver row gone mid-update; SIN not changed",
+            extra={"driver_id": driver_id, "audit_log_id": audit_id},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Driver record changed or was removed mid-update — the SIN was NOT changed. Reload and retry.",
+        )
 
     # Push the correction to Stripe so its copy doesn't keep the wrong
     # number. Unlike the onboarding prefill this must FORCE the write —

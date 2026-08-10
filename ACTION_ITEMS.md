@@ -4410,6 +4410,50 @@ _Last updated: 2026-08-10 — B19 and B21 CLOSED: `payment_retry.py`'s `requires
   (the `--cov-fail-under` gate inside `pytest`) are unaffected — this is
   purely the external Codecov *reporting* path, not CI's own gate.
 
+### C13. Required `pull_request`-triggered workflows silently never fire on some PRs
+- [ ] **Status:** open — found 2026-08-10 on PR #3494. `CI/CD Pipeline`
+  (`ci.yml`), `Security Gates`, `CI Guard Rails`, and `PR Checks` — all
+  confirmed `active` workflows, all normally triggering on `pull_request`
+  events per their own `on:` blocks — showed **zero runs** against either of
+  two consecutive commits on that PR (the PR-open commit, and a follow-up
+  empty commit pushed specifically to force a `synchronize` event). Verified
+  directly against the Actions API (`list_workflow_runs`), not just the PR's
+  check-runs view, which can lag. Nothing was stuck in `action_required`
+  (rules out a first-time-contributor approval gate), and every workflow's
+  `state` is `active` (rules out a disabled workflow). The only thing that
+  did run was Vercel's own bot-posted status (expected — always fires, not
+  a `pull_request`-triggered GitHub Actions workflow).
+- **Why it matters:** this is the same failure *shape* as the already-tracked
+  C9 (Codex auto-review going silent) and C7 (Claude review off by design) —
+  a third, independent instance of "no automated PR review/gate signal
+  arrives," this time hitting native GitHub Actions rather than a
+  third-party bot. A PR whose required checks never even run cannot show a
+  legitimate green state and risks being merged on manual override with zero
+  automated verification, or blocked indefinitely with no actionable error.
+- **What was tried:** pushing an empty commit to force a `synchronize`
+  `pull_request` event — did not retrigger the workflows either. This rules
+  out "the PR was opened as a draft and workflows correctly skip drafts" as
+  the sole explanation (the PR was later marked ready for review, which is
+  itself a `pull_request` event type `ci-guardrails.yml`/`pr-checks.yml`
+  explicitly listen for, and still nothing fired).
+- **Not resolvable from an engineering session** — no repo-admin access to
+  check the two likely causes: (1) **Settings → Actions → General** — a
+  "require approval for all outside collaborators" or similar restriction
+  that doesn't surface as `action_required` in the API the way a
+  fork-PR approval gate normally would, or an org-level Actions policy; (2)
+  **Settings → Webhooks** — a failed/disabled delivery for the
+  `pull_request` event specifically (other event types, e.g. this repo's
+  own push-triggered workflows, were observed firing normally on the same
+  commits).
+- **Files:** none — this is a GitHub App/repo-configuration issue, not a
+  workflow YAML defect. No `.github/workflows/*.yml` change is implicated;
+  all four workflows' `on:` blocks are correctly configured.
+- **Acceptance:** a repo admin confirms (or rules out) an Actions/webhook
+  restriction via the two settings pages above; once addressed, a fresh PR's
+  `CI/CD Pipeline` run should appear within the workflow's normal start
+  latency (observed elsewhere in this file as low-minutes) of PR
+  open/synchronize/ready-for-review.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
@@ -4579,6 +4623,20 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   same token — the unit tests confirm the key function's own logic, not the
   full rate-limit-storage round trip (that's the same level of verification
   every other key-function in this file has, per existing test coverage).
+- [ ] **AI1b. Daily-cap fail-open on Redis error — revisit as its own decision.**
+  Spun off 2026-08-10 while reconciling a merge conflict: a parallel session
+  independently built a fail-closed-with-a-floor alternative for
+  `orchestrator._over_daily_cap` (process-local counter, generous fixed
+  floor instead of the admin-configured cap, since `get_app_settings()`
+  could itself be degraded) — discarded during reconciliation in favor of
+  AI1's already-merged, deliberate "leave it alone, don't change an accepted
+  trade-off silently" call, not because the alternative was wrong. Logged
+  here rather than dropped: worth an explicit product/eng decision on
+  whether a bounded fail-closed floor should replace the current fail-open
+  policy, same treatment AI1 itself already got. Also flagging the sibling
+  fail-open gap the same investigation found in `mcp_server.py`'s
+  `_over_mcp_daily_cap` (same pattern, separate `/mcp` surface) — not yet
+  tracked anywhere.
 - [x] **AI2. Assistant output is persisted un-scrubbed** — only the user
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with

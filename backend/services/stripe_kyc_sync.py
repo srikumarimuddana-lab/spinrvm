@@ -3,9 +3,12 @@
 Maps a Stripe Express ``account.updated`` payload (or a live
 ``Account.retrieve()`` response) into the cache columns on the
 ``drivers`` row added by migration 92. The SIN itself is never stored —
-we keep only ``id_number_provided`` (boolean) and ``id_number_last4`` so
-the admin slideout can display "On file · ••••1234" without us holding
-the regulated data.
+we keep only ``id_number_provided`` (boolean). The ``id_number_last4``
+column exists but is always NULL: Stripe returns no digits of an ID number
+in any form, so the slideout's "On file · ••••1234" shows only the on-file
+state. Spinr's own SIN — the one T4A is filed from — is a separate,
+Vault-encrypted column (migration 289) and has nothing to do with this
+mirror; see the note above ``get_legal_name_and_address_from_stripe``.
 
 Sources:
   - routes/webhooks.py  — fires apply_account_update on the webhook event
@@ -118,9 +121,17 @@ def _kyc_mirror_fields(account: Dict[str, Any]) -> Dict[str, Any]:
     verification = (individual.get("verification") or {}) if individual else {}
     tos = account.get("tos_acceptance") or {}
 
-    # Stripe reports id_number_provided + id_number_last_4 on the
-    # `individual` object when the SIN has been collected. The actual
-    # number stays on Stripe's side.
+    # `id_number_provided` is real and works. `id_number_last_4` is NOT a
+    # Stripe field — it does not exist anywhere in the API (verified against
+    # the installed SDK: zero occurrences). Stripe exposes only booleans about
+    # the ID number: `id_number_provided` and, for US SSNs,
+    # `ssn_last_4_provided` — the *digits* are never returned in any form.
+    #
+    # So `stripe_id_number_last4` is always NULL and the admin slideout's
+    # "On file · ••••1234" has never rendered digits. Kept reading the absent
+    # key (a harmless None) rather than deleting the column, because the fix
+    # is a product decision — Spinr must collect the last 4 itself or drop the
+    # display — not a rename. See the SIN section of the Stripe runbook.
     id_provided = bool(individual.get("id_number_provided"))
     id_last4_raw = individual.get("id_number_last_4")
     id_last4: Optional[str] = None
@@ -298,55 +309,27 @@ async def refresh_driver_kyc(
     return {"status": "ok", "updates": updates}
 
 
-async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
-    """Return the plaintext SIN once, for a single audit-logged admin reveal.
-
-    Uses Stripe's expand mechanism to retrieve ``individual.id_number``,
-    which Stripe surfaces only to the platform owner and not in normal
-    Account.retrieve responses. **The returned value is NEVER persisted
-    anywhere on our side.** Caller MUST write the audit_log entry around
-    this call so we have an authoritative record of who saw it and when.
-    """
-    account_id = driver.get("stripe_account_id")
-    if not account_id:
-        return None
-
-    settings = await get_app_settings()
-    stripe_secret = settings.get("stripe_secret_key", "")
-    if not stripe_secret:
-        return None
-
-    import stripe
-
-    try:
-        account = stripe.Account.retrieve(
-            account_id,
-            api_key=stripe_secret,
-            expand=["individual.id_number"],
-        )
-    except Exception:
-        # B-P3-leak-cleanup: full traceback to logs (server-side only),
-        # no Stripe error detail in the return.
-        logger.error(
-            "[STRIPE-KYC] reveal-sin: Account.retrieve failed for %s",
-            account_id,
-            exc_info=True,
-        )
-        return None
-
-    sin = (account.get("individual") or {}).get("id_number")
-    if not sin:
-        return None
-    # Defensive: SIN must be 9 digits. Anything else is a Stripe-side
-    # data quality issue we don't want to surface as-is.
-    sin_str = str(sin).strip()
-    if not (len(sin_str) == 9 and sin_str.isdigit()):
-        logger.error(
-            "[STRIPE-KYC] reveal-sin: Stripe returned non-canonical SIN format for %s",
-            account_id,
-        )
-        return None
-    return sin_str
+# ── Why there is no SIN reveal here ──────────────────────────────────────
+# There used to be a `reveal_sin_from_stripe`. It could not work, and no
+# amount of retrying, re-keying or re-onboarding would have made it work:
+#
+#   `individual.id_number` is WRITE-ONLY on Stripe Connect. In the SDK
+#   (generated from Stripe's API spec) it appears in six request-parameter
+#   modules and in ZERO response models. Stripe returns `id_number_provided`
+#   and `ssn_last_4_provided` — booleans, never digits. Asking for it with
+#   `expand=["individual.id_number"]` earns "This property cannot be
+#   expanded", which is Stripe saying no such response property exists.
+#
+# Spinr now collects its own Vault-encrypted copy (migration 289) and the
+# reveal lives in `routes/admin/drivers.py::admin_reveal_driver_sin`, which
+# decrypts our column under a super_admin gate with an audit row.
+#
+# If you are here because you want the SIN: it is not obtainable from Stripe.
+# Do not add an expand back.
+#
+# `stripe_id_number_provided`, mirrored below, remains meaningful for exactly
+# one thing — whether STRIPE has what IT needs to enable payouts. It says
+# nothing about whether Spinr can file a T4A.
 
 
 async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -354,8 +337,8 @@ async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Opti
     for handoff to a third-party tax filer (T4A / Reportable Platform
     Operator reporting) — never the SIN.
 
-    Unlike ``reveal_sin_from_stripe``, this does NOT expand
-    ``individual.id_number`` — ``individual.first_name``/``last_name``/
+    Does NOT expand ``individual.id_number`` (which is impossible anyway,
+    see the note above) — ``individual.first_name``/``last_name``/
     ``address`` are already present on an ordinary ``Account.retrieve()``
     response for the platform owner, no special expand permission needed.
     Deliberately kept as a separate function from the SIN reveal (not a

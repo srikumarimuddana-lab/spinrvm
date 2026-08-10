@@ -87,6 +87,16 @@ export interface DriverLiveStats {
     /** True when a licence number exists on the row (even if it could not be
      * decrypted), so the panel can distinguish "none on file" from "unreadable". */
     license_number_on_file: boolean;
+    /** Last 4 of the driver's SIN. Stored in the clear precisely so T4A
+     * readiness is visible without decrypting anything — unlike the licence,
+     * this needs no round-trip through Vault. */
+    sin_last4: string | null;
+    /** True when Spinr holds an encrypted SIN. This is the T4A gate: without
+     * it a slip cannot be filed, and it is NOT the same as Stripe's
+     * `id_number_provided` above, which reports a number Stripe never returns. */
+    sin_on_file: boolean;
+    /** When the driver supplied it. */
+    sin_collected_at: string | null;
 }
 export const getDriverLiveStats = (id: string) =>
     request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);

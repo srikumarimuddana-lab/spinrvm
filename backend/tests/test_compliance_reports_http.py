@@ -16,6 +16,7 @@ plumbing, not the aggregation logic.
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -484,8 +485,17 @@ def test_t4a_filer_handoff_never_includes_sin(admin_client):
     assert "Jane A. Doe" in body
     assert "123 Main St" in body
     assert "750.00" in body
-    # sin_on_file_at_stripe is a Yes/No flag, never the number itself.
-    assert "sin" not in body.lower().replace("sin_on_file", "").replace("sinstatus", "")
+    # Only readiness metadata may appear: a Yes/No flag and a collection
+    # timestamp. Never the number, and never any part of it — not even the
+    # last 4, which internal admin views do show but this export must not,
+    # because it leaves Spinr for a third-party filer.
+    allowed = {"sin_on_file", "sin_collected_at"}
+    header = body.splitlines()[0] if body.splitlines() else ""
+    sin_columns = {c for c in header.split(",") if "sin" in c.lower()}
+    assert sin_columns <= allowed, f"unexpected SIN column(s): {sin_columns - allowed}"
+    assert "last4" not in body.lower()
+    # And no 9-digit run anywhere in the payload, whatever it is called.
+    assert not re.search(r"(?<!\d)\d{9}(?!\d)", body)
 
 
 def test_t4a_filer_handoff_filters_by_500_threshold(admin_client):

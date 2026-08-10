@@ -90,6 +90,11 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         "legacy_synced_earnings": _money_str(synced_earnings),
         "gst_registered": driver.get("gst_registered", False),
         "gst_bn": driver.get("gst_bn") or "",
+        # Last 4 only. The driver's slip shows it masked so they can confirm we
+        # hold the right number; `drivers.sin` itself is never read here, and
+        # this summary is returned over the API.
+        "sin_last4": driver.get("sin_last4") or "",
+        "sin_on_file": bool(driver.get("sin")),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "pdf_url": f"/api/v1/drivers/t4a/{year}/pdf",
         "driver_name": driver_name,
@@ -121,13 +126,16 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
     # CRA T4A-compatible CSV. GST/BN columns are required for drivers who
     # earn above the T4A reporting threshold and hold a GST/HST account.
     csv_data = (
-        "Year,Total Earnings,Total Trips,Net Earnings,GST Registered,GST/HST Business Number\n"
+        "Year,Total Earnings,Total Trips,Net Earnings,GST Registered,GST/HST Business Number,SIN\n"
         f"{year},"
         f"{summary_data['total_earnings']},"
         f"{summary_data['total_trips']},"
         f"{summary_data['net_earnings']},"
         f"{'Yes' if summary_data['gst_registered'] else 'No'},"
-        f"{summary_data['gst_bn']}"
+        f"{summary_data['gst_bn']},"
+        # Masked, matching the PDF. This file leaves our control the moment the
+        # driver forwards it to an accountant, so it carries the last 4 only.
+        f"{'Ending in ' + summary_data['sin_last4'] if summary_data['sin_last4'] else 'Not on file'}"
     )
     filename = f"earnings_export_{year}.csv"
 

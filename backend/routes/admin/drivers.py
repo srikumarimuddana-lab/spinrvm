@@ -2668,23 +2668,20 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     active_days_30d = len([d for d in recent_dates if d])
 
     # ---- Aggregate from payouts ----
+    # limit=5000 mirrors get_driver_balance (routes/drivers/earnings.py): the
+    # deduction below claims to be lifetime, so it must not be computed over a
+    # 200-row window — a driver with years of instant cash-outs would have
+    # their oldest payouts silently drop out of the math and pending_balance
+    # would overstate what is owed. The display list is still capped by
+    # `limit` at serialization.
     payouts = await db_supabase.get_rows(
         "payouts",
         {"driver_id": driver_id},
         order="created_at",
         desc=True,
-        limit=max(limit, 200),
+        limit=5000,
     )
 
-    # payout_type='stripe_sync' rows are legacy-app payout HISTORY
-    # materialized from Stripe transfer records
-    # (services/stripe_payout_sync_service.py). The earnings they cashed out
-    # were paid in the OLD app and are not in this DB's rides, so counting
-    # them as money-out would wrongly zero pending_balance for every migrated
-    # driver the moment "Refresh Payouts from Stripe" runs. Mirror the
-    # exclusion in routes/drivers/earnings.py (get_driver_balance) so the
-    # admin and driver views of the same money agree. ('legacy_import' rows
-    # still deduct — they pair with imported rides counted above.)
     def _sum_by_status(*statuses: str) -> Decimal:
         return sum(
             (
@@ -2695,8 +2692,36 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             Decimal("0"),
         )
 
-    total_paid_out = _sum_by_status("completed")
+    # Money-out mirrors routes/drivers/earnings.py exactly: deduct EVERY
+    # payout that represents money sent or in-flight — only 'reversed' and
+    # 'failed' (money returned or never left) are excluded, so persistent
+    # intermediate statuses like 'reserved' and 'transfer_completed' (a stuck
+    # instant payout whose Transfer succeeded) still count as money-out
+    # rather than silently inflating pending_balance. An unknown/new status
+    # defaults to deducting: worst case the admin view under-states what is
+    # owed (recoverable), never invites a double payment.
+    #
+    # payout_type='stripe_sync' rows are the one exception: legacy-app payout
+    # HISTORY materialized from Stripe transfer records
+    # (services/stripe_payout_sync_service.py). The earnings they cashed out
+    # were paid in the OLD app and are not in this DB's rides, so counting
+    # them as money-out would wrongly zero pending_balance for every migrated
+    # driver the moment "Refresh Payouts from Stripe" runs. ('legacy_import'
+    # rows still deduct — they pair with imported rides counted above.)
+    _not_money_out = {"reversed", "failed"}
+    money_out = sum(
+        (
+            _dec(p.get("amount"))
+            for p in payouts
+            if str(p.get("status") or "").lower() not in _not_money_out and p.get("payout_type") != "stripe_sync"
+        ),
+        Decimal("0"),
+    )
     pending_in_flight = _sum_by_status("pending", "processing")
+    # Everything sent and not merely queued — completed, transfer_completed,
+    # reserved, and any future status — so the card agrees with what the
+    # driver's own balance has already deducted.
+    total_paid_out = money_out - pending_in_flight
     on_hold = _sum_by_status("failed")
 
     # Legacy money surfaced separately so the operator still sees the full
@@ -2711,9 +2736,9 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     )
 
     # Amount owed to the driver that hasn't been queued for payout yet.
-    # Includes ride earnings + bonuses - paid out - in flight, matching
-    # the driver-facing balance in routes/drivers/earnings.py.
-    pending_balance = max(lifetime_earnings - total_paid_out - pending_in_flight, Decimal("0"))
+    # Includes ride earnings + bonuses - all money out, matching the
+    # driver-facing balance in routes/drivers/earnings.py.
+    pending_balance = max(lifetime_earnings - money_out, Decimal("0"))
 
     last_completed = next((p for p in payouts if p.get("status") == "completed"), None)
     last_failed = next((p for p in payouts if p.get("status") == "failed"), None)

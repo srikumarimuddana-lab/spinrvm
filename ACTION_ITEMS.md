@@ -3657,7 +3657,23 @@ _Last updated: 2026-08-10 — A1c CLOSED: full-suite backend coverage verified a
   |---|---|---|---|
   | `cryptography` | 49.0.0 | PYSEC-2026-3552 | 50.0.0 |
   | `h2` | 4.3.0 | CVE-2026-71554 | 4.4.1 |
-  | `pypdf` | 6.14.2 | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
+  | ~~`pypdf`~~ | ~~6.14.2~~ → **6.15.0 (bumped 2026-08-10)** | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
+
+  **2026-08-10 update — `pypdf` bumped, done:** `pypdf` is now `6.15.0` in
+  `backend/requirements.txt` and `backend/requirements-locked.txt` (new hashes
+  pulled from PyPI for both the wheel and sdist). `cryptography` and `h2` are
+  **still open** — do not close this item's checkbox until those two are also
+  resolved or each has a `[CR]`. Usage of `pypdf` is confined to
+  `backend/services/data_transfer/sgi_form_filler.py` (fills the SGI regulatory
+  AcroForm PDFs); the affected test files
+  (`tests/test_sgi_form_filler.py`, `tests/test_driver_statement_pdf.py`,
+  `tests/test_corporate_statement_pdf.py`) plus the broader PDF suite
+  (`tests/test_corporate_statement_pdf_routes.py`, `tests/test_receipt_pdf.py`,
+  `tests/test_subscription_invoice_pdf_coverage.py`,
+  `tests/test_t4a_pdf_coverage.py` — none of which import `pypdf` directly, run
+  for safety) all pass unmodified against `pypdf==6.15.0`, 71 tests total,
+  0 failures. `h2` and `cryptography` still need their own careful verification
+  per the notes below before this item can close.
 
 - **Why it was not bumped inline:** gate 8 also says not to force a fix that breaks
   something else to turn a check green. Each of these needs its own verification:

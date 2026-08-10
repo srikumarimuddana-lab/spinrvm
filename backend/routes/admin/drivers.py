@@ -2711,6 +2711,12 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         "business_type": driver.get("stripe_business_type"),
         "id_number_provided": bool(driver.get("stripe_id_number_provided")),
         "id_number_last4": driver.get("stripe_id_number_last4"),
+        # OUR Vault-encrypted copy — the one /reveal-sin decrypts and the T4A
+        # reads. Distinct from id_number_provided above, which only says
+        # Stripe holds *a* number it will never return. The dashboard gates
+        # the Reveal button on these, not on Stripe's flag.
+        "sin_on_file": bool(driver.get("sin")),
+        "sin_last4": driver.get("sin_last4"),
         # Canonical column is gst_bn (migration 58). API field name stays
         # gst_hst_number for clarity in the admin UI; the column-level
         # gst_hst_number we briefly added was dropped from migration 92.

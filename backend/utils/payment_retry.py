@@ -67,6 +67,40 @@ logger = logging.getLogger(__name__)
 _INVOICE_CLAIM_STALE_SECONDS = 300
 
 
+async def _resolve_driver_user_ids(driver_ids: set) -> dict:
+    """Batch-resolve drivers.id -> users.id for a set of driver ids (N3,
+    ACTION_ITEMS.md).
+
+    send_push_notification's first argument is a users.id — it does
+    `db.find_one("users", {"id": user_id})` and drops the push (logged, not
+    silent, but never delivered) if that lookup misses. `payouts.driver_id`
+    and `rides.driver_id` are both foreign keys into `drivers.id`, a distinct
+    id space from `users.id`, so passing either straight through has always
+    missed that lookup — every "Payout failed" / "Payment retry in progress"
+    push from this module was silently dropped at the device-delivery layer.
+
+    Batched via a single `$in` query rather than one lookup per row in the
+    caller's loop (CLAUDE.md: no N+1 Supabase reads in a loop). Best-effort:
+    a lookup failure here must not abort the caller's retry/payout-failure
+    processing, so it's caught and logged, leaving the map empty (each
+    caller then skips the push for any driver_id it can't resolve, rather
+    than raising).
+    """
+    if not driver_ids:
+        return {}
+    try:
+        driver_rows = await db.get_rows(
+            "drivers",
+            {"id": {"$in": list(driver_ids)}},
+            columns="id,user_id",
+            limit=len(driver_ids),
+        )
+    except Exception as e:
+        logger.error(f"payment_retry: failed to resolve driver user_ids for push delivery: {e}")
+        return {}
+    return {d["id"]: d["user_id"] for d in (driver_rows or []) if d.get("user_id")}
+
+
 async def _fire_purchase_conversion(ride_id: str) -> None:
     """Meta Purchase/FirstRide for a ride this sweep just settled or reconciled.
 
@@ -226,10 +260,14 @@ async def update_payout_status(payout_id: str, status: str) -> None:
     )
 
 
-async def notify_driver_payout_failed(driver_id: str, payout_id: str) -> None:
+async def notify_driver_payout_failed(user_id: str, payout_id: str) -> None:
+    """user_id must be the driver's users.id (N3, ACTION_ITEMS.md) — NOT
+    drivers.id. send_push_notification looks the recipient up by
+    users.id; the caller is responsible for resolving drivers.id ->
+    users.id first (see _resolve_driver_user_ids)."""
     try:
         await send_push_notification(
-            driver_id,
+            user_id,
             "Payout failed",
             "We couldn't process your payout. Please contact support.",
             data={"type": "payout_failed", "payout_id": payout_id},
@@ -258,6 +296,15 @@ async def retry_stuck_payouts() -> None:
         logger.error(f"Payout retry: failed to fetch payouts: {e}")
         return
 
+    # N3 (ACTION_ITEMS.md): resolve every stuck payout's driver_id to its
+    # users.id up front, batched, before the loop below — see
+    # _resolve_driver_user_ids for why (payouts.driver_id references
+    # drivers.id, not users.id, and send_push_notification requires the
+    # latter).
+    driver_user_ids = await _resolve_driver_user_ids(
+        {payout["driver_id"] for payout in stuck_payouts if payout.get("driver_id")}
+    )
+
     for payout in stuck_payouts:
         payout_id = payout["id"]
         driver_id = payout.get("driver_id", "")
@@ -280,7 +327,13 @@ async def retry_stuck_payouts() -> None:
             )
             if claimed is None:
                 continue
-            await notify_driver_payout_failed(driver_id, payout_id)
+            driver_user_id = driver_user_ids.get(driver_id)
+            if driver_user_id:
+                await notify_driver_payout_failed(driver_user_id, payout_id)
+            else:
+                logger.warning(
+                    f"Payout {payout_id}: could not resolve a users.id for driver {driver_id} — push skipped"
+                )
             logger.error(f"Payout {payout_id} failed after {MAX_RETRIES} attempts")
             logger.error(
                 f"ADMIN ALERT: Payout {payout_id} for driver {driver_id} "
@@ -322,6 +375,12 @@ async def retry_failed_payments():
 
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
+
+    # N3 (ACTION_ITEMS.md): batch-resolve every ride's driver_id to its
+    # users.id up front — see _resolve_driver_user_ids. rides.driver_id is
+    # a drivers.id, not a users.id; send_push_notification requires the
+    # latter.
+    driver_user_ids = await _resolve_driver_user_ids({ride["driver_id"] for ride in rides if ride.get("driver_id")})
 
     for ride in rides:
         ride_id = ride["id"]
@@ -446,11 +505,11 @@ async def retry_failed_payments():
                     },
                 )
                 logger.info(f"Payment retry: ride {ride_id} retry #{attempt} submitted")
-                driver_id = ride.get("driver_id")
-                if driver_id:
+                driver_user_id = driver_user_ids.get(ride.get("driver_id") or "")
+                if driver_user_id:
                     try:
                         await send_push_notification(
-                            driver_id,
+                            driver_user_id,
                             "Payment retry in progress",
                             f"Payment retry {attempt} of {MAX_RETRIES} in progress",
                             {

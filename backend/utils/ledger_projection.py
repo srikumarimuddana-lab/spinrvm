@@ -38,6 +38,7 @@ so finance can re-derive the split later if needed.
 import asyncio
 import random
 import socket
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -45,10 +46,12 @@ from loguru import logger
 try:
     from .. import db_supabase
     from ..services import ledger_service
+    from .datetime_utils import parse_iso_utc
     from .redis_client import redis_set_nx
 except ImportError:  # python -m backend.server vs top-level
     import db_supabase  # type: ignore
     from services import ledger_service  # type: ignore
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
 try:
@@ -93,12 +96,80 @@ _LOCK_TTL_SECONDS = int(LEDGER_PROJECTION_INTERVAL_SECONDS * (1 - _JITTER_FRACTI
 # never select * in a loop (payment_retry idiom). discount_amount is required,
 # not optional: driver_earnings is computed pre-discount while the rider is
 # charged post-discount, so without it every promo ride looks like a fare whose
-# parts exceed the whole. See build_charge_legs.
-_RIDE_COLUMNS = "id,total_fare,grand_total,tax_amount,driver_earnings,tip_amount,discount_amount"
+# parts exceed the whole. See build_charge_legs. payment_status is required by
+# the B20 settlement-confirmed gate below (see _fare_ready_to_decompose).
+_RIDE_COLUMNS = "id,total_fare,grand_total,tax_amount,driver_earnings,tip_amount,discount_amount,payment_status"
 
 # Set after the first "function does not exist" error so a partial deploy
 # (code live, migration 287 not yet applied) logs once, not every 15 minutes.
 _rpc_missing_logged = False
+
+# B20: how long a fare/tip event may wait, past migration 287's 30-minute
+# work-queue gate, for its ride's payment_status to reach 'paid' before
+# decomposition gives up waiting and falls back to degraded.
+#
+# Why the 30-minute RPC gate isn't enough on its own: it covers the normal
+# "header written before update_ride lands" gap in services/payment_service.py
+# (_finalize_card_settlement's legacy two-write path — record_payment_event,
+# THEN update_ride applies the tip delta to rides.driver_earnings /
+# rides.tax_amount and flips payment_status to 'paid'). But if that second
+# write fails outright — the "Charge {} succeeded but ride {} DB update
+# failed" branch in _finalize_card_settlement, which returns 503 and leaves
+# the ride stuck at whatever payment_status it had (typically 'processing')
+# — the ride can sit stuck for far longer than 30 minutes while still being
+# the oldest row in the queue, and driver_earnings/tax_amount stay at their
+# stale pre-tip values.
+#
+# 6h, not 24h, and deliberately shorter than payment_retry.py's own 24h
+# ceiling on the same ride:
+#   - payment_retry.retry_failed_payments only waits 30 min before touching a
+#     'processing' ride, then (for exactly this "Stripe already succeeded"
+#     case) fixes payment_status on that very tick — so the legitimate
+#     recovery path this gate is waiting for normally lands within
+#     ~30-60 minutes, not hours. 6h is a generous multiple of that, not a
+#     tight timeout.
+#   - utils/reconciliation.py's daily leg-completeness check pages on-call
+#     when the projection work-queue HEAD has not advanced in 24h (a stuck
+#     event sitting un-projected pins the head — see that module's
+#     _check_leg_completeness). Keeping this fallback well under 24h means a
+#     genuinely stuck row degrades and clears the head long before that
+#     separate alarm could fire on it, instead of the two racing.
+#   - A ride payment_retry could not fix (MAX_RETRIES exhausted, or the
+#     stale-invoice-sentinel path) already pages an admin well inside 6h, so
+#     nothing here waits past the point where a human has already been
+#     notified. Continuing to wait past that would only let one permanently
+#     -stuck row sit at the head of the oldest-first queue (the exact
+#     starvation the degraded-legs design exists to avoid — see module
+#     docstring). Falling back to degraded at 6h books the correct TOTAL
+#     (still balanced, still auditable) instead of a wrong tip/platform
+#     split, matching every other degraded reason above.
+_SETTLEMENT_FALLBACK_SECONDS = 6 * 60 * 60
+
+
+def _fare_ready_to_decompose(ride: Dict[str, Any], event: Dict[str, Any]) -> tuple:
+    """Return (ready: bool, timed_out: bool) for a process_payment fare event.
+
+    ``ready`` — rides.driver_earnings / rides.tax_amount are trustworthy
+    (payment_status has reached 'paid', so any tip delta has landed).
+
+    ``timed_out`` — only meaningful when ``ready`` is False: the event has
+    been waiting longer than _SETTLEMENT_FALLBACK_SECONDS with no sign the
+    ride will ever settle, so the caller should degrade instead of retrying
+    forever. See _SETTLEMENT_FALLBACK_SECONDS for why 'paid' — not merely
+    'not failed/not cancelled' — is the bar: any other value (including
+    'processing') is exactly the state a stuck post-charge update leaves
+    behind, which is the B20 bug this gates against.
+    """
+    if ride.get("payment_status") == "paid":
+        return True, False
+    created_at = parse_iso_utc(event.get("created_at"))
+    if created_at is None:
+        # Can't age an event with no parseable created_at — never block it
+        # forever on a check we can't evaluate; fall through to the existing
+        # (pre-B20) behavior of decomposing straight from the ride row.
+        return True, False
+    age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+    return False, age_seconds >= _SETTLEMENT_FALLBACK_SECONDS
 
 
 def _pod_id() -> str:
@@ -170,6 +241,25 @@ def _decompose(event: Dict[str, Any], ride: Optional[Dict[str, Any]]) -> tuple:
     # settles that reuse it). Decompose from the ride row.
     if not ride:
         return _degraded_legs(event_type, amount), True, "ride_missing"
+
+    # B20: rides.driver_earnings / rides.tax_amount only reflect the tip
+    # split once payment_status has actually reached 'paid'. Cancellation-fee
+    # and notice-fee events never reach this branch (both return above,
+    # unconditionally, regardless of ride.payment_status) — this gate is
+    # scoped to fare/tip events only, by construction.
+    ready, timed_out = _fare_ready_to_decompose(ride, event)
+    if not ready:
+        if timed_out:
+            return _degraded_legs(event_type, amount), True, "payment_not_settled_timeout"
+        # Not stuck (yet) — just skip this tick and let the RPC hand it back
+        # next time, unbooked. Deliberately NOT a degraded entry: booking now
+        # would risk exactly the tip-misclassification this gate exists to
+        # prevent, and this event keeps its slot in the oldest-first queue
+        # only up to _SETTLEMENT_FALLBACK_SECONDS (see that constant) before
+        # falling through to the degraded branch above instead of blocking
+        # newer events forever.
+        return [], False, "awaiting_payment_settlement"
+
     legs = ledger_service.build_charge_legs(
         total_cents=amount,
         driver_cents=to_cents(ride.get("driver_earnings")),

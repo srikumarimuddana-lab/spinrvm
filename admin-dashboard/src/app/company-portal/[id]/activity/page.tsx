@@ -102,7 +102,7 @@ export default function ActivityPage() {
             </div>
 
             {error && (
-                <p className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>
+                <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>
             )}
 
             <Card>

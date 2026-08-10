@@ -315,6 +315,7 @@ export default function BulkOperationsPage() {
     const [statusBatch, setStatusBatch] = useState<string | null>(null);
     const [status, setStatus] = useState<StripeImportStatus | null>(null);
     const [statusLoading, setStatusLoading] = useState(false);
+    const [discovering, setDiscovering] = useState(false);
 
     const isSuperAdmin = user?.role === "super_admin";
     if (!isSuperAdmin) {
@@ -345,7 +346,6 @@ export default function BulkOperationsPage() {
         resetReport();
     };
 
-    const [discovering, setDiscovering] = useState(false);
     const handleDiscover = async () => {
         setDiscovering(true);
         try {

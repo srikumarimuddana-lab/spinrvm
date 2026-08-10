@@ -128,7 +128,13 @@ async def offer_expiry_reaper_loop() -> None:
     """Background loop: durable backstop for offer-timeout timers lost on restart."""
     logger.info(f"Offer expiry reaper started (interval={REAP_INTERVAL_SECONDS}s)")
     while True:
-        lock_ttl = int(REAP_INTERVAL_SECONDS * 2)
+        # TTL must be SHORTER than the minimum possible sleep below (interval *
+        # 0.9, worst-case jitter), or the pod that ran the last tick wakes to
+        # find its OWN key still alive, fails SET NX, and sleeps another full
+        # interval — halving the documented cadence. `interval * 2` doesn't
+        # (2x > 0.9x). Matches ledger_projection.py's `_LOCK_TTL_SECONDS`
+        # formula (ACTION_ITEMS B21): 0.05 headroom under the 0.9 floor.
+        lock_ttl = int(REAP_INTERVAL_SECONDS * 0.85)
         if not await redis_set_nx("spinr:offer_expiry_reaper:lock", _pod_id(), lock_ttl):
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(REAP_INTERVAL_SECONDS)

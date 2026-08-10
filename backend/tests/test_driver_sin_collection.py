@@ -227,6 +227,34 @@ class TestUpdateProfileRoute:
         assert "123456789" not in str(ei.value.detail)
 
     @pytest.mark.anyio
+    async def test_empty_string_sin_is_422_and_writes_nothing(self):
+        """`{"sin": ""}` survives exclude_none. Under the old truthiness gate
+        (`if updates.get("sin")`) it skipped validation, encryption, and the
+        immutability check, and was written verbatim — a non-NULL, non-token
+        value that permanently fails the `sin IS NULL` compare-and-set,
+        bricking self-serve SIN entry for that driver. Must 422."""
+        from fastapi import HTTPException
+
+        captured: dict = {}
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active"}
+        with pytest.raises(HTTPException) as ei:
+            await self._call(self._body(sin=""), driver, captured)
+        assert ei.value.status_code == 422
+        assert "update" not in captured  # nothing reached the DB
+
+    @pytest.mark.anyio
+    async def test_whitespace_only_sin_is_422_and_writes_nothing(self):
+        """Normalizes to empty — same trap as "" above."""
+        from fastapi import HTTPException
+
+        captured: dict = {}
+        driver = {"id": "drv-1", "user_id": "user-1", "status": "active"}
+        with pytest.raises(HTTPException) as ei:
+            await self._call(self._body(sin="   "), driver, captured)
+        assert ei.value.status_code == 422
+        assert "update" not in captured
+
+    @pytest.mark.anyio
     async def test_supplying_a_sin_does_not_knock_a_verified_driver_offline(self):
         """It is a `safe_field` like gst_bn. If it were treated as a vehicle
         field, entering a SIN would flip an active driver to needs_review and

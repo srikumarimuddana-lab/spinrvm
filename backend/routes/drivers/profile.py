@@ -169,7 +169,13 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     # unreachable — so a bad number must never reach the column. The
     # ValueError message describes what is wrong and never echoes the value,
     # so it is safe to return to the client.
-    if updates.get("sin"):
+    #
+    # Membership test, NOT truthiness: `{"sin": ""}` survives exclude_none,
+    # and a truthiness gate would skip validation and write the empty string
+    # verbatim — a non-NULL, non-token value that permanently fails the
+    # `sin IS NULL` compare-and-set below, locking the driver out of ever
+    # entering their real SIN. Empty goes through validate_sin → 422.
+    if "sin" in updates:
         # Immutable after first entry. A SIN change post-collection is either
         # a typo (needs a human to verify against the CRA-issued document) or
         # someone else's number (needs a human, full stop) — both go through

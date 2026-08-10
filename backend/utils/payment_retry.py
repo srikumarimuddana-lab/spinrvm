@@ -45,7 +45,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
-    from .money import dollars_to_cents
+    from .money import cents_to_dollars, dollars_to_cents
     from .redis_client import redis_set_nx
     from .rider_emails import send_payment_blocked_email
 except ImportError:
@@ -55,7 +55,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
-    from utils.money import dollars_to_cents
+    from utils.money import cents_to_dollars, dollars_to_cents
     from utils.redis_client import redis_set_nx
     from utils.rider_emails import send_payment_blocked_email
 
@@ -502,42 +502,40 @@ async def retry_failed_payments():
                     api_key=stripe_secret,
                     idempotency_key=f"ride-capture-{ride_id}-{capture_cents}",
                 )
-                # Ledger row BEFORE the ride update (same order as the normal
-                # settlement path) so a recovery record exists even if the
-                # paid-write below fails. record_payment_event never raises.
+                # ACTION_ITEMS B19: route through the same shared finalizer
+                # settle_card's two success paths use, instead of the old
+                # bare capture -> record_payment_event -> separate update_ride
+                # sequence. Picks up the atomic settle_ride_card_payment RPC
+                # (when enabled) — exactly one financial_events header even
+                # under the ambiguous-transport-error case — plus the
+                # automatic Sentry escalation on an unverifiable outcome, for
+                # free. tip_d here is the ride's OWN already-stored
+                # tip_amount (not a new tip), so _finalize_card_settlement's
+                # legacy-path _tip_ride_update always computes a zero delta
+                # and never touches driver_earnings — safe even though this
+                # loop's SELECT above omits that column. Do not pass a
+                # different tip value here without adding driver_earnings to
+                # the SELECT.
                 try:
-                    from ..services.payment_service import record_payment_event
+                    from ..services.payment_service import _finalize_card_settlement
                 except ImportError:
-                    from services.payment_service import record_payment_event
-                await record_payment_event(
-                    ride_id,
-                    ride.get("rider_id"),
-                    capture_cents,
-                    payment_intent_id,
+                    from services.payment_service import _finalize_card_settlement  # type: ignore
+                result = await _finalize_card_settlement(
                     ride=ride,
-                    tip_amount=tip_d,
+                    ride_id=ride_id,
+                    rider_id=ride.get("rider_id"),
+                    settled_amount=cents_to_dollars(capture_cents),
+                    payment_intent_id=payment_intent_id,
+                    tip_collected=tip_d,
+                    auth_status="captured",
                 )
-                try:
-                    await db.update_one(
-                        "rides",
-                        {"id": ride_id},
-                        {
-                            "$set": {
-                                "payment_status": "paid",
-                                "auth_status": "captured",
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            }
-                        },
-                    )
-                except Exception as db_err:
-                    # Money HAS moved — leave the row in 'processing' for the
-                    # stuck-processing reconciler; do NOT let the outer except
-                    # reset it to 'failed'.
-                    logger.error(
-                        f"Payment retry: captured hold for ride {ride_id} but paid-write failed — "
-                        f"leaving 'processing' for reconciler: {db_err}",
-                        exc_info=True,
-                    )
+                if not result.success:
+                    # Money HAS moved (the capture above already succeeded) —
+                    # _finalize_card_settlement already logged the specific
+                    # failure and left the ride in whichever state its own
+                    # contract requires (stuck 'processing' for the reconciler,
+                    # or an escalated Sentry page on an ambiguous atomic-RPC
+                    # outcome). Do NOT let the outer except reset it to 'failed'.
                     continue
                 logger.info(
                     f"Payment retry: captured stranded hold for ride {ride_id} "
@@ -666,8 +664,15 @@ async def payment_retry_loop():
         # double-charge is prevented by the atomic DB claim (payment_status →
         # 'retrying') + the Stripe idempotency key (see module docstring). The
         # lock only reduces redundant work; it is never relied on for safety.
-        # TTL is 1.5× interval so a real lock expires before the next election.
-        lock_ttl = int(RETRY_INTERVAL_SECONDS * 1.5)
+        # TTL must be SHORTER than the minimum possible sleep below (interval *
+        # 0.9, the worst-case jitter draw), or the pod that ran the last tick
+        # wakes to find its OWN key still alive, fails SET NX, and sleeps
+        # another full interval — halving the documented cadence. The old
+        # `interval * 1.5` got this backwards (comment claimed it "expires
+        # before the next election" — it does not, 1.5x > 0.9x). Matches
+        # ledger_projection.py's `_LOCK_TTL_SECONDS` formula (ACTION_ITEMS B21):
+        # 0.05 headroom under the 0.9 floor.
+        lock_ttl = int(RETRY_INTERVAL_SECONDS * 0.85)
         if not await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl):
             _record_heartbeat("payment_retry (5min)")
             await asyncio.sleep(RETRY_INTERVAL_SECONDS)

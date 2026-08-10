@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-10 — A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-10 — B19 and B21 CLOSED: `payment_retry.py`'s `requires_capture` branch now routes through `_finalize_card_settlement` (picking up the atomic RPC + Sentry escalation + WS notify the other two settlement paths already had), and all 4 background loops (`payment_retry.py`, `driver_claim_reaper.py`, `offer_expiry_reaper.py`, `orphaned_hold_reconciler.py`) now have correct throttle-lock TTL arithmetic (`interval * 0.85` instead of `1.5x`/`2x`), each with the same two regression tests `ledger_projection.py` already used to catch this class of bug. 165 + 113 tests pass across the affected surfaces. Prior same-day (2026-08-10): A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -3576,7 +3576,28 @@ _Last updated: 2026-08-10 — A1c CLOSED: full-suite backend coverage verified a
   extended to cover Steps H–M.
 
 ### B19. `payment_retry`'s `requires_capture` hold-recovery still uses the non-atomic two-write settlement
-- [ ] **Status:** open — found 2026-08-07 by the money-auditor pass on PR #3464.
+- [x] **Status:** CLOSED (2026-08-10) — found 2026-08-07 by the money-auditor pass on PR #3464.
+  Fixed exactly as the Acceptance line below specifies: the `requires_capture` branch now
+  calls `_finalize_card_settlement` (imported cross-module, same precedent as
+  `utils/stripe_reconcile.py` and `routes/webhooks.py` already importing
+  `_tip_ride_update` from `services/payment_service.py`) instead of its own
+  `record_payment_event` + separate `update_ride`. `tip_d` passed in is the
+  ride's own already-stored `tip_amount` (not a new tip), so
+  `_finalize_card_settlement`'s `_tip_ride_update` always computes a zero
+  delta and never touches `driver_earnings` — safe even though this loop's
+  `SELECT` omits that column (documented inline so a future change to what's
+  passed doesn't silently break it). The two existing `requires_capture`
+  tests were updated to mock at the finalizer's own dependencies
+  (`record_payment_event`, `db_supabase.update_ride`,
+  `manager.send_personal_message`) instead of this module's `db.update_one`
+  for the paid write, plus an exactly-one-header assertion mirroring
+  `test_atomic_settle.py`'s matrix, per the acceptance criterion. 165 tests
+  across the payment/loop surface (`test_payment_retry.py`,
+  `test_payment_retry_coverage.py`, `test_replay_safety_payment_loops.py`,
+  `test_atomic_settle.py`, `test_coverage_payments.py`, plus
+  `test_cancellation_fee_card_charge.py`/`test_guest_auto_settle.py`/
+  `test_payment_exhausted_alert_once.py`/`test_e4_d10_payment_3ds_quests.py`/
+  `test_stripe_charge.py`) pass. See git history for the commit.
 - **What:** `backend/utils/payment_retry.py` (the `requires_capture` branch) still
   does `Stripe capture → record_payment_event → separate update_ride` — the exact
   sequence PR #3464 replaced in `settle_card`'s two success paths with the atomic
@@ -3618,8 +3639,17 @@ _Last updated: 2026-08-10 — A1c CLOSED: full-suite backend coverage verified a
   a projection test covering a stuck-`processing` fare ride.
 
 ### B21. Background-loop lock TTL is longer than the sleep, halving several loops' cadence
-- [ ] **Status:** open — found 2026-08-08 reviewing PR #3464. Fixed in
-  `ledger_projection.py` only; the other loops are untouched.
+- [x] **Status:** CLOSED (2026-08-10) — found 2026-08-08 reviewing PR #3464. All 4 loops
+  listed below now use `TTL = interval * 0.85` (matching `ledger_projection.py`'s
+  existing fix — 0.05 headroom under the `1 - jitter_fraction` floor), with
+  the same two regression tests per loop (`test_lock_ttl_expires_before_the_earliest_next_wake`,
+  `test_..._loop_reacquires_its_own_lock_on_the_next_wake`) added to each
+  loop's own `*_coverage.py` test file, adapted for `orphaned_hold_reconciler.py`'s
+  extra unconditional startup jitter sleep. `payment_retry.py`'s misleading
+  comment corrected. 113 tests across the affected loop/reaper test files
+  pass. See git history for the 3 commits (payment_retry.py first per this
+  item's own "look at first" guidance, then the two reapers together, then
+  orphaned_hold_reconciler.py).
 - **What:** the shared loop-shell idiom sets the Redis throttle lock with
   `TTL = interval * 1.5` and then sleeps `interval` (± jitter). The pod that ran
   the last tick therefore wakes while its OWN key is still alive, fails `SET NX`,

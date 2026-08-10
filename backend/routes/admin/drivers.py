@@ -2945,98 +2945,80 @@ async def admin_refresh_all_driver_kyc(body: RefreshAllKycRequest, admin: dict =
 
 @router.post("/drivers/{driver_id}/reveal-sin")
 async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admin_user)):
-    """One-shot retrieval of the driver SIN from Stripe for tax filing.
+    """One-shot retrieval of a driver's SIN for T4A filing.
 
-    **This cannot currently succeed.** Stripe Connect's `individual.id_number`
-    is write-only — submittable, never readable — so the expand below is
-    always refused and this endpoint always returns 409. Left in place, and
-    failing loudly, because Spinr holds no other copy of the SIN and choosing
-    how to source it for T4A is a compliance decision, not a code fix.
+    **This is the only place in the codebase that decrypts `drivers.sin`.**
+    Everywhere else — the driver's own slip, the driver CSV, the admin driver
+    panel, the filer-handoff export — shows the last 4 and nothing more. Keep
+    it that way: the value of encrypting at rest is proportional to how few
+    paths can undo it.
 
-    The flow it was built for:
-      1. Calls Stripe Account.retrieve with expand=["individual.id_number"]
-         — which Stripe refuses; see services.stripe_kyc_sync.SinNotRevealable
-      2. Writes an audit_log row capturing admin, driver, timestamp,
-         IP/user-agent (caller supplies)
-      3. Returns the plaintext SIN to the caller exactly once
-      4. NEVER stores the SIN in our database
+    It used to ask Stripe, which cannot work — `individual.id_number` is
+    write-only on Connect, so the call was refused every time and no T4A could
+    be filed. Migration 289 gave Spinr its own Vault-encrypted copy and this
+    now reads that.
 
-    Restricted to super_admin to keep the reveal surface narrow — every
-    other admin role sees only the last 4 from the cache columns.
-    Each successful reveal generates an audit_log row that ops + the
-    privacy officer can review.
+    The guarantees, in order:
+      1. super_admin only — every other role sees `sin_last4`.
+      2. An audit_log row is written BEFORE the decrypt, so an attempt that
+         fails still leaves a record of the intent.
+      3. The plaintext is returned exactly once, in this response.
+      4. It is never written back to our database, logged, or cached.
     """
-    # Hard-gated to super_admin only. Regular admins (role="admin") see
-    # only the last-4 from the cache columns — that's enough to confirm
-    # SIN is on file at Stripe but doesn't expose the regulated value.
-    # Every successful reveal already writes an audit_log row, but the
-    # additional role check is defence-in-depth: even if an admin token
-    # is somehow leaked, the reveal path stays closed.
+    # Hard-gated to super_admin. Defence in depth alongside the audit row: even
+    # with a leaked admin token, the reveal path stays closed.
     if (admin.get("role") or "").lower() != "super_admin":
         raise HTTPException(status_code=403, detail="reveal_sin requires super_admin role")
 
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
-    if not driver.get("stripe_account_id"):
-        raise HTTPException(status_code=400, detail="Driver has no Stripe Connect account")
-    if not driver.get("stripe_id_number_provided"):
-        raise HTTPException(status_code=400, detail="No SIN on file at Stripe yet")
-
-    try:
-        from ..services.stripe_kyc_sync import SinNotRevealable, reveal_sin_from_stripe
-    except ImportError:
-        # Both names, or the `except SinNotRevealable` below raises NameError on
-        # the very path it exists to handle. This is the branch that runs in
-        # production — `..services` does not resolve from routes.admin.
-        from services.stripe_kyc_sync import (  # type: ignore
-            SinNotRevealable,
-            reveal_sin_from_stripe,
+    # Gated on OUR record, not `stripe_id_number_provided`. That flag means
+    # Stripe holds a number Stripe will never return, so treating it as
+    # "revealable" is what made this endpoint look functional when it wasn't.
+    if not driver.get("sin"):
+        raise HTTPException(
+            status_code=400,
+            detail="No SIN on file. The driver supplies it in the app under Payouts; it cannot be recovered from Stripe.",
         )
 
-    # Audit log BEFORE the reveal, so a Stripe failure still leaves a
-    # trail of the intent. metadata never carries the SIN itself.
+    # Audit BEFORE the decrypt, so a failure still leaves a trail of the
+    # intent. Metadata carries the last 4 only — never the number.
     audit_id = await log_admin_action(
         admin,
         "driver_sin_reveal",
         "drivers",
         driver_id,
         {
-            "stripe_account_id_last6": driver["stripe_account_id"][-6:],
-            "sin_last4": driver.get("stripe_id_number_last4"),
+            "sin_last4": driver.get("sin_last4"),
+            "sin_collected_at": driver.get("sin_collected_at"),
         },
     )
 
-    try:
-        sin = await reveal_sin_from_stripe(driver)
-    except SinNotRevealable as exc:
-        # 409, not 502. Stripe Connect's `individual.id_number` is write-only:
-        # it exists only as a request parameter and is never a response field,
-        # so no account type, key permission or API version makes this work.
-        # The old 502 "Try again" put admins in a loop on an impossible call.
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Stripe never returns a driver's SIN — on Connect the ID number is "
-                "write-only, so it can be submitted but not read back. This is permanent "
-                "and affects every driver; retrying will not help. Spinr holds no other "
-                "copy, so the SIN must be collected from the driver directly for T4A."
-            ),
-        ) from exc
-    if not sin:
+    token = str(driver["sin"])
+    plain = await _vault_decrypt(token, "sin_admin_reveal")
+    # _vault_decrypt returns the token unchanged when it cannot decrypt — it
+    # degrades rather than raising, so an undetected failure would hand the
+    # caller a UUID and call it a SIN.
+    if not plain or plain == token:
         raise HTTPException(
             status_code=502,
-            detail="Could not retrieve SIN from Stripe. Try again or check Stripe Dashboard.",
+            detail="Could not decrypt the stored SIN. The Vault key or RPC is unavailable — do not re-key; escalate.",
         )
+    plain = plain.strip()
+    if not (len(plain) == 9 and plain.isdigit()):
+        # Never echo the value, even here: this lands in logs and Sentry.
+        logger.error(
+            "[SIN-REVEAL] decrypted value is not a canonical 9-digit SIN",
+            extra={"driver_id": driver_id, "audit_log_id": audit_id},
+        )
+        raise HTTPException(status_code=502, detail="Stored SIN is malformed; escalate rather than re-collecting.")
 
-    # Surface ONLY in the immediate response. Frontend is responsible for
-    # showing it for a short window and never sending it back to any other
-    # service.
     return {
-        "sin": sin,
-        "sin_last4": sin[-4:],
+        "sin": plain,
+        "sin_last4": plain[-4:],
         "audit_log_id": audit_id,
-        "warning": "This value is not stored. Audit log records every reveal.",
+        "warning": "Shown once and not stored by the browser. Every reveal is audit-logged.",
     }
 
 

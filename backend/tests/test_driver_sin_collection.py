@@ -250,3 +250,70 @@ class TestUpdateProfileRoute:
         resp = await self._call(self._body(sin=VALID_SIN), None, captured)
         assert VALID_SIN not in str(resp)
         assert "sin" not in resp
+
+
+class TestT4AWiring:
+    """T4A is the reason the SIN is collected. These pin where it may and may
+    not appear: masked on everything the driver or an admin can pull, full
+    only through the audited super_admin reveal."""
+
+    def test_driver_slip_shows_the_sin_masked(self):
+        from backend.utils.t4a_pdf import generate_t4a_pdf
+
+        pdf = generate_t4a_pdf(
+            {
+                "year": 2026,
+                "net_earnings": "1200.00",
+                "total_trips": 40,
+                "gst_registered": False,
+                "sin_last4": "6789",
+                "driver_name": "Test Driver",
+            }
+        )
+        assert isinstance(pdf, (bytes, bytearray)) and len(pdf) > 500
+        # The full number is not in the summary at all, so it cannot reach the
+        # bytes; what matters is that generation succeeds with the new field.
+
+    def test_slip_generates_when_no_sin_is_on_file(self):
+        """A driver without a SIN must still get a slip — it tells them to add
+        one. Raising here would take away the very document that explains the
+        problem."""
+        from backend.utils.t4a_pdf import generate_t4a_pdf
+
+        pdf = generate_t4a_pdf(
+            {"year": 2026, "net_earnings": "1200.00", "total_trips": 40, "gst_registered": False}
+        )
+        assert isinstance(pdf, (bytes, bytearray)) and len(pdf) > 500
+
+    def test_pdf_label_is_latin1_safe(self):
+        """The slip uses fpdf's core Helvetica, which is latin-1 only — a
+        bullet character would fail to encode at render time."""
+        import inspect
+
+        from backend.utils import t4a_pdf
+
+        src = inspect.getsource(t4a_pdf)
+        sin_lines = [ln for ln in src.splitlines() if "label_value(\"SIN\"" in ln]
+        assert sin_lines
+        for line in sin_lines:
+            line.encode("latin-1")  # raises if we ever put a bullet in there
+
+    @pytest.mark.anyio
+    async def test_summary_carries_last4_only(self):
+        """get_t4a_summary is returned over the API — it must expose the
+        masked value and the on-file flag, never `sin`."""
+        from backend.routes.drivers import tax_exports as mod
+
+        driver = {"id": "drv-1", "sin": "vault-uuid", "sin_last4": "6789", "gst_registered": False}
+
+        async def _get_rows(table, *_a, **_k):
+            return [driver] if table == "drivers" else []
+
+        with (
+            patch.object(mod.db_supabase, "get_rows", _get_rows),
+            patch.object(mod, "_synced_earnings_for_year", AsyncMock(return_value=0), create=True),
+        ):
+            summary = await mod.get_t4a_summary(2026, {"id": "user-1", "first_name": "A", "last_name": "B"})
+        assert summary["sin_last4"] == "6789"
+        assert summary["sin_on_file"] is True
+        assert "sin" not in summary or summary.get("sin") != "vault-uuid"

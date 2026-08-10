@@ -201,3 +201,158 @@ SIN work is reverted — they stand on their own.
 - **Existing drivers are not prompted.** The field is optional and nothing
   chases the ~111 imported drivers for it; a reminder campaign ahead of the
   deadline is not built.
+
+---
+
+## Addendum 1 — wire T4A to the collected SIN
+
+### Issue/gap identified
+
+The previous change collected and encrypted the SIN but nothing read it, so
+T4A was no better off. The filer-handoff export still reported
+`sin_on_file_at_stripe` and instructed the operator to *"retrieve per-driver
+via the audited reveal-sin admin endpoint"* — an endpoint that could not work.
+A "Yes" in that column read as "ready to file" when nothing was.
+
+### Fix/remediation
+
+The SIN now appears in exactly the places filing needs it, at the least
+disclosure each can do its job with.
+
+| Surface | What it shows | Decrypt? |
+|---|---|---|
+| Driver's T4A PDF | `SIN — Ending in 1234`, or `Not on file - add it in the app before filing` | No |
+| Driver's earnings CSV | `Ending in 1234` / `Not on file` | No |
+| `get_t4a_summary` API | `sin_last4`, `sin_on_file` | No |
+| Admin driver panel | `•••• 1234`, or `Missing — cannot file T4A` | No |
+| Admin filer handoff | `sin_on_file` (`Yes` / `NO - CANNOT FILE`), `sin_collected_at` — **no digits at all** | No |
+| `POST /admin/drivers/{id}/reveal-sin` | the full number, once | **Yes — the only one** |
+
+`reveal-sin` was repointed from Stripe to `drivers.sin`. It keeps its existing
+super_admin gate and its audit-before-attempt ordering, and gains two failure
+modes it needs now that it decrypts: `_vault_decrypt` returns its input
+unchanged when it cannot decrypt, so an unnoticed failure would have handed the
+caller a UUID labelled `sin` — that is now a 502, as is a decrypted value that
+is not 9 digits. Neither echoes the value.
+
+Its precondition changed from `stripe_id_number_provided` to `drivers.sin`.
+The old gate asked whether *Stripe* held a number, which is unrelated to
+whether *we* can file.
+
+`reveal_sin_from_stripe`, `SinNotRevealable` and `_expansion_refused` are
+deleted — they described an operation Stripe does not offer. A block comment in
+`stripe_kyc_sync.py` records why, so nobody adds the expand back.
+
+**This is the decrypt decision that was deferred**, made narrow: one call site,
+super_admin only, audited, never cached or re-stored.
+
+### Risk & impact on existing functionality
+
+| Changed | Other consumers | Effect |
+|---|---|---|
+| `generate_t4a_pdf` | `tax_exports.py` ×2 (driver download, emailed slip) | New key is optional; absent → "Not on file" line. Slip still generates — a driver without a SIN must still receive the document that tells them to add one. |
+| `get_t4a_summary` | PDF, CSV, email | Two additive keys. |
+| T4A filer handoff | admin compliance export only | Column renamed and re-sourced. **Anyone with a saved 2025 export has a `sin_on_file_at_stripe` column that meant nothing.** |
+| `reveal-sin` | admin dashboard only | Was returning 409 for everything, so no working behaviour is lost. |
+| `stripe_id_number_provided` | KYC mirror, driver app | Untouched, still correct for *Stripe's* payout gating. |
+
+T4A **amounts** are not touched. Income still comes from completed rides plus
+`payouts.payout_type='stripe_sync'`; the double-count guard in migration 288's
+header is unaffected.
+
+### User experience effect
+
+- **Driver:** their T4A PDF and earnings CSV gain a SIN line — masked if on
+  file, an instruction to add one if not. Visible to anyone who downloads a
+  slip.
+- **Admin:** the filer handoff marks unfileable drivers `NO - CANNOT FILE`
+  instead of a misleading `Yes`. `reveal-sin` returns a SIN instead of a 409.
+- **Rider/corporate:** none.
+
+### Files modified
+
+| file path | what changed | why |
+|---|---|---|
+| `backend/utils/t4a_pdf.py` | Optional `sin_last4` → masked RECIPIENT line | The driver's own copy |
+| `backend/routes/drivers/tax_exports.py` | `sin_last4` / `sin_on_file` in the summary; masked SIN column in the CSV | Feeds the PDF and the export |
+| `backend/routes/admin/compliance.py` | Filer handoff re-sourced to our columns; subtitle corrected | It was pointing at a broken endpoint |
+| `backend/routes/admin/drivers.py` | `reveal-sin` decrypts `drivers.sin`; new 400/502 paths | The one decrypt chokepoint |
+| `backend/services/stripe_kyc_sync.py` | Stripe SIN reveal deleted; block comment kept | It could never work |
+| `admin-dashboard/src/lib/api/drivers.ts` | `sin_last4` / `sin_on_file` / `sin_collected_at` on `DriverLiveStats` | Type the new fields |
+| `admin-dashboard/src/app/dashboard/drivers/page.tsx` | Masked `SIN (T4A)` row beside the licence row | Show who cannot be filed for |
+| `backend/tests/*` | `TestT4AWiring`, `TestRevealSin` rewritten, stale class removed, compliance guard hardened | Below |
+
+### Before/after
+
+```python
+# before — reported Stripe's flag, which says nothing about our ability to file
+"sin_on_file_at_stripe": "Yes" if d.get("stripe_id_number_provided") else "No",
+
+# after
+"sin_on_file": "Yes" if d.get("sin") else "NO - CANNOT FILE",
+"sin_collected_at": d.get("sin_collected_at") or "",
+```
+
+**An existing guard test caught an overreach mid-change.** The first cut of this
+also put `sin_last4` in the filer handoff, and
+`test_t4a_filer_handoff_never_includes_sin` failed — its stated intent is that
+*"not any field even named `sin`"* may appear in an export that leaves Spinr for
+a third-party filer. It was right: last 4 answers no question that export asks.
+It was dropped, and the test's assertion was rewritten from a brittle substring
+check into the property it was actually defending — an allowlist of readiness
+columns, no `last4` anywhere, and **no 9-digit run in the payload whatever it is
+called**. Internal admin views still show last 4; this one does not.
+
+### Rollback plan
+
+Code-only; no migration, no data written, no Stripe object mutated. `git revert`
+restores the previous behaviour, which was: slips without a SIN line, a filer
+handoff with a misleading column, and a `reveal-sin` that always 409'd. Nothing
+downstream depends on the new fields, and no collected SIN is altered or lost.
+
+### Verification performed
+
+- `pytest -k "driver or admin or t4a or tax or compliance or kyc or stripe"` —
+  **3664 passed, 1 skipped**.
+- `test_driver_sin_collection.py` — 33 passed, including: the slip renders with
+  a SIN and **also renders without one**; the PDF's SIN label is asserted
+  **latin-1 encodable**, because fpdf's core Helvetica cannot encode a bullet
+  and would fail at render time; `get_t4a_summary` exposes `sin_last4` /
+  `sin_on_file` and not the token.
+- `TestRevealSin` rewritten: super_admin gate; 400 when no SIN with a message
+  saying where it comes from; success decrypts and audits **first**, with the
+  number absent from the audit metadata; a failed decrypt is 502 and the token
+  does not appear in the response; a malformed plaintext is 502 and is not
+  echoed; the attempt is audited even when the decrypt fails.
+- `ruff check` + `ruff format --check` clean.
+- **Admin dashboard: real production build run** — `npm run build` (Next.js)
+  completed and emitted the full route table. The existing
+  `RevealSinResponse` type already matched the endpoint's shape, so the reveal
+  UI needed no change; it simply stops erroring.
+
+### What was NOT verified
+
+- **Migration 289 still not applied**, so none of this has run against a real
+  row.
+- **No real Vault decrypt.** `_vault_decrypt` is mocked throughout; the RPC is
+  unchanged and already used for `license_number`, but no encrypt→decrypt
+  round-trip of a SIN has been performed.
+- **The generated PDF was not opened.** Tests assert it renders and is
+  non-trivially sized; nobody looked at the page. There is no snapshot tooling
+  for PDF output in this repo.
+- **No admin-dashboard change.** The reveal-sin UI still calls the same
+  endpoint and will now succeed instead of erroring, but the dashboard was not
+  rebuilt or exercised, and how it displays a returned SIN was not reviewed.
+- **CRA acceptance is unverified.** The slip is Spinr's own layout, not a
+  CRA-certified form, and no filing has been attempted. Whether the masked SIN
+  is acceptable on a recipient copy is a question for your accountant.
+- **Nothing chases drivers without a SIN.** The filer handoff now flags them,
+  but no reminder or campaign exists.
+- **Adjacent, pre-existing, and not addressed here:** `backend/ai/pii.py`
+  deliberately does not scrub a *bare* 9-digit run — only the grouped 3-3-3
+  spelling — because digit-count alone collides with this codebase's own ids and
+  timestamps (documented at `pii.py:105`). The new SIN form uses a number pad,
+  so drivers now type SINs ungrouped. This is not a regression (a driver could
+  always have typed one into the AI chat) and `prompts.py` never asks for one,
+  but SIN collection being a first-class flow makes the gap more reachable than
+  it was. Worth revisiting separately — not silently, and not in this change.

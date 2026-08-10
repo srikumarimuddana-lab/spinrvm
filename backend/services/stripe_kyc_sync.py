@@ -6,7 +6,9 @@ Maps a Stripe Express ``account.updated`` payload (or a live
 we keep only ``id_number_provided`` (boolean). The ``id_number_last4``
 column exists but is always NULL: Stripe returns no digits of an ID number
 in any form, so the slideout's "On file · ••••1234" shows only the on-file
-state. See :class:`SinNotRevealable`.
+state. Spinr's own SIN — the one T4A is filed from — is a separate,
+Vault-encrypted column (migration 289) and has nothing to do with this
+mirror; see the note above ``get_legal_name_and_address_from_stripe``.
 
 Sources:
   - routes/webhooks.py  — fires apply_account_update on the webhook event
@@ -307,103 +309,27 @@ async def refresh_driver_kyc(
     return {"status": "ok", "updates": updates}
 
 
-class SinNotRevealable(Exception):
-    """Stripe will not return ``individual.id_number``. Ever, for any account.
-
-    ``id_number`` is **write-only** on Stripe Connect. Verified against the
-    installed SDK (generated from Stripe's own API spec): it appears solely as
-    a request parameter — ``params/_account_create_params.py``,
-    ``_account_update_params.py``, ``_account_{create,modify}_person_params``
-    and the two ``_account_person_*_params`` — and **never** as a response
-    attribute on ``Account`` or ``Person``. What the response does carry is
-    ``id_number_provided: bool`` and, for US SSNs, ``ssn_last_4_provided:
-    bool`` — booleans, not digits. Stripe returns no part of the number.
-
-    "This property cannot be expanded" is therefore Stripe stating there is no
-    such response property, not withholding one. It is not affected by the
-    account's Connect type, the key's permissions, or the API version, so the
-    error deliberately carries no diagnostic fields — there is nothing to
-    diagnose and offering a knob implies a fix that does not exist.
-    """
-
-    def __init__(self) -> None:
-        super().__init__("Stripe Connect never returns individual.id_number; the field is write-only")
-
-
-def _expansion_refused(exc: BaseException) -> bool:
-    """True for Stripe's "This property cannot be expanded (…)" response.
-
-    Matched on the message rather than a code because Stripe sends this as a
-    generic ``InvalidRequestError`` with no distinguishing ``code``. Narrowed
-    by the exception type so an unrelated invalid request cannot be mistaken
-    for a permanent refusal and hide a real, retryable fault.
-    """
-    import stripe
-
-    if not isinstance(exc, stripe.error.InvalidRequestError):
-        return False
-    return "cannot be expanded" in f"{getattr(exc, 'user_message', None) or ''} {exc}".lower()
-
-
-async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
-    """Return the plaintext SIN once, for a single audit-logged admin reveal.
-
-    **This cannot currently succeed.** It asks Stripe to expand
-    ``individual.id_number``, which is write-only on Connect — see
-    :class:`SinNotRevealable`. The function is kept, rather than deleted,
-    because removing the endpoint is a T4A/compliance decision (Spinr holds no
-    other copy of the SIN) and because it fails loudly and correctly: Stripe's
-    refusal raises :class:`SinNotRevealable`, which the route reports as a
-    permanent 409.
-
-    Every *other* failure still returns ``None`` and is reported as a
-    retryable 502, so a genuine Stripe outage is never mistaken for the
-    permanent refusal. If the returned value is ever non-empty it is **NEVER
-    persisted anywhere on our side**, and the caller MUST write the audit_log
-    entry around this call.
-    """
-    account_id = driver.get("stripe_account_id")
-    if not account_id:
-        return None
-
-    settings = await get_app_settings()
-    stripe_secret = settings.get("stripe_secret_key", "")
-    if not stripe_secret:
-        return None
-
-    import stripe
-
-    try:
-        account = stripe.Account.retrieve(
-            account_id,
-            api_key=stripe_secret,
-            expand=["individual.id_number"],
-        )
-    except Exception as exc:
-        # B-P3-leak-cleanup: full traceback to logs (server-side only),
-        # no Stripe error detail in the return.
-        logger.error(
-            "[STRIPE-KYC] reveal-sin: Account.retrieve failed for %s",
-            account_id,
-            exc_info=True,
-        )
-        if _expansion_refused(exc):
-            raise SinNotRevealable from exc
-        return None
-
-    sin = (account.get("individual") or {}).get("id_number")
-    if not sin:
-        return None
-    # Defensive: SIN must be 9 digits. Anything else is a Stripe-side
-    # data quality issue we don't want to surface as-is.
-    sin_str = str(sin).strip()
-    if not (len(sin_str) == 9 and sin_str.isdigit()):
-        logger.error(
-            "[STRIPE-KYC] reveal-sin: Stripe returned non-canonical SIN format for %s",
-            account_id,
-        )
-        return None
-    return sin_str
+# ── Why there is no SIN reveal here ──────────────────────────────────────
+# There used to be a `reveal_sin_from_stripe`. It could not work, and no
+# amount of retrying, re-keying or re-onboarding would have made it work:
+#
+#   `individual.id_number` is WRITE-ONLY on Stripe Connect. In the SDK
+#   (generated from Stripe's API spec) it appears in six request-parameter
+#   modules and in ZERO response models. Stripe returns `id_number_provided`
+#   and `ssn_last_4_provided` — booleans, never digits. Asking for it with
+#   `expand=["individual.id_number"]` earns "This property cannot be
+#   expanded", which is Stripe saying no such response property exists.
+#
+# Spinr now collects its own Vault-encrypted copy (migration 289) and the
+# reveal lives in `routes/admin/drivers.py::admin_reveal_driver_sin`, which
+# decrypts our column under a super_admin gate with an audit row.
+#
+# If you are here because you want the SIN: it is not obtainable from Stripe.
+# Do not add an expand back.
+#
+# `stripe_id_number_provided`, mirrored below, remains meaningful for exactly
+# one thing — whether STRIPE has what IT needs to enable payouts. It says
+# nothing about whether Spinr can file a T4A.
 
 
 async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -411,8 +337,8 @@ async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Opti
     for handoff to a third-party tax filer (T4A / Reportable Platform
     Operator reporting) — never the SIN.
 
-    Unlike ``reveal_sin_from_stripe``, this does NOT expand
-    ``individual.id_number`` — ``individual.first_name``/``last_name``/
+    Does NOT expand ``individual.id_number`` (which is impossible anyway,
+    see the note above) — ``individual.first_name``/``last_name``/
     ``address`` are already present on an ordinary ``Account.retrieve()``
     response for the platform owner, no special expand permission needed.
     Deliberately kept as a separate function from the SIN reveal (not a

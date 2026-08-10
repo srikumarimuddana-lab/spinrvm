@@ -199,58 +199,10 @@ class TestRefreshDriverKyc:
         assert result["updates"]["stripe_details_submitted"] is False
 
 
-# ── reveal_sin_from_stripe ───────────────────────────────────────────────
-
-
-class TestRevealSinFromStripe:
-    @pytest.mark.anyio
-    async def test_no_stripe_account_returns_none(self):
-        from backend.services.stripe_kyc_sync import reveal_sin_from_stripe
-
-        assert await reveal_sin_from_stripe({"id": "driver-1"}) is None
-
-    @pytest.mark.anyio
-    async def test_not_configured_returns_none(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={}))
-        assert await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"}) is None
-
-    @pytest.mark.anyio
-    async def test_retrieve_error_returns_none(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
-        with patch("stripe.Account.retrieve", side_effect=RuntimeError("boom")):
-            result = await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert result is None
-
-    @pytest.mark.anyio
-    async def test_missing_id_number_returns_none(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
-        with patch("stripe.Account.retrieve", return_value={"individual": {}}):
-            result = await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert result is None
-
-    @pytest.mark.anyio
-    async def test_non_canonical_sin_format_returns_none(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
-        with patch("stripe.Account.retrieve", return_value={"individual": {"id_number": "not-9-digits"}}):
-            result = await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert result is None
-
-    @pytest.mark.anyio
-    async def test_valid_sin_is_returned(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
-        with patch("stripe.Account.retrieve", return_value={"individual": {"id_number": "123456789"}}):
-            result = await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert result == "123456789"
+# ── reveal_sin_from_stripe: REMOVED ─────────────────────────────────────
+# The function is gone. `individual.id_number` is write-only on Connect, so
+# it could never return a SIN. The reveal now decrypts Spinr's own column
+# and is covered by TestRevealSin in test_admin_drivers_coverage.py.
 
 
 # ── get_legal_name_and_address_from_stripe ──────────────────────────────
@@ -335,77 +287,3 @@ class TestGetLegalNameAndAddress:
         assert result is not None
         assert result["legal_name"] is None
         assert result["address_line1"] == "123 Main St"
-
-
-# ── SIN reveal: permanent refusal vs transient failure ───────────────────
-
-
-class TestSinRevealRefusal:
-    """Stripe answers a refused expansion with a generic InvalidRequestError.
-    Collapsing it into the same None as a network blip told admins to "try
-    again" on a call that can never succeed — a retry loop, in production, on
-    the one endpoint that touches a SIN."""
-
-    @staticmethod
-    def _refusal():
-        import stripe
-
-        return stripe.error.InvalidRequestError(
-            "This property cannot be expanded (individual.id_number).", param="expand"
-        )
-
-    @staticmethod
-    def _patches(monkeypatch, retrieve):
-        import stripe
-
-        from backend.services import stripe_kyc_sync as mod
-
-        monkeypatch.setattr(mod, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}))
-        monkeypatch.setattr(stripe.Account, "retrieve", retrieve)
-        return mod
-
-    @pytest.mark.anyio
-    async def test_refusal_raises_the_typed_error(self, monkeypatch):
-        calls = []
-
-        def _retrieve(_id, api_key=None, expand=None):
-            calls.append(expand)
-            raise TestSinRevealRefusal._refusal()
-
-        mod = self._patches(monkeypatch, _retrieve)
-        with pytest.raises(mod.SinNotRevealable):
-            await mod.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        # One call only. The refusal reason is universal (id_number is
-        # write-only on Connect), so there is nothing to go back and diagnose.
-        assert calls == [["individual.id_number"]]
-
-    @pytest.mark.anyio
-    async def test_transient_failure_still_returns_none_not_the_typed_error(self, monkeypatch):
-        """A retryable fault must NOT be reported as permanent, or a real
-        outage looks like a policy refusal and nobody retries."""
-        import stripe
-
-        def _retrieve(_id, api_key=None, expand=None):
-            raise stripe.error.APIConnectionError("network")
-
-        mod = self._patches(monkeypatch, _retrieve)
-        assert await mod.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"}) is None
-
-    @pytest.mark.anyio
-    async def test_unrelated_invalid_request_is_not_treated_as_permanent(self, monkeypatch):
-        """Only "cannot be expanded" is a refusal. Any other InvalidRequestError
-        is a real fault that must stay retryable."""
-        import stripe
-
-        def _retrieve(_id, api_key=None, expand=None):
-            raise stripe.error.InvalidRequestError("No such account: acct_1", param="account")
-
-        mod = self._patches(monkeypatch, _retrieve)
-        assert await mod.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"}) is None
-
-    def test_detector_requires_the_stripe_error_type(self):
-        from backend.services.stripe_kyc_sync import _expansion_refused
-
-        assert _expansion_refused(self._refusal()) is True
-        # Same words, wrong type — a bare exception is not Stripe's verdict.
-        assert _expansion_refused(RuntimeError("cannot be expanded")) is False

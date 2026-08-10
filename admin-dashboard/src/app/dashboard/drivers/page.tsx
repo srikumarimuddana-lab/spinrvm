@@ -1256,6 +1256,16 @@ export default function DriversPage() {
                                                     value={liveStats?.license_number_last4 ? `•••• ${liveStats.license_number_last4}` : liveStats?.license_number_on_file ? "On file (unreadable)" : "—"}
                                                     mono
                                                 />
+                                                <DetailField
+                                                    icon={ShieldCheck}
+                                                    label="SIN (T4A)"
+                                                    // Masked always. The full number comes only from the
+                                                    // audited super_admin reveal, never from this panel.
+                                                    // "Missing" is called out because a driver without one
+                                                    // cannot be filed for at year end.
+                                                    value={liveStats?.sin_last4 ? `•••• ${liveStats.sin_last4}` : liveStats?.sin_on_file ? "On file" : "Missing — cannot file T4A"}
+                                                    mono
+                                                />
                                                 <DetailField icon={FileText} label="License Class" value={selected.license_class || "—"} />
                                                 <DetailField icon={ShieldCheck} label="Regulatory Authority" value={selected.regulatory_authority || (selected.sgi_approved != null ? "SGI" : "—")} />
                                                 <DetailField icon={MapPin} label="Regulatory Region" value={selected.regulatory_region || "—"} />

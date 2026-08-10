@@ -1040,7 +1040,9 @@ class TestDeclineRide:
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
             patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
             patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
             patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
@@ -1386,7 +1388,11 @@ class TestStripeOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+                # Onboarding is hard-gated on a SIN on file. The legacy flag
+                # (SIN already held by Stripe) satisfies the gate while keeping
+                # prefill_sin_to_stripe on its no-op path, so this test needs
+                # no stripe.Account.retrieve mock.
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123", stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1459,7 +1465,9 @@ class TestStripeEmbeddedOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+                # Legacy SIN-at-Stripe flag: passes the onboarding SIN gate
+                # without engaging prefill (no Account.retrieve mock needed).
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123", stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1486,7 +1494,8 @@ class TestStripeEmbeddedOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver()]),
+                # SIN gate precedes the secret check, so satisfy it here.
+                AsyncMock(return_value=[_driver(stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1720,7 +1729,9 @@ class TestDriverReferral:
 
         terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
         with (
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())
+            ),
             patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=3)),
             patch("backend.routes.drivers._deps.resolve_referral_terms", AsyncMock(return_value=terms)),
             patch("backend.routes.drivers._deps.paid_referral_earnings", AsyncMock(return_value=None)),
@@ -1738,7 +1749,9 @@ class TestDriverReferral:
 
         terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
         with (
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())
+            ),
             patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=12)),
             patch("backend.routes.drivers._deps.resolve_referral_terms", AsyncMock(return_value=terms)),
         ):

@@ -293,6 +293,10 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
     if not driver or not user:
         raise HTTPException(status_code=404, detail="Driver/User profile not found")
 
+    # Hard gate: no Stripe onboarding without a SIN on file. Applied before
+    # the mock/dev branch too, so dev behaves like production.
+    _require_sin_for_onboarding(driver)
+
     try:
         from ...settings_loader import get_app_settings
     except ImportError:
@@ -482,9 +486,10 @@ async def stripe_account_session(current_user: dict = Depends(get_current_user))
     """Mint a single-use Stripe AccountSession client secret for the embedded
     account-onboarding component (Option B — fully in-app, no browser redirect).
 
-    The connected account collects and *holds* the SIN itself; we never see the
-    raw value, preserving the PIPEDA posture (only last-4 + status is mirrored
-    back via the account.updated webhook). Called repeatedly by the WebView's
+    The SIN we collected in-app is pre-filled onto the connected account before
+    the session is minted (prefill_sin_to_stripe), so the embedded form does not
+    ask for it again. Only last-4 + status is mirrored back via the
+    account.updated webhook. Called repeatedly by the WebView's
     fetchClientSecret callback, so it must stay cheap and idempotent."""
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
@@ -492,6 +497,9 @@ async def stripe_account_session(current_user: dict = Depends(get_current_user))
     user = await db_supabase.get_user_by_id(current_user.get("id"))
     if not driver or not user:
         raise HTTPException(status_code=404, detail="Driver/User profile not found")
+
+    # Same hard gate as the hosted-link flow: SIN before Stripe.
+    _require_sin_for_onboarding(driver)
 
     try:
         from ...settings_loader import get_app_settings
@@ -730,23 +738,48 @@ def _require_gst_for_payout(driver: dict) -> None:
         )
 
 
-def _require_sin_for_payout(driver: dict) -> None:
-    """Block payout until the driver's SIN is on file with Stripe.
+def _sin_on_file(driver: dict) -> bool:
+    """True when the driver's SIN is captured somewhere we can rely on for
+    T4A filing: our own Vault-encrypted column (new flow — collected in-app
+    before Stripe onboarding), or Stripe's individual.id_number (legacy flow —
+    drivers who entered it inside Stripe's hosted form before we started
+    collecting it ourselves, mirrored as stripe_id_number_provided)."""
+    return bool(driver.get("sin")) or bool(driver.get("stripe_id_number_provided"))
 
-    Stripe collects and *holds* the SIN (individual.id_number); we only mirror
-    the boolean stripe_id_number_provided (+ last4), never the number itself.
-    CRA T4A / platform reporting (Income Tax Act Part XX) requires the SIN, so
-    we treat it as a hard precondition for payout — stricter than Stripe, which
-    leaves the full SIN "eventually due" until a payout-volume threshold. The
-    driver supplies it by re-opening Stripe onboarding (Payouts -> Update); on
-    an Express account it cannot be pushed via the platform API."""
-    if not driver.get("stripe_id_number_provided"):
+
+def _require_sin_for_onboarding(driver: dict) -> None:
+    """SIN must be on file BEFORE Stripe onboarding starts — enforced, not
+    just ordered in the app checklist. The onboarding link pre-fills Stripe
+    with our copy (prefill_sin_to_stripe); minting a link without a SIN on
+    file would push the question back into Stripe's form and leave us with
+    no copy for the T4A. Legacy drivers whose SIN already lives at Stripe
+    (stripe_id_number_provided) pass — asking them again would be worse."""
+    if not _sin_on_file(driver):
         raise HTTPException(
             status_code=422,
             detail=(
-                "Your SIN must be on file before you can be paid. Open "
-                "Payouts and tap Update to add it securely through Stripe "
-                "(we never see or store it — Stripe holds it)."
+                "Add your SIN before connecting your payout account. It is "
+                "needed for your T4A tax slip and is passed to Stripe so you "
+                "are only asked once."
+            ),
+        )
+
+
+def _require_sin_for_payout(driver: dict) -> None:
+    """Block payout until the driver's SIN is on file.
+
+    CRA T4A / platform reporting (Income Tax Act Part XX) requires the SIN,
+    so it is a hard precondition for payout — stricter than Stripe, which
+    leaves the full SIN "eventually due" until a payout-volume threshold.
+    Either our Vault copy or Stripe's (legacy) satisfies the gate; the new
+    in-app collection path fills ours before Stripe onboarding even starts."""
+    if not _sin_on_file(driver):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Your SIN must be on file before you can be paid. Add it in "
+                "Payouts — it is needed for your T4A tax slip and is stored "
+                "encrypted."
             ),
         )
 

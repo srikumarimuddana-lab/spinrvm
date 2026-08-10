@@ -437,3 +437,84 @@ class TestStripePrefill:
         with patch.object(mod, "_ensure_stripe_account", AsyncMock(return_value="acct_1")):
             acct, result = await mod.with_account_repair({"id": "d1"}, {"id": "u1"}, "sk_x", lambda a: "ok")
         assert (acct, result) == ("acct_1", "ok")
+
+
+class TestSinOnboardingGate:
+    """SIN before Stripe is enforced by the backend, not just ordered in the
+    app checklist. Without the gate a driver could mint an onboarding link
+    with no SIN on file, pushing the question back into Stripe's form and
+    leaving Spinr with no copy for the T4A."""
+
+    @staticmethod
+    def _mod():
+        from backend.routes.drivers import payouts
+
+        return payouts
+
+    def test_gate_blocks_without_any_sin(self):
+        from fastapi import HTTPException
+
+        mod = self._mod()
+        with pytest.raises(HTTPException) as exc:
+            mod._require_sin_for_onboarding({"id": "d1"})
+        assert exc.value.status_code == 422
+        assert "SIN" in exc.value.detail
+
+    def test_gate_passes_with_vault_copy(self):
+        self._mod()._require_sin_for_onboarding({"id": "d1", "sin": "vault-uuid"})
+
+    def test_gate_passes_with_legacy_stripe_flag(self):
+        """Drivers whose SIN already lives at Stripe (entered in Stripe's own
+        form before in-app collection existed) must not be asked again."""
+        self._mod()._require_sin_for_onboarding({"id": "d1", "stripe_id_number_provided": True})
+
+    @pytest.mark.anyio
+    async def test_onboard_endpoint_422_without_sin(self):
+        from fastapi import HTTPException
+
+        mod = self._mod()
+        with (
+            patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "d1", "user_id": "u1"}])),
+            patch.object(mod.db_supabase, "get_user_by_id", AsyncMock(return_value={"id": "u1"})),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await mod.onboard_stripe(current_user={"id": "u1"})
+        assert exc.value.status_code == 422
+
+    @pytest.mark.anyio
+    async def test_account_session_endpoint_422_without_sin(self):
+        from fastapi import HTTPException
+
+        mod = self._mod()
+        with (
+            patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "d1", "user_id": "u1"}])),
+            patch.object(mod.db_supabase, "get_user_by_id", AsyncMock(return_value={"id": "u1"})),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await mod.stripe_account_session(current_user={"id": "u1"})
+        assert exc.value.status_code == 422
+
+    def test_payout_gate_accepts_vault_copy(self):
+        """_require_sin_for_payout used to insist on Stripe's flag alone; the
+        Vault copy satisfies the T4A requirement on its own."""
+        self._mod()._require_sin_for_payout({"id": "d1", "sin": "vault-uuid"})
+
+    def test_payout_gate_still_blocks_without_any_sin(self):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            self._mod()._require_sin_for_payout({"id": "d1"})
+        assert exc.value.status_code == 422
+
+    def test_gate_errors_never_contain_digits(self):
+        """PIPEDA guard in the same spirit as the validator tests: the 422
+        bodies must never carry a 9-digit run that could be a SIN."""
+        import re
+
+        from fastapi import HTTPException
+
+        mod = self._mod()
+        for fn in (mod._require_sin_for_onboarding, mod._require_sin_for_payout):
+            with pytest.raises(HTTPException) as exc:
+                fn({"id": "d1"})
+            assert not re.search(r"\d{9}", exc.value.detail)

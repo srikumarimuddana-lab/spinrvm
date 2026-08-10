@@ -1578,6 +1578,188 @@ class TestPayoutsSummary:
         assert body["payment_method"]["stripe_account_hint"] == "ABCDEFGHIJ"[-6:]
         assert body["payment_method"]["bank_name"] == "Bank of X"
 
+    def test_bonuses_fold_into_earnings_and_pending_balance(self, test_client, super_admin_override):
+        """driver_bonuses (quest/referral/adjustment) are payable earnings —
+        the admin summary must count them exactly like the driver-facing
+        get_driver_balance does, or the two views disagree on what a driver
+        is owed (the original 'manual boost is invisible' bug)."""
+
+        def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                return [{"driver_earnings": "50.00", "tip_amount": "0", "ride_completed_at": "2026-07-01T00:00:00Z"}]
+            if table == "driver_bonuses":
+                return [
+                    {
+                        "id": "b-1",
+                        "amount": "200.00",
+                        "kind": "adjustment",
+                        "description": "Service area boost (manual)",
+                        "created_at": "2026-07-02T00:00:00Z",
+                    }
+                ]
+            if table == "payouts":
+                return [{"id": "po-1", "amount": "40.00", "status": "completed", "created_at": "2026-07-03T00:00:00Z"}]
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        summary = body["summary"]
+        assert summary["lifetime_ride_earnings"] == 50.0
+        assert summary["lifetime_bonuses"] == 200.0
+        assert summary["lifetime_earnings"] == 250.0
+        assert summary["ytd_earnings"] == 250.0
+        # 250 earned - 40 paid = 210 still owed (bonus counted, like earnings.py)
+        assert summary["pending_balance"] == 210.0
+        assert body["bonuses"][0]["kind"] == "adjustment"
+        assert body["bonuses"][0]["amount"] == 200.0
+
+    def test_stripe_sync_rows_do_not_deduct_from_pending_balance(self, test_client, super_admin_override):
+        """payout_type='stripe_sync' rows are legacy-app payout history
+        materialized from Stripe transfers. The earnings they cashed out are
+        not in this DB's rides, so they must not count as money-out — mirror
+        of routes/drivers/earnings.py and its regression test. Without the
+        exclusion, clicking 'Refresh Payouts from Stripe' zeroes the admin's
+        pending-balance for every migrated driver."""
+
+        def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                return [{"driver_earnings": "50.00", "tip_amount": "0", "ride_completed_at": "2026-07-01T00:00:00Z"}]
+            if table == "payouts":
+                return [
+                    {"id": "po-1", "amount": "40.00", "status": "completed", "created_at": "2026-07-03T00:00:00Z"},
+                    {
+                        "id": "stripe-sync-tr_1",
+                        "amount": "200.00",
+                        "status": "completed",
+                        "payout_type": "stripe_sync",
+                        "created_at": "2025-01-01T00:00:00Z",
+                    },
+                ]
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["summary"]
+        # Only the app-native $40 deducts; the legacy $200 is surfaced separately.
+        assert summary["total_paid_out"] == 40.0
+        assert summary["legacy_stripe_transfers"] == 200.0
+        assert summary["pending_balance"] == 10.0
+
+
+# ---------------------------------------------------------------------------
+# admin_refresh_driver_stripe_payouts -- per-driver full Stripe financial sync
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshStripePayouts:
+    def _post(self, test_client, driver_id="drv-1"):
+        return test_client.post(f"/api/admin/drivers/{driver_id}/refresh-stripe-payouts")
+
+    def test_regular_admin_forbidden(self, test_client, regular_admin_override):
+        """Writes payout history via the same commit_plan the dedicated
+        /admin/stripe/payout-sync routes gate behind super_admin — the
+        per-driver button must not be a privilege loophole around that."""
+        resp = self._post(test_client)
+        assert resp.status_code == 403
+
+    def test_driver_not_found_404(self, test_client, super_admin_override):
+        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
+            resp = self._post(test_client, driver_id="nope")
+        assert resp.status_code == 404
+
+    def test_no_stripe_account_400(self, test_client, super_admin_override):
+        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)):
+            resp = self._post(test_client)
+        assert resp.status_code == 400
+
+    def test_plan_errors_fail_loudly_and_never_commit(self, test_client, super_admin_override):
+        """A Stripe listing failure must be a 502, not a 200 that reads as
+        'nothing needed syncing' — a silently short listing under-reports the
+        driver's payout history and eventually their T4A."""
+        from services import stripe_payout_sync_service as sync_svc
+
+        driver = {**DRIVER, "stripe_account_id": "acct_X"}
+        plan = sync_svc.StripePayoutSyncPlan(batch="b")
+        plan.errors.append(sync_svc.SyncReportItem("drv-1", "stripe_list_failed", "could not list"))
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("settings_loader.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
+            patch.object(sync_svc, "build_plan", AsyncMock(return_value=plan)),
+            patch.object(sync_svc, "commit_plan") as commit,
+        ):
+            resp = self._post(test_client)
+        assert resp.status_code == 502
+        commit.assert_not_called()
+
+    def test_successful_sync_returns_history_with_timestamps(self, test_client, super_admin_override):
+        from services import stripe_payout_sync_service as sync_svc
+
+        driver = {**DRIVER, "stripe_account_id": "acct_X"}
+        plan = sync_svc.StripePayoutSyncPlan(batch="b")
+        plan.stats = {"sum_planned": 200.0}
+
+        class FakeLedgerResult:
+            payouts_upserted = 1
+            ledger_upserted = 2
+            warnings = []
+            errors = []
+
+        def rows(table, filters=None, **kwargs):
+            if table == "payouts":
+                return [
+                    {
+                        "id": "stripe-sync-tr_1",
+                        "amount": "200.00",
+                        "status": "completed",
+                        "payout_type": "stripe_sync",
+                        "stripe_transfer_id": "tr_1",
+                        "created_at": "2025-06-01T00:00:00+00:00",
+                        "processed_at": "2025-06-01T00:00:00+00:00",
+                    }
+                ]
+            if table == "driver_stripe_payouts":
+                return [
+                    {
+                        "id": "po_1",
+                        "amount": "180.00",
+                        "currency": "cad",
+                        "status": "paid",
+                        "created_at": "2025-06-02T00:00:00+00:00",
+                        "synced_at": "2026-08-10T00:00:00+00:00",
+                    }
+                ]
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("settings_loader.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
+            patch.object(sync_svc, "build_plan", AsyncMock(return_value=plan)),
+            patch.object(sync_svc, "commit_plan", return_value={"inserted": 1, "skipped_existing": 0}),
+            patch(
+                "services.stripe_connect_ledger_service.sync_connect_ledger",
+                AsyncMock(return_value=FakeLedgerResult()),
+            ),
+        ):
+            resp = self._post(test_client)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["synced"] is True
+        assert body["transfers_inserted"] == 1
+        assert body["payouts"][0]["stripe_transfer_id"] == "tr_1"
+        assert body["payouts"][0]["created_at"] == "2025-06-01T00:00:00+00:00"
+        assert body["bank_payouts"][0]["status"] == "paid"
+
 
 # ---------------------------------------------------------------------------
 # admin_update_driver_sin -- admin-approved SIN correction

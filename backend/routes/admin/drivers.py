@@ -2676,15 +2676,39 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         limit=max(limit, 200),
     )
 
+    # payout_type='stripe_sync' rows are legacy-app payout HISTORY
+    # materialized from Stripe transfer records
+    # (services/stripe_payout_sync_service.py). The earnings they cashed out
+    # were paid in the OLD app and are not in this DB's rides, so counting
+    # them as money-out would wrongly zero pending_balance for every migrated
+    # driver the moment "Refresh Payouts from Stripe" runs. Mirror the
+    # exclusion in routes/drivers/earnings.py (get_driver_balance) so the
+    # admin and driver views of the same money agree. ('legacy_import' rows
+    # still deduct — they pair with imported rides counted above.)
     def _sum_by_status(*statuses: str) -> Decimal:
         return sum(
-            (_dec(p.get("amount")) for p in payouts if p.get("status") in statuses),
+            (
+                _dec(p.get("amount"))
+                for p in payouts
+                if p.get("status") in statuses and p.get("payout_type") != "stripe_sync"
+            ),
             Decimal("0"),
         )
 
     total_paid_out = _sum_by_status("completed")
     pending_in_flight = _sum_by_status("pending", "processing")
     on_hold = _sum_by_status("failed")
+
+    # Legacy money surfaced separately so the operator still sees the full
+    # Stripe picture without it distorting the owed-balance math.
+    legacy_stripe_transfers = sum(
+        (
+            _dec(p.get("amount"))
+            for p in payouts
+            if p.get("payout_type") == "stripe_sync" and p.get("status") == "completed"
+        ),
+        Decimal("0"),
+    )
 
     # Amount owed to the driver that hasn't been queued for payout yet.
     # Includes ride earnings + bonuses - paid out - in flight, matching
@@ -2751,6 +2775,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             "lifetime_tips": float(lifetime_tips),
             "ytd_earnings": float(ytd_earnings),
             "total_paid_out": float(total_paid_out),
+            "legacy_stripe_transfers": float(legacy_stripe_transfers),
             "pending_in_flight": float(pending_in_flight),
             "pending_balance": float(pending_balance),
             "on_hold": float(on_hold),
@@ -2890,13 +2915,26 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
     Returns the full set of synced transfer records with timestamps so the
     admin dashboard can display every payment Stripe knows about for this
     driver, supporting earnings review and T4A generation.
+
+    super_admin only: this writes payout history via the same commit_plan /
+    sync_connect_ledger the dedicated /admin/stripe/* sync routes gate behind
+    super_admin ("writing payouts history is above module grants") — a
+    per-driver entry point must not be a privilege loophole around that.
     """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super_admin")
+
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    # Current OR superseded account: a driver retired by a key-mode change
+    # keeps only stripe_account_id_superseded until they re-onboard, and
+    # their transfer history is exactly what this refresh must preserve
+    # (see stripe_payout_sync_service module docstring).
     stripe_account_id = (driver.get("stripe_account_id") or "").strip()
-    if not stripe_account_id:
+    superseded_account_id = (driver.get("stripe_account_id_superseded") or "").strip()
+    if not stripe_account_id and not superseded_account_id:
         raise HTTPException(
             status_code=400,
             detail="Driver has no Stripe Connect account on file. They must complete payout setup first.",
@@ -2928,29 +2966,95 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
         driver_ids=[driver_id],
     )
 
-    transfers_inserted = 0
-    transfers_skipped = 0
-    plan_errors = []
+    # A plan error means Stripe could not be fully listed for this driver —
+    # committing or reporting success would under-report their history (and
+    # eventually their T4A). Fail loudly, matching the KYC refresh above and
+    # the CLAUDE.md rule against softening payment errors.
     if plan.errors:
-        plan_errors = [{"field": e.field, "message": e.message} for e in plan.errors]
-        logger.warning("[STRIPE-REFRESH] plan has errors for driver %s: %s", driver_id, plan_errors)
-    else:
-        try:
-            commit_result = await asyncio.to_thread(sync_svc.commit_plan, plan)
-            transfers_inserted = commit_result.get("inserted", 0)
-            transfers_skipped = commit_result.get("skipped_existing", 0)
-        except Exception:
-            logger.error("[STRIPE-REFRESH] commit failed for driver %s", driver_id, exc_info=True)
-            raise HTTPException(
-                status_code=502,
-                detail="Failed to write synced transfers to the database. Try again.",
-            )
+        logger.error(
+            "[STRIPE-REFRESH] plan has errors for driver %s: %s",
+            driver_id,
+            [(e.field, e.message) for e in plan.errors],
+        )
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh",
+            "drivers",
+            driver_id,
+            {"status": "plan_errors", "errors": len(plan.errors)},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Stripe could not be fully read for this driver — nothing was written. Try again shortly.",
+        )
 
-    # 2. Sync connected-account bank payouts + balance transactions
-    ledger_result = await sync_connect_ledger(
-        stripe_secret,
-        driver_ids=[driver_id],
-    )
+    try:
+        commit_result = await asyncio.to_thread(sync_svc.commit_plan, plan)
+        transfers_inserted = commit_result.get("inserted", 0)
+        transfers_skipped = commit_result.get("skipped_existing", 0)
+    except Exception:
+        logger.error("[STRIPE-REFRESH] commit failed for driver %s", driver_id, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to write synced transfers to the database. Try again.",
+        )
+
+    # 2. Sync connected-account bank payouts + balance transactions. Wrapped
+    # so a failure here still audits the transfers already committed in
+    # step 1 — a money-affecting write must never be left without a trail.
+    try:
+        ledger_result = await sync_connect_ledger(
+            stripe_secret,
+            driver_ids=[driver_id],
+        )
+    except Exception:
+        logger.error("[STRIPE-REFRESH] connect-ledger sync failed for driver %s", driver_id, exc_info=True)
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh",
+            "drivers",
+            driver_id,
+            {
+                "status": "ledger_sync_failed",
+                "transfers_inserted": transfers_inserted,
+                "transfers_skipped": transfers_skipped,
+                "sum_planned": plan.stats.get("sum_planned"),
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger "
+                "sync failed. Re-run the refresh — it is safe to repeat."
+            ),
+        )
+
+    if ledger_result.errors:
+        logger.error(
+            "[STRIPE-REFRESH] connect-ledger reported errors for driver %s: %s",
+            driver_id,
+            [(e.field, e.message) for e in ledger_result.errors],
+        )
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh",
+            "drivers",
+            driver_id,
+            {
+                "status": "ledger_errors",
+                "transfers_inserted": transfers_inserted,
+                "transfers_skipped": transfers_skipped,
+                "sum_planned": plan.stats.get("sum_planned"),
+                "ledger_errors": len(ledger_result.errors),
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Transfers synced ({transfers_inserted} new), but Stripe's bank-payout/ledger "
+                "data could not be fully read. Re-run the refresh — it is safe to repeat."
+            ),
+        )
 
     await log_admin_action(
         admin,
@@ -2958,8 +3062,12 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
         "drivers",
         driver_id,
         {
+            "status": "ok",
             "transfers_inserted": transfers_inserted,
             "transfers_skipped": transfers_skipped,
+            # Dollar total introduced into payout history, matching the audit
+            # detail the bulk /admin/stripe/payout-sync/commit endpoint logs.
+            "sum_planned": plan.stats.get("sum_planned"),
             "payouts_upserted": ledger_result.payouts_upserted,
             "ledger_upserted": ledger_result.ledger_upserted,
         },
@@ -3001,10 +3109,11 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
         "transfers_skipped": transfers_skipped,
         "bank_payouts_synced": ledger_result.payouts_upserted,
         "ledger_entries_synced": ledger_result.ledger_upserted,
+        # Errors never reach here — they raise 502 above. Warnings (e.g. a
+        # superseded account not on this key, a partial reversal) are real
+        # answers the operator should still see.
         "plan_warnings": [{"field": w.field, "message": w.message} for w in plan.warnings],
-        "plan_errors": plan_errors,
         "ledger_warnings": [{"field": w.field, "message": w.message} for w in ledger_result.warnings],
-        "ledger_errors": [{"field": e.field, "message": e.message} for e in ledger_result.errors],
         "payouts": [
             {
                 "id": p.get("id"),

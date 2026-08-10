@@ -34,12 +34,23 @@ jobs:
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
+          # Diff from the actual merge-base, not raw BASE. `pull_request.base.sha`
+          # is the base branch's CURRENT tip, which keeps moving as main advances —
+          # a PR branch that falls behind (hasn't merged/rebased main in a while)
+          # would otherwise show every migration main gained since the PR's fork
+          # point as "deleted by this PR" (present in a two-dot diff's BASE side,
+          # absent on HEAD), tripping the append-only check below for migrations
+          # the PR never touched. Found 2026-08-10 on PR #3497: 11 false-positive
+          # append-only failures, all on migrations identical between the PR
+          # branch's fork point and main, just added to main after the branch
+          # diverged.
+          MERGE_BASE=$(git merge-base "$BASE" "$HEAD")
           # List all SQL files touched in this PR (added, modified, deleted)
-          git diff --name-only --diff-filter=ACDMRT "$BASE" "$HEAD" -- 'backend/migrations/*.sql' \
+          git diff --name-only --diff-filter=ACDMRT "$MERGE_BASE" "$HEAD" -- 'backend/migrations/*.sql' \
             > /tmp/changed_migrations.txt
           echo "Changed files:"
           cat /tmp/changed_migrations.txt
-          echo "base_sha=$BASE" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$MERGE_BASE" >> "$GITHUB_OUTPUT"
 
       - name: Run migration safety checks
         id: check
@@ -162,6 +173,33 @@ jobs:
 
               content_upper = content.upper()
 
+              # Comment-only view of the file, for checks that must ignore
+              # anything inside a string/executable statement and only look at
+              # what's documented. Strips `--` line comments and `/* ... */`
+              # block comments' DELIMITERS but keeps their text, so a rollback
+              # note phrased as "/* Rollback: ... */" still reads as prose.
+              # Deliberately simple (line/block stripping, no dollar-quote or
+              # string-literal awareness like migrate.py's tokenizer) — this
+              # script only ever reads comment TEXT, never re-executes SQL, so
+              # the failure mode of a naive scan is at most a missed or
+              # over-eager warning, not a broken migration apply.
+              comment_lines = []
+              in_block_comment = False
+              for line in content.splitlines():
+                  stripped = line.strip()
+                  if in_block_comment:
+                      comment_lines.append(line)
+                      if "*/" in stripped:
+                          in_block_comment = False
+                      continue
+                  if stripped.startswith("--"):
+                      comment_lines.append(line)
+                  elif stripped.startswith("/*"):
+                      comment_lines.append(line)
+                      if "*/" not in stripped:
+                          in_block_comment = True
+              comment_text = "\n".join(comment_lines)
+
               # ── CHECK C: RLS on new tables ────────────────────────────────────
               has_create_table = bool(re.search(r'\bCREATE\s+TABLE\b', content, re.IGNORECASE))
               if has_create_table:
@@ -180,19 +218,38 @@ jobs:
                   record(short, "RLS", STATUS_OK, "no CREATE TABLE — RLS check skipped")
 
               # ── CHECK D: rollback comment ─────────────────────────────────────
-              has_rollback = bool(re.search(r'^--\s+[Rr]ollback:', content, re.MULTILINE))
+              # Was `^--\s+[Rr]ollback:` — required an exact "Rollback:"/"rollback:"
+              # immediately after `-- `. Real usage across this repo's own migrations
+              # varies a lot ("Rollback plan:", "-- ROLLBACK (on paper):", "/* Rollback:
+              # ... */", all-caps "-- ROLLBACK" section headers) and the strict form
+              # missed most of it — confirmed 2026-08-10 (PR #3497, migration 289) and
+              # by grepping the existing migrations directory. Loosened to: the word
+              # "rollback" (any case) appearing at the start of a `--` or `/* */`
+              # comment, anywhere in the file — matches backend/migrations/CLAUDE.md's
+              # actual requirement ("put the rollback plan in a top comment"), which
+              # names no specific phrasing.
+              has_rollback = bool(re.search(r'(?:--|/\*)\s*rollback\b', comment_text, re.IGNORECASE))
               if has_rollback:
                   record(short, "rollback-comment", STATUS_OK, "rollback comment found")
               else:
-                  msg = "missing '-- rollback:' or '-- Rollback:' comment"
+                  msg = "missing a '-- rollback' (or '/* rollback */') comment"
                   record(short, "rollback-comment", STATUS_FAIL, msg)
                   errors.append(f"{short}: {msg}")
 
               # ── CHECK E: dangerous operations (warn only) ─────────────────────
+              # Scans executable SQL only (content with comment lines removed) —
+              # was scanning raw `content`, which flagged a rollback COMMENT
+              # documenting "DROP COLUMN ... to undo this" as if the migration
+              # itself executed it. Found 2026-08-10 alongside the rollback-comment
+              # fix above, same root cause (raw-text scan, comment-blind) as the
+              # migrate.py CONCURRENTLY misdetection fixed for ACTION_ITEMS B0.
+              code_only = "\n".join(
+                  line for line in content.splitlines() if line not in comment_lines
+              )
               dangerous = []
-              if re.search(r'\bDROP\s+TABLE\b',                    content, re.IGNORECASE): dangerous.append("DROP TABLE")
-              if re.search(r'\bTRUNCATE\b',                        content, re.IGNORECASE): dangerous.append("TRUNCATE")
-              if re.search(r'\bALTER\s+TABLE\b.*\bDROP\s+COLUMN\b', content, re.IGNORECASE): dangerous.append("ALTER TABLE ... DROP COLUMN")
+              if re.search(r'\bDROP\s+TABLE\b',                    code_only, re.IGNORECASE): dangerous.append("DROP TABLE")
+              if re.search(r'\bTRUNCATE\b',                        code_only, re.IGNORECASE): dangerous.append("TRUNCATE")
+              if re.search(r'\bALTER\s+TABLE\b.*\bDROP\s+COLUMN\b', code_only, re.IGNORECASE): dangerous.append("ALTER TABLE ... DROP COLUMN")
 
               if dangerous:
                   msg = f"contains destructive operation(s): {', '.join(dangerous)} — verify intent"

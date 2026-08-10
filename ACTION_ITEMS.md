@@ -4496,6 +4496,106 @@ _Last updated: 2026-08-10 — B20 CLOSED: `ledger_projection.py`'s `_decompose` 
   latency (observed elsewhere in this file as low-minutes) of PR
   open/synchronize/ready-for-review.
 
+### C14. `Migration Safety Check` false positives, and a blank-template PR merged with no compliance flags ticked
+- [x] **Status:** the checker bugs are fixed (2026-08-10); the merged-PR
+  process gap below is logged, not fixable after the fact.
+- **Found on PR #3497** ("Claude/stripe card sync issue gepad1" — the title
+  and PR body were stale/blank; the PR actually collected and Vault-encrypted
+  driver SINs for T4A filing, added a Stripe-onboarding SIN gate, and closed
+  two TOCTOU races a security audit found in the SIN writes — a real,
+  well-reasoned 12-commit change). Investigated its 3 `Migration Safety
+  Check` failures before assuming any were genuine:
+  1. **11 "append-only: never edit a merged migration" failures — false
+     positive, checker bug, now fixed.** Root cause:
+     `.github/workflows/migration-check.yml`'s "Detect changed migration
+     files" step diffed the PR against `github.event.pull_request.base.sha`
+     directly (two-dot diff) instead of the actual merge-base. `base.sha` is
+     the base branch's **current, continuously-moving** tip, not a fixed
+     fork point — so any PR branch that falls behind `main` (hasn't
+     merged/rebased in a while) sees every migration `main` gained since as
+     "deleted by this PR" (present in the two-dot diff's base side, absent
+     on head), which the per-file check then reports as an append-only
+     violation even though the PR never touched those files. Confirmed by
+     diffing the 11 flagged files between `main` and the PR branch: **byte-
+     identical**, simply absent on the stale branch. Fixed: the "Detect
+     changed migration files" step now diffs from `git merge-base BASE
+     HEAD` instead of raw `BASE`, so only files the PR branch itself
+     actually added/modified/deleted since it diverged are considered.
+  2. **Rollback-comment check — false negative, checker bug, now fixed.**
+     `^--\s+[Rr]ollback:` required an exact "Rollback:"/"rollback:"
+     immediately after `-- `. PR #3497's new migration
+     (`289_driver_sin_encrypted.sql`) documented rollback thoroughly under
+     an all-caps `-- ROLLBACK` section header (including the non-obvious
+     `vault.secrets` orphan-cleanup step) — didn't match. Grepped this
+     repo's own 369 migration files: the strict regex only matched 248 of
+     them; real usage varies a lot (`Rollback plan:`, `-- ROLLBACK (on
+     paper):`, `/* Rollback: ... */`), none of which the old regex covered.
+     `backend/migrations/CLAUDE.md` itself only requires "the rollback plan
+     in a top comment," no specific phrasing. Loosened to `(?:--|/\*)\s*
+     rollback\b`, case-insensitive, matched against comment text only (see
+     #3 below) — re-run against all 369 migrations: 306 now pass (up from
+     248), **zero regressions** (nothing that passed the old regex fails
+     the new one).
+  3. **Dangerous-ops warning — false positive, checker bug, now fixed.**
+     Scanned the whole raw file text for `DROP TABLE`/`TRUNCATE`/`ALTER
+     TABLE ... DROP COLUMN`, so a rollback *comment* describing exactly
+     those statements (to undo the migration) tripped the same warning as
+     if the migration executed them. Same root-cause shape as the
+     `migrate.py` `CONCURRENTLY` misdetection fixed for B0 — a raw-text
+     scan that doesn't distinguish comments from executable SQL. Added a
+     simple line-based comment stripper (deliberately not the full
+     tokenizer `migrate.py` needed — this script only ever reads comment
+     *text*, never re-executes SQL, so a naive strip's worst failure mode
+     is a missed/over-eager warning, not a broken apply) and scan only the
+     remaining code. Re-run against all 369 migrations: dropped from 155
+     flagged files to 7, and the 7 that remain are genuine executable
+     `TRUNCATE`/`DROP COLUMN` statements (spot-checked) — zero newly-flagged
+     files, zero regressions.
+- **Real, small, still-open item this surfaced (not fixed here, informational
+  only):** PR #3497's new migration is `289_driver_sin_encrypted.sql`, but
+  `main` already has an unrelated `289_financial_events_purge_delete_gate.sql`
+  — a genuine duplicate numeric prefix, now merged. Per this repo's own
+  migration convention ("Duplicate numeric prefixes exist from history and
+  are handled by full-filename keying — do not introduce new duplicates"),
+  the runner is unaffected (its idempotency key is the full filename, which
+  differs), but it's exactly the drift the convention says to avoid going
+  forward. **Deliberately not renamed** — root CLAUDE.md's migration rules
+  are explicit that "already-applied migrations must never be renamed" since
+  the runner's idempotency key is the filename; renaming a merged migration
+  risks a runner in any environment that already recorded
+  `289_driver_sin_encrypted.sql` as applied re-attempting it under a new
+  name. No functional fix needed; noted here so the next duplicate-prefix
+  sighting isn't re-investigated from scratch.
+- **Process gap this PR also exposed, not fixable retroactively:** #3497
+  merged with its PR template completely blank — every Tier 1/2/4 field
+  still the raw placeholder text, including Tier 3's `Money-touching` and
+  `PIPEDA-relevant` compliance checkboxes unticked on a PR whose entire
+  purpose is collecting and encrypting a government ID. Per root CLAUDE.md,
+  this repo currently has **no automated PR review running** (see C7/C9) —
+  nothing else was positioned to catch this before merge. Logged rather than
+  silently passed over; no corrective action possible on an already-merged
+  PR beyond noting it. If a `Required PR fields filled`-style gate (already
+  proven out on PR #3494/#3501, this session) doesn't already block merge on
+  a blank template repo-wide, that's worth confirming — it clearly should
+  have stopped this one.
+- **Files:** `.github/workflows/migration-check.yml` (all 3 fixes).
+- **Verification:** re-ran the fixed rollback-comment and dangerous-ops
+  logic against every one of the 369 files currently in
+  `backend/migrations/` (not just the one PR that surfaced the bugs) — zero
+  regressions on either check, confirmed via direct comparison against the
+  old regex's pass/fail sets. The append-only merge-base fix was verified by
+  confirming the 11 previously-flagged files are byte-identical between
+  `main` and the PR branch (root-cause diagnosis), not by re-running the
+  workflow itself (no open PR currently reproduces the stale-branch
+  condition to test against live). Embedded Python script syntax-checked
+  (`ast.parse`) after edits; YAML re-validated.
+- **What was NOT verified:** the merge-base fix specifically, end-to-end
+  against a real GitHub Actions run with a genuinely stale PR branch — the
+  fix is a straightforward, well-understood `git merge-base` substitution
+  with no ambiguity in what it should do, but it hasn't been observed
+  clearing a real red check the way the other two fixes were confirmed
+  against the full migrations corpus.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

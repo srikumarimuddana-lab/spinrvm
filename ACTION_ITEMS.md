@@ -4852,26 +4852,44 @@ when payment retries are exhausted (R32, formerly N4)._
 
 Remaining, roughly in order of user impact:
 
-- [ ] **N1. Rider DSAR export assembles no data and sends no email (R10)** —
-  `POST /users/data-export` (`routes/users.py:152`) inserts a
-  `data_export_requests` row with a 30-day SLA and stops. Nothing builds the
-  export, nothing emails it, and the admin status-change endpoint
-  (`routes/admin/users.py:486`) notifies nobody either. A working export exists
-  driver-side (`routes/drivers/tax_exports.py:668`, handles rider-only
-  accounts at `:721`) but the rider app never calls it. **This is a PIPEDA
-  access-right obligation, not a nice-to-have** — own change, own review.
-  Now the largest open item in this group.
+- [x] **N1. Rider DSAR export assembles no data and sends no email (R10)** —
+  CLOSED (2026-08-11): `POST /users/data-export` now spawns a background task
+  that reuses (and extends) the driver-side export builder
+  (`routes/drivers/tax_exports.py::_build_and_email_data_export`) to actually
+  build and email the export, then reflects the real outcome on the queued
+  `data_export_requests` row. Rate-limited to match the driver endpoint
+  (`@dsar_export_limit`, 3/hour), since it now runs the same fan-out DB-reads
+  + ZIP-build + Storage-upload + email pipeline. The reused function's own
+  handling of a rider-only account was found to be incomplete during this
+  fix (it previously exported only account + notification_preferences, no
+  ride history) and was extended with a `rides_as_rider` + `saved_addresses`
+  read, independent of the existing driver-shaped `rides` (gated on having a
+  `drivers` row). Caught by an independent `spinr-regulatory-compliance-
+  checker` subagent pass before merge. The admin status-change endpoint
+  (`routes/admin/users.py:486`) still notifies nobody on manual status
+  changes, and the DSAR queue's `status` CHECK constraint has no distinct
+  `'failed'` value (a silently-failed auto-fulfillment currently looks
+  identical to "not yet attempted") — both left as smaller, explicitly noted
+  follow-ups rather than expanding this fix's scope further.
 - [x] ~~**N2. Corporate guest rides get no receipt (R26)**~~ — done: the
   receipt hook now sits beside the Meta conversion hook in
   `auto_settle_guest_corporate`, gated on `not already_paid` so a replayed
   settlement does not re-send. A phone-only guest still has no email on file
   and is skipped silently.
-- [ ] **N3. Two push call sites pass the wrong ID and are silently dropped (X6)**
-  — `utils/payment_retry.py:183` passes `drivers.id` and `:412` passes
-  `ride["driver_id"]` where `user_id` is required; `features.py:1659` then finds
-  no user and drops the push at `:1661`. Every "Payout failed" notice from
-  `retry_stuck_payouts` is lost. Same defect shape at
-  `routes/admin/vehicle_fleet.py:541`, which passes `fcm_token`.
+- [x] **N3. Three push call sites pass the wrong ID and are silently dropped (X6)**
+  — CLOSED (2026-08-11). Confirmed a third site beyond the two originally
+  named: `utils/payment_retry.py::notify_driver_payout_failed` (called from
+  `retry_stuck_payouts` with `payouts.driver_id`) and the in-progress-retry
+  push in `retry_failed_payments` (`rides.driver_id`) both passed a
+  `drivers.id` where `send_push_notification` requires `users.id`;
+  `routes/admin/vehicle_fleet.py`'s lost-and-found notify passed the raw
+  `fcm_token` string instead of any id. Fixed the two `payment_retry.py`
+  sites with a shared batched `drivers.id → users.id` resolver
+  (`_resolve_driver_user_ids`, one `$in` query per sweep tick rather than
+  per row) and the `vehicle_fleet.py` site by passing the already-fetched
+  `driver["user_id"]` instead of the token. 143 tests passing; new
+  assertions specifically pin the resolved `users.id` (not the driver id or
+  token) as what reaches `send_push_notification`'s first argument.
 - [x] ~~**N4. Rider blocked from booking is never told (R32)**~~ — done:
   `_alert_admins_payment_exhausted` now emails the rider first, before the
   admin WS broadcast and pushes, and is self-swallowing so those still fire.

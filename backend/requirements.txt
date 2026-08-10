@@ -18,7 +18,7 @@ charset-normalizer==3.4.7  # via -r requirements.in, requests
 click==8.3.3              # via -r requirements.in, pyiceberg, typer, uvicorn
 cloudinary==1.44.2        # via -r requirements.in
 coverage==7.13.5          # via pytest-cov
-cryptography==49.0.0      # via google-auth, pyjwt
+cryptography==50.0.0      # via google-auth, pyjwt
 defusedxml==0.7.1         # via fpdf2
 deprecated==1.3.1         # via limits
 deprecation==2.1.0        # via postgrest, storage3

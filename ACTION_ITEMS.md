@@ -3750,15 +3750,35 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
 
   | Package | Pinned | Advisory | Fixed in |
   |---|---|---|---|
-  | `cryptography` | 49.0.0 | PYSEC-2026-3552 (aka `CVE-2026-69247` per Trivy/`G6`) | 50.0.0 |
+  | ~~`cryptography`~~ | ~~49.0.0~~ → **50.0.0 (bumped 2026-08-11)** | PYSEC-2026-3552 (aka `CVE-2026-69247` per Trivy/`G6`) | 50.0.0 |
   | `h2` | 4.3.0 | CVE-2026-71554 | 4.4.1 |
   | ~~`pypdf`~~ | ~~6.14.2~~ → **6.15.0 (bumped 2026-08-10)** | CVE-2026-71870, CVE-2026-71852 | 6.15.0 |
 
+  **2026-08-11 update — `cryptography` bumped, done:** `cryptography` is now
+  `50.0.0` in `backend/requirements.txt`/`requirements-locked.txt`, regenerated
+  via `pip-compile --upgrade-package cryptography==50.0.0` (Python 3.12,
+  matching CI's toolchain) — diffed both files line-by-line, confirmed no other
+  package's pin moved. Direct-importer blast radius: `utils/sns_verify.py` (SNS
+  webhook signature verification, `hazmat`/`x509`) plus the transitive JWT auth
+  path via `pyjwt`/`google-auth`. Verified with a real `pytest` run against the
+  new version (not reasoned about): 29 auth/JWT/token/crypto-adjacent test
+  files, 665 passed/1 skipped/1 failed — the 1 failure is the already-documented
+  `test_utils_extended.py` contextvar-leak pollution bug (A8-class), confirmed
+  unrelated by running the affected file standalone (63/63 pass). Separately,
+  `test_ses_webhook.py`'s **real** (non-mocked) RSA-generate→sign→verify
+  roundtrip against `sns_verify.verify_sns_signature()` plus its two webhook
+  coverage files: 118/118 pass. Local `pip-audit -r requirements-locked.txt`
+  confirms `cryptography 50.0.0` now reports zero vulnerabilities. **Not
+  verified: a real Docker build / Trivy re-scan** — no Docker daemon available
+  in this session (same limitation as CR-2026-002); `G4a`/`G6` both going green
+  is the final confirmation, to be checked once this merges and CI runs for
+  real. Full writeup: `docs/change-log/2026-08-11-b22-cryptography-cve-bump.md`.
+
   **2026-08-10 update — `pypdf` bumped, done:** `pypdf` is now `6.15.0` in
   `backend/requirements.txt` and `backend/requirements-locked.txt` (new hashes
-  pulled from PyPI for both the wheel and sdist). `cryptography` and `h2` are
-  **still open** — do not close this item's checkbox until those two are also
-  resolved or each has a `[CR]`. Usage of `pypdf` is confined to
+  pulled from PyPI for both the wheel and sdist). `h2` is **still open** — do
+  not close this item's checkbox until it is also resolved or has a `[CR]`.
+  Usage of `pypdf` is confined to
   `backend/services/data_transfer/sgi_form_filler.py` (fills the SGI regulatory
   AcroForm PDFs); the affected test files
   (`tests/test_sgi_form_filler.py`, `tests/test_driver_statement_pdf.py`,
@@ -3767,8 +3787,8 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   `tests/test_subscription_invoice_pdf_coverage.py`,
   `tests/test_t4a_pdf_coverage.py` — none of which import `pypdf` directly, run
   for safety) all pass unmodified against `pypdf==6.15.0`, 71 tests total,
-  0 failures. `h2` and `cryptography` still need their own careful verification
-  per the notes below before this item can close.
+  0 failures. `h2` still needs its own careful verification per the notes below
+  before this item can close.
 
 - **Why it was not bumped inline:** gate 8 also says not to force a fix that breaks
   something else to turn a check green. Each of these needs its own verification:

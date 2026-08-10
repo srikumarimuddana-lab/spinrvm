@@ -396,6 +396,64 @@ class TestStripePrefill:
         dec.assert_not_awaited()  # not even decrypted when there is nothing to do
 
     @pytest.mark.anyio
+    async def test_mirror_flag_short_circuits_without_any_stripe_call(self):
+        """/stripe-account-session is called repeatedly by the WebView's
+        fetchClientSecret and must stay cheap: once the drivers row mirrors
+        id_number_provided for THIS account, prefill costs zero round-trips."""
+        mod = self._mod()
+        driver = {"id": "d1", "sin": "vault-uuid", "stripe_id_number_provided": True, "stripe_account_id": "acct_1"}
+        with patch.object(mod.stripe.Account, "retrieve", MagicMock()) as ret:
+            out = await mod.prefill_sin_to_stripe(driver, "acct_1", "sk_test_x")
+        assert out == "already_provided"
+        ret.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_mirror_flag_for_a_different_account_takes_the_full_path(self):
+        """A repaired (freshly re-created) account has a new id — the stale
+        in-memory flag must not skip prefilling it, or the recovery path
+        silently reintroduces the double SIN prompt."""
+        mod = self._mod()
+        driver = {"id": "d1", "sin": "vault-uuid", "stripe_id_number_provided": True, "stripe_account_id": "acct_old"}
+        with (
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
+            patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
+            patch.object(mod.db_supabase, "update_one", AsyncMock()),
+        ):
+            out = await mod.prefill_sin_to_stripe(driver, "acct_new", "sk_test_x")
+        assert out == "prefilled"
+        modify.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_successful_prefill_persists_the_mirror_flag(self):
+        """So the next fetchClientSecret call short-circuits above instead of
+        paying another Account.retrieve."""
+        mod = self._mod()
+        with (
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "modify", MagicMock()),
+            patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
+            patch.object(mod.db_supabase, "update_one", AsyncMock()) as upd,
+        ):
+            out = await mod.prefill_sin_to_stripe({"id": "d1", "sin": "vault-uuid"}, "acct_1", "sk_test_x")
+        assert out == "prefilled"
+        upd.assert_awaited_once_with("drivers", {"id": "d1"}, {"stripe_id_number_provided": True})
+
+    @pytest.mark.anyio
+    async def test_mirror_write_failure_does_not_break_prefill(self):
+        """The mirror is an optimization; losing it costs one redundant
+        retrieve next call, never the prefill outcome itself."""
+        mod = self._mod()
+        with (
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "modify", MagicMock()),
+            patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
+            patch.object(mod.db_supabase, "update_one", AsyncMock(side_effect=RuntimeError("db down"))),
+        ):
+            out = await mod.prefill_sin_to_stripe({"id": "d1", "sin": "vault-uuid"}, "acct_1", "sk_test_x")
+        assert out == "prefilled"  # still reported as the Stripe outcome
+
+    @pytest.mark.anyio
     async def test_failed_decrypt_never_sends_a_uuid_to_stripe(self):
         """_vault_decrypt returns its input when it cannot decrypt. Unchecked,
         that would register a UUID as somebody's SIN with Stripe."""

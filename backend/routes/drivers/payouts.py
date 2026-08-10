@@ -141,6 +141,25 @@ async def _ensure_stripe_account(driver: dict, user: dict, stripe_secret: str) -
     return await _create_stripe_account(driver, user, stripe_secret, superseded=superseded)
 
 
+async def _mirror_id_number_provided(driver_id: str, account_id: str) -> None:
+    """Record on the drivers row that Stripe now holds an id_number.
+
+    This is the same mirror column stripe_kyc_sync maintains from the
+    account.updated webhook — setting it here just gets there first, so the
+    next prefill_sin_to_stripe call short-circuits instead of paying an
+    Account.retrieve. Best-effort: prefill must never raise, and losing this
+    write costs one redundant retrieve, not correctness — the webhook/sync
+    will set it anyway."""
+    try:
+        await db_supabase.update_one("drivers", {"id": driver_id}, {"stripe_id_number_provided": True})
+    except Exception:
+        logger.error(
+            "[SIN-PREFILL] could not mirror stripe_id_number_provided; next prefill will re-check Stripe",
+            exc_info=True,
+            extra={"driver_id": driver_id, "stripe_account_id": account_id},
+        )
+
+
 async def prefill_sin_to_stripe(driver: dict, account_id: str, stripe_secret: str) -> str:
     """Give Stripe the SIN we already hold, so its form stops asking for it.
 
@@ -167,11 +186,22 @@ async def prefill_sin_to_stripe(driver: dict, account_id: str, stripe_secret: st
     if not driver.get("sin"):
         return "no_sin_on_file"
 
+    # Skip Stripe entirely when our mirror already says this account holds an
+    # id_number. /stripe-account-session is called repeatedly by the WebView's
+    # fetchClientSecret and must stay cheap — without this, every mint paid an
+    # Account.retrieve round-trip long after the first one settled the matter.
+    # Guarded on the account matching the driver's current row: a repaired
+    # (freshly re-created) account carries a different id than the stale
+    # in-memory dict, so it always takes the full path below.
+    if driver.get("stripe_id_number_provided") and driver.get("stripe_account_id") == account_id:
+        return "already_provided"
+
     try:
         account = await asyncio.to_thread(stripe.Account.retrieve, account_id, api_key=stripe_secret)
         if ((account.get("individual") or {}).get("id_number_provided")) is True:
             # Stripe already has one — from its own form, or from a previous
             # run of this. Writing again would be a pointless round-trip.
+            await _mirror_id_number_provided(driver["id"], account_id)
             return "already_provided"
 
         plain = await _vault_decrypt(str(driver["sin"]), "sin_stripe_prefill")
@@ -190,6 +220,7 @@ async def prefill_sin_to_stripe(driver: dict, account_id: str, stripe_secret: st
             individual={"id_number": plain.strip()},
             api_key=stripe_secret,
         )
+        await _mirror_id_number_provided(driver["id"], account_id)
         return "prefilled"
     except Exception:
         # Loud, but not fatal. exc_info carries the Stripe error; the SIN is

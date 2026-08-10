@@ -4300,6 +4300,47 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   (or a new standalone app) + Grafana Cloud config (external, not in this
   repo).
 
+### C12. Codecov uploads on `main` pushes silently fail — no token configured
+- [ ] **Status:** open — found 2026-08-10 while checking A1c's current
+  coverage number against the latest `main` CI run.
+- **What's wrong:** `.github/workflows/ci.yml`'s `backend-test` job uploads
+  to Codecov via `codecov/codecov-action@v6` with no `token:` input (tokenless
+  upload) and `continue-on-error: true`. On push-triggered runs (as opposed to
+  PRs from within the same repo) Codecov's tokenless mode rejects the upload:
+  the job log shows `error - Upload queued for processing failed: {"message":
+  "Token required - not valid tokenless upload"}` — but because of
+  `continue-on-error: true`, the step itself still reports `conclusion:
+  success` in the GitHub UI. Nothing about the green checkmark tells you the
+  upload was rejected. Confirmed on run
+  [`31348756297`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/31348756297/job/93335534234)
+  (commit `64a720e`, 2026-08-10).
+- **Impact:** the Codecov dashboard has no current data for `main`-branch
+  pushes (only whatever tokenless PR uploads succeeded, if any) — anyone
+  checking Codecov instead of a live CI log for "what's our coverage right
+  now" gets stale or missing numbers with no error surfaced. The same
+  `codecov-action@v6` step (same tokenless/`continue-on-error` pattern)
+  appears 4 times in `ci.yml` (once per test job:
+  backend/rider-app/driver-app/admin), so this likely affects all four, not
+  just backend — not independently re-verified here, flagging as an unknown.
+- **Root cause:** no `CODECOV_TOKEN` repository secret is configured, and the
+  workflow doesn't pass one via `with: token:`.
+- **Why not fixed here:** requires a human with GitHub repo-admin access to
+  generate a Codecov upload token (Codecov project settings → General →
+  Repository Upload Token) and add it as `GitHub → repo → Settings → Secrets
+  and variables → Actions → CODECOV_TOKEN` — no dev session/sandbox can do
+  this. Once the secret exists, add `token: ${{ secrets.CODECOV_TOKEN }}` to
+  each of the 4 `codecov-action@v6` steps in `ci.yml`.
+- **Also worth doing alongside the token fix:** drop `continue-on-error:
+  true` (or add a step afterward that great-greps the codecov CLI output for
+  `"Upload queued for processing failed"` and fails loudly) so a *future*
+  upload failure — token expiry, Codecov outage, config drift — surfaces as
+  a red check instead of silently passing again. As written today, fixing
+  the token alone reduces the immediate symptom but leaves the same
+  false-green failure mode dormant for next time.
+- **Not blocking:** actual test pass/fail and coverage-floor enforcement
+  (the `--cov-fail-under` gate inside `pytest`) are unaffected — this is
+  purely the external Codecov *reporting* path, not CI's own gate.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

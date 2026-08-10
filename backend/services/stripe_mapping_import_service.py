@@ -36,10 +36,12 @@ from typing import Any
 
 try:
     from ..supabase_client import supabase
+    from ..utils.stripe_mode import key_mode, object_mode
     from .driver_import_service import _select_in, normalize_phone, read_csv_text
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
     from services.driver_import_service import _select_in, normalize_phone, read_csv_text
     from supabase_client import supabase  # type: ignore  # noqa: F401
+    from utils.stripe_mode import key_mode, object_mode  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +116,41 @@ def _row_ref(row: dict[str, str], idx: int, key: str) -> str:
     return legacy if legacy else f"row-{idx + 2}"
 
 
+def _phone_lookup_keys(raw: str) -> list[str]:
+    """Every spelling of ``raw`` a driver row might legitimately be stored as.
+
+    ``users.phone`` / ``drivers.phone`` are E.164 by convention (auth validates
+    on signup, the legacy import normalizes), so the normalized form is tried
+    first. The verbatim spelling is carried too because a row written by any
+    path that skipped normalization would otherwise be invisible to the ``IN``
+    query and every CSV row referencing it would fail ``no_match`` — including
+    rows produced by our own email discovery, which reads the phone straight
+    off the driver row. Order is significant: callers take the first hit.
+
+    Deliberately NOT canonicalized to last-10-digits — that would let a
+    non-NANP number collide with a NANP one and redirect a payout destination
+    to the wrong driver.
+    """
+    keys: list[str] = []
+    for candidate in (normalize_phone(raw or ""), (raw or "").strip()):
+        if candidate and candidate not in keys:
+            keys.append(candidate)
+    return keys
+
+
+def _csv_safe_phone(raw: str) -> str:
+    """The stored phone if it can ride an unquoted CSV cell, else "".
+
+    Returning "" routes the match to ``matches_without_phone``, where the
+    operator sees it, rather than emitting a cell that shifts every column to
+    its right and silently maps a payout destination onto the wrong driver.
+    """
+    value = (raw or "").strip()
+    if not value or any(ch in value for ch in ',"\r\n'):
+        return ""
+    return value
+
+
 def _prefetch_drivers(
     rows: list[dict[str, str]],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -126,7 +163,7 @@ def _prefetch_drivers(
     detects value collisions across the whole table.
     """
     old_ids = sorted({(r.get("old_driver_id") or "").strip() for r in rows} - {""})
-    phones = sorted({normalize_phone(r.get("phone") or "") for r in rows if (r.get("phone") or "").strip()})
+    phones = sorted({k for r in rows for k in _phone_lookup_keys(r.get("phone") or "")})
     accts = sorted({(r.get("stripe_account_id") or "").strip() for r in rows} - {""})
 
     cols = "id,phone,stripe_account_id,legacy_import_metadata"
@@ -255,9 +292,11 @@ def _build_local_driver_plan(rows: list[dict[str, str]], plan: StripeMappingPlan
 
     for _idx, row, row_ref, acct in candidates:
         old_id = (row.get("old_driver_id") or "").strip()
-        phone = normalize_phone(row.get("phone") or "") if (row.get("phone") or "").strip() else ""
         matched_by_old = by_old_id.get(old_id) if old_id else None
-        matched_by_phone = by_phone.get(phone) if phone else None
+        matched_by_phone = next(
+            (by_phone[k] for k in _phone_lookup_keys(row.get("phone") or "") if k in by_phone),
+            None,
+        )
 
         if matched_by_old and matched_by_phone and matched_by_old["id"] != matched_by_phone["id"]:
             plan.errors.append(
@@ -405,11 +444,33 @@ def _build_local_rider_plan(rows: list[dict[str, str]], plan: StripeMappingPlan)
 
 def _livemode_error(obj: dict[str, Any], stripe_secret: str) -> tuple[str, str] | None:
     """Hard error: a test-mode object must never be mapped as a live payout
-    destination (or vice versa). Normally unreachable — a key can't retrieve
-    the other mode's objects — so if it fires, something is deeply wrong."""
-    live_key = stripe_secret.startswith("sk_live_")
-    if bool(obj.get("livemode")) != live_key:
-        return ("livemode", "object livemode does not match the configured key mode")
+    destination (or vice versa).
+
+    This is a **cross-check, not the primary evidence**. The retrieve in
+    `_retrieve_stripe` already proves mode: Stripe cannot return an object
+    from the other mode, it 404s, which lands as `not_accessible`. So this
+    only ever fires on a contradiction Stripe should be incapable of
+    producing — and it must stay silent when it has nothing to compare:
+
+    - **A Connect `Account` carries no `livemode` field at all** (unlike
+      `Customer`, which does). Reading it as a falsy boolean made every live
+      account look test-mode and failed 100% of driver rows.
+    - **A restricted key (`rk_live_…`) is a live key.** Matching only the
+      `sk_live_` prefix made every live object look mode-mismatched.
+
+    Both are handled by delegating to `object_mode` / `key_mode`, which return
+    None for "cannot tell" rather than guessing. None on either side means no
+    finding — never a hard error inferred from absent evidence.
+    """
+    observed = object_mode(obj)
+    configured = key_mode(stripe_secret)
+    if observed is None or configured is None:
+        return None
+    if observed != configured:
+        return (
+            "livemode",
+            f"object is {observed}-mode but the configured Stripe key is {configured}-mode",
+        )
     return None
 
 
@@ -889,6 +950,7 @@ async def sync_kyc_after_commit(
 # in the import's validate/commit path — discovery never touches a row, so a
 # wrong guess here can cost at most a rejected CSV row, never a payout.
 
+
 def _list_connected_accounts(stripe_secret: str, cap: int = 1000) -> list[dict[str, Any]]:
     """Every connected account on the running key (Stripe has no email filter
     on /v1/accounts, so we page and match locally). Blocking; call in a thread.
@@ -1018,7 +1080,12 @@ async def discover_driver_accounts_by_email(stripe_secret: str) -> dict[str, Any
                     # key-mode repair — expected after a cutover; flagged so
                     # the operator understands why the slot is empty.
                     "was_retired": bool(d.get("stripe_account_id_superseded")),
-                    "phone": normalize_phone(d.get("phone") or ""),
+                    # Verbatim, NOT normalized: the import looks this value up
+                    # against drivers.phone, so echoing what is stored is the
+                    # spelling guaranteed to match. A value carrying CSV
+                    # delimiters would corrupt the file, so it is dropped to
+                    # matches_without_phone instead of silently mangled.
+                    "phone": _csv_safe_phone(d.get("phone") or ""),
                 }
             )
         else:

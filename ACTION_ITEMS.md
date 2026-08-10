@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-10 — A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -662,9 +662,29 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   acceptance was never defined and now lives under A1c, not here.
 
 ### A1c. Backend test-coverage floor — Track 2 (breadth, lower priority, in progress)
-- [ ] **Status:** open — spun off from A1b (2026-08-01) when A1b's Track 1
-  work closed out. One file already done (below, picked up under A1b before
-  the split); the rest of Track 2 is unscoped.
+- [x] **Status:** CLOSED (2026-08-10) — spun off from A1b (2026-08-01) when
+  A1b's Track 1 work closed out. All three sub-tiers itemized below are
+  done (Sub-tier A closed 2026-08-01/02, Sub-tier B closed 2026-08-02 in a
+  full 26-file sweep, Sub-tier C closed 2026-08-03 across all 39 files in
+  the 60-80% band). Verified against the actual latest `main` CI run
+  ([job `93335534234`](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/31348756297/job/93335534234),
+  commit `64a720e`, 2026-08-10): full-suite backend coverage is
+  **46448 stmts, 4531 missed → 90%** (up from the 78.5% aggregate recorded
+  when this item was first scoped), 10592 passed, 6 skipped, 1 xfailed. Also
+  spot-checked the 19 brand-new backend files added since the 2026-08-03
+  snapshot (Stripe payouts/Connect ledger sync, corporate Stripe
+  identity-drift repair, email-branding retrofit, admin Sentry viewer) —
+  every one already shipped with a dedicated test file in its own PR, no new
+  gap found. Closing rather than leaving open with no acceptance criteria:
+  the item's own **Acceptance** note below explicitly rejected "cover
+  everything to 80%" as a goal, and there is no unscoped remainder left to
+  define one against. If a future session finds a real file below the CI
+  floor, re-open as a new dated entry rather than reusing this one.
+  **Not part of this closure** (found during the same check, filed
+  separately): the 1 test failing on this same `main` run
+  (`test_snap_to_road_returns_none_without_any_provider_configured`, fixed
+  same day, see git history) and the Codecov tokenless-upload gap (**C12**,
+  new).
 - **Why:** same logic as A1/A1b (higher-risk code deserves a higher bar),
   but for everything *outside* the money/safety/compliance-adjacent set
   Track 1 already covers — utils/services with no explicit coverage target,
@@ -2251,8 +2271,10 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
     no bugs found. Full suite re-run after: 6801 passed (was 6782), 0
     failed, 0 new warnings. See
     `docs/change-log/2026-08-01-a1c-reconciliation-coverage.md`.
-  - Rest of Sub-tier A/B/C above: not yet started — pick one file/PR at a
-    time, ≤3 files per subtask, per the same pattern Track 1 followed.
+  - ~~Rest of Sub-tier A/B/C above: not yet started~~ — stale as of
+    2026-08-10: this line was never updated after Sub-tier B (2026-08-02)
+    and Sub-tier C (2026-08-03) both closed above. Left struck through
+    rather than deleted so the correction is visible in-place.
 - **Approach:** everything currently below the 60% CI floor or in the
   60-80% band with no explicit target, that Track 1 didn't already touch.
   Only worth picking up once a specific file becomes a live incident source,
@@ -2269,9 +2291,10 @@ _Last updated: 2026-08-03 — A1c (Track 2) Sub-tier C fully CLOSED across two p
   DB, not this repo, and needs a live DB read to answer, not a coverage
   pass). Real, separate asks — track as their own items if/when wanted,
   don't fold into A1c.
-- **Acceptance:** not yet defined — pick a file list with the user before
-  starting; don't assume "cover everything to 80%" is the goal without
-  confirming.
+- **Acceptance:** met (2026-08-10) — no fixed target was ever set (deliberately,
+  see above); closed instead on the combination of all three scoped
+  sub-tiers being done and the measured 90% full-suite aggregate. See
+  Status line above for the verification run.
 
 ### A2. Post-deploy smoke test in CI
 - [x] **Status:** done — already implemented before this checklist was last

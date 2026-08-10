@@ -3513,7 +3513,36 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   scoping (b)/(c) above into concrete acceptance criteria.
 
 ### B17. `purge_pii_retention` Step B will FK-abort the entire daily retention purge once any paid ride crosses 7 years
-- [x] **Status:** CLOSED (2026-08-10) — decision taken with the user: `ON DELETE
+- [x] **Status:** CLOSED (2026-08-10), **with an erratum found and fixed the
+  same day**: the original 294 fix (`ON DELETE SET NULL`) does not actually
+  work on its own. `financial_events_no_mutate` (migration 58/289) is a
+  `BEFORE UPDATE FOR EACH ROW` trigger that unconditionally raises on any
+  `UPDATE` it doesn't recognize (289 only carved out an exception for
+  `DELETE`, gated by a GUC). PostgreSQL implements FK referential actions
+  like `ON DELETE SET NULL` by issuing an internal `UPDATE` against the
+  referencing table through the normal executor path — which fires that
+  table's own row-level `BEFORE UPDATE` triggers exactly as a direct
+  statement would (documented Postgres behavior, not an edge case). So the
+  SET NULL action itself would fail when Step B deletes an old ride, and
+  Step B would still abort — just with a trigger-raised `P0001` instead of a
+  raw `foreign_key_violation`. Not caught by 294's own test because that
+  suite is purely textual (no live Postgres in CI, same constraint every
+  migration test in this repo works under) and only pinned the FK's `ON
+  DELETE` clause, not its interaction with the immutability trigger. Fixed
+  by `backend/migrations/295_financial_events_immutable_allows_fk_setnull.sql`,
+  which extends `_financial_events_immutable()` to unconditionally (no GUC —
+  Postgres's own FK machinery issues the internal UPDATE with no chance for
+  application code to set a session GUC first) permit exactly one UPDATE
+  shape: nulling `ride_id` with every other column pinned unchanged via
+  equality checks. 8 new textual tests
+  (`test_financial_events_fk_setnull_trigger_fix.py`); the Postgres semantics
+  claim itself was independently verified by a second `spinr-migration-
+  reviewer` pass before committing, given how consequential a wrong claim
+  here would be. `docs/runbooks/data-retention.md`'s Step B section updated
+  with the erratum.
+  <details><summary>Original fix (294) and finding history</summary>
+
+  **Status (2026-08-10, before the erratum):** decision taken with the user: `ON DELETE
   SET NULL` on `financial_events.ride_id` (not `CASCADE` — would delete the
   7-year CRA/SOC2 tax record itself — and not per-batch exception isolation on
   Step B — would leave every paid ride permanently un-purgeable). Implemented
@@ -3570,12 +3599,38 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   the run; `docs/runbooks/data-retention.md` updated to describe Steps H–M,
   which it currently omits entirely.
   </details>
+  </details>
 
 ### B18. Retention docs promise anonymize-not-delete; migration 216 implements hard-delete, and 289 makes it operative
-- [ ] **Status:** open — found 2026-08-07 in the PR #3464 regulatory audit.
-  **Needs a legal/product decision, not a code change** — filed here rather than
-  "reconciled" unilaterally, because rewriting the policy docs to match the code
-  would be deciding the question rather than surfacing it.
+- [x] **Status:** CLOSED for the narrower, unambiguous part of this ticket
+  (2026-08-10): the anonymize-vs-delete decision itself is recorded as
+  **keep Step H's hard-delete model as-is** (product-owner-directed in this
+  session; NOT a substitute for real legal/founder sign-off if one is later
+  required — un-shipping an already-operative model is out of scope for an
+  agent session's unilateral call, and this decision doesn't require
+  reversing anything, only building on top of it). Separately, and
+  independent of that decision either way,
+  `.claude/context/regulatory-sk.md`'s Right-to-delete #1 ("personal profile
+  fields... scrubbed within 30 days") was found to be completely
+  unimplemented — `delete_account_pipeda` left name/email/profile_image/
+  `saved_addresses` fully live for the entire 7-year window. Fixed by
+  `backend/migrations/296_pipeda_30day_profile_scrub.sql` (new Step N,
+  anchored on `deletion_requested_at`, 14 new textual tests). `CLAUDE.md`,
+  `regulatory-sk.md`, and `data-retention.md` reconciled to describe what
+  actually ships (hard-delete at 7y, scrub at 30d) instead of the prior
+  "anonymized, not deleted" claim.
+  **Not closed — left as an explicit, documented gap:** `regulatory-sk.md`'s
+  other promise, "rider identity linked to trip: 7 years (hashed after 2)",
+  is a *general* rule (every ride, not just DSAR ones). Implementing it
+  literally would null/hash `rides.rider_id` at 2 years, breaking every
+  active rider's own trip-history screen and any admin/refund lookup by
+  rider for rides older than 2 years — a live, real-user-facing regression
+  needing real product/legal scoping before any code change, not something
+  to ship under this ticket's momentum. Re-filed as its own follow-up rather
+  than silently left in this closed ticket — see the new item filed
+  immediately below this one's history.
+  <details><summary>Original finding (2026-08-07)</summary>
+
 - **The divergence:** three governing documents state that records are
   *anonymized* after the retention window —
   `.claude/context/regulatory-sk.md:45,87` ("rows are anonymized (user_id
@@ -3600,6 +3655,44 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
 - **Acceptance:** a recorded legal/founder decision on anonymize-vs-delete; the
   three documents reconciled with whichever is chosen; `data-retention.md`
   extended to cover Steps H–M.
+  </details>
+
+### B23. `regulatory-sk.md` promises rider identity is hashed after 2 years; nothing implements it, and the literal fix breaks live rider trip history
+- [ ] **Status:** open — split out of B18 (2026-08-10) when B18's narrower
+  30-day-scrub part closed. `.claude/context/regulatory-sk.md`'s trip-log
+  retention table (line 43) promises "Rider identity linked to trip: 7 years
+  (hashed after 2)" — a *general* rule for every ride, not just DSAR-deleted
+  accounts. Nothing in `purge_pii_retention()` or anywhere else implements
+  any 2-year hashing step.
+- **Why this isn't a copy-paste of B18's Step N:** Step N (30-day profile
+  scrub) only touches accounts that explicitly requested deletion — a small,
+  self-selected population that has already agreed to lose access to their
+  own history. This promise is different: it would apply to every active
+  rider's ride record at 2 years regardless of whether they ever asked for
+  anything, and `rides.rider_id` is the FK a rider's own "my trips" screen,
+  and any admin/support/refund lookup by rider, actually joins on. Hashing
+  or nulling it at 2 years breaks that lookup for every ride older than 2
+  years, for every still-active user — a live, real-money-adjacent,
+  real-user-facing regression, not a narrow backend fix.
+- **Options needing a real product/legal decision, not an agent's unilateral
+  call:** (a) exclude this from ride-level hashing entirely and treat the
+  regulatory-sk.md line as describing a data-warehouse/reporting-layer
+  concern rather than the live `rides` table rider queries and admin tools
+  actually read; (b) a separate, access-controlled identity-lookup table
+  that `rides` keeps pointing at (rather than `users` directly) so a 2-year
+  "hash the direct link" step has something narrower to act on without
+  touching the column every live query depends on; (c) accept the doc
+  overstates the actual promise and correct `regulatory-sk.md` to match
+  reality instead (this is itself a compliance-relevant document change per
+  CLAUDE.md's regulatory-doc conventions, so it needs the same sign-off any
+  other windows-table change would).
+- **Severity:** dormant in the sense that nothing breaks today, but every
+  day this stays open is a day `regulatory-sk.md` states something false
+  about what the product does — an audit-readiness gap, not a code bug.
+- **Acceptance:** a recorded decision on which option (or another) is taken;
+  either an implementation matching it with a test proving no live rider
+  trip-history/admin-lookup regression, or `regulatory-sk.md` corrected to
+  match what's actually promised — not left silently divergent either way.
 
 ### B19. `payment_retry`'s `requires_capture` hold-recovery still uses the non-atomic two-write settlement
 - [x] **Status:** CLOSED (2026-08-10) — found 2026-08-07 by the money-auditor pass on PR #3464.

@@ -1257,6 +1257,16 @@ export default function DriversPage() {
                                                     value={liveStats?.license_number_last4 ? `•••• ${liveStats.license_number_last4}` : liveStats?.license_number_on_file ? "On file (unreadable)" : "—"}
                                                     mono
                                                 />
+                                                <DetailField
+                                                    icon={ShieldCheck}
+                                                    label="SIN (T4A)"
+                                                    // Masked always. The full number comes only from the
+                                                    // audited super_admin reveal, never from this panel.
+                                                    // "Missing" is called out because a driver without one
+                                                    // cannot be filed for at year end.
+                                                    value={liveStats?.sin_last4 ? `•••• ${liveStats.sin_last4}` : liveStats?.sin_on_file ? "On file" : "Missing — cannot file T4A"}
+                                                    mono
+                                                />
                                                 <DetailField icon={FileText} label="License Class" value={selected.license_class || "—"} />
                                                 <DetailField icon={ShieldCheck} label="Regulatory Authority" value={selected.regulatory_authority || (selected.sgi_approved != null ? "SGI" : "—")} />
                                                 <DetailField icon={MapPin} label="Regulatory Region" value={selected.regulatory_region || "—"} />
@@ -1442,7 +1452,7 @@ export default function DriversPage() {
                                         onRevealSin={async () => {
                                             // Confirm before triggering — every reveal writes an
                                             // audit_log row and admins should not click it idly.
-                                            if (!window.confirm("Reveal SIN from Stripe?\n\nThis call is recorded in the audit log with your admin ID and a timestamp. The value will be shown for 30 seconds then hidden.")) return;
+                                            if (!window.confirm("Reveal this driver's SIN?\n\nThis decrypts Spinr's encrypted copy. The call is recorded in the audit log with your admin ID and a timestamp. The value will be shown for 30 seconds then hidden.")) return;
                                             try {
                                                 const res = await revealDriverSin(selected.id);
                                                 setRevealedSin({ sin: res.sin, expiresAt: Date.now() + 30_000 });
@@ -2085,13 +2095,20 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                 <div className="px-4 py-3 space-y-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">SIN (held by Stripe)</p>
-                            {data.kyc.id_number_provided ? (
+                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">SIN</p>
+                            {/* Gate on OUR Vault-encrypted copy (sin_on_file), not Stripe's
+                                id_number_provided mirror: the reveal endpoint decrypts our
+                                column (Stripe's is write-only), and the SIN-before-Stripe
+                                flow means drivers now have a SIN on file long before Stripe
+                                does. Gating on Stripe's flag hid the Reveal button for
+                                exactly those drivers — and showed it for legacy drivers
+                                whose reveal call can only 400. */}
+                            {data.kyc.sin_on_file ? (
                                 <div className="flex items-center gap-2 mt-0.5">
                                     {revealedSin ? (
                                         <p className="text-sm font-medium font-mono">{revealedSin.sin}</p>
                                     ) : (
-                                        <p className="text-sm font-medium font-mono">•••-•••-{data.kyc.id_number_last4 || "•••"}</p>
+                                        <p className="text-sm font-medium font-mono">•••-•••-{data.kyc.sin_last4 || "•••"}</p>
                                     )}
                                     {canRevealSin ? (
                                         <Button
@@ -2100,7 +2117,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                             className="h-6 text-[10px] px-2"
                                             onClick={onRevealSin}
                                             disabled={!!revealedSin}
-                                            title="One-shot reveal from Stripe. Every reveal writes an audit log entry."
+                                            title="One-shot decrypt of Spinr's encrypted copy. Every reveal writes an audit log entry."
                                         >
                                             {revealedSin ? <CheckCircle className="h-3 w-3 mr-1" /> : <Eye className="h-3 w-3 mr-1" />}
                                             {revealedSin ? "Shown" : "Reveal"}
@@ -2111,6 +2128,13 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                         </span>
                                     )}
                                 </div>
+                            ) : data.kyc.id_number_provided ? (
+                                <p
+                                    className="text-sm text-muted-foreground mt-0.5"
+                                    title="This driver entered their SIN into Stripe's own form before Spinr collected SINs in-app. Stripe never returns it (write-only), so it cannot be revealed here — use the tax-ID import or ask the driver via support to get a copy on file for the T4A."
+                                >
+                                    Held by Stripe only — not revealable
+                                </p>
                             ) : (
                                 <p className="text-sm text-muted-foreground mt-0.5">Not provided yet</p>
                             )}

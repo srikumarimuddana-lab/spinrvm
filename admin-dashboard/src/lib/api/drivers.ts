@@ -87,6 +87,16 @@ export interface DriverLiveStats {
     /** True when a licence number exists on the row (even if it could not be
      * decrypted), so the panel can distinguish "none on file" from "unreadable". */
     license_number_on_file: boolean;
+    /** Last 4 of the driver's SIN. Stored in the clear precisely so T4A
+     * readiness is visible without decrypting anything — unlike the licence,
+     * this needs no round-trip through Vault. */
+    sin_last4: string | null;
+    /** True when Spinr holds an encrypted SIN. This is the T4A gate: without
+     * it a slip cannot be filed, and it is NOT the same as Stripe's
+     * `id_number_provided` above, which reports a number Stripe never returns. */
+    sin_on_file: boolean;
+    /** When the driver supplied it. */
+    sin_collected_at: string | null;
 }
 export const getDriverLiveStats = (id: string) =>
     request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);
@@ -337,6 +347,9 @@ export interface DriverPayoutSummary {
         description: string | null;
         created_at: string;
     }>;
+    // Stripe Connect KYC + tax identity mirror (migration 92).
+    // SIN itself is never exposed here — only on-file flags and last4.
+    // Use /reveal-sin for the one-shot retrieval.
     kyc: {
         details_submitted: boolean;
         charges_enabled: boolean;
@@ -345,6 +358,11 @@ export interface DriverPayoutSummary {
         business_type: string | null;
         id_number_provided: boolean;
         id_number_last4: string | null;
+        /** True when Spinr holds a Vault-encrypted SIN (migration 289) — the
+         * copy /reveal-sin decrypts and the T4A reads. NOT the same as
+         * `id_number_provided`, which reports a number Stripe never returns. */
+        sin_on_file: boolean;
+        sin_last4: string | null;
         gst_hst_number: string | null;
         requirements_due: string[];
         requirements_past_due: string[];

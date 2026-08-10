@@ -293,9 +293,15 @@ export const getReferralPairs = (params: { source?: "driver" | "rider"; limit?: 
 export interface DriverPayoutSummary {
     summary: {
         lifetime_earnings: number;
+        lifetime_ride_earnings?: number;
+        lifetime_bonuses?: number;
         lifetime_tips: number;
         ytd_earnings: number;
         total_paid_out: number;
+        /** Completed payout_type='stripe_sync' rows — legacy-app money paid
+         * via Stripe Transfers, shown separately because it must not deduct
+         * from pending_balance (the earnings it cashed out predate this DB). */
+        legacy_stripe_transfers?: number;
         pending_in_flight: number;
         pending_balance: number;
         on_hold: number;
@@ -329,12 +335,21 @@ export interface DriverPayoutSummary {
         id: string;
         amount: number;
         status: "pending" | "processing" | "completed" | "failed" | string;
+        payout_type?: string | null;
+        stripe_transfer_id?: string | null;
         stripe_payout_id: string | null;
         bank_name: string | null;
         account_last4: string | null;
         error_message: string | null;
         created_at: string;
         processed_at: string | null;
+    }>;
+    bonuses?: Array<{
+        id: string;
+        amount: number;
+        kind: string;
+        description: string | null;
+        created_at: string;
     }>;
     // Stripe Connect KYC + tax identity mirror (migration 92).
     // SIN itself is never exposed here — only on-file flags and last4.
@@ -368,6 +383,30 @@ export const refreshDriverStripeKyc = (id: string) =>
         `/api/admin/drivers/${id}/refresh-stripe-kyc`,
         { method: "POST" },
     );
+
+export const refreshDriverStripePayouts = (id: string) =>
+    request<{
+        synced: boolean;
+        message: string;
+        transfers_inserted: number;
+        transfers_skipped: number;
+        bank_payouts_synced: number;
+        ledger_entries_synced: number;
+        payouts: DriverPayoutSummary["payouts"];
+        bank_payouts: Array<{
+            id: string;
+            amount: number;
+            currency: string;
+            status: string;
+            method: string | null;
+            arrival_date: string | null;
+            bank_last4: string | null;
+            failure_code: string | null;
+            failure_message: string | null;
+            created_at: string;
+            synced_at: string;
+        }>;
+    }>(`/api/admin/drivers/${id}/refresh-stripe-payouts`, { method: "POST" });
 
 /* Fleet-wide KYC refresh (super_admin). With retire_unreachable=false (the
  * default) drivers whose Stripe account the current key cannot see are only

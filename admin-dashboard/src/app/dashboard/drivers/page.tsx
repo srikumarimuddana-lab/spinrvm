@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshAllDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshDriverStripePayouts, refreshAllDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -138,6 +138,7 @@ export default function DriversPage() {
     const [payoutLoading, setPayoutLoading] = useState(false);
     const [retryingPayoutId, setRetryingPayoutId] = useState<string | null>(null);
     const [refreshingKyc, setRefreshingKyc] = useState(false);
+    const [refreshingPayouts, setRefreshingPayouts] = useState(false);
     // The revealed SIN is held briefly in memory then cleared. Never
     // logged, never persisted, never written to any other state path.
     const [revealedSin, setRevealedSin] = useState<{ sin: string; expiresAt: number } | null>(null);
@@ -1399,6 +1400,7 @@ export default function DriversPage() {
                                         notify={toast}
                                         retryingPayoutId={retryingPayoutId}
                                         refreshingKyc={refreshingKyc}
+                                        refreshingPayouts={refreshingPayouts}
                                         revealedSin={revealedSin}
                                         canRevealSin={canRevealSin}
                                         onRetry={async (payoutId) => {
@@ -1417,12 +1419,6 @@ export default function DriversPage() {
                                         onRefreshKyc={async () => {
                                             setRefreshingKyc(true);
                                             try {
-                                                // The endpoint returns 200 for several distinct
-                                                // outcomes (synced / no account / account retired).
-                                                // Toasting a blanket "Synced from Stripe" for all of
-                                                // them is how a detached account looked like a
-                                                // successful refresh — branch on `synced` and show
-                                                // the backend's own explanation.
                                                 const res = await refreshDriverStripeKyc(selected.id);
                                                 const fresh = await getDriverPayoutsSummary(selected.id);
                                                 setPayoutSummary(fresh);
@@ -1435,6 +1431,26 @@ export default function DriversPage() {
                                                 toast({ title: "Refresh failed", description: e?.message || "Unknown error", variant: "destructive" });
                                             } finally {
                                                 setRefreshingKyc(false);
+                                            }
+                                        }}
+                                        onRefreshPayouts={async () => {
+                                            setRefreshingPayouts(true);
+                                            try {
+                                                // Failures raise non-2xx (handled in catch); still
+                                                // branch on `synced` like onRefreshKyc so a future
+                                                // partial-success response can't toast as success.
+                                                const res = await refreshDriverStripePayouts(selected.id);
+                                                const fresh = await getDriverPayoutsSummary(selected.id);
+                                                setPayoutSummary(fresh);
+                                                toast({
+                                                    title: res.synced ? "Payouts synced from Stripe" : "Not synced",
+                                                    description: res.message,
+                                                    ...(res.synced ? {} : { variant: "destructive" as const }),
+                                                });
+                                            } catch (e: any) {
+                                                toast({ title: "Payout sync failed", description: e?.message || "Unknown error", variant: "destructive" });
+                                            } finally {
+                                                setRefreshingPayouts(false);
                                             }
                                         }}
                                         onRevealSin={async () => {
@@ -1877,7 +1893,7 @@ function PayoutMetric({ label, value, tone, sub }: { label: string; value: strin
     );
 }
 
-function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRevealSin, refreshingKyc, revealedSin, canRevealSin, notify }: {
+function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRefreshPayouts, onRevealSin, refreshingKyc, refreshingPayouts, revealedSin, canRevealSin, notify }: {
     data: DriverPayoutSummary | null;
     loading: boolean;
     driverId: string;
@@ -1885,8 +1901,10 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
     retryingPayoutId: string | null;
     onRetry: (payoutId: string) => Promise<void>;
     onRefreshKyc: () => Promise<void>;
+    onRefreshPayouts: () => Promise<void>;
     onRevealSin: () => Promise<void>;
     refreshingKyc: boolean;
+    refreshingPayouts: boolean;
     revealedSin: { sin: string; expiresAt: number } | null;
     canRevealSin: boolean;
     notify: (opts: { title: string; description?: string; variant?: "destructive" }) => void;
@@ -1923,9 +1941,26 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
     );
 
     const { summary, payment_method: pm, payouts } = data;
+    const bonuses = data.bonuses ?? [];
+    const hasBonuses = (summary.lifetime_bonuses ?? 0) > 0;
 
     return (
         <div className="space-y-5">
+            {/* Refresh Payouts from Stripe */}
+            <div className="flex items-center justify-end">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={refreshingPayouts}
+                    onClick={onRefreshPayouts}
+                    title="Pull all Transfers, bank payouts, and balance transactions from Stripe for this driver"
+                >
+                    {refreshingPayouts ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                    Refresh Payouts from Stripe
+                </Button>
+            </div>
+
             {/* Top 4 metric cards: Pending / Paid out / Lifetime / YTD */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <PayoutMetric
@@ -1938,12 +1973,17 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     label="Total paid out"
                     value={fmtMoney(summary.total_paid_out)}
                     tone="emerald"
-                    sub={`${payouts.filter(p => p.status === "completed").length} completed payouts`}
+                    sub={(summary.legacy_stripe_transfers ?? 0) > 0
+                        ? `+ ${fmtMoney(summary.legacy_stripe_transfers ?? 0)} legacy Stripe transfers`
+                        : `${payouts.filter(p => p.status === "completed").length} completed payouts`}
                 />
                 <PayoutMetric
                     label="Lifetime earnings"
                     value={fmtMoney(summary.lifetime_earnings)}
-                    sub={`${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`}
+                    sub={hasBonuses
+                        ? `${fmtMoney(summary.lifetime_ride_earnings ?? 0)} rides + ${fmtMoney(summary.lifetime_bonuses ?? 0)} bonuses · ${fmtMoney(summary.lifetime_tips)} tips`
+                        : `${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`
+                    }
                 />
                 <PayoutMetric
                     label="Year to date"
@@ -2193,6 +2233,39 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                 </div>
             )}
 
+            {/* Bonuses (quest/referral/adjustment) */}
+            {bonuses.length > 0 && (
+                <div className="rounded-xl border border-border overflow-x-auto">
+                    <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+                        <DollarSign className="h-4 w-4 text-muted-foreground" />
+                        <h4 className="text-sm font-semibold">Bonuses &amp; Adjustments</h4>
+                        <Badge variant="outline" className="text-[10px] ml-auto">{bonuses.length} entries</Badge>
+                    </div>
+                    <Table>
+                        <TableHeader>
+                            <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Date</TableHead>
+                                <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right">Amount</TableHead>
+                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Type</TableHead>
+                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Description</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {bonuses.map((b) => (
+                                <TableRow key={b.id} className="hover:bg-muted/20">
+                                    <TableCell className="text-xs whitespace-nowrap">{fmtDateTime(b.created_at)}</TableCell>
+                                    <TableCell className="text-sm font-semibold text-right tabular-nums">{fmtMoney(b.amount)}</TableCell>
+                                    <TableCell>
+                                        <Badge variant="outline" className="text-[10px]">{b.kind}</Badge>
+                                    </TableCell>
+                                    <TableCell className="text-xs text-muted-foreground">{b.description || "—"}</TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            )}
+
             {/* Earnings statements — date-filtered download / email to driver */}
             <DriverStatementsPanel driverId={driverId} driverName={driverName} notify={notify} />
 
@@ -2204,6 +2277,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                             <SortableHead column="processed_at" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Date</SortableHead>
                             <SortableHead column="amount" sort={payoutsSort} onSort={togglePayoutsSort} align="right" className="h-9 text-[11px] uppercase tracking-wider">Amount</SortableHead>
                             <SortableHead column="status" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Status</SortableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Type</TableHead>
                             <SortableHead column="bank_name" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Destination</SortableHead>
                             <SortableHead column="stripe_payout_id" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Stripe Ref</SortableHead>
                             <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right">Action</TableHead>
@@ -2212,7 +2286,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     <TableBody>
                         {payouts.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                                <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
                                     <p className="text-sm">No payouts yet.</p>
                                     <p className="text-xs mt-1">When {driverName} requests a withdrawal it will appear here.</p>
                                 </TableCell>
@@ -2220,6 +2294,12 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                         ) : sortedPayouts.map((p) => {
                             const style = PAYOUT_STATUS_STYLE[p.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: p.status };
                             const isRetrying = retryingPayoutId === p.id;
+                            const typeLabel =
+                                p.payout_type === "stripe_sync" ? "Stripe Transfer"
+                                : p.payout_type === "instant" ? "Instant"
+                                : p.payout_type === "legacy_import" ? "Legacy import"
+                                : !p.payout_type || p.payout_type === "standard" ? "Standard"
+                                : p.payout_type;
                             return (
                                 <TableRow key={p.id} className="hover:bg-muted/20">
                                     <TableCell className="text-xs whitespace-nowrap">
@@ -2238,6 +2318,9 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                             )}
                                         </div>
                                     </TableCell>
+                                    <TableCell>
+                                        <Badge variant="outline" className="text-[10px]">{typeLabel}</Badge>
+                                    </TableCell>
                                     <TableCell className="text-xs">
                                         {p.bank_name ? (
                                             <>
@@ -2247,14 +2330,14 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                         ) : "—"}
                                     </TableCell>
                                     <TableCell>
-                                        {p.stripe_payout_id ? (
+                                        {(p.stripe_transfer_id || p.stripe_payout_id) ? (
                                             <button
                                                 type="button"
-                                                onClick={() => navigator.clipboard.writeText(p.stripe_payout_id!)}
-                                                title={`Copy ${p.stripe_payout_id}`}
+                                                onClick={() => navigator.clipboard.writeText(p.stripe_transfer_id || p.stripe_payout_id || "")}
+                                                title={`Copy ${p.stripe_transfer_id || p.stripe_payout_id}`}
                                                 className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
                                             >
-                                                {p.stripe_payout_id.slice(0, 12)}…
+                                                {(p.stripe_transfer_id || p.stripe_payout_id || "").slice(0, 12)}...
                                                 <Copy className="h-2.5 w-2.5" />
                                             </button>
                                         ) : (

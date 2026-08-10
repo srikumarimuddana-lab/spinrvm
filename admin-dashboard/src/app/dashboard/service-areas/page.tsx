@@ -450,7 +450,7 @@ export default function ServiceAreasPage() {
                                   Draw Airport Boundary on Map {airportForm.polygon.length === 0 && <span className="text-red-500">(required)</span>}
                                 </label>
                                 <div className="h-64 rounded-xl overflow-hidden border border-blue-200">
-                                  <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+                                  <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
                                     <GeofenceMap
                                       key={airportMapKey}
                                       polygon={airportForm.polygon}
@@ -464,7 +464,7 @@ export default function ServiceAreasPage() {
                               </div>
                               <div className="flex gap-3">
                                 <button onClick={() => handleCreateAirportSubRegion(area.id)} className="bg-blue-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-blue-600">Create Airport Zone</button>
-                                <button onClick={() => setAddAirportFor(null)} className="bg-gray-100 text-gray-600 px-5 py-2 rounded-xl text-sm font-semibold">Cancel</button>
+                                <button onClick={() => setAddAirportFor(null)} className="bg-muted text-foreground px-5 py-2 rounded-xl text-sm font-semibold">Cancel</button>
                               </div>
                             </div>
                           )}
@@ -498,7 +498,7 @@ export default function ServiceAreasPage() {
                                   <div>
                                     <label className="block text-xs font-semibold text-blue-800 mb-2">Airport Zone Boundary</label>
                                     <div className="h-56 rounded-xl overflow-hidden border border-blue-200">
-                                      <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+                                      <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
                                         <GeofenceMap
                                           key={`sub-${sub.id}`}
                                           polygon={getAreaPolygon(sub)}

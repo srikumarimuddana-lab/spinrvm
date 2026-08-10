@@ -93,8 +93,10 @@ _LOCK_TTL_SECONDS = int(LEDGER_PROJECTION_INTERVAL_SECONDS * (1 - _JITTER_FRACTI
 # never select * in a loop (payment_retry idiom). discount_amount is required,
 # not optional: driver_earnings is computed pre-discount while the rider is
 # charged post-discount, so without it every promo ride looks like a fare whose
-# parts exceed the whole. See build_charge_legs.
-_RIDE_COLUMNS = "id,total_fare,grand_total,tax_amount,driver_earnings,tip_amount,discount_amount"
+# parts exceed the whole. See build_charge_legs. payment_status is required by
+# _decompose's B20 settlement check — WITHOUT it every fare charge would read
+# None != "paid" and degrade unconditionally, the opposite of the intended fix.
+_RIDE_COLUMNS = "id,total_fare,grand_total,tax_amount,driver_earnings,tip_amount,discount_amount,payment_status"
 
 # Set after the first "function does not exist" error so a partial deploy
 # (code live, migration 287 not yet applied) logs once, not every 15 minutes.
@@ -170,6 +172,29 @@ def _decompose(event: Dict[str, Any], ride: Optional[Dict[str, Any]]) -> tuple:
     # settles that reuse it). Decompose from the ride row.
     if not ride:
         return _degraded_legs(event_type, amount), True, "ride_missing"
+    if ride.get("payment_status") != "paid":
+        # ACTION_ITEMS B20: the financial_events header can legitimately land
+        # before update_ride's paid flip (see payment_service.py's two
+        # settlement paths) — migration 287's 30-minute age filter is generous
+        # headroom for that *normal* gap. But a ride whose post-charge
+        # update_ride failed and wasn't recovered in time (the 503
+        # "confirmation failed" path) can still be un-paid when this event
+        # finally clears that filter. Decomposing from driver_earnings/
+        # tax_amount here would silently read pre-tip figures and book the
+        # tip to platform_revenue instead of driver_payable, with no signal
+        # anything went wrong.
+        #
+        # Booking degraded (not skip-and-retry) keeps the work queue moving:
+        # a skip would leave this event with no legs, sitting at the head of
+        # financial_events_missing_legs' oldest-first queue forever if the
+        # ride is never recovered — reintroducing the exact starvation the
+        # RPC's own event_type/amount filters exist to avoid (see migration
+        # 287's header). Degrading writes legs immediately (removing it from
+        # the queue) and the escalate() call below pages on-call instead of
+        # silently mis-booking. Source-aware by construction: cancellation_fee
+        # and scheduled_cancel_notice_fee events return above this branch and
+        # never reach it, so a cancelled (not paid) ride never trips this check.
+        return _degraded_legs(event_type, amount), True, "ride_not_yet_settled"
     legs = ledger_service.build_charge_legs(
         total_cents=amount,
         driver_cents=to_cents(ride.get("driver_earnings")),

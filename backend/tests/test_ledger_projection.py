@@ -14,6 +14,12 @@ What must hold:
 - The flag is checked once per tick; the missing-RPC partial-deploy case
   idles quietly; one bad row never stops the batch; prod writers pass no
   legs (single-writer invariant: only the projection writes legs).
+- A fare-settlement event whose ride isn't yet payment_status='paid' (the
+  header-before-update_ride write gap outlasting migration 287's 30-minute
+  filter — e.g. a stuck-processing ride from a failed post-charge write)
+  degrades rather than silently decomposing from stale driver_earnings/
+  tax_amount (ACTION_ITEMS B20). Source-aware: cancellation_fee and
+  scheduled_cancel_notice_fee events never reach this check.
 """
 
 from __future__ import annotations
@@ -51,6 +57,11 @@ def _ride(**overrides) -> dict:
         "driver_earnings": "15.00",
         "tip_amount": "0.00",
         "discount_amount": "0.00",
+        # Every existing test in this file exercises the settled/happy path
+        # (B20's fix reads this to decide whether driver_earnings/tax_amount
+        # can be trusted yet) — override to something else to test the
+        # stuck-processing case.
+        "payment_status": "paid",
     }
     base.update(overrides)
     return base
@@ -86,6 +97,51 @@ def test_fare_charge_with_inconsistent_amounts_degrades():
     ride = _ride(driver_earnings="25.00", tax_amount="5.00")
     legs, degraded, reason = lp._decompose(_event(), ride)
     assert degraded and reason == "amounts_inconsistent"
+    ls.assert_balanced(legs)
+
+
+def test_fare_charge_on_stuck_processing_ride_degrades_not_misclassifies():
+    """ACTION_ITEMS B20 REGRESSION: a ride whose post-charge update_ride never
+    landed (the 503 'confirmation failed' path — see payment_service.py) can
+    still be un-paid by the time migration 287's 30-minute age filter lets
+    this event through. Before the fix, this silently decomposed from the
+    stale (pre-tip) driver_earnings/tax_amount and booked the tip to
+    platform_revenue with no signal anything was wrong. It must now degrade
+    loudly instead — same whole-amount-to-platform_revenue booking as
+    ride_missing/amounts_inconsistent, not a skip (skipping would leave this
+    event queued forever, starving the oldest-first work queue)."""
+    ride = _ride(payment_status="processing")
+    legs, degraded, reason = lp._decompose(_event(), ride)
+    assert degraded and reason == "ride_not_yet_settled"
+    ls.assert_balanced(legs)
+    by = {(leg.account, leg.side): leg.amount_cents for leg in legs}
+    assert by == {
+        (ls.ACCT_STRIPE_RECEIVABLE, ls.DEBIT): 2000,
+        (ls.ACCT_PLATFORM_REVENUE, ls.CREDIT): 2000,
+    }
+
+
+def test_fare_charge_on_failed_payment_status_ride_also_degrades():
+    """Any non-'paid' status is untrustworthy here, not just 'processing' —
+    e.g. a ride reset toward 'failed' by payment_retry's outer except after
+    the header was already written by an earlier, since-superseded attempt."""
+    ride = _ride(payment_status="failed")
+    _legs, degraded, reason = lp._decompose(_event(), ride)
+    assert degraded and reason == "ride_not_yet_settled"
+
+
+def test_cancellation_fee_on_unpaid_ride_is_not_affected_by_the_paid_check():
+    """Source-aware by construction: cancellation_fee events point at
+    cancelled (never 'paid') rides and must keep projecting normally —
+    B20's check lives only in the default fare-settlement branch, which
+    cancellation_fee returns above and never reaches."""
+    ride = _ride(payment_status="failed")  # a cancelled ride is never 'paid'
+    ev = _event(
+        delta_cents=450,
+        metadata={"source": "cancellation_fee", "fee_admin": "0.50", "fee_driver": "4.00"},
+    )
+    legs, degraded, reason = lp._decompose(ev, ride)
+    assert not degraded and reason is None, "cancellation_fee must not be caught by the fare-only paid check"
     ls.assert_balanced(legs)
 
 
@@ -131,6 +187,17 @@ def test_ride_columns_fetch_discount_amount():
     make every promo ride silently degrade again with no test failing.
     """
     assert "discount_amount" in lp._RIDE_COLUMNS.split(",")
+
+
+def test_ride_columns_fetch_payment_status():
+    """ACTION_ITEMS B20: _decompose reads ride["payment_status"] to decide
+    whether driver_earnings/tax_amount can be trusted yet. Without this
+    column in _RIDE_COLUMNS, ride.get("payment_status") is always None in
+    production, which is != "paid" — every fare charge would degrade
+    unconditionally, the opposite of the intended fix, with no test failing
+    to catch it (the in-memory _decompose unit tests above build their own
+    ride dicts and would stay green regardless of what the SELECT fetches)."""
+    assert "payment_status" in lp._RIDE_COLUMNS.split(",")
 
 
 def test_cancellation_fee_decomposes_from_metadata_split():

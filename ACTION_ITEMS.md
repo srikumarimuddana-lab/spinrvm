@@ -4951,6 +4951,13 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   this endpoint. No code change needed; correcting the stale item.
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
+- [ ] **D8. No rate limiting on SIN-touching admin endpoints** — flagged by the
+  2026-08-10 security audit of the SIN-enforcement branch: `reveal-sin`
+  (pre-existing), `update-sin`, and `/tax-ids/import/{validate,commit}` are
+  all absent from `utils/rate_limiter.py`. Not exploitable past the
+  super_admin gate + audit rows, but three SIN surfaces with zero throttling
+  should be a deliberate decision, not an inherited omission. Decide a limit
+  (e.g. reveal/update: 10/hour per admin) and wire it, or document why not.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.
 - [x] **D7. Admin analytics Redis cache** — done: `GET /admin/analytics/cancellation-reasons`
   now caches its response for 5 minutes (`_OVERVIEW_CACHE_TTL`, same TTL

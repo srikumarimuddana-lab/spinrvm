@@ -4587,8 +4587,28 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   repo).
 
 ### C12. Codecov uploads on `main` pushes silently fail — no token configured
-- [ ] **Status:** open — found 2026-08-10 while checking A1c's current
-  coverage number against the latest `main` CI run.
+- [ ] **Status:** open — partially addressed 2026-08-11 (the "also worth
+  doing alongside" half, not the actual fix — see below). The `CODECOV_TOKEN`
+  secret itself is still missing; do not close this checkbox until it's
+  added and `token: ${{ secrets.CODECOV_TOKEN }}` is wired into the 3 steps
+  below.
+- **2026-08-11 update:** added a follow-up step after each of the 3
+  *actually-running* `codecov/codecov-action@v6` calls (`backend-test`,
+  `driver-app-test`, `rider-app-test`) that checks `steps.codecov_upload.outcome
+  == 'failure'` (the step's real result, unmasked by `continue-on-error`) and
+  emits a `::warning::` annotation plus a `$GITHUB_STEP_SUMMARY` entry when
+  the upload fails. Does **not** change the job's overall conclusion — still
+  green until the token exists — only stops the failure from being invisible.
+  **Correction to the "4 times... backend/rider-app/driver-app/admin" count
+  below: `admin-test` has no Codecov upload step at all** — checked directly
+  against `ci.yml`, only `backend-test`, the disabled `frontend-test` (`if:
+  false`, dead code, not touched), `driver-app-test`, and `rider-app-test`
+  have one. So the real count of live jobs affected is 3, not 4. YAML
+  validated via `yaml.safe_load` (parses clean, correct step count per job);
+  no live GitHub Actions run available in this session to confirm the
+  `::warning::`/summary actually fires on a real rejected upload — next
+  push-triggered `main` run (which reliably rejects tokenless, per the
+  original finding) is the real confirmation.
 - **What's wrong:** `.github/workflows/ci.yml`'s `backend-test` job uploads
   to Codecov via `codecov/codecov-action@v6` with no `token:` input (tokenless
   upload) and `continue-on-error: true`. On push-triggered runs (as opposed to

@@ -1,0 +1,95 @@
+name: Mobile Bundle Smoke Test
+
+# ─── What this does ────────────────────────────────────────────────────────
+# Runs a real Metro bundle (`expo export`) for both mobile apps on every PR
+# that touches them, on BOTH platforms Metro actually resolves differently
+# for (android/ios). This is the step `eas update` / `eas build` run in
+# production — but here it runs *before* merge, as a required PR check,
+# instead of failing silently after landing on main.
+#
+# Why this exists: a react-native 0.86 (SDK 57) upgrade removed a legacy
+# renderer shim that react-native-gesture-handler still imported. Metro
+# could not resolve it, so `expo export`, `eas build`, and `eas update` all
+# died at the bundling step. Nothing in CI ran an actual bundle — `tsc
+# --noEmit` and `expo install --check` (mobile-dep-check.yml) both passed
+# throughout — so the break was invisible until eas-build.yml's push-to-main
+# "EAS Mobile Update" job tried to publish an OTA and failed. It failed on
+# every push for ~8 consecutive update jobs across both apps before anyone
+# noticed the dashboard. See docs/change-log/2026-08-11-metro-rngh-renderer-shim.md
+# for the incident, and ACTION_ITEMS.md C17 for the follow-up.
+#
+# This check is intentionally build-time only (no device/simulator) — it
+# catches "can we produce a bundle at all", not runtime behavior. Runtime
+# regressions still need docs/runbooks/MOBILE_SMOKE.md.
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "rider-app/**"
+      - "driver-app/**"
+      - "shared/**"
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  rider-bundle-smoke:
+    name: rider-app — expo export (android + ios)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rider-app
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache rider-app node_modules
+        uses: actions/cache@v6
+        with:
+          path: rider-app/node_modules
+          # Same key shape as mobile-dep-check.yml: include patches/** so a
+          # patch-package change invalidates the cache instead of trying to
+          # re-apply a hunk on top of an already-patched node_modules.
+          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Bundle smoke — Android
+        run: npx expo export --platform android --output-dir /tmp/rider-export-android
+
+      - name: Bundle smoke — iOS
+        run: npx expo export --platform ios --output-dir /tmp/rider-export-ios
+
+  driver-bundle-smoke:
+    name: driver-app — expo export (android + ios)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: driver-app
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache driver-app node_modules
+        uses: actions/cache@v6
+        with:
+          path: driver-app/node_modules
+          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Bundle smoke — Android
+        run: npx expo export --platform android --output-dir /tmp/driver-export-android
+
+      - name: Bundle smoke — iOS
+        run: npx expo export --platform ios --output-dir /tmp/driver-export-ios

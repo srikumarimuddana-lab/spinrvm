@@ -174,3 +174,30 @@ async def test_account_emails_are_branded():
 async def test_sender_failure_never_propagates():
     with patch.object(re_mod, "send_lifecycle_email", AsyncMock(side_effect=RuntimeError("boom"))):
         assert await re_mod.send_welcome_email({"id": "u1"}) is False
+
+
+# --- New-device sign-in notice (ACTION_ITEMS.md N15/R8) --------------------
+
+
+async def test_new_device_notice_is_sent_to_the_current_address():
+    kwargs = await _capture(lambda: re_mod.send_new_device_notice({"id": "u1", "email": "current@example.com"}))
+    assert kwargs["to_override"] is None  # goes to the resolved recipient's own address, not overridden
+
+
+async def test_new_device_notice_tells_the_reader_what_to_do_if_it_was_not_them():
+    kwargs = await _capture(lambda: re_mod.send_new_device_notice({"id": "u1"}))
+    body = kwargs["rendered"].text
+    assert "haven't seen before" in body
+    assert "contact" in body.lower()
+
+
+async def test_new_device_notice_is_transactional():
+    from utils.email_notifications import EmailClass
+
+    kwargs = await _capture(lambda: re_mod.send_new_device_notice({"id": "u1"}))
+    assert kwargs["email_class"] is EmailClass.TRANSACTIONAL
+
+
+async def test_new_device_notice_failure_never_propagates():
+    with patch.object(re_mod, "send_lifecycle_email", AsyncMock(side_effect=RuntimeError("boom"))):
+        assert await re_mod.send_new_device_notice({"id": "u1"}) is False

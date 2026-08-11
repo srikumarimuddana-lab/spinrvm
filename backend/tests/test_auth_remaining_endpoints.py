@@ -361,6 +361,7 @@ class TestReactivateAccount:
                 AsyncMock(return_value=("raw-refresh", "hash", datetime.now(timezone.utc) + timedelta(days=30))),
             ),
             patch("backend.routes.auth._audit_log_user", AsyncMock()),
+            patch("backend.routes.auth._alert_if_new_device", AsyncMock()),
         ):
             inner = _resolve_inner(reactivate_account)
             body = ReactivateRequest(reactivation_token="valid-token")
@@ -371,6 +372,40 @@ class TestReactivateAccount:
         # First update_one call restores status; called with users table + user id
         calls = [c.args for c in update_mock.await_args_list]
         assert any(c[0] == "users" and c[1] == {"id": "u-react-1"} and c[2].get("status") == "active" for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_reactivation_checks_for_new_device(self):
+        """ACTION_ITEMS.md N15/R8 — reactivating a signed-out account is a
+        real sign-in and must run the same new-device check other logins do."""
+        from backend.routes.auth import ReactivateRequest, reactivate_account
+
+        user = {
+            "id": "u-react-3",
+            "phone": "+13065553333",
+            "status": "pending_deletion",
+            "token_version": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        alert_mock = AsyncMock()
+        with (
+            patch("backend.routes.auth.verify_reactivation_token", return_value="u-react-3"),
+            patch("backend.routes.auth.db_supabase.get_user_by_id", AsyncMock(return_value=dict(user))),
+            patch("backend.routes.auth.db_supabase.update_one", AsyncMock(return_value=True)),
+            patch("backend.routes.auth.redis_set", AsyncMock()),
+            patch(
+                "backend.routes.auth.issue_refresh_token",
+                AsyncMock(return_value=("raw-refresh", "hash", datetime.now(timezone.utc) + timedelta(days=30))),
+            ),
+            patch("backend.routes.auth._audit_log_user", AsyncMock()),
+            patch("backend.routes.auth._alert_if_new_device", alert_mock),
+        ):
+            inner = _resolve_inner(reactivate_account)
+            body = ReactivateRequest(reactivation_token="valid-token")
+            await inner(_request(), MagicMock(), body)
+
+        alert_mock.assert_awaited_once()
+        called_user = alert_mock.await_args.args[0]
+        assert called_user["id"] == "u-react-3"
 
     @pytest.mark.asyncio
     async def test_already_active_account_is_idempotent(self):
@@ -395,6 +430,7 @@ class TestReactivateAccount:
                 "backend.routes.auth.issue_refresh_token",
                 AsyncMock(return_value=("raw-refresh", "hash", datetime.now(timezone.utc) + timedelta(days=30))),
             ),
+            patch("backend.routes.auth._alert_if_new_device", AsyncMock()),
         ):
             inner = _resolve_inner(reactivate_account)
             body = ReactivateRequest(reactivation_token="valid-token")
@@ -608,6 +644,7 @@ class TestCompanyEmailOtpErrorBranches:
                 return [otp]
             return []  # no user, no invites
 
+        alert_mock = AsyncMock()
         with (
             patch("backend.routes.auth._check_otp_lockout", AsyncMock()),
             patch("backend.routes.auth._record_otp_failure", AsyncMock()),
@@ -623,10 +660,70 @@ class TestCompanyEmailOtpErrorBranches:
             ),
             patch("backend.routes.auth.generate_csrf_token", return_value="csrf"),
             patch("backend.routes.auth.set_csrf_cookie"),
+            patch("backend.routes.auth._alert_if_new_device", alert_mock),
         ):
             result = await verify_company_email_otp(
                 _request(), MagicMock(), CompanyEmailOtpVerifyRequest(email="brandnew@corp.com", code="1234")
             )
+
+        # ACTION_ITEMS.md N15/R8: a brand-new signup has no prior device to
+        # compare against — alerting here would be pure noise, not a signal.
+        alert_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_verify_existing_user_checks_for_new_device(self):
+        """A returning corporate-email user is a real sign-in, so the
+        new-device check must run (unlike the brand-new-signup case above)."""
+        from backend.routes.auth import CompanyEmailOtpVerifyRequest, verify_company_email_otp
+        from backend.utils.crypto import hash_otp
+
+        otp = {
+            "id": "otp-existing",
+            "email": "returning@corp.com",
+            "code_hash": hash_otp("1234"),
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            "verified": False,
+        }
+        existing_user = {
+            "id": "existing-corp-user",
+            "email": "returning@corp.com",
+            "phone": "+13065559999",
+            "role": "rider",
+            "status": "active",
+            "token_version": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        async def fake_get_rows(table, filters=None, **kwargs):
+            if table == "corporate_email_otp_records":
+                return [otp]
+            if table == "users":
+                return [existing_user]
+            return []
+
+        alert_mock = AsyncMock()
+        with (
+            patch("backend.routes.auth._check_otp_lockout", AsyncMock()),
+            patch("backend.routes.auth._record_otp_failure", AsyncMock()),
+            patch("backend.routes.auth._clear_otp_failures", AsyncMock()),
+            patch("backend.routes.auth.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.auth.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.auth.redis_set", AsyncMock()),
+            patch("backend.routes.auth.create_jwt_token", return_value="tok"),
+            patch(
+                "backend.routes.auth.issue_refresh_token",
+                AsyncMock(return_value=("rt", "rh", datetime.now(timezone.utc) + timedelta(days=30))),
+            ),
+            patch("backend.routes.auth.generate_csrf_token", return_value="csrf"),
+            patch("backend.routes.auth.set_csrf_cookie"),
+            patch("backend.routes.auth._alert_if_new_device", alert_mock),
+        ):
+            await verify_company_email_otp(
+                _request(), MagicMock(), CompanyEmailOtpVerifyRequest(email="returning@corp.com", code="1234")
+            )
+
+        alert_mock.assert_awaited_once()
+        assert alert_mock.await_args.args[0]["id"] == "existing-corp-user"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

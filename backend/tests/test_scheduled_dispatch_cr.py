@@ -646,9 +646,7 @@ class TestDriverNudge:
         with (
             patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
             patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
-            patch.object(
-                sr.db, "get_rows", AsyncMock(return_value=[{"user_id": "driver-1"}, {"user_id": "driver-2"}])
-            ),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"user_id": "driver-1"}, {"user_id": "driver-2"}])),
             patch.object(sr, "send_push_notification", push_mock),
         ):
             # Must not raise even though the first push failed.
@@ -696,9 +694,7 @@ class TestCorporatePolicyRecheck:
 
         eval_mock = AsyncMock()
         with patch("services.corporate_policy_service.evaluate_policy_for_ride", eval_mock):
-            allowed = await sr._corporate_policy_still_allows_dispatch(
-                _corp_ride(corporate_account_id=None)
-            )
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride(corporate_account_id=None))
 
         assert allowed is True
         eval_mock.assert_not_awaited()
@@ -738,6 +734,8 @@ class TestCorporatePolicyRecheck:
         assert allowed is False
         metric_inc.assert_called_once_with("spinr_dispatch_scheduled_corporate_policy_blocked_total")
         push.assert_awaited_once()
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push.await_args.kwargs.get("target_app") == "rider"
         admin_bcast.assert_awaited_once()
         admin_payload = admin_bcast.await_args.args[0]
         assert admin_payload["type"] == "scheduled_ride_policy_blocked"

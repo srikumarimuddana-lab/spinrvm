@@ -96,6 +96,7 @@ async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict, *, escala
                 "Your ride is taking longer than expected to start because your other trip "
                 "hasn't finished yet. We'll keep trying — contact support if you'd like to cancel or rebook.",
                 data={"type": "scheduled_ride_delayed_escalated", "ride_id": ride_id},
+                target_app="rider",
             )
         else:
             await send_push_notification(
@@ -103,6 +104,7 @@ async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict, *, escala
                 "Your scheduled ride is waiting",
                 "We'll start finding a driver as soon as your current trip ends.",
                 data={"type": "scheduled_ride_delayed", "ride_id": ride_id},
+                target_app="rider",
             )
     except Exception as e:
         logger.warning(f"scheduled dispatch: delayed-notice push failed for {ride_id}: {e}")
@@ -302,6 +304,7 @@ async def _corporate_policy_still_allows_dispatch(ride: dict) -> bool:
                 "Your scheduled ride is on hold",
                 "Your company's booking policy no longer allows this ride. Contact your company admin for help.",
                 data={"type": "scheduled_ride_policy_blocked", "ride_id": ride_id},
+                target_app="rider",
             )
         except Exception as push_err:
             logger.warning(f"scheduled dispatch: policy-blocked push failed for {ride_id}: {push_err}")
@@ -491,6 +494,7 @@ async def _dispatch_scheduled_ride(ride: dict):
                 "Your scheduled ride is starting!",
                 f"We're finding a driver for your ride to {ride.get('dropoff_address', 'your destination')}.",
                 data={"type": "scheduled_ride_dispatched", "ride_id": ride_id},
+                target_app="rider",
             )
 
     except Exception as e:
@@ -535,6 +539,7 @@ async def _send_reminder(ride: dict):
                     "Ride reminder - 10 minutes",
                     f"Your ride to {ride.get('dropoff_address', 'your destination')} is scheduled soon. A driver will be assigned shortly.",
                     data={"type": "scheduled_ride_reminder", "ride_id": ride_id},
+                    target_app="rider",
                 )
             except Exception:
                 try:

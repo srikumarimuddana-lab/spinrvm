@@ -1361,6 +1361,7 @@ async def settle_card(
                         "ride_id": ride_id,
                         "deeplink": "/wallet",
                     },
+                    target_app="rider",
                 )
             except Exception as _push_err:
                 logger.debug(f"Payment failure push to rider failed: {_push_err}")
@@ -1407,6 +1408,7 @@ async def settle_card(
                     "ride_id": ride_id,
                     "deeplink": "/wallet",
                 },
+                target_app="rider",
             )
         except Exception as _push_err:
             logger.debug(f"Payment failure push to rider failed: {_push_err}")

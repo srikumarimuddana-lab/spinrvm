@@ -4954,6 +4954,23 @@ Remaining, roughly in order of user impact:
   rather than `fcm_token_rider`. Works today only because registration still
   mirrors both (`routes/notifications.py:329-336`); breaks silently if that
   mirroring is ever removed.
+  **2026-08-11 update — Batch 1 done:** fixed the 10 clearest, unambiguous
+  rider-directed call sites across 5 files —
+  `routes/rides/lifecycle.py:113` (ride-started push),
+  `routes/rides/matching.py:1347` (no-drivers-found auto-cancel),
+  `utils/scheduled_rides.py:93,102,302,492,537` (delay notice ×2,
+  policy-blocked, dispatch-fired, 10-min reminder),
+  `utils/stuck_ride_sweeper.py:117` (stuck-ride auto-cancel), and
+  `services/payment_service.py:1355,1402` (payment-failed ×2, fresh-charge
+  path). Each got a regression test asserting `target_app="rider"` is passed
+  (verified to fail if reverted). ~19 call sites remain, inventoried in
+  `docs/change-log/2026-08-11-n10-rider-push-target-app-batch1.md`'s
+  "Remaining scope" section — the clearest next batch is
+  `routes/disputes.py:98,308` and
+  `services/guest_notification_service.py:167`, all confirmed unambiguously
+  rider-directed but not yet fixed. `routes/rides/cancellation.py` and
+  `utils/receipt_email.py` were excluded from this sweep entirely (owned by
+  parallel N5/N8 sessions this run) and still need their own inventory pass.
 - [ ] **N16. Consolidate the two copies of the company-address assembly** —
   `utils/company_details.py` and `utils/marketing_email.py` both carry
   `_coalesce` / `_postal_address`. Deliberately not merged: marketing's copy

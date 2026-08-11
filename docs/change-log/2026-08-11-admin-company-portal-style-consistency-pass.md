@@ -8,7 +8,7 @@
 | Author | Claude (agent) |
 | Surface(s) | admin-dashboard (`/company-portal` — corporate self-service surface) |
 | Domain (Sentry tag) | corporate, admin |
-| PR / commit link | f9b5ad9, 2e471a3, 8721e80, 37acef1, 607b314 |
+| PR / commit link | f9b5ad9, 2e471a3, 8721e80, 37acef1, 607b314, 25ce8b8 (batch F addendum) |
 | Related issue or gap ID | #2816 (adjacent style-consistency follow-on, not itself a filed bug) |
 
 ## 1. Issue / gap identified
@@ -164,6 +164,27 @@ possible without affecting the others.
 - [x] No silent behavior change — explicitly framed as visual-only from
       the start (Section 1); UX effect field states the exact trigger
       conditions are unchanged
+
+## 11. Addendum — batch F (`company-login`, `company-signup`)
+
+Found in a follow-up sweep: `admin-dashboard/src/app/company-login/page.tsx`
+and `admin-dashboard/src/app/company-signup/page.tsx` — the public
+sibling entry pages to `/company-portal` (same product surface, same
+Building2-icon-in-a-badge header + `bg-red-50` error box) — were outside
+the original 13-file batch because they live at the top-level `app/`
+route rather than under `app/company-portal/`. Confirmed
+theme-participating via existing `bg-background` usage in both files
+(not a standalone/fixed-light page). Same fix, same rationale, same
+tokens as the rest of this pass (`bg-destructive/10 text-destructive` for
+the error box, `bg-emerald-50 dark:bg-emerald-900/20` /
+`text-emerald-600 dark:text-emerald-400` for the logo badge) — 2 files,
+4 spots, commit `25ce8b8`.
+
+Verification: `npx tsc --noEmit` (0 new errors), `npx eslint` (0 new
+warnings — cleanest result of this entire pass, no pre-existing warnings
+in either file), `npm run build` (clean production build). Same "not
+independently visually verified, reasoned from established precedent"
+caveat as the rest of this log applies.
 
 ## What was NOT verified
 

@@ -968,12 +968,13 @@ function RideOptionsScreenContent() {
       {/* ═══ Payment method modal ═══ */}
       <Modal visible={showPaymentSheet} animationType="slide" transparent onRequestClose={() => setShowPaymentSheet(false)}>
         {/* Backdrop is an absolute-fill SIBLING under the sheet, not a parent
-            Touchable: nesting the Done button inside two TouchableOpacity
-            wrappers stopped its presses from registering on the New
-            Architecture (rows inside the ScrollView kept working because they
-            route through the scroll responder), leaving riders stuck on this
-            sheet. A plain View sheet over a Pressable backdrop keeps
-            tap-outside-to-close without putting any Touchable above Done. */}
+            Touchable, and there is deliberately NO footer button: this Modal
+            stacks over the ride-options bottom sheet, and on iOS (New Arch,
+            observed on TestFlight 2.0.0 (16)) the region below the ScrollView
+            never receives touches — a footer Done button rendered but was
+            un-tappable, leaving riders stuck. Rows commit their selection and
+            dismiss in the same press instead; backdrop tap and the hardware
+            back button (onRequestClose) stay as the other exits. */}
         <View style={styles.modalOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowPaymentSheet(false)} />
           <View style={styles.paymentModal}>
@@ -987,7 +988,7 @@ function RideOptionsScreenContent() {
                 return (
                   <TouchableOpacity key={card.id}
                     style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
-                    onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); setUseCorporate(false); }}>
+                    onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); setUseCorporate(false); setShowPaymentSheet(false); }}>
                     <View style={styles.paymentOptionIcon}>
                       <Ionicons name="card" size={22} color={isSelected ? colors.primary : colors.textDim} />
                     </View>
@@ -1022,7 +1023,7 @@ function RideOptionsScreenContent() {
               {/* Wallet */}
               <TouchableOpacity
                 style={[styles.paymentOption, selectedPayment === 'wallet' && !useCorporate && styles.paymentOptionSelected]}
-                onPress={() => { setSelectedPayment('wallet'); setUseCorporate(false); }}>
+                onPress={() => { setSelectedPayment('wallet'); setUseCorporate(false); setShowPaymentSheet(false); }}>
                 <View style={styles.paymentOptionIcon}>
                   <Ionicons name="wallet" size={22} color={selectedPayment === 'wallet' && !useCorporate ? colors.primary : colors.textDim} />
                 </View>
@@ -1048,7 +1049,7 @@ function RideOptionsScreenContent() {
                     return (
                       <TouchableOpacity key={acct.id}
                         style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
-                        onPress={() => { setUseCorporate(true); setSelectedCorporateId(acct.id); }}>
+                        onPress={() => { setUseCorporate(true); setSelectedCorporateId(acct.id); setShowPaymentSheet(false); }}>
                         <View style={styles.paymentOptionIcon}>
                           <Ionicons name="business" size={22} color={isSelected ? colors.primary : colors.textDim} />
                         </View>
@@ -1072,10 +1073,6 @@ function RideOptionsScreenContent() {
                 <Text style={styles.addPaymentText}>Add payment method</Text>
               </TouchableOpacity>
             </ScrollView>
-
-            <TouchableOpacity style={styles.paymentDoneBtn} onPress={() => setShowPaymentSheet(false)}>
-              <Text style={styles.paymentDoneBtnText}>Done</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1987,19 +1984,6 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.primary,
     },
-    paymentDoneBtn: {
-      marginTop: 8,
-      paddingVertical: 14,
-      borderRadius: 24,
-      backgroundColor: colors.primary,
-      alignItems: 'center',
-    },
-    paymentDoneBtnText: {
-      fontSize: sf(16),
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: '#FFFFFF',
-    },
-
     // ── Promo sheet ──
     promoSheetContent: {
       paddingHorizontal: 20,

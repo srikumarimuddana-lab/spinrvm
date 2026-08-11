@@ -129,6 +129,46 @@ async def test_kill_switch_short_circuits_before_any_query():
 
 
 @pytest.mark.asyncio
+async def test_master_corporate_billing_kill_switch_short_circuits():
+    """E5: corporate_billing_enabled is the master switch, layered on top
+    of this loop's own more specific corporate_kyb_reverification_enabled
+    toggle -- off must short-circuit even when the specific toggle is on."""
+    with (
+        patch(
+            "utils.kyb_reverification.get_app_settings",
+            AsyncMock(return_value={"corporate_billing_enabled": False, "corporate_kyb_reverification_enabled": True}),
+        ),
+        patch("utils.kyb_reverification.list_companies_needing_kyb_reverification", AsyncMock()) as m_list,
+    ):
+        from utils.kyb_reverification import run_kyb_reverification_tick
+
+        await run_kyb_reverification_tick()
+
+    m_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_master_corporate_billing_key_missing_defaults_to_enabled():
+    """A settings dict with no corporate_billing_enabled key (legacy row)
+    must still proceed -- the flag defaults to enabled. _SETTINGS_ON
+    (used by every other test in this file) already omits this key, so
+    this pins that those tests aren't accidentally passing for the wrong
+    reason."""
+    with (
+        patch("utils.kyb_reverification.get_app_settings", AsyncMock(return_value=_SETTINGS_ON)),
+        patch(
+            "utils.kyb_reverification.list_companies_needing_kyb_reverification",
+            AsyncMock(return_value=[]),
+        ) as m_list,
+    ):
+        from utils.kyb_reverification import run_kyb_reverification_tick
+
+        await run_kyb_reverification_tick()
+
+    m_list.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_custom_threshold_months_is_passed_through():
     settings = {"corporate_kyb_reverification_enabled": True, "corporate_kyb_reverify_after_months": 6}
     with (

@@ -5162,6 +5162,17 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   where it was found.
 
 ### C17. No CI job ever ran an actual Metro bundle — 8 consecutive EAS Mobile Update jobs failed silently on `main` after the SDK 57 bump before anyone noticed
+- **CORRECTION (2026-08-11, later same day):** the line below ("EAS Mobile
+  Update jobs" now healthy) is **wrong as a production status claim** — it
+  was true only for the specific bundling failure this item and the linked
+  change log describe. Checking the actual `EAS Mobile Update` run history
+  (run #620, `f011ff3`, well after `d4b573c` merged) found bundling now
+  succeeds but `eas update` still fails 100% of the time, at a **different,
+  later step** neither this item's nor the change log's verification ran
+  (`expo export` doesn't reach it; only the real `eas update` command does).
+  See **C19** for the still-open, still-live bug and its fix. Leaving this
+  item's text below as-written (it's accurate about what it actually fixed
+  and verified) rather than editing history — read C19 for current reality.
 - [x] **Status:** CI gate CLOSED (2026-08-11) — the underlying bundle break
   itself was already fixed same-day by commit `d4b573c` (see
   `docs/change-log/2026-08-11-metro-rngh-renderer-shim.md`); this item adds
@@ -5282,6 +5293,99 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
 - **Files:** all of `.github/workflows/*.yml` except the one file (if any)
   that's already fully pinned — not individually enumerated here; run the
   grep in this entry's own investigation to get the current list.
+
+### C19. `eas update` is still 100% broken on `main` today — a second, different bug downstream of the C17/RNGH fix, in `eas update`'s fingerprint-computation step
+- [x] **Status:** mitigated (2026-08-11) — root-caused, unblocked in CI with
+  EAS's own documented bypass; the underlying yarn.lock resolution bug is
+  **not yet fixed**, only routed around.
+- **How found:** user asked to check the actual EAS Mobile Update run
+  history from `#604` (last green) onward, rather than trust the C17 fix's
+  own "already fixed" framing. Every run **including the latest at the time
+  (`#620`, commit `f011ff3`, well after `d4b573c` — the C17/RNGH fix —
+  merged)** is red for both apps. That framing gap is itself worth naming:
+  C17's verification ran `expo export`, which stops at "bundle produced."
+  `eas update` (the actual production command `eas-build.yml` runs) does
+  strictly more after that — it also computes a project fingerprint before
+  publishing — and that's where it now dies. **A green `expo export` does
+  not mean a green `eas update`**; the two aren't the same command.
+- **Root cause, reproduced directly (not inferred from a log alone):** ran
+  `require('@expo/fingerprint').createFingerprintAsync(cwd)` in driver-app's
+  installed `node_modules` (same library `eas update` calls internally) and
+  got the identical crash byte-for-byte:
+  `(0 , brace_expansion_1.expand) is not a function`, at
+  `@expo/fingerprint/node_modules/minimatch/dist/commonjs/index.js:157`.
+  `@expo/fingerprint@0.20.6` bundles its own `minimatch@10.2.5`, whose
+  `package.json` declares `"brace-expansion": "^5.0.5"` — but that nested
+  `minimatch` has **no nested `node_modules/brace-expansion` of its own**,
+  so Node's resolution walks up and finds the top-level, incorrectly-hoisted
+  `brace-expansion@1.1.18` instead (confirmed via
+  `require.resolve('brace-expansion', {paths: [...]})`). `brace-expansion`
+  v1's export is a bare function (`module.exports = expandTop`), not an
+  object with an `.expand` property — hence `.expand is not a function`.
+  The `yarn.lock` entry itself looks corrupted/stale: one block claims
+  ranges `^1.1.18, ^1.1.7, ^2.0.1, ^2.0.2, ^5.0.5` **all** resolve to version
+  `1.1.18` — which is semver-impossible for the `^2.x`/`^5.x` ranges in that
+  same line — while a separate, correct `brace-expansion@^5.0.9: version
+  "5.0.9"` entry exists elsewhere in the file but isn't the copy Node
+  actually reaches from `@expo/fingerprint`'s nested `minimatch`. Blast
+  radius of the conflicting range: grepped both apps' lockfiles —
+  `minimatch@^10.2.2` has exactly **one** requester in each app
+  (`@expo/fingerprint`, itself pulled in only via `expo@~57.0.9`), so this
+  is narrow, not a wide dependency-tree conflict.
+- **Why this step matters not at all for OTA compatibility here, and so is
+  safe to skip:** both apps pin a **literal string** `runtimeVersion`
+  (`rider-app/app.config.ts` `'2.0.0'`, `driver-app/app.config.ts`
+  `'2.5.0'`), not the `'fingerprint'` policy — the apps' own code comments
+  say EAS CLI rejects a `fingerprint`/`appVersion` policy for bare workflow.
+  The fingerprint `eas update` computes here is unused dead weight for this
+  app's actual compatibility mechanism, not a load-bearing check being
+  bypassed.
+- **Fix applied:** `EAS_SKIP_AUTO_FINGERPRINT: "1"` added to the `env:` of
+  both `rider` and `driver` jobs' "Publish OTA update" step in
+  `.github/workflows/eas-build.yml` — the exact bypass `eas update`'s own
+  error message names (`⏩ To skip this step, set the environment variable:
+  EAS_SKIP_AUTO_FINGERPRINT=1`).
+- **Durable fix still needed (not done here):** repair the `brace-expansion`
+  resolution in `rider-app/yarn.lock` and `driver-app/yarn.lock` so
+  `minimatch@^10.2.2`'s `^5.0.5` requirement resolves to an actual `5.x`
+  install reachable from `@expo/fingerprint/node_modules/minimatch` (e.g.
+  `yarn-deduplicate` on `brace-expansion`, or a `resolutions` pin — verify
+  it doesn't regress the other `brace-expansion` consumers before landing,
+  per this repo's own "verify a newer version actually works before pinning
+  it" gate) — then remove the `EAS_SKIP_AUTO_FINGERPRINT` bypass, since it's
+  routing around a bug, not fixing it.
+- **Risk & impact:** this bug has blocked **every** `eas update` OTA
+  publish on `main` since at least 2026-08-01 (`#605` onward, 15+
+  consecutive failed runs across both apps by the time this was found) —
+  meaning no JS-only fix, however small or urgent, has actually reached a
+  phone on the `production` channel in that window without a full native
+  rebuild. That is the actual severity of this repo's mobile-update
+  pipeline right now, not just "8 red dashboard rows."
+- **User-experience effect:** none directly from this fix (build-pipeline
+  only) — but its *absence* means every rider/driver-facing JS fix shipped
+  since 2026-08-01 has been silently stuck, undelivered to installed apps,
+  until this unblocks it.
+- **Verification performed:** reproduced the exact crash directly via the
+  same `@expo/fingerprint` library call `eas-cli` makes (see Root cause
+  above) — high confidence in the diagnosis. Confirmed both apps pin a
+  literal `runtimeVersion`, not `fingerprint` policy, via their own
+  `app.config.ts`. Confirmed via GitHub Actions job logs (run `#620`) that
+  bundling and upload both fully succeed and the crash is isolated to the
+  post-upload "Computing project fingerprints" step — same signature in
+  both the `rider` and `driver` jobs' logs.
+- **What was NOT verified:** the actual fix (`EAS_SKIP_AUTO_FINGERPRINT=1`)
+  was **not** exercised against the real EAS service in this session — no
+  `EXPO_TOKEN`/Expo auth available here, so `eas update` itself could not be
+  run end-to-end. Confidence in the fix rests on (a) it being `eas update`'s
+  own documented, CLI-printed bypass for exactly this step, and (b)
+  confirming neither app's OTA-compatibility model depends on the skipped
+  computation. The next real push to `main` touching either app is the
+  actual proof — check the `EAS Mobile Update` workflow run for that push.
+  Also not verified: the yarn.lock resolution repair itself (durable fix)
+  — not attempted this session, scoped above for whoever picks it up.
+- **Files:** `.github/workflows/eas-build.yml` (fix applied); durable fix
+  targets `rider-app/yarn.lock` and `driver-app/yarn.lock` (not yet
+  touched).
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

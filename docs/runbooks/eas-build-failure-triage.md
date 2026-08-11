@@ -51,7 +51,7 @@ npx expo export --platform android --output-dir /tmp/export-check
 
 | Result | Meaning |
 |---|---|
-| Exits 0, `.hbc` bundle listed in output | Bundling itself is fine — the EAS failure is something else (credentials, EAS API, build infra). Check the EAS run's raw log, not just the dashboard status dot. |
+| Exits 0, `.hbc` bundle listed in output | Bundling itself is fine — but this does **not** mean `eas update` will succeed (see the warning below). If `eas update` is still red, go to §3b. |
 | Exits non-zero with `Unable to resolve module ...` | **Module resolution failure** — a dependency (often a native module) imports a path that doesn't exist in the currently-installed version of some other dependency. Go to §3. |
 | Exits non-zero with a Babel/transform error | Different class of break (syntax the configured Babel preset can't parse) — not covered by this runbook; check `babel.config.js` against the new dependency's minimum supported RN/Expo version. |
 | Exits non-zero with an out-of-memory or timeout | Infra/resource issue, not a code break — check runner resources, not app code. |
@@ -59,6 +59,17 @@ npx expo export --platform android --output-dir /tmp/export-check
 Run the same check with `--platform ios` too — resolution can differ by
 platform (platform-specific `resolveRequest` branches, `.ios.ts`/`.android.ts`
 file resolution).
+
+> **⚠️ `expo export` succeeding does not mean `eas update` will succeed.**
+> This bit the 2026-08-11 incident's own fix: `expo export` stops once a
+> bundle is produced. `eas update` (the actual command `eas-build.yml` runs
+> in production) does strictly more *after* that — it uploads the bundle,
+> then computes a project fingerprint before publishing. A break in that
+> later step is invisible to `expo export`, to `mobile-bundle-smoke.yml`'s
+> CI check, and to a local `expo export` verification alike. See §3b for a
+> real instance of exactly this. **If you need to be sure `eas update`
+> itself works, run `eas update` itself** (needs `EXPO_TOKEN`) — a green
+> `expo export` is necessary, not sufficient.
 
 ---
 
@@ -120,6 +131,73 @@ until someone notices the dashboard.
    an `ACTION_ITEMS.md` entry naming the upstream release to watch for and
    what to delete once it ships. A silent workaround with no removal
    trigger accumulates forever.
+
+---
+
+## 3b. Root-cause class: `eas update`'s fingerprint step crashes on a broken transitive dependency resolution
+
+Found 2026-08-11, same day as §3's incident, immediately after fixing it —
+`ACTION_ITEMS.md` C19 has the full writeup; this is the general pattern.
+
+**Mechanism:** `eas update` does more than `expo export`. After the bundle
+is built and uploaded, it computes a project fingerprint (via
+`@expo/fingerprint`, installed as a dependency of `expo` itself, not a
+separate global tool) before publishing. That library — like any
+`node_modules`-installed tool — can be broken by a `yarn.lock` resolution
+problem even when your own app code and the bundle itself are completely
+fine. In the 2026-08-11 case: `@expo/fingerprint`'s bundled `minimatch`
+needed a specific major version of `brace-expansion`, had no nested copy of
+it, and Node's directory-walk resolution found a different, incompatible,
+incorrectly-hoisted top-level version instead — `yarn.lock` claimed
+semver-incompatible ranges all resolved to one version, which isn't
+possible and is itself the bug.
+
+**Symptom in the CI log:** bundling and upload both report success
+(`✔ Exported bundle(s)`, `✔ Uploaded N app bundles`), then it dies one step
+later:
+```
+- Computing project fingerprints
+✖ Failed to compute project fingerprints
+⏩ To skip this step, set the environment variable: EAS_SKIP_AUTO_FINGERPRINT=1
+(0 , brace_expansion_1.expand) is not a function
+    Error: update command failed.
+```
+Do not read a "bundle succeeded" log line as "the whole run should have
+succeeded" — check the *last* step that actually ran, not just the ones
+you expected to be interesting.
+
+**Diagnostic steps:**
+
+1. Read past the last successful-looking log line — CI summaries and
+   dashboard status dots often only show that *something* failed, not
+   which step.
+2. Reproduce directly, without needing EAS credentials: call the same
+   library the CLI calls, from a real install.
+   ```bash
+   cd rider-app  # or driver-app
+   yarn install --frozen-lockfile
+   node -e "require('@expo/fingerprint').createFingerprintAsync(process.cwd()).then(r=>console.log('OK')).catch(e=>console.log('ERROR:',e.message,e.stack))"
+   ```
+   A full stack trace pinpoints the exact broken `node_modules` path —
+   far more useful than the CLI's summarized error.
+3. Check whether the step is even load-bearing for your app: grep
+   `app.config.ts` for `runtimeVersion`. A **literal string** value (not
+   the `'fingerprint'` policy) means the fingerprint computation isn't
+   part of your actual OTA-compatibility mechanism — safe to bypass while
+   you fix the underlying dependency issue on a separate timeline.
+4. If the step isn't load-bearing, check whether the tool has its own
+   documented skip switch (the error message above literally names one —
+   `EAS_SKIP_AUTO_FINGERPRINT=1`). Prefer the tool's own sanctioned bypass
+   over patching its internals.
+5. **The bypass is a mitigation, not the fix.** File it in `ACTION_ITEMS.md`
+   with the actual dependency-resolution repair still needed (e.g.
+   `yarn-deduplicate`, a `resolutions` pin — verified against every other
+   consumer of the same package before landing, per this repo's own
+   pre-merge gate) and a note to remove the bypass once that lands.
+6. **This step could not be verified end-to-end without real EAS
+   credentials** (`EXPO_TOKEN`) in a sandboxed session — say so explicitly
+   rather than claiming full confidence. The next real `eas update` run
+   against `main` is the actual proof.
 
 ---
 

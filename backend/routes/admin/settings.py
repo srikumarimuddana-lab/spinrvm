@@ -208,6 +208,10 @@ class SettingsUpdateRequest(BaseModel):
     # Company info shown on rider receipts + driver T4A slips + the
     # admin dashboard footer. Edited via the Settings page → Company tab.
     company_name: Optional[str] = None
+    # Product/brand name for email BODY copy, independent of the legal-entity
+    # company_name above. See schemas.AppSettings.company_app_name and
+    # ACTION_ITEMS.md N17.
+    company_app_name: Optional[str] = None
     company_address: Optional[str] = None
     company_phone: Optional[str] = None
     company_email: Optional[str] = None
@@ -323,6 +327,10 @@ class SettingsUpdateRequest(BaseModel):
     # the shared shell/typography/radius restyle. Not a credential, no
     # special masking/super-admin gate needed.
     admin_theme_v2_enabled: Optional[bool] = None
+    # Driver SOS discreet-hold-shield rollout gate (ACTION_ITEMS.md B16) —
+    # dark-launched, driver-app only. Not a credential, no masking/
+    # super-admin gate needed.
+    driver_discreet_sos_enabled: Optional[bool] = None
     # Dual-approval gate for large PII-bearing exports (migration 268,
     # routes/admin/compliance.py, routes/admin/data_transfer_export.py) —
     # requires a second super_admin to approve before a large driver/rider

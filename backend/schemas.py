@@ -309,6 +309,13 @@ class AppSettings(BaseModel):
     # / Profile footers without each app hard-coding them. None of these
     # fields are sensitive — they're the same info on a business card.
     company_name: str = "Spinr"
+    # Product/brand name used in email BODY copy ("Open the {app_name} driver
+    # app", "your {app_name} wallet", "— The {app_name} Team"). Deliberately
+    # separate from company_name, which is the legal entity name
+    # ("Spinr Technologies Inc.") and reads badly inline ("Open the Spinr
+    # Technologies Inc. driver app"). See utils/company_details.py and
+    # ACTION_ITEMS.md N17.
+    company_app_name: str = "Spinr"
     company_address: str = ""
     company_phone: str = ""
     company_email: str = ""
@@ -446,6 +453,14 @@ class AppSettings(BaseModel):
     # must never lock out every build). Semver "MAJOR.MINOR.PATCH" only.
     min_rider_app_version: str = ""
     min_driver_app_version: str = ""
+    # ── Driver SOS discreet-hold-shield UX (ACTION_ITEMS.md B16) ──────────
+    # Dark-launched rollout gate: with this off (default), driver-app keeps
+    # rendering the existing shared SOSButton unchanged. On, the driver
+    # dashboard swaps to the new SafetyShield/SafetyOverlay pair (silent 3s
+    # hold, tap-to-open Safety overlay). Rider-app is unaffected either way
+    # — this flag is read by driver-app only. Not a credential/destination
+    # field, no masking/super-admin gate needed.
+    driver_discreet_sos_enabled: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

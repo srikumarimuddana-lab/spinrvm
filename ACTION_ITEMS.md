@@ -5204,15 +5204,37 @@ Remaining, roughly in order of user impact:
   additionally now **escapes** admin-authored free text, which the previous
   bare `<h2>`/`<p>` interpolation did not. See
   `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
-- [ ] **N17. Product name in email copy is still literal "Spinr"** — "Open the
-  Spinr driver app", "your Spinr wallet", "— The Spinr Team". Deliberate, not
-  an oversight: the `company_name` setting holds the *legal entity* name, and
-  "Open the Spinr Technologies Inc. driver app" reads badly, so settings drive
-  the footer identity, mailing address, logo, logo alt text and sentence-final
-  legal-name usage only. A rebrand of the product name itself needs a separate
-  `company_app_name` setting plus a copy sweep across `utils/rider_emails.py`,
-  `utils/driver_status_notifications.py`, `utils/document_expiry.py` and
-  `routes/drivers/tax_exports.py`. Worth doing before, not after, any rename.
+- [x] **N17 closed**: added `company_app_name` (default `"Spinr"`) as a new,
+  independent setting alongside `company_name` (the legal entity) —
+  `schemas.AppSettings.company_app_name`, wired through
+  `routes/admin/settings.py`'s `SettingsUpdateRequest` the same way
+  `company_logo_url` etc. are, and surfaced on the admin Settings page →
+  Company Info tab (new "App Name" field next to "Company Name", each with a
+  help line pointing at the other). `utils/company_details.CompanyDetails`
+  gained an `app_name` field, resolved in `load_company_details()` from
+  `company_app_name` with the same "falls back to Spinr" rule as every other
+  field there. Swept all four named files to interpolate
+  `company.app_name`/`{app_name}` instead of the literal word "Spinr" in
+  BODY copy (subjects, "Open the ... app", "your ... wallet", "— The ...
+  Team", the DSAR README/HTML/link-email copy) — footer/mailing-address/logo
+  usages correctly stayed on `company_name` via the existing
+  `company_details.py` plumbing, untouched.
+  `utils/driver_status_notifications.py` and `utils/document_expiry.py`
+  build their next-step copy as static/module-level strings ahead of the
+  async settings load, so those two use a `{app_name}` placeholder
+  substituted at send time (mirroring the existing `{support}` placeholder
+  pattern already in `driver_status_notifications.py`) rather than an
+  f-string. Tests: `tests/test_company_details.py` (schema default +
+  independence from `company_name`), `tests/test_admin_settings_company_app_name.py`
+  (request-model/loader wiring, mirroring `test_admin_settings_company_logo.py`),
+  and one fallback+configured-value test per swept file
+  (`tests/test_rider_emails_app_name.py`,
+  `tests/test_driver_status_email_app_name.py`,
+  `tests/test_document_expiry_app_name.py`,
+  `tests/test_tax_exports_app_name.py`) — 61 new tests, all passing, plus the
+  181 pre-existing tests across these files' own test suites re-verified
+  green. Admin-dashboard: `npm run build` run and passed (exit 0), not just
+  `tsc`/dev server, per CLAUDE.md's explicit requirement.
 - [ ] **N11c. Delete the pre-retrofit receipt/invoice shell and its flag** —
   once the branded version has been seen in real inboxes. Two shells and a
   switch are a real carrying cost; both `_LEGACY_*` constants are commented
@@ -5226,13 +5248,51 @@ Remaining, roughly in order of user impact:
   (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
   `utils/rider_emails.py` and go through the policy layer, so the
   `lifecycle_emails_enabled` kill switch covers them.
-- [ ] **N14. Rider email addresses are never verified (R5)** — `email_verified`
-  is written `false` at `routes/users.py` and nothing ever flips it for a
-  rider; the only `verify-email-otp` endpoint (`routes/auth.py:744`) belongs to
-  the corporate business portal. The welcome email is now a *de facto*
-  deliverability signal — a hard bounce lands the address on the suppression
-  list — but that is not a verification flow, and nothing surfaces the
-  difference to the rider or to support.
+- [ ] **N14. Rider email addresses are never verified (R5)** — **partially
+  done.** The verification flow itself now exists and is tested:
+  `POST /users/verify-email/request` + `POST /users/verify-email/confirm`
+  (`routes/users.py`) reuse the corporate portal's exact OTP mechanics
+  (`routes/auth.py:744`'s `_check_otp_lockout`/`_record_otp_failure`/
+  `_clear_otp_failures`/`_enforce_otp_send_cap`, imported directly rather than
+  re-implemented) — SHA-256-hashed code at rest, 5-failures/hour lockout,
+  "1234" dev bypass only when `ENV != production`, refused outright in
+  production with no email provider configured. Codes are stored in a new
+  `rider_email_verification_otp` table (migration `299`, keyed on `user_id`
+  rather than the corporate table's bare `email`, so the two flows' lockout
+  buckets never collide even for the same address) and delivered through a
+  new `send_email_verification_code` in `utils/rider_emails.py`, going through
+  the same policy layer (`send_lifecycle_email`, TRANSACTIONAL class) as every
+  other rider email. The request endpoint carries its own outer rate limit
+  (`rider_email_verify_request_limit`, 3/hour, user-keyed) on top of the
+  reused per-destination send cap. Confirming flips `email_verified` +
+  `email_verified_at` on the caller's own `users` row only, and refuses if the
+  account's email changed between request and confirm (code was minted for
+  the old address). 12 tests in `tests/test_rider_email_verification.py`
+  cover hashing, success, wrong-code, expiry, lockout, the email-changed
+  guard, and both sides of the rate limit.
+  **Two things this pass deliberately did NOT do, both open:**
+  (a) **no rider-app UI calls either endpoint** — this was a backend-only
+  session, so there is no "verify your email" prompt, banner, or settings
+  entry anywhere in `rider-app/` yet. The capability exists and is safe to
+  call, but nothing in the product surfaces it to a rider today. Follow-up.
+  (b) **whether/how to gate anything on `email_verified` remains an open
+  product decision**, not resolved here — nothing was changed to require
+  verification before booking, payouts, or any other flow, and CLAUDE.md's
+  pre-merge gates (feature-flag anything user-visible; no silent behavior
+  change) mean that decision needs explicit product sign-off before any
+  gating ships, not a unilateral backend call.
+  **Discovered existing consumer (not introduced by this change):**
+  `routes/corporate_rider.py`'s `POST /corporate/join-domain` already 403s
+  with `ERR_EMAIL_UNVERIFIED` when `email_verified` is falsy (added in
+  migration 252, before this flow existed). Before this change that gate was
+  permanently unsatisfiable for a rider — there was no way for the flag to
+  ever become true — so join-domain 403'd for every rider, always. This
+  change doesn't add a new gate; it makes the pre-existing one work as
+  originally intended. The practical effect: a rider who runs the new
+  verify-email flow can now successfully call join-domain where before they
+  categorically could not. Flagging this explicitly since it's a real,
+  immediately-live behavior change on a corporate-adjacent endpoint even
+  though no new gating code was written.
 - [ ] **N15. Remaining silent rider surfaces** — grouped rather than split,
   since they share one cause (no notification call of any kind at the site):
   rider-initiated ride completion sends the rider nothing while the
@@ -5680,13 +5740,42 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   this endpoint. No code change needed; correcting the stale item.
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
-- [ ] **D8. No rate limiting on SIN-touching admin endpoints** — flagged by the
-  2026-08-10 security audit of the SIN-enforcement branch: `reveal-sin`
-  (pre-existing), `update-sin`, and `/tax-ids/import/{validate,commit}` are
-  all absent from `utils/rate_limiter.py`. Not exploitable past the
-  super_admin gate + audit rows, but three SIN surfaces with zero throttling
-  should be a deliberate decision, not an inherited omission. Decide a limit
-  (e.g. reveal/update: 10/hour per admin) and wire it, or document why not.
+- [x] **D8. No rate limiting on SIN-touching admin endpoints** — done: added
+  4 new `default_limiter.limit(...)` entries in `utils/rate_limiter.py` —
+  `admin_sin_reveal_limit` (10/hour) on `POST /admin/drivers/{id}/reveal-sin`,
+  `admin_sin_update_limit` (10/hour) on `POST /admin/drivers/{id}/update-sin`,
+  `tax_id_import_validate_limit` (30/hour) on `POST /admin/tax-ids/import/validate`,
+  `tax_id_import_commit_limit` (10/hour) on `POST /admin/tax-ids/import/commit`.
+  10/hour for reveal/update is D8's own suggested figure. The two import
+  endpoints reuse the validate/commit asymmetry already established by
+  `data_transfer_import_*_limit`/`booking_import_*_limit`/`driver_import_commit_limit`
+  (read-only dry-run gets the looser 30/hour, the write path gets 10/hour) —
+  the per-call `MAX_ROWS` (500) cap already bounds blast radius per call, so
+  the per-hour cap only needs to guard unbounded scripted looping. All 4 are
+  keyed per-admin via `get_user_or_ip_key` (existing function, unmodified —
+  decodes the JWT's `user_id` claim without verifying the signature; safe
+  because `Depends(get_admin_user)` still re-verifies before any handler body
+  runs), not per-IP like every other `admin_*` limiter in the file — a
+  deliberate deviation, since IP keying would let multiple super_admins
+  behind one office/VPN egress IP share (and exhaust) one bucket, or
+  under-count a single admin who rotates IPs. Confirmed admin JWTs carry
+  `user_id` (`routes/admin/auth.py::_mint_admin_access_token`), so no new key
+  function was needed. Both `reveal-sin`/`update-sin`
+  (`routes/admin/drivers.py`) and the two `tax-ids/import` endpoints
+  (`routes/admin/tax_id_import.py`) needed a `request: Request` parameter
+  added — `AsyncLimiter.limit` requires one to find the connection to key on,
+  and none of the 4 endpoints previously took one. Still purely
+  defense-in-depth per the audit's own framing: all 4 stay super_admin-gated
+  + audit-logged before the limiter ever runs. New tests in
+  `tests/test_admin_sin_rate_limiting.py` (5 cases) prove the actual
+  `AsyncLimiter`/`MemoryStorage` mechanics at each configured rate — N
+  allowed calls succeed, the N+1th raises `RateLimitExceeded` — plus one case
+  proving two different admin JWTs from the same source IP get independent
+  buckets (the per-admin-not-per-IP guarantee this item exists for). Grepped
+  every other consumer of `get_user_or_ip_key`/`default_limiter`: both are
+  unmodified, and only new module-level limiter objects were added — no
+  shared behavior changed for any of the ~30 other `default_limiter.limit(...)`
+  call sites across `routes/`.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.
 - [x] **D7. Admin analytics Redis cache** — done: `GET /admin/analytics/cancellation-reasons`
   now caches its response for 5 minutes (`_OVERVIEW_CACHE_TTL`, same TTL

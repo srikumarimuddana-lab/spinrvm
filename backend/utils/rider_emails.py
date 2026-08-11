@@ -130,11 +130,11 @@ async def send_welcome_email(user: dict[str, Any]) -> bool:
         company=company,
         user_id=user["id"],
         user=user,
-        subject="Welcome to Spinr",
-        heading="Welcome to Spinr",
+        subject=f"Welcome to {company.app_name}",
+        heading=f"Welcome to {company.app_name}",
         paragraphs=[
-            "Your account is ready. You can book a ride from the Spinr app whenever you need one.",
-            "Spinr is Saskatchewan-built and takes 0% commission — every dollar of the fare "
+            f"Your account is ready. You can book a ride from the {company.app_name} app whenever you need one.",
+            f"{company.app_name} is Saskatchewan-built and takes 0% commission — every dollar of the fare "
             "goes to your driver. You'll always see the full price before you confirm a ride, "
             "with GST and PST shown as separate line items on your receipt.",
             f"Questions any time: {company.support_email}",
@@ -162,10 +162,10 @@ async def send_email_changed_notice(
         company=company,
         user_id=user["id"],
         user=user,
-        subject="The email on your Spinr account was changed",
-        heading="Your Spinr email address was changed",
+        subject=f"The email on your {company.app_name} account was changed",
+        heading=f"Your {company.app_name} email address was changed",
         paragraphs=[
-            "The email address on your Spinr account was just changed, so this is the last "
+            f"The email address on your {company.app_name} account was just changed, so this is the last "
             "message this address will receive.",
             f"If you made this change, nothing more is needed. If you did not, contact "
             f"{company.support_email} straight away — your account may have been accessed by someone else.",
@@ -183,10 +183,10 @@ async def send_account_deletion_notice(user: dict[str, Any], scheduled_at: str) 
         company=company,
         user_id=user["id"],
         user=user,
-        subject="Your Spinr account has been deactivated",
+        subject=f"Your {company.app_name} account has been deactivated",
         heading="Your account has been deactivated",
         paragraphs=[
-            "We've received your deletion request and your Spinr account is now closed. "
+            f"We've received your deletion request and your {company.app_name} account is now closed. "
             "You can reactivate it any time by signing in with your phone number.",
             "Your ride records are kept, still linked to you, because the Saskatchewan "
             "Transportation Act and Canadian tax rules require us to hold them for seven "
@@ -214,7 +214,7 @@ async def send_refund_email(
         company=company,
         user_id=user_id,
         user=user,
-        subject=f"Your Spinr refund of ${_money(amount)}",
+        subject=f"Your {company.app_name} refund of ${_money(amount)}",
         heading=f"Refund processed — ${_money(amount)} CAD",
         paragraphs=[
             f"We've refunded ${_money(amount)} CAD"
@@ -234,9 +234,9 @@ async def send_wallet_topup_email(
     new_balance: Any = None,
     user: dict[str, Any] | None = None,
 ) -> bool:
-    """Receipt for money added to the Spinr wallet."""
+    """Receipt for money added to the rider's wallet."""
     company = await load_company_details()
-    paragraphs = [f"${_money(amount)} CAD has been added to your Spinr wallet."]
+    paragraphs = [f"${_money(amount)} CAD has been added to your {company.app_name} wallet."]
     if new_balance not in (None, ""):
         paragraphs.append(f"Your wallet balance is now ${_money(new_balance)} CAD.")
     paragraphs.append("Your wallet is used automatically on your next ride unless you pick another payment method.")
@@ -244,7 +244,7 @@ async def send_wallet_topup_email(
         company=company,
         user_id=user_id,
         user=user,
-        subject=f"Spinr wallet top-up — ${_money(amount)}",
+        subject=f"{company.app_name} wallet top-up — ${_money(amount)}",
         heading=f"Wallet topped up — ${_money(amount)} CAD",
         paragraphs=paragraphs,
         email_type="rider_wallet_topup",
@@ -294,15 +294,45 @@ async def send_payment_blocked_email(
         company=company,
         user_id=user_id,
         user=user,
-        subject="Action needed: your Spinr payment didn't go through",
+        subject=f"Action needed: your {company.app_name} payment didn't go through",
         heading="We couldn't complete your payment",
         paragraphs=[
             f"We tried several times to charge ${_money(amount)} CAD"
             + (f" for ride {ref}" if ref else "")
             + ", and your payment method declined each time.",
-            "You won't be able to book another ride until this is settled. Open the Spinr app "
+            f"You won't be able to book another ride until this is settled. Open the {company.app_name} app "
             "and add or update a payment method, and we'll retry the outstanding amount.",
             f"If you think your card is fine, contact {company.support_email} and we'll look into it.",
         ],
         email_type="rider_payment_blocked",
+    )
+
+
+async def send_email_verification_code(
+    user: dict[str, Any],
+    code: str,
+    expiry_minutes: int,
+) -> bool:
+    """OTP for the rider self-serve "verify your email" flow (N14,
+    ACTION_ITEMS.md — ``POST /users/verify-email/request``).
+
+    Distinct from `send_welcome_email`: welcome only proves the address
+    didn't hard-bounce at send time, this proves the rider can actually read
+    what lands in it. Not sent automatically on any lifecycle event — issued
+    only when explicitly requested via the verify-email endpoint, so unlike
+    every other sender in this module it is never fired from a route the
+    rider didn't just call for exactly this purpose.
+    """
+    company = await load_company_details()
+    return await _send(
+        company=company,
+        user_id=user["id"],
+        user=user,
+        subject="Your Spinr verification code",
+        heading="Verify your email",
+        paragraphs=[
+            f"Your Spinr verification code is {code}.",
+            f"It expires in {expiry_minutes} minutes. If you didn't request it, you can ignore this email.",
+        ],
+        email_type="rider_email_verification",
     )

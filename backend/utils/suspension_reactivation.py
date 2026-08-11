@@ -176,7 +176,15 @@ async def suspension_reactivation_loop() -> None:
     """Background loop: reactivate expired temporary suspensions every interval."""
     logger.info(f"Suspension reactivation loop started (interval={REACTIVATION_INTERVAL_SECONDS}s)")
     while True:
-        lock_ttl = int(REACTIVATION_INTERVAL_SECONDS * 2)
+        # TTL must stay below the sleep interval or the pod that just ran a
+        # tick finds its own key still alive on the next wake and skips it,
+        # halving effective cadence -- same defect shape as B21
+        # (ACTION_ITEMS.md), which fixed 4 other loops with this identical
+        # `interval * 2` bug but explicitly did not audit beyond that list.
+        # Found here while working N7. 0.85 mirrors every other loop's fix
+        # (0.05 headroom under the 0.9 floor at the default 0.1 jitter
+        # fraction below).
+        lock_ttl = int(REACTIVATION_INTERVAL_SECONDS * 0.85)
         if not await redis_set_nx("spinr:users:suspension_reactivation:lock", _pod_id(), lock_ttl):
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(REACTIVATION_INTERVAL_SECONDS)

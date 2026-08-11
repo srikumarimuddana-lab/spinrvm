@@ -384,6 +384,77 @@ class TestGetT4ASummary:
         assert result["total_earnings"] == "20.00"
         assert result["total_trips"] == 1
 
+    async def test_t4a_years_lists_only_years_with_earnings(self):
+        """The apps used to synthesize "last three completed years" and offer a
+        T4A for each, so a driver with no income for a year was emailed a
+        $0.00 slip. Only years with real income are returned."""
+        from backend.routes.drivers import get_t4a_years
+
+        driver = _driver_row()
+        r2025 = _ride_row(120.00)
+        r2025["created_at"] = "2025-04-02T00:00:00+00:00"
+        r2023 = _ride_row(60.00)
+        r2023["created_at"] = "2023-06-01T00:00:00+00:00"
+
+        async def _get_rows(table, query=None, **kwargs):
+            if table == "drivers":
+                return [driver]
+            if table == "payouts":
+                return [{"amount": 300.00, "created_at": "2024-02-02T00:00:00+00:00"}]
+            return []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rides_for_driver",
+                AsyncMock(return_value=[r2025, r2023]),
+            ),
+        ):
+            result = await get_t4a_years(current_user={"id": DRIVER_USER_ID})
+
+        # Newest first; 2024 comes from a stripe_sync payout with no rides.
+        assert [y["year"] for y in result["years"]] == [2025, 2024, 2023]
+        assert result["years"][0]["total_earnings"] == "120.00"
+        assert result["years"][0]["total_trips"] == 1
+        assert result["years"][1]["total_earnings"] == "300.00"
+        assert result["years"][1]["total_trips"] == 0
+
+    async def test_t4a_years_empty_when_no_earnings(self):
+        """A driver who has never earned gets an empty list, so the app can
+        hide the Tax Documents section instead of offering a $0.00 slip."""
+        from backend.routes.drivers import get_t4a_years
+
+        async def _get_rows(table, query=None, **kwargs):
+            return [_driver_row()] if table == "drivers" else []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
+        ):
+            result = await get_t4a_years(current_user={"id": DRIVER_USER_ID})
+
+        assert result["years"] == []
+
+    async def test_t4a_years_excludes_previous_app_imported_rides(self):
+        """A migrated driver whose only income was previous-app rides has no
+        Spinr tax year — the imported rides must not conjure one."""
+        from backend.routes.drivers import get_t4a_years
+
+        legacy = _ride_row(900.00)
+        legacy["created_at"] = "2024-03-03T00:00:00+00:00"
+        legacy["legacy_import_metadata"] = {"source": "legacy_mongo_booking_import"}
+
+        async def _get_rows(table, query=None, **kwargs):
+            return [_driver_row()] if table == "drivers" else []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=[legacy])),
+        ):
+            result = await get_t4a_years(current_user={"id": DRIVER_USER_ID})
+
+        assert result["years"] == []
+
     async def test_driver_not_found_raises_404(self):
         from fastapi import HTTPException
 

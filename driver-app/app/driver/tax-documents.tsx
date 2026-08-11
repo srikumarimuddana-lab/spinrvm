@@ -24,6 +24,15 @@ interface TaxDocument {
     tax_year: number;
     file_url: string | null;
     generated_at: string | null;
+    total_earnings?: string;
+    total_trips?: number;
+}
+
+/** Years the driver actually earned in — GET /drivers/t4a/years. */
+interface T4AYear {
+    year: number;
+    total_earnings: string;
+    total_trips: number;
 }
 
 function TaxDocumentsScreen() {
@@ -42,22 +51,25 @@ function TaxDocumentsScreen() {
 
     const fetchDocuments = async () => {
         try {
-            // There is no server-side listing endpoint for tax documents yet —
-            // T4A summaries are generated per-year on demand via
-            // POST /drivers/t4a/{year}/email. Synthesize a list client-side for
-            // the last three completed tax years; the actual PDF is emailed
-            // when the driver taps the row.
-            const now = new Date();
-            const latestCompletedYear = now.getFullYear() - 1;
-            const years = [latestCompletedYear, latestCompletedYear - 1, latestCompletedYear - 2];
-            const synthesized: TaxDocument[] = years.map((year) => ({
-                id: `t4a-${year}`,
-                type: 'T4A',
-                tax_year: year,
-                file_url: null,
-                generated_at: null,
-            }));
-            setDocuments(synthesized);
+            // Only years the driver actually earned in. This used to synthesize
+            // "the last three completed years" client-side, which offered a T4A
+            // for years with no income at all — tapping one emailed a $0.00
+            // slip. The server now reports the real years (rides + legacy
+            // Stripe-synced income), so an empty list means there is genuinely
+            // nothing to show.
+            const res = await api.get<{ years: T4AYear[] }>('/drivers/t4a/years');
+            const years = res.data?.years ?? [];
+            setDocuments(
+                years.map((y) => ({
+                    id: `t4a-${y.year}`,
+                    type: 'T4A',
+                    tax_year: y.year,
+                    file_url: null,
+                    generated_at: null,
+                    total_earnings: y.total_earnings,
+                    total_trips: y.total_trips,
+                })),
+            );
         } catch (err: any) {
             showToast('error', 'Load Failed', getApiErrorMessage(err, 'Could not load tax documents. Please try again.'));
         } finally {
@@ -96,6 +108,9 @@ function TaxDocumentsScreen() {
         });
     };
 
+    // Local, matching payout.tsx — there is no shared currency helper in this app.
+    const formatCurrency = (amount: string | number) => `$${parseFloat(String(amount)).toFixed(2)}`;
+
     const getDocTypeLabel = (type: string) => {
         switch (type) {
             case 'T4A': return 'T4A Slip';
@@ -122,9 +137,14 @@ function TaxDocumentsScreen() {
                 <View style={styles.docInfo}>
                     <Text style={styles.docType}>{getDocTypeLabel(item.type)}</Text>
                     <Text style={styles.docYear}>Tax Year {item.tax_year}</Text>
-                    {item.generated_at && (
+                    {item.total_earnings != null ? (
+                        <Text style={styles.docDate}>
+                            {formatCurrency(item.total_earnings)}
+                            {item.total_trips ? ` · ${item.total_trips} trip${item.total_trips === 1 ? '' : 's'}` : ''}
+                        </Text>
+                    ) : item.generated_at ? (
                         <Text style={styles.docDate}>Generated {formatDate(item.generated_at)}</Text>
-                    )}
+                    ) : null}
                 </View>
                 <TouchableOpacity
                     style={[styles.emailBtn, isSending && styles.emailBtnDisabled]}
@@ -144,9 +164,10 @@ function TaxDocumentsScreen() {
     const renderEmpty = () => (
         <View style={styles.emptyState}>
             <Ionicons name="document-text-outline" size={64} color={colors.border} />
-            <Text style={styles.emptyTitle}>No documents yet</Text>
+            <Text style={styles.emptyTitle}>No tax documents yet</Text>
             <Text style={styles.emptySub}>
-                Tax documents will appear here once generated after your first tax year.
+                A T4A slip appears here for each year you earn with Spinr. Complete your first
+                trips and your tax year will show up.
             </Text>
         </View>
     );

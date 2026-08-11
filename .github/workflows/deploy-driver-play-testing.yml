@@ -1,0 +1,102 @@
+name: Deploy Driver App → Play Console Testing
+
+# ─── What this does ────────────────────────────────────────────────────────
+# Builds the driver app as a store AAB (not a sideload APK) and submits it
+# to the Google Play "Auto" closed testing track via EAS. This is required
+# for Android Auto — sideloaded APKs are invisible to Android Auto's Car
+# App Library discovery; only Play Store installs are recognised.
+#
+# Triggers:
+#   • Manual (workflow_dispatch) — pick platform and whether to auto-submit
+#   • Push to main with [play-test] in the commit message
+#
+# ─── Prerequisites ─────────────────────────────────────────────────────────
+#   • Repo secret EXPO_TOKEN
+#   • driver-app/play-service-account.json (or the secret that generates it)
+#     must be available to EAS for the submit step
+#   • The "Auto" closed testing track must exist in Google Play Console
+#   • Testers must be added to the track and have accepted the opt-in link
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "driver-app/**"
+      - "shared/**"
+  workflow_dispatch:
+    inputs:
+      auto_submit:
+        description: "Auto-submit to Play Console after build"
+        required: false
+        default: true
+        type: boolean
+      skip_build:
+        description: "Skip build and submit the latest existing android-auto build"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-driver-play-testing
+  cancel-in-progress: false
+
+jobs:
+  build-and-submit:
+    runs-on: ubuntu-latest
+    # On push: only run when commit message contains [play-test]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[play-test]'))
+    defaults:
+      run:
+        working-directory: driver-app
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - run: yarn install --frozen-lockfile
+
+      - name: Build and submit driver app to Play Console
+        if: ${{ github.event.inputs.skip_build != 'true' }}
+        run: |
+          SUBMIT_FLAG=""
+          if [ "${{ github.event.inputs.auto_submit }}" != "false" ]; then
+            SUBMIT_FLAG="--auto-submit-with-profile android-auto"
+          fi
+
+          eas build \
+            --platform android \
+            --profile android-auto \
+            --non-interactive \
+            --no-wait \
+            $SUBMIT_FLAG
+
+      - name: Submit latest build (skip-build mode)
+        if: ${{ github.event.inputs.skip_build == 'true' }}
+        run: |
+          eas submit \
+            --platform android \
+            --profile android-auto \
+            --latest \
+            --non-interactive
+
+      - name: Summary
+        run: |
+          echo "## Driver App → Play Console Testing" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Profile:** android-auto (store AAB)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Track:** Auto (closed testing)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Auto-submit:** ${{ github.event.inputs.auto_submit || 'true' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Monitor build at [expo.dev](https://expo.dev) → Builds" >> $GITHUB_STEP_SUMMARY
+          echo "2. Once submitted, testers install/update from Play Store" >> $GITHUB_STEP_SUMMARY
+          echo "3. Connect phone to car → Spinr Driver appears in Android Auto" >> $GITHUB_STEP_SUMMARY

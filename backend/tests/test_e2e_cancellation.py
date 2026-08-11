@@ -191,6 +191,49 @@ class TestRiderCancelDriverArrived:
         sent_events = [call.args[0] for call in ws_mock.call_args_list]
         assert any(e.get("type") == "ride_cancelled" for e in sent_events)
 
+    async def test_driver_arrived_also_pushes_driver_not_just_ws(self):
+        """N5 (ACTION_ITEMS.md): a driver already assigned/en route must be
+        notified by push, not just WebSocket -- a backgrounded app would
+        otherwise keep the driver heading to a pickup that no longer exists.
+        """
+        import asyncio
+
+        from backend.routes import rides as rides_mod
+
+        ride_arrived = _ride(status="driver_arrived", driver_id=DRIVER_ID)
+        driver = _driver()
+        ride_cancelled = _ride(status="cancelled", driver_id=DRIVER_ID)
+        settings = {"cancellation_fee_admin": 0.50, "cancellation_fee_driver": 2.50}
+        wallet = {"id": "wallet_1", "balance": 100.0}
+
+        push_mock = AsyncMock()
+        with (
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride_arrived, None, wallet])),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=settings)),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", push_mock),
+        ):
+            fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
+            await fn(request=MagicMock(), ride_id=RIDE_ID, current_user={"id": RIDER_ID}, reason=None)
+            # The push is fired via spawn() (fire-and-forget) -- yield once
+            # so the scheduled task actually runs before asserting on it.
+            await asyncio.sleep(0)
+
+        push_mock.assert_awaited_once()
+        call = push_mock.await_args
+        assert call.args[0] == DRIVER_USER_ID
+        assert call.kwargs.get("priority") == "dispatch"
+        assert call.kwargs.get("target_app") == "driver"
+        assert call.kwargs.get("data", {}).get("type") == "ride_cancelled"
+
 
 @pytest.mark.e2e
 @pytest.mark.asyncio

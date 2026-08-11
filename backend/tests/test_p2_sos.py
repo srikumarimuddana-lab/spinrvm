@@ -394,6 +394,43 @@ class TestTriggerEmergency:
         assert result["contacts_notified"] == 0
         assert any("type=twilio_error status=400" in c.args[0] for c in mock_logger.error.call_args_list)
 
+    async def test_response_includes_per_contact_status(self):
+        """B16: the driver-app Safety overlay's per-contact '✓ Notified' list
+        needs individual status, not just the aggregate contacts_notified
+        count. One contact's SMS succeeds, the other fails (non-throwing) --
+        the new `contacts` array must reflect each outcome by id/name."""
+        contacts = [
+            {"id": "ec-1", "phone": "+13061112222", "name": "Mom"},
+            {"id": "ec-2", "phone": "+13063334444", "name": "Dad"},
+        ]
+
+        async def _mixed_send_sms(phone, body, **kwargs):
+            if phone == "+13061112222":
+                return {"success": True, "provider": "mock"}
+            return {"success": False, "error": "type=twilio_error status=400"}
+
+        result, _, _, _sms = await self._trigger(
+            RIDER_ID, emergency_contacts=contacts, send_sms_side_effect=_mixed_send_sms
+        )
+
+        assert result["contacts_notified"] == 1
+        assert result["contacts"] == [
+            {"id": "ec-1", "name": "Mom", "notified": True},
+            {"id": "ec-2", "name": "Dad", "notified": False},
+        ]
+
+    async def test_contacts_key_present_on_degraded_sms_failure(self):
+        """The outer-exception (e.g. get_app_settings down) branch must also
+        carry the `contacts` key -- empty, not missing -- so a client never
+        has to conditionally check for its presence."""
+        result, _, _, _sms = await self._trigger(
+            RIDER_ID,
+            emergency_contacts=[{"id": "ec-1", "phone": "+13061112222", "name": "Mom"}],
+            get_app_settings_side_effect=RuntimeError("settings service down"),
+        )
+
+        assert result["contacts"] == []
+
     async def test_contact_notification_outer_failure_returns_warning(self):
         """A failure anywhere in the contact-notification block (e.g.
         get_app_settings blowing up) must not fail the whole request — the

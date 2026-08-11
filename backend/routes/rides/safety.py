@@ -174,6 +174,7 @@ async def trigger_emergency(
 
     # Notify emergency contacts via SMS (Twilio when configured, console log in dev)
     contacts_notified = 0
+    _notified_contact_ids: set = set()
     try:
         sms_settings = await _deps.get_app_settings()
         contacts_rows = await _deps.db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
@@ -214,6 +215,7 @@ async def trigger_emergency(
                 logger.error(f"SOS SMS failed for contact {contact.get('id')}: {type(result).__name__}")
             elif result.get("success"):
                 contacts_notified += 1
+                _notified_contact_ids.add(contact.get("id"))
             else:
                 # send_sms guarantees 'error' is a PII-free "type code=N
                 # status=N" string (never str(exception) — see sms_service).
@@ -229,13 +231,25 @@ async def trigger_emergency(
             "success": True,
             "incident_id": incident["id"],
             "contacts_notified": 0,
+            "contacts": [],
             "notification_warning": "Emergency contacts could not be reached — please call them directly.",
         }
+
+    # Per-contact status (B16): the driver-app Safety overlay's "✓ Notified"
+    # list needs to know which specific contacts were reached, not just the
+    # aggregate count above (kept unchanged for backward compatibility with
+    # existing callers/tests). Built from data the loop above already
+    # computed -- no extra DB/SMS work, purely additive.
+    contacts_status = [
+        {"id": c.get("id"), "name": c.get("name", ""), "notified": c.get("id") in _notified_contact_ids}
+        for c in contacts
+    ]
 
     return {
         "success": True,
         "incident_id": incident["id"],
         "contacts_notified": contacts_notified,
+        "contacts": contacts_status,
     }
 
 

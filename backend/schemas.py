@@ -446,6 +446,14 @@ class AppSettings(BaseModel):
     # must never lock out every build). Semver "MAJOR.MINOR.PATCH" only.
     min_rider_app_version: str = ""
     min_driver_app_version: str = ""
+    # ── Driver SOS discreet-hold-shield UX (ACTION_ITEMS.md B16) ──────────
+    # Dark-launched rollout gate: with this off (default), driver-app keeps
+    # rendering the existing shared SOSButton unchanged. On, the driver
+    # dashboard swaps to the new SafetyShield/SafetyOverlay pair (silent 3s
+    # hold, tap-to-open Safety overlay). Rider-app is unaffected either way
+    # — this flag is read by driver-app only. Not a credential/destination
+    # field, no masking/super-admin gate needed.
+    driver_discreet_sos_enabled: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

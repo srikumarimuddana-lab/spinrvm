@@ -5019,6 +5019,13 @@ Remaining, roughly in order of user impact:
   was alerted (R38); corporate allowance reset and exhaustion are silent, with
   exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
   "new device signed in" alert (R8).
+  - [x] **R19 closed**: `rider_complete_ride` (`routes/rides/lifecycle.py`)
+    now spawns the same "Ride Completed! ✅" push the driver-initiated path
+    (`routes/drivers/ride_complete.py::complete_ride`) already sends,
+    alongside the existing `ride_completed` WS message — `target_app="rider"`,
+    `priority="normal"` (informational, not dispatch/safety-tier). R31/R33/
+    R34, R35/R37, R38, R43/R44 and R8 remain open; this checkbox stays `[ ]`
+    until all of them are.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

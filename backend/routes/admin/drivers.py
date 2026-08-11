@@ -1368,6 +1368,8 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         "is_citizen",
         "decals_sent",
         "decals_sent_at",
+        "decal_generated_at",
+        "decal_number",
     }
     allowed = user_fields | driver_fields
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -3331,7 +3333,11 @@ async def admin_refresh_all_driver_stripe_payouts(
             f"Synced {transfers_inserted} new transfer(s) across "
             f"{plan.stats.get('drivers_scanned', 0)} driver(s); {transfers_skipped} already tracked. "
             f"{ledger_result.payouts_upserted} bank payout(s), {ledger_result.ledger_upserted} ledger entries."
-            + (f" {len(plan_errors)} driver(s) could not be read — re-run, it is safe to repeat." if plan_errors else "")
+            + (
+                f" {len(plan_errors)} driver(s) could not be read — re-run, it is safe to repeat."
+                if plan_errors
+                else ""
+            )
         ),
         "drivers_scanned": plan.stats.get("drivers_scanned", 0),
         "transfers_inserted": transfers_inserted,

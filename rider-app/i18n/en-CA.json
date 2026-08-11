@@ -148,6 +148,24 @@
     "alert_title": "\uD83D\uDEA8 Emergency Alert Sent",
     "alert_msg": "Your location has been shared with Spinr support and your emergency contacts.\n\nDo you want to call 911?",
     "call_911": "Call 911",
-    "im_ok": "I'm OK"
+    "im_ok": "I'm OK",
+    "failure_title": "\u26A0\uFE0F Alert Not Sent",
+    "failure_msg": "Could not reach Spinr. The button will stay red \u2014 tap it to retry.\n\nYou can call 911 directly right now.",
+    "retry_now": "Retry Now",
+    "dismiss": "Dismiss",
+    "no_active_ride_title": "No Active Ride",
+    "no_active_ride_msg": "Emergency alert requires an active ride. Call 911 directly for immediate help.",
+    "label_hold": "Hold...",
+    "label_sending": "Sending\u2026",
+    "label_alert_sent": "Alert Sent",
+    "label_failed": "FAILED",
+    "label_default": "SOS",
+    "hold_hint": "Hold for 1.2 seconds",
+    "retry_hint": "Tap to retry",
+    "a11y_label_sending": "Sending emergency alert",
+    "a11y_label_failed": "Emergency alert failed \u2014 tap to retry",
+    "a11y_hint_failed": "Alert failed \u2014 double tap to retry",
+    "a11y_hint_sent": "Alert sent",
+    "a11y_hint_default": "Double tap to send SOS alert"
   }
 }

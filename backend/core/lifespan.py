@@ -478,6 +478,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import stuck ride sweeper: {e}")
 
+    # Stale in_progress ride alerter (P2 task #16) — the sweeper above only
+    # covers 'searching'; an in_progress ride abandoned by a force-killed
+    # driver app has no automated recovery, so this loop alerts (Sentry +
+    # error log, domain=dispatch) rather than mutating ride/driver state.
+    # Gated by app_settings.stale_in_progress_ride_alert_enabled (default on).
+    try:
+        from utils.stale_in_progress_ride_alerter import stale_in_progress_ride_alert_loop
+
+        _spawn("stale_in_progress_ride_alerter (5min)", stale_in_progress_ride_alert_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import stale in_progress ride alerter: {e}")
+
     # Orphaned card-hold reconciler — releases booking-time authorizations left open
     # on rides that are cancelled and will never be billed. Two populations: the
     # historical backlog from before the stuck-ride sweeper released holds at all
@@ -570,6 +582,7 @@ async def lifespan(app: FastAPI):
             "t4a_annual_job (yearly Feb 28)",
             "driver_statements (30min)",
             "stuck_ride_sweeper (60s)",
+            "stale_in_progress_ride_alerter (5min)",
             "offer_expiry_reaper (10s)",
             "push_retry (30s)",
             "capacity_watchdog (60s)",

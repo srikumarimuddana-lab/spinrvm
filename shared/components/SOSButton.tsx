@@ -6,10 +6,60 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { getSOSLocation } from '../utils/sosLocation';
 
+// This component is shared by rider-app and driver-app, which each ship
+// their own, independent i18n instance (different translation JSON, two
+// separate zustand stores — see rider-app/i18n/index.ts's useTranslation()
+// vs driver-app/store/languageStore.ts's useLanguageStore()). Rather than
+// import either app's store from `shared/` (which would hard-couple this
+// component to one app and break the other's build), the caller injects
+// its own `t`. Both apps carry an identical `sos.*` key set (plus
+// `common.cancel`) in their locale files specifically so this one set of
+// t() calls resolves correctly regardless of which app renders it.
+//
+// `t` is optional and defaults to the pre-localization English copy below
+// — any caller that hasn't been updated to pass `t` yet keeps rendering
+// byte-identical English text.
+const DEFAULT_STRINGS: Record<string, string> = {
+  'sos.button_label': 'Emergency SOS',
+  'sos.alert_title': '🚨 Emergency Alert Sent',
+  'sos.alert_msg': 'Your location has been shared with Spinr support and your emergency contacts.\n\nDo you want to call 911?',
+  'sos.call_911': 'Call 911',
+  'sos.im_ok': "I'm OK",
+  'sos.failure_title': '⚠️ Alert Not Sent',
+  'sos.failure_msg': 'Could not reach Spinr. The button will stay red — tap it to retry.\n\nYou can call 911 directly right now.',
+  'sos.retry_now': 'Retry Now',
+  'sos.dismiss': 'Dismiss',
+  'sos.no_active_ride_title': 'No Active Ride',
+  'sos.no_active_ride_msg': 'Emergency alert requires an active ride. Call 911 directly for immediate help.',
+  'sos.label_hold': 'Hold...',
+  'sos.label_sending': 'Sending…',
+  'sos.label_alert_sent': 'Alert Sent',
+  'sos.label_failed': 'FAILED',
+  'sos.label_default': 'SOS',
+  'sos.hold_hint': 'Hold for 1.2 seconds',
+  'sos.retry_hint': 'Tap to retry',
+  'sos.alert_sent_label': 'Emergency alert sent',
+  'sos.a11y_label_sending': 'Sending emergency alert',
+  'sos.a11y_label_failed': 'Emergency alert failed — tap to retry',
+  'sos.a11y_hint_failed': 'Alert failed — double tap to retry',
+  'sos.a11y_hint_sent': 'Alert sent',
+  'sos.a11y_hint_default': 'Double tap to send SOS alert',
+  'common.cancel': 'Cancel',
+};
+
+function defaultT(key: string): string {
+  return DEFAULT_STRINGS[key] ?? key;
+}
+
 interface SOSButtonProps {
   rideId?: string;
   onTrigger: (rideId: string, lat?: number, lng?: number) => Promise<void>;
   size?: 'small' | 'large';
+  /**
+   * Translation function — pass `useTranslation().t` (rider-app) or
+   * `useLanguageStore().t` (driver-app). Omit to keep English strings.
+   */
+  t?: (key: string) => string;
 }
 
 /**
@@ -28,7 +78,8 @@ const SOS_HOLD_MS = 1200;
 const SOS_MAX_ATTEMPTS = 3;
 const SOS_RETRY_DELAYS_MS = [1000, 2000];
 
-export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps) {
+export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonProps) {
+  const translate = t ?? defaultT;
   const [triggered, setTriggered] = useState(false);
   const [sending, setSending] = useState(false);
   const [pressing, setPressing] = useState(false);
@@ -64,16 +115,16 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
 
   const showSuccessAlert = () => {
     Alert.alert(
-      '🚨 Emergency Alert Sent',
-      'Your location has been shared with Spinr support and your emergency contacts.\n\nDo you want to call 911?',
+      translate('sos.alert_title'),
+      translate('sos.alert_msg'),
       [
         {
-          text: 'Call 911',
+          text: translate('sos.call_911'),
           style: 'destructive',
           onPress: () => Linking.openURL('tel:911'),
         },
         {
-          text: "I'm OK",
+          text: translate('sos.im_ok'),
           style: 'cancel',
           onPress: () => setTriggered(false),
         },
@@ -83,21 +134,21 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
 
   const showFailureAlert = (retry: () => void) => {
     Alert.alert(
-      '⚠️ Alert Not Sent',
-      'Could not reach Spinr. The button will stay red — tap it to retry.\n\nYou can call 911 directly right now.',
+      translate('sos.failure_title'),
+      translate('sos.failure_msg'),
       [
         {
-          text: 'Call 911',
+          text: translate('sos.call_911'),
           style: 'destructive',
           onPress: () => Linking.openURL('tel:911'),
         },
         {
-          text: 'Retry Now',
+          text: translate('sos.retry_now'),
           onPress: retry,
         },
         // "Dismiss" intentionally does NOT reset the button — failed state
         // persists so the driver always knows the alert was not sent.
-        { text: 'Dismiss', style: 'cancel' },
+        { text: translate('sos.dismiss'), style: 'cancel' },
       ]
     );
   };
@@ -139,11 +190,11 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
     if (!rideId) {
       // No active ride context — direct user to call 911 immediately.
       Alert.alert(
-        'No Active Ride',
-        'Emergency alert requires an active ride. Call 911 directly for immediate help.',
+        translate('sos.no_active_ride_title'),
+        translate('sos.no_active_ride_msg'),
         [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') },
+          { text: translate('common.cancel'), style: 'cancel' },
+          { text: translate('sos.call_911'), style: 'destructive', onPress: () => Linking.openURL('tel:911') },
         ],
       );
     } else if (backendOk) {
@@ -168,14 +219,14 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
     : 'shield';
 
   const labelText = pressing
-    ? 'Hold...'
+    ? translate('sos.label_hold')
     : sending
-    ? 'Sending…'
+    ? translate('sos.label_sending')
     : triggered
-    ? 'Alert Sent'
+    ? translate('sos.label_alert_sent')
     : failed
-    ? 'FAILED'
-    : 'SOS';
+    ? translate('sos.label_failed')
+    : translate('sos.label_default');
 
   return (
     <Animated.View style={[{ transform: [{ scale: pressing ? pulseAnim : 1 }] }]}>
@@ -195,15 +246,21 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
         disabled={sending}
         accessibilityLabel={
           triggered
-            ? 'Emergency alert sent'
+            ? translate('sos.alert_sent_label')
             : sending
-            ? 'Sending emergency alert'
+            ? translate('sos.a11y_label_sending')
             : failed
-            ? 'Emergency alert failed — tap to retry'
-            : 'Emergency SOS'
+            ? translate('sos.a11y_label_failed')
+            : translate('sos.button_label')
         }
         accessibilityRole="button"
-        accessibilityHint={failed ? "Alert failed — double tap to retry" : triggered ? "Alert sent" : "Double tap to send SOS alert"}
+        accessibilityHint={
+          failed
+            ? translate('sos.a11y_hint_failed')
+            : triggered
+            ? translate('sos.a11y_hint_sent')
+            : translate('sos.a11y_hint_default')
+        }
         accessibilityState={{
           selected: triggered,
           busy: sending,
@@ -215,12 +272,12 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
       </TouchableOpacity>
       {pressing && (
         <View style={[styles.holdHint, isLarge && { bottom: -24 }]}>
-          <Text style={styles.holdHintText}>Hold for 1.2 seconds</Text>
+          <Text style={styles.holdHintText}>{translate('sos.hold_hint')}</Text>
         </View>
       )}
       {failed && !sending && (
         <View style={[styles.holdHint, isLarge && { bottom: -24 }]}>
-          <Text style={styles.holdHintText}>Tap to retry</Text>
+          <Text style={styles.holdHintText}>{translate('sos.retry_hint')}</Text>
         </View>
       )}
     </Animated.View>

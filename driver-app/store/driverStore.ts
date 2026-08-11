@@ -425,7 +425,7 @@ interface DriverState {
     setCountdown: (seconds: number) => void;
     applyDriverConfig: (config: { ride_offer_timeout_seconds?: number; pickup_radius_meters?: number }) => void;
     acceptRide: (rideId: string) => Promise<void>;
-    declineRide: (rideId: string) => Promise<void>;
+    declineRide: (rideId: string, reason?: string) => Promise<void>;
     arriveAtPickup: (rideId: string, driverLat?: number, driverLng?: number) => Promise<{ success: boolean; distance?: number; error?: string }>;
     verifyOTP: (rideId: string, otp: string) => Promise<boolean>;
     startRide: (rideId: string) => Promise<void>;
@@ -626,9 +626,19 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         }
     },
 
-    declineRide: async (rideId: string) => {
+    declineRide: async (rideId: string, reason?: string) => {
         try {
-            await api.post(`/drivers/rides/${rideId}/decline`);
+            // Optional reason (e.g. 'service_animal', reported via the
+            // offer card's long-press flag). Omit the body entirely when
+            // there's no reason — mirrors cancelRide below — so the default
+            // fast decline (single tap, auto-decline-on-timeout) keeps
+            // posting exactly the same request it always has.
+            const trimmed = reason?.trim();
+            if (trimmed) {
+                await api.post(`/drivers/rides/${rideId}/decline`, { reason: trimmed });
+            } else {
+                await api.post(`/drivers/rides/${rideId}/decline`);
+            }
         } catch {
             // Decline failure is non-critical — reset state regardless
         }

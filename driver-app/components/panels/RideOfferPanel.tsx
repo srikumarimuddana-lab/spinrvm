@@ -9,6 +9,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAlertPrefsStore } from '../../store/alertPrefsStore';
+import { showAlert } from '../AlertDialog';
+
+// Machine-readable code for the one flaggable decline reason surfaced here.
+// Trust & safety queries backend audit_logs / logs for this exact string —
+// keep it in sync with backend/routes/drivers/ride_flow.py.
+export const DECLINE_REASON_SERVICE_ANIMAL = 'service_animal';
 
 interface IncentiveItem {
     name: string;
@@ -54,7 +60,8 @@ interface RideOfferPanelProps {
     pickupDistanceKm?: number | null;
     isLoading: boolean;
     onAccept: () => void;
-    onDecline: () => void;
+    /** Optional reason (e.g. DECLINE_REASON_SERVICE_ANIMAL) from the long-press flag flow. */
+    onDecline: (reason?: string) => void;
 }
 
 const ACCENT = '#10B981';
@@ -126,9 +133,30 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
         }
     };
 
-    const handleDecline = () => {
+    const handleDecline = (reason?: string) => {
         vibrateForActionTap();
-        onDecline();
+        onDecline(reason);
+    };
+
+    // Long-press on Decline surfaces a single, optional flag for the one
+    // decline reason trust & safety needs to be able to detect today: a
+    // driver refusing to accommodate a service animal (CLAUDE.md
+    // Accessibility: "mandatory; drivers cannot refuse"). The plain tap
+    // (the fast, common path on a ~15s countdown) is completely unchanged —
+    // this is additive only, reachable but not in the way.
+    const handleDeclineLongPress = () => {
+        showAlert(
+            'Report a reason?',
+            "If you're declining because you can't accommodate a service animal, let us know. Service animal accommodation is mandatory and refusals are reviewed.",
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Service animal — report & decline',
+                    style: 'destructive',
+                    onPress: () => handleDecline(DECLINE_REASON_SERVICE_ANIMAL),
+                },
+            ],
+        );
     };
 
     const handleAccept = () => {
@@ -346,7 +374,8 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     <View style={styles.actionBar}>
                         <TouchableOpacity
                             style={styles.declineBtn}
-                            onPress={handleDecline}
+                            onPress={() => handleDecline()}
+                            onLongPress={handleDeclineLongPress}
                             activeOpacity={0.7}
                             accessibilityLabel="Decline ride"
                             disabled={isLoading}

@@ -11,12 +11,17 @@ from ._deps import (  # noqa: F401
     BaseModel,
     Decimal,
     Dict,
+    ErrorCode,
+    ErrorKeys,
     HTTPException,
     RideStatus,
+    SpinrException,
     asyncio,
+    datetime,
     db_supabase,
     hashlib,
     logger,
+    timezone,
 )
 
 _TWO_PLACES = Decimal("0.01")
@@ -638,3 +643,166 @@ def serialize_ride_for_driver(ride):
 # a number. Stripped anyway, because the token is still an unnecessary handle
 # to regulated data and any future decrypt would otherwise leak silently.
 _STRIP_FROM_SELF_RESPONSE = {"stripe_account_id", "bank_account", "fcm_token", "sin"}
+
+
+# ── Mid-session document-expiry re-check (P1 #12, 2026-08-11) ────────────────
+# go_online (status.py::update_driver_status) fail-closes on document expiry
+# at the moment a driver goes online, but the ONLY other place expiry is
+# enforced afterwards is the 12h document_expiry sweep and the 6h subscription
+# sweep — so a license/insurance/inspection/CRC-VSC that lapses while a driver
+# is already online can keep accepting NEW rides for up to 12h. That is a
+# regulatory + insurance-liability gap (see .claude/context/regulatory-sk.md:
+# "re-check cadence: on expiry" for these documents), not just a UX one.
+#
+# This block is a deliberately-scoped, NEW re-check for ride_flow.py::accept_ride
+# — it intentionally mirrors go_online's core-document-expiry semantics rather
+# than calling into status.py's inline block directly. go_online's block is
+# ~150 lines of tested, live-surface logic (per-area `required_documents`
+# matching + legacy-column fallback); refactoring it to share this helper is a
+# larger, higher-blast-radius change than this fix's scope justifies, so it is
+# left untouched and this stays an intentionally-duplicated, smaller check.
+# See docs/change-log/2026-08-11-accept-ride-mid-session-expiry-check.md for
+# the full blast-radius note and the follow-up flagged for real consolidation.
+#
+# Scope note: unlike go_online, this check is NOT gated on the driver's
+# service-area `required_documents` config. The four categories below (SK
+# license, insurance ride-share endorsement, vehicle inspection, CRC/VSC) are
+# unconditional regulatory requirements for every driver per
+# regulatory-sk.md's onboarding table ("Enforced ... again on every
+# go_online call") — they don't vary by area the way Spinr Pass requirements
+# do — so checking them unconditionally is more correct here, not merely a
+# simplification, and it avoids a second query (service_areas) that
+# area-scoped matching would need.
+_CORE_DOC_EXPIRY_CATEGORIES = (
+    ("license_expiry_date", "Driving license", ("license", "driving", "permit")),
+    ("insurance_expiry_date", "Vehicle insurance", ("insurance",)),
+    ("vehicle_inspection_expiry_date", "Vehicle inspection", ("inspection",)),
+    (
+        "background_check_expiry_date",
+        "Background check",
+        ("background", "criminal", "crc", "vulnerable", "vsc"),
+    ),
+)
+
+
+def _parse_document_expiry(val):
+    """Return a tz-aware UTC datetime for a document expiry value, or None.
+
+    Mirrors status.py::update_driver_status's `_parse_expiry` inline helper —
+    duplicated (not imported) because that one is a closure local to
+    go_online, not a module-level export; behaviour is kept identical
+    intentionally so the two checks agree on what "expired" means.
+    """
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    if isinstance(val, str):
+        try:
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _document_matches_category(doc: Dict[str, Any], keywords: tuple) -> bool:
+    haystack = f"{doc.get('document_type') or ''} {doc.get('requirement_key') or ''}".lower()
+    return any(kw in haystack for kw in keywords)
+
+
+async def _suspend_driver_for_expired_documents(driver_id: str, expired_labels: list) -> None:
+    """Best-effort mirror of what the 12h document_expiry sweep would
+    eventually do: flip the driver to suspended so a retried accept (or a
+    subsequent go-online) surfaces the clear "account suspended" message
+    instead of repeating the same "expired" rejection with no path forward.
+
+    CAS on status != 'suspended' so a concurrent request/sweep tick doesn't
+    double-write. Failure here must NOT block the caller's rejection of this
+    accept — the accept is already being denied via the SpinrException the
+    caller raises; a failed suspend-write just means the sweep catches it
+    later, same as today.
+    """
+    try:
+        await db_supabase.update_one(
+            "drivers",
+            {"id": driver_id, "status": {"$ne": "suspended"}},
+            {"is_online": False, "is_available": False, "status": "suspended"},
+        )
+        logger.info(
+            "[ACCEPT] driver %s suspended mid-session for expired documents: %s",
+            driver_id,
+            ", ".join(expired_labels),
+        )
+    except Exception:
+        logger.error(
+            "[ACCEPT] failed to suspend driver %s after detecting expired documents (%s) — "
+            "the 12h document_expiry sweep will still catch this",
+            driver_id,
+            ", ".join(expired_labels),
+            exc_info=True,
+        )
+
+
+async def check_driver_documents_current(driver: Dict[str, Any]) -> None:
+    """Re-check the driver's own regulatory-document expiry, right now.
+
+    Uses the already-loaded `driver` row for the legacy expiry columns (zero
+    extra queries) plus ONE additional indexed lookup — `driver_documents`
+    filtered by `driver_id` + `status='approved'`, a simple row lookup on an
+    indexed foreign key, not a join or scan — to catch expiry on a document
+    that was re-uploaded and approved since onboarding (the legacy columns
+    are onboarding-only and never refreshed on re-upload, same caveat as
+    go_online's own comment on this).
+
+    Raises ``SpinrException`` (400, DRIVER_DOCUMENTS_EXPIRED) on a genuine
+    expiry — the same error shape go_online uses for its own expiry block —
+    after best-effort suspending the driver so the rejection doesn't recur
+    silently forever. Any DB error propagates uncaught: this is a regulatory
+    eligibility gate on a ride-accept, and the caller is responsible for
+    failing CLOSED (503) rather than letting a check failure wave the accept
+    through.
+    """
+    now = datetime.now(timezone.utc)
+    driver_id = driver["id"]
+
+    approved_docs = await db_supabase.get_rows(
+        "driver_documents",
+        {"driver_id": driver_id, "status": "approved"},
+        limit=200,
+    )
+
+    covered_legacy_fields: set = set()
+    for field, label, keywords in _CORE_DOC_EXPIRY_CATEGORIES:
+        docs = [d for d in approved_docs if _document_matches_category(d, keywords)]
+        if not docs:
+            continue
+        docs.sort(key=lambda d: str(d.get("uploaded_at") or ""), reverse=True)
+        latest = docs[0]
+        exp = _parse_document_expiry(latest.get("expiry_date") or latest.get("expires_at"))
+        if exp and exp < now:
+            await _suspend_driver_for_expired_documents(driver_id, [label])
+            raise SpinrException(
+                message=f"{label} has expired. Please update your documents before accepting rides.",
+                error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+                status_code=400,
+                message_key=ErrorKeys.DRIVER_DOCUMENTS_EXPIRED,
+                action_hint="Renew documents in Profile",
+            )
+        # A fresh approved upload covers this category — don't also enforce
+        # the (possibly stale, never-refreshed) legacy column for it below.
+        covered_legacy_fields.add(field)
+
+    for field, label, _keywords in _CORE_DOC_EXPIRY_CATEGORIES:
+        if field in covered_legacy_fields:
+            continue
+        exp = _parse_document_expiry(driver.get(field))
+        if exp and exp < now:
+            await _suspend_driver_for_expired_documents(driver_id, [label])
+            raise SpinrException(
+                message=f"{label} has expired ({field}). Please update your documents before accepting rides.",
+                error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+                status_code=400,
+                message_key=ErrorKeys.DRIVER_DOCUMENTS_EXPIRED,
+                action_hint="Renew documents in Profile",
+            )

@@ -24,6 +24,7 @@ import { SOSButton } from '@shared/components/SOSButton';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useTranslation } from '../i18n';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
@@ -39,6 +40,7 @@ function DriverArrivedScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, wsConnected } = useRideStore();
+  const { t } = useTranslation();
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<any>(null);
   const snapPoints = useMemo(() => ['42%', '70%'], []);
@@ -229,7 +231,7 @@ function DriverArrivedScreenContent() {
             <View style={styles.pulseGreen} />
             <Text style={styles.arrivedChipText} allowFontScaling={false}>Driver has arrived</Text>
           </View>
-          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
+          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
         </View>
       </SafeAreaView>
 

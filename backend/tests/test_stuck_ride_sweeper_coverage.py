@@ -174,6 +174,8 @@ class TestSweepHappyPath:
         assert push_args[0] == "rider-1"
         assert push_args[3]["ride_id"] == "ride-1"
         assert push_args[3]["type"] == "ride_cancelled"
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push_kwargs.get("target_app") == "rider"
 
         mocks["set_driver_available"].assert_awaited_once_with("driver-1", True)
 

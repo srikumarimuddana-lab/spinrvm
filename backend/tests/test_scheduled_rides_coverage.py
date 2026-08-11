@@ -139,6 +139,24 @@ class TestNotifyScheduleDelayed:
         args, kwargs = send_push.await_args
         assert args[0] == "rider-1"
         assert kwargs["data"]["ride_id"] == "ride-1"
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert kwargs["target_app"] == "rider"
+
+    @pytest.mark.anyio
+    async def test_escalated_notification_targets_rider_app(self, sr, monkeypatch):
+        """The escalated (defer-count-exhausted) push is a distinct call site
+        from the routine 'waiting' notice -- N10 regression covering it too."""
+        monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(return_value=True))
+        send_push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", send_push)
+
+        await sr._notify_schedule_delayed("ride-1", "rider-1", {}, escalated=True)
+
+        send_push.assert_awaited_once()
+        args, kwargs = send_push.await_args
+        assert args[0] == "rider-1"
+        assert kwargs["data"]["type"] == "scheduled_ride_delayed_escalated"
+        assert kwargs["target_app"] == "rider"
 
     @pytest.mark.anyio
     async def test_redis_unavailable_falls_through_and_still_notifies(self, sr, monkeypatch):
@@ -284,6 +302,8 @@ class TestDispatchScheduledRide:
         push_args, push_kwargs = send_push.await_args
         assert push_args[0] == "rider-1"
         assert push_kwargs["data"]["type"] == "scheduled_ride_dispatched"
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push_kwargs["target_app"] == "rider"
 
     @pytest.mark.anyio
     async def test_no_rider_id_skips_final_push_notification(
@@ -463,6 +483,8 @@ class TestSendReminder:
         push_args, push_kwargs = send_push.await_args
         assert push_args[0] == "rider-1"
         assert push_kwargs["data"]["type"] == "scheduled_ride_reminder"
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push_kwargs["target_app"] == "rider"
 
         update_one.assert_awaited_once_with("rides", {"id": "ride-1"}, {"$set": {"reminder_sent": True}})
 

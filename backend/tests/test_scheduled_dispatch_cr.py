@@ -754,6 +754,8 @@ class TestCorporatePolicyRecheck:
         assert allowed is False
         metric_inc.assert_called_once_with("spinr_dispatch_scheduled_corporate_policy_blocked_total")
         push.assert_awaited_once()
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push.await_args.kwargs.get("target_app") == "rider"
         admin_bcast.assert_awaited_once()
         admin_payload = admin_bcast.await_args.args[0]
         assert admin_payload["type"] == "scheduled_ride_policy_blocked"

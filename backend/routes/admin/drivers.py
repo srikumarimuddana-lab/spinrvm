@@ -1275,6 +1275,7 @@ async def admin_nudge_driver_expiry(
                 "driver_id": driver_id,
                 "doc_type": body.doc_type,
             },
+            target_app="driver",
         )
     except Exception as exc:
         logger.error(
@@ -1590,7 +1591,11 @@ async def admin_review_driver_photo(
     try:
         if req.action == "approve":
             await send_push_notification(
-                user_id, "Photo approved ✅", "Your profile photo is now visible to riders.", {"type": "photo_approved"}
+                user_id,
+                "Photo approved ✅",
+                "Your profile photo is now visible to riders.",
+                {"type": "photo_approved"},
+                target_app="driver",
             )
         else:
             await send_push_notification(
@@ -1598,6 +1603,7 @@ async def admin_review_driver_photo(
                 "Photo needs attention ⚠️",
                 "Your profile photo wasn't approved. Please upload a clear photo of yourself.",
                 {"type": "photo_rejected"},
+                target_app="driver",
             )
     except Exception as e:
         logger.warning(f"[ADMIN] photo-review push failed for driver {driver_id}: {e}")

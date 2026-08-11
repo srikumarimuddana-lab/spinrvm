@@ -164,6 +164,11 @@ async def admin_send_notification(request: Request, notification: NotificationRe
     # Broadcasts only need the user id for the push fan-out — project it so we
     # don't pull up to 10k base64 profile_image blobs out of the DB.
     elif audience == "all":
+        # N10 (ACTION_ITEMS.md): "all" spans both roles with no per-user role
+        # lookup here, so it can't map to a single target_app column —
+        # target_app stays unset (legacy fcm_token fallback), matching the
+        # same accepted precedent routes/admin/messaging.py's
+        # _target_app_for_audience already established for its own "all".
         all_users = await db.get_rows("users", {}, columns="id", limit=10000)
         for u in all_users or []:
             await send_push_notification(u["id"], title, body)
@@ -171,12 +176,12 @@ async def admin_send_notification(request: Request, notification: NotificationRe
     elif audience == "riders":
         riders = await db.get_rows("users", {"is_rider": True}, columns="id", limit=10000)
         for u in riders or []:
-            await send_push_notification(u["id"], title, body)
+            await send_push_notification(u["id"], title, body, target_app="rider")
         logger.info(f"Broadcast notification to all riders: {title}")
     elif audience == "drivers":
         drivers = await db.get_rows("users", {"is_driver": True}, columns="id", limit=10000)
         for u in drivers or []:
-            await send_push_notification(u["id"], title, body)
+            await send_push_notification(u["id"], title, body, target_app="driver")
         logger.info(f"Broadcast notification to all drivers: {title}")
 
     return {"success": True, "notification": notification_doc}

@@ -2981,9 +2981,12 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
 
 
 ### B9. Address+coordinate pairs are stored server-side with zero consistency validation
-- [x] **Status:** partially done — geocode-verify + dedupe fix shipped; `place_id`
-  storage and `CreateRideRequest` cross-field validation explicitly deferred
-  (see below)
+- [x] **Status:** CLOSED 2026-08-11 — geocode-verify + dedupe fix, `place_id`
+  storage, and `CreateRideRequest` cross-field validation are all now shipped
+  (see below). The only remaining piece named anywhere in this item's history
+  — `place_id` re-resolve-on-save for saved addresses — was already flagged
+  as its own separate, larger follow-up when `place_id` storage shipped, not
+  part of what this item's Action text asked for.
 - **Why:** the client-side carriers of mismatched pairs are fixed (recents v2,
   search-screen pin integrity, map-pick label binding), but the backend still
   accepts and replays unvalidated pairs:
@@ -3030,25 +3033,56 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
     Updated `tests/test_address_verification.py` (3-tuple return, `place_id`
     asserted in every branch) and
     `tests/test_p3_addresses_favorites_safety_disputes.py` (2 new tests:
-    `place_id` persisted on success, `None` when verification fails open) —
-    **verification of these tests is deferred to the end-of-batch full-suite
-    run**, per this session's token-budget constraint; not run individually.
-  - `CreateRideRequest` cross-field validation in `schemas.py` — **still not
-    attempted**, deliberately. Ride creation is a live, state-machine-critical,
-    money-adjacent surface; changing what it accepts needs its own dedicated
-    pass (dry run against `mock_supabase_client`, feature-flag consideration)
-    per CLAUDE.md's pre-merge release gates — which itself conflicts with
-    this session's "no testing until the end of the batch" instruction, so
-    attempting it blind here would violate the item's own stated
-    prerequisite. Left open for a dedicated pass with its own dry run.
+    `place_id` persisted on success, `None` when verification fails open).
+    **Verification note:** the "deferred to end-of-batch full-suite run" note
+    left here by the original pass was never actually confirmed run —
+    re-verified 2026-08-11 as its own explicit step before starting the
+    `CreateRideRequest` work below: `pytest tests/test_address_verification.py
+    tests/test_p3_addresses_favorites_safety_disputes.py -q --no-cov` → **40
+    passed**, 0 failures.
+  - `CreateRideRequest` cross-field validation — **done 2026-08-11**, in
+    `routes/rides/booking.py`'s `create_ride` handler rather than
+    `schemas.py` itself: pydantic `field_validator`s are synchronous and
+    can't make the network call a geocode check requires, so this was
+    structurally impossible to add as a schema validator — it has to live
+    in the route. Reuses the existing `verify_address_matches_coordinate`
+    helper (no new geocode logic), running both legs concurrently via
+    `asyncio.gather` (bounds added latency to one Maps round-trip, not two).
+    Placed *after* the existing pickup/dropoff/stop geofence gates so an
+    out-of-service-area request is rejected by the free in-memory polygon
+    check first, without spending a paid Maps call on a booking that would
+    be rejected anyway. Same fail-open contract as the other two call
+    sites. Dry run performed per CLAUDE.md's pre-merge release gate for
+    state-machine/money-adjacent changes: 671 tests across every
+    ride-booking-adjacent test file found via grep (`test_rides.py`,
+    `test_create_ride_guard_clauses.py` — 3 new tests added here,
+    `test_wav_dispatch.py`, `test_corporate_ride_payment.py`,
+    `test_coverage_rides.py`, `test_admin_rides_coverage.py`,
+    `test_corporate_surge_bypass.py`, `test_p0_ship_blockers.py`,
+    `test_ai_tools_booking.py`) — 0 failures, 0 hangs, ~20s combined;
+    confirmed the unmocked existing tests don't make a real network call
+    (the internal `get_app_settings()` lookup resolves through the same
+    mocked `db_supabase.get_rows` autouse fixture every other test already
+    relies on). `ruff check` clean on all touched files. Full Change Impact
+    Log: `docs/change-log/2026-08-11-b9-create-ride-address-coordinate-validation.md`.
+    **Not verified:** no manual/staging repro against a real Maps API key;
+    production Maps-budget/latency impact of the 2 extra geocode calls per
+    booking is unmeasured (same open question B6 already documents for the
+    Directions call); the rider-app's handling of the new 400 response was
+    not implemented (backend-only change — a raw error string surfacing
+    to the rider instead of a friendly retry prompt is a real, disclosed
+    gap, not silently assumed covered); full ~9000-test backend suite was
+    not run, only the targeted 671-test slice above.
 - **Files:** `backend/routes/addresses.py`, `backend/routes/favorites.py`,
+  `backend/routes/rides/_deps.py`, `backend/routes/rides/booking.py`,
   `backend/utils/address_verification.py` (new),
   `backend/tests/test_address_verification.py` (new),
-  `backend/tests/test_p3_addresses_favorites_safety_disputes.py`
-- **Acceptance:** no endpoint persists an address whose stored coordinate is
-  more than ~1 km from where that address geocodes, when Google is confident
-  about the geocode (met for `/addresses` and `/favorites`; `CreateRideRequest`
-  still open — see deferred above).
+  `backend/tests/test_p3_addresses_favorites_safety_disputes.py`,
+  `backend/tests/test_create_ride_guard_clauses.py`
+- **Acceptance:** met — no endpoint (`/addresses`, `/favorites`, or
+  `POST /rides`) persists an address whose stored coordinate is more than
+  ~1 km from where that address geocodes, when Google is confident about
+  the geocode.
 
 ### B10. Compliance-module exports have no dual-approval gate (extends open AI-3)
 - [x] **Status:** DONE (2026-07-29) — shipped across PR #2819 (schema,

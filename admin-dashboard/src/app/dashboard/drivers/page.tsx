@@ -730,8 +730,8 @@ export default function DriversPage() {
                 { key: "sgi_approved", label: "SGI Approved" }, { key: "sgi_approved_at", label: "SGI Approved At" },
                 { key: "work_authorization_status", label: "Work Authorization" },
                 { key: "is_permanent_resident", label: "Permanent Resident" }, { key: "is_citizen", label: "Citizen" },
-                { key: "decal_number", label: "Decal Number" }, { key: "decal_generated_at", label: "Decal Generated At" },
-                { key: "decals_sent", label: "Decals Sent" }, { key: "decals_sent_at", label: "Decals Sent At" },
+                { key: "decal_number", label: "Welcome Letter Ref #" }, { key: "decal_generated_at", label: "Welcome Letter Generated" },
+                { key: "decals_sent", label: "Welcome Letter Sent" }, { key: "decals_sent_at", label: "Welcome Letter Sent At" },
                 { key: "subscription_status", label: "Subscription Status" },
                 { key: "subscription_plan", label: "Subscription Plan" },
                 { key: "subscription_expires_at", label: "Subscription Expires" },
@@ -1330,10 +1330,10 @@ export default function DriversPage() {
                                                         Citizen / permanent resident / work permit are mutually exclusive — picking one marks the others not applicable.
                                                     </p>
                                                 </div>
-                                                <EditField label="Decal Number" value={ef("decal_number")} onChange={v => setEf("decal_number", v)} />
-                                                <EditField label="Decal Generated At" value={ef("decal_generated_at")} onChange={v => setEf("decal_generated_at", v)} type="datetime-local" />
-                                                <EditBooleanField label="Decals Sent" value={ef("decals_sent")} onChange={v => setEf("decals_sent", v)} />
-                                                <EditField label="Decals Sent At" value={ef("decals_sent_at")} onChange={v => setEf("decals_sent_at", v)} type="datetime-local" />
+                                                <EditField label="Welcome Letter Ref #" value={ef("decal_number")} onChange={v => setEf("decal_number", v)} />
+                                                <EditField label="Welcome Letter Generated" value={ef("decal_generated_at")} onChange={v => setEf("decal_generated_at", v)} type="datetime-local" />
+                                                <EditBooleanField label="Welcome Letter Sent" value={ef("decals_sent")} onChange={v => setEf("decals_sent", v)} />
+                                                <EditField label="Welcome Letter Sent At" value={ef("decals_sent_at")} onChange={v => setEf("decals_sent_at", v)} type="datetime-local" />
                                             </div>
                                         ) : (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -1370,10 +1370,10 @@ export default function DriversPage() {
                                                 />
                                                 <DetailField icon={Shield} label="Permanent Resident" value={WORK_AUTH_FLAG_LABELS[workAuth(selected).permanent_resident] || "Unknown"} />
                                                 <DetailField icon={Shield} label="Citizen" value={WORK_AUTH_FLAG_LABELS[workAuth(selected).citizen] || "Unknown"} />
-                                                <DetailField icon={FileText} label="Decal Number" value={selected.decal_number || "—"} mono />
-                                                <DetailField icon={Clock} label="Decal Generated At" value={selected.decal_generated_at ? new Date(selected.decal_generated_at).toLocaleString("en-CA") : "—"} />
-                                                <DetailField icon={CheckCircle} label="Decals Sent" value={selected.decals_sent === true ? "Yes" : selected.decals_sent === false ? "No" : "Unknown"} />
-                                                <DetailField icon={Clock} label="Decals Sent At" value={selected.decals_sent_at ? new Date(selected.decals_sent_at).toLocaleString("en-CA") : "—"} />
+                                                <DetailField icon={FileText} label="Welcome Letter Ref #" value={selected.decal_number || "—"} mono />
+                                                <DetailField icon={Clock} label="Welcome Letter Generated" value={selected.decal_generated_at ? new Date(selected.decal_generated_at).toLocaleString("en-CA") : "—"} />
+                                                <DetailField icon={CheckCircle} label="Welcome Letter Sent" value={selected.decals_sent === true ? "Yes" : selected.decals_sent === false ? "No" : "Unknown"} />
+                                                <DetailField icon={Clock} label="Welcome Letter Sent At" value={selected.decals_sent_at ? new Date(selected.decals_sent_at).toLocaleString("en-CA") : "—"} />
                                             </div>
                                         )}
                                     </DetailSection>

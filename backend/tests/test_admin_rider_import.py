@@ -238,6 +238,48 @@ def test_commit_creates_rows(test_client, super_admin_override):
     assert store["users"][0]["is_rider"] is True
 
 
+def test_commit_stamps_provenance_on_created_user(test_client, super_admin_override):
+    """P0-A (docs/audit/2026-08-11-driver-rider-migration-audit.md): every
+    other importer stamps legacy_import_metadata on rows it touches; the
+    rider CSV importer must too, so an admin can answer "which rows did
+    import batch X create."""
+    store = _fresh_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = _post(test_client, "/api/admin/riders/import/commit", _csv(GOOD_ROW))
+    assert resp.status_code == 200, resp.text
+    meta = store["users"][0]["legacy_import_metadata"]["rider_csv_import"]
+    assert meta["batch"] == "batch-1"
+    assert meta["source"] == "legacy_rider_csv_import"
+    assert meta["imported_at"]
+
+
+def test_commit_stamps_provenance_on_updated_user_without_clobbering_other_metadata(test_client, super_admin_override):
+    """The same users.legacy_import_metadata column is shared with
+    stripe_mapping_import_service (a `stripe_migration` sub-key on the same
+    row) — writing rider-import provenance must merge, not overwrite."""
+    store = _fresh_store()
+    store["users"].append(
+        {
+            "id": "existing-1",
+            "phone": "+13065551234",
+            "email": None,
+            "is_rider": False,
+            "is_driver": False,
+            "stripe_customer_id": None,
+            "legacy_import_metadata": {"stripe_migration": {"batch": "stripe-batch-9", "old_stripe_customer_id": "x"}},
+        }
+    )
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = _post(test_client, "/api/admin/riders/import/commit", _csv(GOOD_ROW))
+    assert resp.status_code == 200, resp.text
+    meta = store["users"][0]["legacy_import_metadata"]
+    assert meta["stripe_migration"] == {"batch": "stripe-batch-9", "old_stripe_customer_id": "x"}
+    assert meta["rider_csv_import"]["batch"] == "batch-1"
+    assert meta["rider_csv_import"]["source"] == "legacy_rider_csv_import"
+
+
 def test_validate_skips_pii_update_for_pending_deletion_account(test_client, super_admin_override):
     """P0-C (docs/audit/2026-08-11-driver-rider-migration-audit.md): a
     phone-matched account mid-PIPEDA-deletion must not have its falsy

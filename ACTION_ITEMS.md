@@ -4900,9 +4900,20 @@ Remaining, roughly in order of user impact:
   `routes/webhooks.py:1297` → `services/stripe_kyc_sync.apply_account_update`
   persists the cache columns and stops. A driver whose payouts Stripe has
   blocked learns nothing.
-- [ ] **N7. Auto-reactivation after `suspended_until` lapses is silent (D21)** —
-  `utils/suspension_reactivation.py` writes an audit row; the driver is never
-  told they can work again.
+- [x] ~~**N7. Auto-reactivation after `suspended_until` lapses is silent (D21)**~~
+  — done: `_reactivate_tick` now sends a push (`"Account reactivated" / "Your
+  account is active again. Welcome back!"`) right after the audit-log insert,
+  gated on the same "did our conditional update actually stick" check so a
+  replica that loses the reactivation race never double-notifies. Applies to
+  both riders and drivers (the `users` table query has no role filter).
+  `target_app=None` (legacy `fcm_token`) is deliberate, not unresolved: the
+  `users.role` column is admin-RBAC-only, not a rider/driver signal, and an
+  account can be both via `is_rider`/`is_driver` — mirrors
+  `routes/admin/users.py`'s manual-reactivation push, which already uses the
+  same copy and the same `target_app=None`. Push-only, no email, matching
+  that same manual precedent (it doesn't email either). 25 tests passing
+  (`test_suspension_reactivation.py`, `test_suspension_reactivation_coverage.py`),
+  6 new specifically on the notification behavior.
 - [ ] **N8. Delete dead `utils/receipt_email.py` (X4)** — no production callers
   (only `tests/test_receipt_email.py`), and it hardcodes `_GST_RATE = 0.05` /
   `_PST_RATE = 0.06` (`:18-19`) instead of reading the service area, so it will

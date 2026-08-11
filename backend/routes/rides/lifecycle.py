@@ -115,6 +115,7 @@ async def rider_start_ride(
                 "Ride Started! ▶️",
                 "Your ride has started. Have a safe trip!",
                 data={"type": "ride_started", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
     await _deps.manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=rider_id)

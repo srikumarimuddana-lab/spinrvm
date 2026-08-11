@@ -119,6 +119,7 @@ async def _sweep() -> None:
                     "No drivers available",
                     "We couldn't find a driver nearby. Please try again.",
                     {"ride_id": str(ride_id), "type": "ride_cancelled"},
+                    target_app="rider",
                 )
             except Exception as exc:
                 logger.error(

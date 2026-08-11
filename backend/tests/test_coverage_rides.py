@@ -956,7 +956,7 @@ async def test_ride_search_timeout_cancels_searching_ride():
         patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.routes.rides._deps.manager") as mock_manager,
-        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock) as mock_push,
     ):
         mock_db.get_ride = AsyncMock(return_value=searching_ride)
         mock_db.update_ride = AsyncMock()
@@ -967,6 +967,11 @@ async def test_ride_search_timeout_cancels_searching_ride():
         await ride_search_timeout(_RIDE_ID, timeout_seconds=0)
 
     mock_db.update_ride.assert_called()
+    # N10 regression: the auto-cancel push goes to the rider, so it must pass
+    # target_app='rider' -- fails if target_app reverts to the omitted default.
+    mock_push.assert_awaited_once()
+    assert mock_push.await_args.args[0] == _RIDER_ID
+    assert mock_push.await_args.kwargs.get("target_app") == "rider"
 
 
 @pytest.mark.anyio
@@ -2178,6 +2183,48 @@ async def test_rider_start_ride_success():
         mock_db.update_one = AsyncMock(return_value=ride)
         result = await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
     assert result["success"] is True
+
+
+@pytest.mark.anyio
+async def test_rider_start_ride_push_target_app_is_rider():
+    """N10 regression: the 'Ride Started' push is fired to the rider, so it
+    must pass target_app='rider' (features.send_push_notification uses this to
+    pick fcm_token_rider over the legacy fcm_token column). Fails if
+    target_app reverts to the omitted/None default."""
+    import asyncio
+
+    from backend.routes.rides import rider_start_ride
+
+    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    driver_row = {"id": _DRIVER_ID}
+    ride = _ride(status="driver_arrived", driver_id=_DRIVER_ID)
+
+    push_calls: list = []
+
+    async def _push(uid, title, body, data=None, priority="normal", target_app=None):
+        push_calls.append({"uid": uid, "target_app": target_app})
+
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.send_push_notification", AsyncMock(side_effect=_push)),
+        patch("backend.routes.rides.lifecycle.send_live_activity_update", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.spawn", side_effect=lambda c: asyncio.ensure_future(c)),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[driver_row])
+        mock_db.update_ride = AsyncMock()
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_manager.send_personal_message = AsyncMock()
+        mock_manager.broadcast_ride_status = AsyncMock()
+        result = await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
+        await asyncio.sleep(0)  # let the spawned push task run
+
+    assert result["success"] is True
+    assert push_calls, "No push was fired"
+    assert push_calls[0]["uid"] == _RIDER_ID
+    assert push_calls[0]["target_app"] == "rider"
 
 
 # ── rider_complete_ride ───────────────────────────────────────────────────────

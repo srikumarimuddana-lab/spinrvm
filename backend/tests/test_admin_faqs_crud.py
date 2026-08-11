@@ -171,7 +171,9 @@ def test_send_notification_broadcast_riders(test_client):
 
     assert resp.status_code == 200
     assert mock_get_rows.call_args[0][1] == {"is_rider": True}
-    send_mock.assert_awaited_once_with("u1", "Rider update", "Body")
+    # N10 (ACTION_ITEMS.md): the riders broadcast loop now targets the
+    # rider app's FCM token column instead of falling through to legacy.
+    send_mock.assert_awaited_once_with("u1", "Rider update", "Body", target_app="rider")
 
 
 def test_send_notification_broadcast_drivers(test_client):
@@ -187,7 +189,9 @@ def test_send_notification_broadcast_drivers(test_client):
 
     assert resp.status_code == 200
     assert mock_get_rows.call_args[0][1] == {"is_driver": True}
-    send_mock.assert_awaited_once_with("d1", "Driver update", "Body")
+    # N10 (ACTION_ITEMS.md): the drivers broadcast loop now targets the
+    # driver app's FCM token column instead of falling through to legacy.
+    send_mock.assert_awaited_once_with("d1", "Driver update", "Body", target_app="driver")
 
 
 # ---------- notifications: list ----------

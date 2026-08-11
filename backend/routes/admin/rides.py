@@ -473,6 +473,7 @@ async def admin_cancel_ride(
                     "Ride Cancelled",
                     reason,
                     {"type": "ride_cancelled", "ride_id": ride_id},
+                    target_app="driver",
                 )
             except Exception as e:
                 logger.warning(f"admin_cancel_ride: driver push failed: {e}")
@@ -489,6 +490,7 @@ async def admin_cancel_ride(
                 "Ride Cancelled",
                 reason,
                 {"type": "ride_cancelled", "ride_id": ride_id},
+                target_app="rider",
             )
         except Exception as e:
             logger.warning(f"admin_cancel_ride: rider push failed: {e}")
@@ -974,6 +976,7 @@ async def admin_create_ride(
                 f"{ride_doc['pickup_address']} → {ride_doc['dropoff_address']}",
                 {k: str(v) for k, v in dispatch_payload.items() if v is not None},
                 priority="dispatch",
+                target_app="driver",
             )
             asyncio.create_task(
                 _offer_timeout_handler(

@@ -5366,7 +5366,7 @@ Remaining, roughly in order of user impact:
     `backend/tests/test_driver_statement_job.py` (4 new cases — opted-out
     skips email but still claims/records totals, opted-in still sends,
     fail-open on lookup error, defaults-true with no prefs row).
-- [ ] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
+- [x] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
   through to the legacy `users.fcm_token` column (`features.py:1664-1670`)
   rather than `fcm_token_rider`. Works today only because registration still
   mirrors both (`routes/notifications.py:329-336`); breaks silently if that
@@ -5415,6 +5415,63 @@ Remaining, roughly in order of user impact:
   existing `test_offer_timeout_handler_auto_offline_notifies_and_pushes`.
   Only the "ambiguous/admin" bucket remains — deliberately not swept here,
   needs its own per-call-site read.
+  **2026-08-11 update — admin/ambiguous bucket done, N10 fully closed:**
+  read each of the 8 flagged call sites individually rather than batch-fixing
+  — several turned out to already be correct or genuinely fine as-is:
+  - **`routes/notifications.py:108` `/test-push`**: confirmed correct as-is,
+    not a gap — its whole documented purpose is diagnosing the legacy
+    `users.fcm_token` column specifically (`token_on_file`/`token_preview`/
+    `platform_hint` all read that exact field), so staying on the legacy
+    path is the intended behavior, not an oversight.
+  - **`routes/admin/wallet.py`** (`admin_credit_wallet`/`admin_debit_wallet`):
+    already correctly wired via a `_wallet_target_app(user)` helper from the
+    earlier N15/R31 pass this session — no gap, nothing to fix.
+  - **`routes/admin/rides.py:901`** (promo-applied push): already
+    `target_app="rider"` from the N15/R33 pass — no gap.
+  - **Genuinely fixed** (9 sites, 6 files): `routes/admin/documents.py`
+    (document-rejection push → `driver`), `routes/admin/drivers.py` ×3
+    (expiry nudge, photo approved, photo rejected → all `driver`),
+    `routes/admin/rides.py` ×2 more (`admin_cancel_ride`'s driver leg →
+    `driver`, rider leg → `rider`; the new-ride dispatch push → `driver`),
+    `routes/admin/users.py` (`admin_update_user_status`'s account-status
+    push → `rider` — settled by the endpoint's own docstring, which scopes
+    it to "Suspend, ban, or reactivate a rider account"/"cannot request a
+    ride"; it operates on the shared `users` table but is rider-only by
+    design, not by accident), `routes/admin/vehicle_fleet.py`
+    (lost-and-found push → `driver`).
+  - **`routes/admin/faqs.py`**'s `admin_send_notification` broadcast: the
+    `riders`/`drivers` loops now pass `target_app="rider"`/`"driver"`
+    per-iteration. The `all` loop deliberately stays unset — it spans both
+    roles with no per-user role lookup in that branch, so it can't map to a
+    single column; this matches the existing, already-accepted precedent in
+    `routes/admin/messaging.py`'s own `_target_app_for_audience`, which
+    already returns `None` for its equivalent "all" case (legacy `fcm_token`
+    fallback, not a bug — the correct behavior for a role-spanning
+    broadcast is documented there, not just replicated blindly).
+  - Tests: new `tests/test_n10_admin_push_target_app.py` (9 tests, one per
+    fix site, function-level — importing each admin route module and
+    patching its actual bound `send_push_notification` name, module-level
+    for `documents.py`/`drivers.py`/`vehicle_fleet.py`, or the `features`
+    module directly for `faqs.py`/`users.py`, which import it locally
+    inside the function body rather than at module top — patching the
+    wrong target here silently no-ops, the real function runs, and it logs
+    "No user found for X — push dropped" and returns normally: several
+    *pre-existing* tests in `test_admin_drivers_coverage.py` and similar
+    files use exactly this ineffective `patch("features.
+    send_push_notification", ...)` pattern against module-top-level-import
+    call sites and were never actually intercepting the push — a real gap
+    in this repo's test quality, flagged here rather than fixed wholesale
+    since it's a pre-existing issue orthogonal to N10's own scope, not
+    introduced by this change) — plus 2 new assertions extending existing
+    tests in `tests/test_admin_rides_coverage.py`
+    (`test_cancel_notifies_driver_and_rider_with_correct_target_app`,
+    extended `test_create_ride_with_driver_status_driver_assigned_and_dispatches`).
+    382 tests total across every touched/adjacent file, all passing.
+  **What was NOT verified**: no live FCM/Expo push exercised for any of the
+  9 sites (mocked per repo convention, matching every other N10 fix this
+  session). The pre-existing ineffective-patch-target test-quality gap
+  noted above was not audited or fixed across the rest of the test suite —
+  flagged, not swept.
 - [x] ~~**N16. Consolidate the two copies of the company-address assembly**~~
   — done 2026-08-11: `_coalesce`/`_postal_address` were byte-identical logic
   duplicated across `utils/company_details.py` and `utils/marketing_email.py`.

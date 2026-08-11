@@ -71,6 +71,10 @@ function PayoutScreen() {
     const [showSinForm, setShowSinForm] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [bonuses, setBonuses] = useState<{ id: string; amount: string; kind: string; description: string; created_at: string }[]>([]);
+    // Tax years the driver actually earned in (GET /drivers/t4a/years). Empty
+    // means there is nothing to file, so the Tax Documents section is hidden
+    // rather than offering a $0.00 slip for a year they never drove.
+    const [taxYears, setTaxYears] = useState<{ year: number; total_earnings: string; total_trips: number }[]>([]);
 
     useEffect(() => {
         loadData();
@@ -84,6 +88,7 @@ function PayoutScreen() {
                 fetchBankAccount(),
                 loadStripeStatus(),
                 loadBonuses(),
+                loadTaxYears(),
                 // GST is sourced from useDriverMe — no manual fetch needed.
             ]);
         } catch (err) {
@@ -99,6 +104,17 @@ function PayoutScreen() {
             setBonuses(res.data?.bonuses || []);
         } catch {
             setBonuses([]);
+        }
+    };
+
+    const loadTaxYears = async () => {
+        try {
+            const res = await api.get<{ years?: typeof taxYears }>('/drivers/t4a/years');
+            setTaxYears(res.data?.years || []);
+        } catch {
+            // Hide the section rather than offering a document we can't
+            // confirm has any earnings behind it.
+            setTaxYears([]);
         }
     };
 
@@ -248,16 +264,23 @@ function PayoutScreen() {
         }
     };
 
+    // Most recent year the driver actually earned in. Preferred over
+    // "last calendar year", which emailed a $0.00 slip for a year they may
+    // not have driven — the section is hidden entirely when this is null.
+    const latestTaxYear = taxYears.length > 0 ? taxYears[0].year : null;
+
     const handleEmailT4A = async () => {
+        if (latestTaxYear == null) return;
         setSendingT4A(true);
         try {
-            // CRA T4A is generated per tax year — default to the most recently
-            // completed year so drivers don't get an in-progress year's partial total.
-            const year = new Date().getFullYear() - 1;
             // Tax documents are delivered by email only (no in-app download); the
             // backend renders the PDF and emails it as an attachment.
-            const res = await api.post<{ message?: string }>(`/drivers/t4a/${year}/email`);
-            showToast('success', 'Check Your Email', res.data?.message || `Your T4A summary for ${year} is on its way.`);
+            const res = await api.post<{ message?: string }>(`/drivers/t4a/${latestTaxYear}/email`);
+            showToast(
+                'success',
+                'Check Your Email',
+                res.data?.message || `Your T4A summary for ${latestTaxYear} is on its way.`,
+            );
         } catch (err: any) {
             showToast('error', 'Send Failed', getApiErrorMessage(err, 'Could not send your T4A. Please try again.'));
         } finally {
@@ -266,9 +289,13 @@ function PayoutScreen() {
     };
 
     const handleEmailCSV = async () => {
+        if (latestTaxYear == null) return;
         setSendingCSV(true);
         try {
-            const year = new Date().getFullYear();
+            // Current year if the driver has earned in it, else their most
+            // recent earning year — never a year with nothing to export.
+            const thisYear = new Date().getFullYear();
+            const year = taxYears.some((y) => y.year === thisYear) ? thisYear : latestTaxYear;
             const res = await api.post<{ message?: string }>(`/drivers/earnings/export/email?year=${year}`);
             showToast('success', 'Check Your Email', res.data?.message || `Your earnings export for ${year} is on its way.`);
         } catch (err: any) {
@@ -739,7 +766,10 @@ function PayoutScreen() {
                     )}
                 </View>
 
-                {/* Tax Documents */}
+                {/* Tax Documents — only for drivers who actually have a tax
+                    year on the books. Previously this always rendered and
+                    emailed a $0.00 slip for last calendar year. */}
+                {latestTaxYear != null && (
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Tax Documents</Text>
                     <View style={styles.payoutCard}>
@@ -784,6 +814,7 @@ function PayoutScreen() {
                         </TouchableOpacity>
                     </View>
                 </View>
+                )}
 
                 {/* Info Note */}
                 <View style={styles.infoNote}>

@@ -206,7 +206,7 @@ describe('rideStore — ride lifecycle', () => {
       await useRideStore.getState().createRide('card');
     });
 
-    const [, payload] = mockApi.post.mock.calls[mockApi.post.mock.calls.length - 1];
+    const [, payload] = mockApi.post.mock.calls[mockApi.post.mock.calls.length - 1] as [string, any];
     expect(payload.is_scheduled).toBe(true);
     // Naive local digits: no 'Z', no UTC offset -- matches the local
     // getFullYear/getMonth/.../getSeconds fields, NOT toISOString()'s

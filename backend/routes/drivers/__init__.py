@@ -269,6 +269,7 @@ from .tax_exports import (  # noqa: F401
     export_driver_data,
     export_earnings,
     get_t4a_summary,
+    get_t4a_years,
 )
 
 api_router = APIRouter(tags=["Drivers"])
@@ -452,6 +453,7 @@ __all__ = [
     "get_subscription_payment_history",
     "get_subscription_plans",
     "get_t4a_summary",
+    "get_t4a_years",
     "hashlib",
     "hmac",
     "idempotent_endpoint",

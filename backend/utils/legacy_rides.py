@@ -46,9 +46,28 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 # Merge into a `rides` filter dict to exclude legacy-imported rides.
-# `None` compiles to PostgREST `is.null` (repositories/_base.py) — a plain
-# `= NULL` would match zero rows and silently zero out every earnings figure.
-EXCLUDE_LEGACY_RIDES: dict[str, Any] = {"legacy_import_metadata": None}
+#
+# A26 (docs/audit/2026-08-11-driver-rider-migration-audit.md, found
+# 2026-08-11, confirmed live against production): this used to be
+# {"legacy_import_metadata": None}, which repositories/_base.py compiles to
+# PostgREST `is.null` — real SQL `IS NULL`. That's the right pattern for an
+# ordinary nullable column, but `rides.legacy_import_metadata` is declared
+# `NOT NULL DEFAULT '{}'::jsonb` (migration 268) — no row, imported or not,
+# can ever be SQL NULL there. `IS NULL` against a `NOT NULL` column matches
+# ZERO ROWS, ALWAYS — not "zero legacy rows," but every row the filter
+# touches. Verified live: a driver with 1 real, non-legacy completed ride
+# got 0 rows back from the exact query this constant used to compile to,
+# meaning `total_rides`/`total_earnings` on their balance screen read 0/
+# $0.00 despite having real, unpaid-out earnings.
+#
+# The correct predicate is equality against the column's own "not imported"
+# default, `'{}'::jsonb` — but a bare `{"legacy_import_metadata": {}}` value
+# doesn't work either: `_apply_filters` treats ANY dict value as an
+# operator-map (for `$gte`/`$in`/etc.), so an empty dict is read as "no
+# operators" and silently applies no filter at all, which would widen every
+# query using this constant to include legacy rows again. `$eq` makes the
+# intent explicit and unambiguous.
+EXCLUDE_LEGACY_RIDES: dict[str, Any] = {"legacy_import_metadata": {"$eq": {}}}
 
 # The synthetic offset the importer wrote to cancel the imported earnings.
 # Never a real bank transfer — excluded from "paid out" alongside the rides.

@@ -265,6 +265,104 @@ def test_dropoff_outside_service_area_gets_400(rider_client):
     assert "dropoff" in resp.json()["detail"]["message"].lower()
 
 
+def test_pickup_address_confident_mismatch_gets_400(rider_client):
+    """B9: a confident geocode mismatch on the pickup leg rejects the
+    booking before any fare/dispatch work, mirroring the identical check
+    already enforced at POST /addresses and POST /favorites."""
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "service_areas":
+            return [_ACTIVE_AREA]
+        return []
+
+    async def _verify(address, lat, lng):
+        if address == _VALID_BODY["pickup_address"]:
+            return False, f"'{address}' geocodes 9.4 km from the supplied location", None
+        return True, None, None
+
+    with (
+        patch("backend.routes.rides.booking._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+        patch(
+            "backend.routes.rides.booking._deps.db.find_one",
+            AsyncMock(return_value={"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}),
+        ),
+        patch("backend.routes.rides.booking._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.routes.rides.booking._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch("backend.routes.rides.booking._get_active_service_area_for_point", AsyncMock(return_value=_ACTIVE_AREA)),
+        patch("backend.routes.rides.booking.verify_address_matches_coordinate", AsyncMock(side_effect=_verify)),
+    ):
+        resp = rider_client.post("/api/v1/rides", json=_body(payment_method="wallet"))
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "pickup" in detail.lower()
+    assert "don't match" in detail.lower()
+
+
+def test_dropoff_address_confident_mismatch_gets_400(rider_client):
+    """B9: same guard, dropoff leg — proves it's checked independently, not
+    just short-circuited by the pickup check."""
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "service_areas":
+            return [_ACTIVE_AREA]
+        return []
+
+    async def _verify(address, lat, lng):
+        if address == _VALID_BODY["dropoff_address"]:
+            return False, f"'{address}' geocodes 6.1 km from the supplied location", None
+        return True, None, None
+
+    with (
+        patch("backend.routes.rides.booking._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+        patch(
+            "backend.routes.rides.booking._deps.db.find_one",
+            AsyncMock(return_value={"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}),
+        ),
+        patch("backend.routes.rides.booking._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.routes.rides.booking._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch("backend.routes.rides.booking._get_active_service_area_for_point", AsyncMock(return_value=_ACTIVE_AREA)),
+        patch("backend.routes.rides.booking.verify_address_matches_coordinate", AsyncMock(side_effect=_verify)),
+    ):
+        resp = rider_client.post("/api/v1/rides", json=_body(payment_method="wallet"))
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "dropoff" in detail.lower()
+    assert "don't match" in detail.lower()
+
+
+def test_address_verification_fails_open_does_not_block_booking(rider_client):
+    """The B9 guard must not fire when verification is ambiguous/unavailable
+    (no API key, budget exhausted, network error, imprecise geocode) — same
+    fail-open contract as POST /addresses and POST /favorites."""
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "service_areas":
+            return [_ACTIVE_AREA]
+        return []
+
+    with (
+        patch("backend.routes.rides.booking._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+        patch(
+            "backend.routes.rides.booking._deps.db.find_one",
+            AsyncMock(return_value={"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}),
+        ),
+        patch("backend.routes.rides.booking._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.routes.rides.booking._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch("backend.routes.rides.booking._get_active_service_area_for_point", AsyncMock(return_value=_ACTIVE_AREA)),
+        patch(
+            "backend.routes.rides.booking.verify_address_matches_coordinate",
+            AsyncMock(return_value=(True, None, None)),
+        ),
+    ):
+        resp = rider_client.post("/api/v1/rides", json=_body(payment_method="wallet"))
+    # Not the 400 from this guard — whatever happens next (likely a 503/500
+    # from unmocked downstream fare/dispatch calls) is out of scope; the
+    # assertion is specifically that this guard did NOT fire.
+    if resp.status_code == 400:
+        detail = str(resp.json().get("detail", "")).lower()
+        assert "don't match" not in detail
+
+
 def test_stop_outside_service_area_gets_400(rider_client):
     async def _get_rows(table, filters=None, **kw):
         if table == "service_areas":

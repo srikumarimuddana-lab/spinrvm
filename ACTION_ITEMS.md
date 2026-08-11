@@ -4916,6 +4916,76 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   against (a super-admin's role changing mid-session without a remount) was
   not manually reproduced.
 
+### C16. `admin-dashboard` test files were never covered by `next build`'s type-check, and where they briefly were (dependabot PR #3483), it broke the build
+- [ ] **Status:** open. Not gating — no user-facing effect (see below); sized
+  S, well under 2 hours for whoever picks it up.
+- **Why:** `tsconfig.json`'s `exclude` list only excluded `src/__tests__` by
+  directory name. 11 of the app's 20 `*.test.ts(x)`/`*.spec.ts(x)` files live
+  outside that directory (colocated `_components/*.test.tsx`, `hooks/*.test.tsx`,
+  `lib/__tests__/*`, etc.) and were silently included in `next build`'s
+  type-check scope all along — invisible only because nothing in the
+  toolchain's own type-checking had ever surfaced an error in them, not
+  because they were actually excluded. Found while verifying dependabot PR
+  #3483 (`next` 16.2.12→16.3.0, one of the "next-stack" group bump): that
+  PR's own changelog includes "Enable TypeScript CLI by default," and under
+  the new stricter check `npm run build` fails with "Failed to type check"
+  on 3 of those 11 files — confirmed via a clean before/after (`main`
+  builds, the bump branch doesn't) that this is a real regression surfaced
+  by the bump, not a flake. The three failures are two different root
+  causes: missing `vitest`/`@testing-library/jest-dom` global types
+  (`route-segments.test.ts`, `driver-statements-panel.test.tsx`), and one
+  genuine type-narrowing bug in test code itself
+  (`companyApi.test.ts:105` — `as {_data:...}` doesn't structurally overlap
+  with the real `NextResponse<any>` return type; the test already passes at
+  runtime under `vitest run`, so this is a compile-time-only strictness
+  complaint, not a hidden behavioral bug).
+- **Immediate unblock (applied to PR #3483 directly, not a fix for this item):**
+  broadened `tsconfig.json`'s `exclude` to a filename-pattern match
+  (`**/*.test.ts`, `**/*.test.tsx`, `**/*.spec.ts`, `**/*.spec.tsx`) covering
+  all 20 test files consistently, instead of the incomplete
+  directory-name-only pattern. Verified: `tsc --noEmit` clean, real
+  `npm run build` passes, and the 3 previously-failing files still run and
+  pass under `npx vitest run` (18/18) — the exclusion only removes them from
+  the build's type-check, not from actual test execution.
+- **The real fix (not yet done):** add `"types": ["vitest/globals",
+  "@testing-library/jest-dom"]` to `tsconfig.json`'s `compilerOptions`, drop
+  the test-file exclusions entirely, then fix what that surfaces. Already
+  dry-ran this in a scratch worktree with **zero exclusions** (the honest
+  full scope, including the 9 files under the old `src/__tests__` exclude
+  that had never been type-checked at all): only **2 files, 4 error sites**
+  total across the whole 20-file suite.
+  - `companyApi.test.ts:105` — one-line `as unknown as {...}` cast, zero
+    functional risk (confirmed above).
+  - `src/__tests__/dashboard/pages.smoke.test.tsx` (3 sites) — a shared
+    `renderPage()` smoke-test helper called with page components whose
+    inferred return type doesn't satisfy `ComponentType<{}>`; root cause
+    (helper's generic signature vs. specific page export types) not yet
+    diagnosed — this is the one part of the estimate that's a real unknown
+    until someone opens it.
+- **User-experience effect:** none, either way. `*.test.ts(x)` files are
+  never bundled into anything Next.js ships — no route, page, or API output
+  includes them regardless of whether the build's `tsc` pass checks them.
+  The benefit of doing the real fix is dev-experience/CI-signal quality
+  only: correct IDE type-hints in test files, and a genuine safety net
+  against test-code bugs like the `companyApi.test.ts` one (harmless today,
+  but the pattern — a test file invisible to type-checking — is exactly how
+  a *behavioral* mismatch could hide next time, not just a strictness
+  complaint).
+- **Files:** `admin-dashboard/tsconfig.json` (unblock, applied);
+  `admin-dashboard/src/lib/__tests__/companyApi.test.ts`,
+  `admin-dashboard/src/__tests__/dashboard/pages.smoke.test.tsx` (real fix,
+  not yet applied).
+- **Effort estimate for the real fix:** tsconfig change ~5 min +
+  `companyApi.test.ts` one-liner ~5 min + `pages.smoke.test.tsx`
+  investigation 30–60 min (unknown until opened) + full re-verification
+  (`tsc` + `npm run build` + `vitest run`) ~15 min ≈ **under 2 hours** total.
+- **What was NOT verified:** the `pages.smoke.test.tsx` root cause itself —
+  scoped by error count and file count, not by actually fixing it. Not
+  checked whether other admin-dashboard-adjacent surfaces (rider-app,
+  driver-app) have the same directory-name-only test-exclude gap in their
+  own `tsconfig.json`s — this item is scoped to admin-dashboard only,
+  where it was found.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

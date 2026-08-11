@@ -889,6 +889,33 @@ async def admin_create_ride(
         },
     )
 
+    if promo_application_id:
+        # N15/R33 (ACTION_ITEMS.md): an admin redeeming a promo on the rider's
+        # behalf previously left zero trace on the rider's device — the
+        # discount just showed up on the fare with no explanation. This is a
+        # best-effort, non-time-critical informational push (send_push_
+        # notification already honours the rider's push opt-out for
+        # priority="normal") — a delivery failure here must never undo the
+        # promo redemption or ride creation that already committed above.
+        try:
+            await send_push_notification(
+                body.rider_id,
+                "Promo code applied",
+                f"{promo_code_normalised} was applied to your ride — you saved ${discount_amount}.",
+                data={
+                    "type": "promo_applied",
+                    "ride_id": ride_doc["id"],
+                    "promo_code": promo_code_normalised or "",
+                    "discount_amount": str(discount_amount),
+                },
+                target_app="rider",
+            )
+        except Exception as e:
+            logger.warning(
+                f"admin_create_ride: rider promo-applied push failed ride_id={ride_doc['id']}: {e}",
+                exc_info=True,
+            )
+
     if body.driver_id:
         try:
             await db_supabase.set_driver_available(body.driver_id, False)

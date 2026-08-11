@@ -24,7 +24,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
+    runtimeVersion: '2.1.0', // bump from 2.0.0 (SDK 57 dependency alignment, 2026-08-11): react-native-gesture-handler 2.31→2.32, react-native-safe-area-context 5.6→5.7, netinfo 11→12 are all NATIVE-module changes, and @react-native-community/datetimepicker + react-native-modal-datetime-picker were removed from autolinking — JS built against these must never OTA onto pre-alignment binaries. Prior: 2.0.0 fenced the New Architecture switch (old-arch installs must not pull that OTA).
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',

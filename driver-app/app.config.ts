@@ -24,7 +24,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.5.0', // bump from 2.4.0: expo-sqlite adds a native module for the durable trip-location outbox, so SQLite-dependent JS must never reach a pre-SQLite binary over the air. 2.4.0 isolated the react-native-screens 4.23.0 native line after 4.24.0 New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object in release builds. Prior 2.2.0 -> 2.3.0 added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
+    runtimeVersion: '2.6.0', // bump from 2.5.0 (SDK 57 dependency alignment, 2026-08-11): react-native-gesture-handler 2.31→2.32, react-native-safe-area-context 5.6→5.7, netinfo 11→12, datetimepicker 8→9 are all NATIVE-module changes — JS built against these must never OTA onto pre-alignment binaries. History: 2.5.0 added expo-sqlite (durable trip-location outbox); 2.4.0 isolated the react-native-screens 4.23.0 native line after 4.24.0 New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object in release builds; 2.2.0 -> 2.3.0 added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',

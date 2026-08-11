@@ -131,6 +131,10 @@ def corrected_totals(old_totals: dict | None, statement: dict) -> dict[str, Any]
     out = {
         "earnings": statement["earnings"],
         "payouts_total": statement["payouts_total"],
+        # Era split (may be absent from statements built before it existed;
+        # the admin list falls back to the gross figure when missing).
+        "payouts_spinr_total": statement.get("payouts_spinr_total"),
+        "payouts_previous_app_total": statement.get("payouts_previous_app_total"),
         "trips": statement["trips"],
     }
     superseded = (old_totals or {}).get("superseded")
@@ -240,8 +244,18 @@ async def recompute_statement_totals(
             continue
 
         result.corrected += 1
+
+        def _earn_total(v: Any) -> float:
+            # The job stores `earnings` as the full breakdown dict (with a
+            # "total" key); treating it as a scalar made every earnings delta
+            # silently skip, so previews reported earnings +0.00 no matter
+            # how large the correction was.
+            if isinstance(v, dict):
+                v = v.get("total")
+            return float(v or 0)
+
         try:
-            result.delta_earnings += float(new["earnings"]) - float(old.get("earnings") or 0)
+            result.delta_earnings += _earn_total(new["earnings"]) - _earn_total(old.get("earnings"))
             result.delta_payouts += float(new["payouts_total"]) - float(old.get("payouts_total") or 0)
         except (TypeError, ValueError):
             pass

@@ -309,6 +309,13 @@ class AppSettings(BaseModel):
     # / Profile footers without each app hard-coding them. None of these
     # fields are sensitive — they're the same info on a business card.
     company_name: str = "Spinr"
+    # Product/brand name used in email BODY copy ("Open the {app_name} driver
+    # app", "your {app_name} wallet", "— The {app_name} Team"). Deliberately
+    # separate from company_name, which is the legal entity name
+    # ("Spinr Technologies Inc.") and reads badly inline ("Open the Spinr
+    # Technologies Inc. driver app"). See utils/company_details.py and
+    # ACTION_ITEMS.md N17.
+    company_app_name: str = "Spinr"
     company_address: str = ""
     company_phone: str = ""
     company_email: str = ""

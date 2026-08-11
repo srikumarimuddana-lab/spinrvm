@@ -24,6 +24,7 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from ..socket_manager import manager
+    from .company_details import load_company_details
     from .datetime_utils import parse_iso_utc
     from .driver_presence import clear_presence
     from .driver_status_notifications import ACCOUNT_PRIORITY
@@ -35,6 +36,7 @@ except ImportError:
     from db import db
     from features import send_push_notification
     from socket_manager import manager
+    from utils.company_details import load_company_details  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_presence import clear_presence
     from utils.driver_status_notifications import ACCOUNT_PRIORITY
@@ -70,6 +72,7 @@ async def _email_expiry_notice(
     every go-online, not a marketing preference.
     """
     try:
+        company = await load_company_details()
         user = await resolve_recipient(user_id)
         first_name = ((user or {}).get("first_name") or "").strip()
         await send_lifecycle_email(
@@ -79,7 +82,10 @@ async def _email_expiry_notice(
             rendered=await render_email(
                 greeting=f"Hi {first_name}," if first_name else None,
                 heading=subject,
-                paragraphs=[body, next_step],
+                # `{app_name}` is a literal replace, not str.format: `body`
+                # can carry a document label an admin/config never vetted.
+                paragraphs=[body, next_step.replace("{app_name}", company.app_name)],
+                company=company,
             ),
             email_type=email_type,
             email_class=EmailClass.TRANSACTIONAL,
@@ -234,7 +240,7 @@ async def check_expiring_documents():
                 driver["id"],
                 _suspend_title,
                 _suspend_body,
-                "Upload a current copy in the Spinr driver app under Profile → Documents. "
+                "Upload a current copy in the {app_name} driver app under Profile → Documents. "
                 "Your account is restored once an admin approves it.",
                 "document_expired_suspension",
             )
@@ -308,7 +314,7 @@ async def check_expiring_documents():
             driver["id"],
             notif_title,
             notif_body,
-            "Upload the renewed document in the Spinr driver app under Profile → Documents. "
+            "Upload the renewed document in the {app_name} driver app under Profile → Documents. "
             "You'll stay online as long as it's approved before the expiry date.",
             notif_type,
         )

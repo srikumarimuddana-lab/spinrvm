@@ -987,6 +987,27 @@ export default function SettingsPage() {
                                     onChange={(e) => update("company_name", e.target.value)}
                                     placeholder="Spinr"
                                 />
+                                <p className="text-xs text-muted-foreground">
+                                    Legal entity name — used in the email footer, mailing
+                                    address, and logo alt text. For the product name that
+                                    appears inline in email copy (&quot;Open the ... app&quot;),
+                                    use App Name below instead.
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>App Name</Label>
+                                <Input
+                                    value={settings.company_app_name || ""}
+                                    onChange={(e) => update("company_app_name", e.target.value)}
+                                    placeholder="Spinr"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Product/brand name used in email body copy (&quot;Open the
+                                    {" "}{settings.company_app_name || "Spinr"} driver app&quot;,
+                                    &quot;your {settings.company_app_name || "Spinr"} wallet&quot;).
+                                    Independent of Company Name above — rebrand the product
+                                    without touching the legal entity name.
+                                </p>
                             </div>
                             <div className="space-y-2">
                                 <Label>Phone</Label>

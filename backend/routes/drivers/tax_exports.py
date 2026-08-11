@@ -32,8 +32,10 @@ from ._shared import (  # noqa: F401
 )
 
 try:
+    from ...utils.company_details import load_company_details
     from ...utils.legacy_rides import drop_legacy_rides
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils.company_details import load_company_details  # type: ignore
     from utils.legacy_rides import drop_legacy_rides  # type: ignore
 
 router = APIRouter()
@@ -312,17 +314,18 @@ async def _email_t4a_document(user_id: str, email: str, year: int, summary: dict
         logger.error("T4A PDF render failed for user %s year %s", user_id, year, exc_info=True)
         return
     filename = f"T4A_{year}_{user_id[:8]}.pdf"
+    company = await load_company_details()
     await _email_driver_document(
         user_id,
         email,
-        subject=f"Your Spinr T4A summary for {year}",
+        subject=f"Your {company.app_name} T4A summary for {year}",
         body=(
             "Hi,\n\n"
             f"As requested, your T4A earnings summary for the {year} tax year is "
             f'attached as a PDF ("{filename}").\n\n'
             "Keep this document for your Canadian tax filing. If you have any "
             "questions, contact support@spinr.ca.\n\n"
-            "— The Spinr Team"
+            f"— The {company.app_name} Team"
         ),
         filename=filename,
         content=pdf_bytes,
@@ -334,16 +337,17 @@ async def _email_t4a_document(user_id: str, email: str, year: int, summary: dict
 async def _email_earnings_csv(user_id: str, email: str, year: int, csv_data: str) -> None:
     """Background task: email the trip-by-trip earnings CSV to the driver."""
     filename = f"earnings_export_{year}.csv"
+    company = await load_company_details()
     await _email_driver_document(
         user_id,
         email,
-        subject=f"Your Spinr earnings export for {year}",
+        subject=f"Your {company.app_name} earnings export for {year}",
         body=(
             "Hi,\n\n"
             f"As requested, your detailed earnings export for {year} is attached "
             f'as a CSV ("{filename}").\n\n'
             "If you have any questions, contact support@spinr.ca.\n\n"
-            "— The Spinr Team"
+            f"— The {company.app_name} Team"
         ),
         filename=filename,
         content=csv_data.encode("utf-8"),
@@ -408,19 +412,20 @@ async def _email_statement_document(user_id: str, email: str, statement: dict) -
         logger.error("statement PDF render failed for user %s", user_id, exc_info=True)
         return
     filename = f"spinr-statement-{statement['period_type']}-{statement['period_start']}.pdf"
+    company = await load_company_details()
     await _email_driver_document(
         user_id,
         email,
-        subject=f"Your Spinr earnings statement — {statement['period_label']}",
+        subject=f"Your {company.app_name} earnings statement — {statement['period_label']}",
         body=(
             "Hi,\n\n"
-            f"As requested, your Spinr earnings statement for {statement['period_label']} "
+            f"As requested, your {company.app_name} earnings statement for {statement['period_label']} "
             f'is attached as a PDF ("{filename}").\n\n'
             f"  Total earnings: ${statement['earnings']['total']}\n"
             f"  Trips completed: {statement['trips']}\n"
             f"  Paid out this period: ${statement['payouts_total']}\n\n"
             "Questions? Contact support@spinr.ca.\n\n"
-            "— The Spinr Team"
+            f"— The {company.app_name} Team"
         ),
         filename=filename,
         content=pdf_bytes,
@@ -589,18 +594,18 @@ def _object_to_csv(obj: dict) -> str:
     return buf.getvalue()
 
 
-def _build_export_readme(payload: dict, generated_on: str) -> str:
+def _build_export_readme(payload: dict, generated_on: str, app_name: str = "Spinr") -> str:
     """Human-readable index of what's in the export archive."""
     account = payload.get("account", {}) or {}
     raw_name = account.get("name") or account.get("full_name") or account.get("first_name") or "Driver"
     # Strip control characters so a name with newlines can't corrupt the README.
     name = " ".join(str(raw_name).split()) or "Driver"
     return (
-        "Spinr — Personal Data Export\n"
-        "============================\n\n"
+        f"{app_name} — Personal Data Export\n"
+        f"{'=' * len(f'{app_name} — Personal Data Export')}\n\n"
         f"Generated: {generated_on}\n"
         f"Account: {name}\n\n"
-        "This archive contains the personal data Spinr holds about you, provided\n"
+        f"This archive contains the personal data {app_name} holds about you, provided\n"
         "in PIPEDA-compliant form. Files:\n\n"
         "  account.csv                  Your account record (field,value).\n"
         "  driver_profile.csv           Your driver profile (field,value), if you're a driver.\n"
@@ -622,13 +627,13 @@ def _build_export_readme(payload: dict, generated_on: str) -> str:
     )
 
 
-def _build_export_zip(payload: dict, generated_on: str) -> bytes:
+def _build_export_zip(payload: dict, generated_on: str, app_name: str = "Spinr") -> bytes:
     """Bundle the export payload into a ZIP of CSV files + README + JSON."""
     import io  # noqa: PLC0415
     import zipfile  # noqa: PLC0415
 
     files = {
-        "README.txt": _build_export_readme(payload, generated_on),
+        "README.txt": _build_export_readme(payload, generated_on, app_name),
         "account.csv": _object_to_csv(payload.get("account", {})),
         "driver_profile.csv": _object_to_csv(payload.get("driver_profile", {})),
         "rides.csv": _rows_to_csv(payload.get("rides") or []),
@@ -646,13 +651,13 @@ def _build_export_zip(payload: dict, generated_on: str) -> bytes:
     return buf.getvalue()
 
 
-def _build_export_email_html(filename: str) -> str:
+def _build_export_email_html(filename: str, app_name: str = "Spinr") -> str:
     """Lyft-style 'your data is ready' HTML email body."""
     return (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
         'max-width:520px;margin:0 auto;color:#1a1a1a;line-height:1.5">'
         '<h2 style="margin:0 0 12px">Your data export is ready</h2>'
-        "<p>As requested, your personal data held by Spinr is attached as a ZIP archive "
+        f"<p>As requested, your personal data held by {app_name} is attached as a ZIP archive "
         f"(<strong>{filename}</strong>).</p>"
         "<p>Inside you'll find spreadsheet (CSV) files you can open in Excel, Numbers, or "
         "Google Sheets:</p>"
@@ -669,7 +674,7 @@ def _build_export_email_html(filename: str) -> str:
         "</ul>"
         '<p style="color:#555;font-size:13px">Questions about your data or want it deleted? '
         'Contact <a href="mailto:privacy@spinr.ca">privacy@spinr.ca</a>.</p>'
-        '<p style="color:#888;font-size:12px">— The Spinr Team</p>'
+        f'<p style="color:#888;font-size:12px">— The {app_name} Team</p>'
         "</div>"
     )
 
@@ -782,11 +787,12 @@ async def _build_export_link_email(download_url: str, expires_human: str):
     except ImportError:
         from utils.email_layout import render_email  # type: ignore
 
+    company = await load_company_details()
     return await render_email(
         greeting="Hi,",
         heading="Your data export is ready",
         paragraphs=[
-            "As requested, your personal data held by Spinr is ready to download.",
+            f"As requested, your personal data held by {company.app_name} is ready to download.",
             _EXPORT_MANIFEST,
             "The CSV files open in Excel, Numbers, or Google Sheets.",
             f"This secure link expires on {expires_human}. If it expires before you download "
@@ -794,6 +800,7 @@ async def _build_export_link_email(download_url: str, expires_human: str):
         ],
         cta=("Download my data (ZIP)", download_url),
         footnote="Questions about your data, or want it deleted? Contact privacy@spinr.ca.",
+        company=company,
     )
 
 
@@ -923,8 +930,9 @@ async def _build_and_email_data_export(user_id: str, email: str) -> bool:
         # Drivers get spreadsheets they can open, not a raw JSON blob.
         now = datetime.now(timezone.utc)
         generated_on = now.strftime("%Y-%m-%d")
-        zip_bytes = _build_export_zip(export_payload, generated_on)
-        subject = "Your Spinr data export is ready"
+        company = await load_company_details()
+        zip_bytes = _build_export_zip(export_payload, generated_on, company.app_name)
+        subject = f"Your {company.app_name} data export is ready"
 
         # Primary delivery: a time-limited signed download link (like Lyft) —
         # keeps PII out of the email body and lets a leaked link self-expire.
@@ -963,13 +971,13 @@ async def _build_and_email_data_export(user_id: str, email: str) -> bool:
                 subject=subject,
                 body=(
                     "Hi,\n\n"
-                    "As requested, your personal data held by Spinr is attached as a ZIP "
+                    f"As requested, your personal data held by {company.app_name} is attached as a ZIP "
                     f'archive ("{filename}").\n\n'
                     "If you have any questions about your data or would like to request "
                     "deletion, please contact privacy@spinr.ca.\n\n"
-                    "— The Spinr Team"
+                    f"— The {company.app_name} Team"
                 ),
-                html=_build_export_email_html(filename),
+                html=_build_export_email_html(filename, company.app_name),
                 attachments=[{"filename": filename, "content": zip_bytes, "mime": "application/zip"}],
                 email_type="dsar",
                 recipient_user_id=user_id,

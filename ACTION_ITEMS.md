@@ -4952,8 +4952,41 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   not manually reproduced.
 
 ### C16. `admin-dashboard` test files were never covered by `next build`'s type-check, and where they briefly were (dependabot PR #3483), it broke the build
-- [ ] **Status:** open. Not gating — no user-facing effect (see below); sized
-  S, well under 2 hours for whoever picks it up.
+- [x] **Status:** CLOSED (2026-08-11) — did the "real fix" this entry itself
+  scoped: added `"types": ["vitest/globals", "@testing-library/jest-dom"]`
+  to `tsconfig.json`'s `compilerOptions` and dropped the `src/__tests__`
+  exclusion entirely (all 20 test files are now honestly in the build's
+  type-check scope, not just the 11 that were silently in-scope before).
+  Fixed the 4 error sites that surfaced — 1 more than this entry's own
+  scratch-worktree dry run found, see below:
+  - `src/lib/__tests__/companyApi.test.ts:107` — the flagged one-liner:
+    `as {...}` → `as unknown as {...}` (the mocked `NextResponse.json`
+    return shape doesn't structurally overlap with the real
+    `NextResponse<any>` type; zero functional risk, confirmed by this
+    entry's own investigation).
+  - `src/__tests__/dashboard/pages.smoke.test.tsx:414,449,463` — this
+    entry's dry run had these 3 sites' root cause as "not yet diagnosed";
+    it turned out to be simple: the shared `renderPage()` smoke-test helper
+    expects `ComponentType<{}>`, but 3 page components
+    (`/dashboard/surge`, `/dashboard/notifications`, `/dashboard/documents`
+    — all simple `redirect()`-only stub pages with no explicit `return`)
+    had their return type inferred as `void`, not `ReactNode`, since a
+    function with no `return` statement defaults to `void` regardless of
+    `redirect()`'s own `never` return type. Fixed by adding an explicit
+    `: never` return-type annotation to each of the 3 page functions —
+    `never` satisfies `ReactNode` by TS's covariance rules, and the runtime
+    behavior (call `redirect()`, never actually return) is unchanged. No
+    edit needed to `pages.smoke.test.tsx` itself.
+  - Verification: `npx tsc --noEmit` clean (zero errors), `npx vitest run`
+    — 160/160 passed (all 20 test files, up from the 11 the old build scope
+    covered), and a real `npm run build` — full production build, exit
+    clean, complete route manifest printed (not just `tsc --noEmit` or a
+    dev server per CLAUDE.md's explicit requirement for any admin-dashboard
+    change). `npx eslint` on every touched file — 0 errors, only
+    pre-existing unrelated warnings in `pages.smoke.test.tsx`.
+  - **What was NOT verified**: no visual/browser check of the 3 redirect
+    pages beyond the build succeeding and the existing smoke tests passing
+    — this repo has no visual regression tooling (standing gap, N12).
 - **Why:** `tsconfig.json`'s `exclude` list only excluded `src/__tests__` by
   directory name. 11 of the app's 20 `*.test.ts(x)`/`*.spec.ts(x)` files live
   outside that directory (colocated `_components/*.test.tsx`, `hooks/*.test.tsx`,

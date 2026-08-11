@@ -3,18 +3,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     Search, Users, Loader2, CheckCircle, Clock, AlertTriangle, FileText,
-    Download, Car, Mail, RefreshCw,
+    Download, Car, Mail, RefreshCw, ChevronLeft, ChevronRight, MapPin, Filter,
 } from "lucide-react";
-import { getDrivers, generateDecalPdf } from "@/lib/api";
+import { getDrivers, getServiceAreas, generateDecalPdf } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { exportToCsv } from "@/lib/export-csv";
 
 type LetterFilter = "all" | "needs_letter" | "generated" | "sent";
+type DriverStatus = "all" | "active" | "pending" | "suspended" | "banned";
+
+interface ServiceArea {
+    id: string;
+    name: string;
+}
 
 const FILTER_TABS: { value: LetterFilter; label: string; icon: any }[] = [
     { value: "all", label: "All Drivers", icon: Users },
@@ -22,6 +29,16 @@ const FILTER_TABS: { value: LetterFilter; label: string; icon: any }[] = [
     { value: "generated", label: "Generated", icon: FileText },
     { value: "sent", label: "Sent", icon: CheckCircle },
 ];
+
+const STATUS_OPTIONS: { value: DriverStatus; label: string }[] = [
+    { value: "all", label: "All Statuses" },
+    { value: "active", label: "Approved" },
+    { value: "pending", label: "Pending" },
+    { value: "suspended", label: "Suspended" },
+    { value: "banned", label: "Banned" },
+];
+
+const PAGE_SIZE = 25;
 
 const fmtDate = (iso: string | null | undefined) => {
     if (!iso) return "—";
@@ -46,13 +63,28 @@ export default function WelcomeLettersPage() {
     const [refreshing, setRefreshing] = useState(false);
     const [search, setSearch] = useState("");
     const [filter, setFilter] = useState<LetterFilter>("all");
+    const [driverStatus, setDriverStatus] = useState<DriverStatus>("all");
+    const [serviceAreaId, setServiceAreaId] = useState("all");
+    const [serviceAreas, setServiceAreas] = useState<ServiceArea[]>([]);
+    const [dateFrom, setDateFrom] = useState("");
+    const [dateTo, setDateTo] = useState("");
+    const [page, setPage] = useState(1);
     const [generatingId, setGeneratingId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+    useEffect(() => {
+        getServiceAreas()
+            .then((data) => setServiceAreas((data || []).map((a: any) => ({ id: a.id, name: a.name || a.city || a.id }))))
+            .catch(() => setServiceAreas([]));
+    }, []);
 
     const load = useCallback(async () => {
         try {
             setRefreshing(true);
-            const res = await getDrivers({ limit: 500, status: "active" });
+            const opts: Record<string, any> = { limit: 500 };
+            if (driverStatus !== "all") opts.status = driverStatus;
+            if (serviceAreaId !== "all") opts.service_area_id = serviceAreaId;
+            const res = await getDrivers(opts);
             const list = Array.isArray(res) ? res : (res as any)?.drivers || [];
             setDrivers(list);
         } catch (e: any) {
@@ -61,9 +93,11 @@ export default function WelcomeLettersPage() {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [toast]);
+    }, [toast, driverStatus, serviceAreaId]);
 
     useEffect(() => { if (allowed) load(); }, [allowed, load]);
+
+    useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [filter, driverStatus, serviceAreaId, search, dateFrom, dateTo]);
 
     const filtered = useMemo(() => {
         let list = drivers;
@@ -74,6 +108,21 @@ export default function WelcomeLettersPage() {
             list = list.filter(d => d.decal_generated_at && !d.decals_sent);
         } else if (filter === "sent") {
             list = list.filter(d => d.decals_sent);
+        }
+
+        if (dateFrom) {
+            const from = new Date(dateFrom);
+            list = list.filter(d => {
+                if (!d.decal_generated_at) return false;
+                return new Date(d.decal_generated_at) >= from;
+            });
+        }
+        if (dateTo) {
+            const to = new Date(dateTo + "T23:59:59");
+            list = list.filter(d => {
+                if (!d.decal_generated_at) return false;
+                return new Date(d.decal_generated_at) <= to;
+            });
         }
 
         if (search.trim()) {
@@ -88,7 +137,13 @@ export default function WelcomeLettersPage() {
         }
 
         return list;
-    }, [drivers, filter, search]);
+    }, [drivers, filter, search, dateFrom, dateTo]);
+
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    const paged = useMemo(() => {
+        const start = (page - 1) * PAGE_SIZE;
+        return filtered.slice(start, start + PAGE_SIZE);
+    }, [filtered, page]);
 
     const counts = useMemo(() => ({
         all: drivers.length,
@@ -166,10 +221,10 @@ export default function WelcomeLettersPage() {
     };
 
     const toggleSelectAll = () => {
-        if (selectedIds.size === filtered.length) {
+        if (selectedIds.size === paged.length) {
             setSelectedIds(new Set());
         } else {
-            setSelectedIds(new Set(filtered.map(d => d.id)));
+            setSelectedIds(new Set(paged.map(d => d.id)));
         }
     };
 
@@ -208,7 +263,7 @@ export default function WelcomeLettersPage() {
                         Welcome Letters
                     </h1>
                     <p className="text-sm text-muted-foreground mt-1">
-                        Generate and track welcome letters for active drivers
+                        Generate and track welcome letters for drivers
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -249,15 +304,72 @@ export default function WelcomeLettersPage() {
                 ))}
             </div>
 
-            {/* Search */}
-            <div className="relative w-full sm:w-80">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                    placeholder="Search by name, plate, driver code, ref #..."
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                    className="pl-9 h-9 text-sm"
-                />
+            {/* Filters row */}
+            <div className="flex flex-wrap items-end gap-3">
+                <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                        placeholder="Search name, plate, code, ref #..."
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        className="pl-9 h-9 text-sm"
+                    />
+                </div>
+
+                <Select value={driverStatus} onValueChange={v => setDriverStatus(v as DriverStatus)}>
+                    <SelectTrigger className="w-40 h-9" aria-label="Filter by driver status">
+                        <div className="flex items-center gap-1.5">
+                            <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                            <SelectValue placeholder="All Statuses" />
+                        </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                        {STATUS_OPTIONS.map(opt => (
+                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+
+                <Select value={serviceAreaId} onValueChange={setServiceAreaId}>
+                    <SelectTrigger className="w-44 h-9" aria-label="Filter by service area">
+                        <div className="flex items-center gap-1.5">
+                            <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                            <SelectValue placeholder="All Areas" />
+                        </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">All Service Areas</SelectItem>
+                        {serviceAreas.map(a => (
+                            <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+
+                <div className="flex items-center gap-2">
+                    <div className="space-y-0.5">
+                        <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">From</label>
+                        <Input
+                            type="date"
+                            value={dateFrom}
+                            onChange={e => setDateFrom(e.target.value)}
+                            className="h-9 w-36 text-sm"
+                        />
+                    </div>
+                    <div className="space-y-0.5">
+                        <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">To</label>
+                        <Input
+                            type="date"
+                            value={dateTo}
+                            onChange={e => setDateTo(e.target.value)}
+                            className="h-9 w-36 text-sm"
+                        />
+                    </div>
+                    {(dateFrom || dateTo) && (
+                        <Button variant="ghost" size="sm" className="h-9 mt-3.5 text-xs" onClick={() => { setDateFrom(""); setDateTo(""); }}>
+                            Clear
+                        </Button>
+                    )}
+                </div>
             </div>
 
             {/* Table */}
@@ -268,7 +380,7 @@ export default function WelcomeLettersPage() {
                             <TableHead className="h-11 w-10 pl-4">
                                 <input
                                     type="checkbox"
-                                    checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                                    checked={paged.length > 0 && selectedIds.size === paged.length}
                                     onChange={toggleSelectAll}
                                     className="rounded border-border"
                                 />
@@ -296,15 +408,15 @@ export default function WelcomeLettersPage() {
                                 <TableCell><div className="h-3 w-20 bg-muted rounded" /></TableCell>
                                 <TableCell><div className="h-7 w-20 bg-muted rounded" /></TableCell>
                             </TableRow>
-                        )) : filtered.length === 0 ? (
+                        )) : paged.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                                     <Mail className="h-10 w-10 mx-auto mb-3 opacity-20" />
                                     <p className="text-base font-medium">No drivers found</p>
-                                    <p className="text-sm mt-1">Try adjusting your search or filter</p>
+                                    <p className="text-sm mt-1">Try adjusting your search or filters</p>
                                 </TableCell>
                             </TableRow>
-                        ) : filtered.map(driver => {
+                        ) : paged.map(driver => {
                             const st = letterStatus(driver);
                             const vehicle = [driver.vehicle_year, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(" ");
                             return (
@@ -383,10 +495,56 @@ export default function WelcomeLettersPage() {
                 </Table>
             </div>
 
+            {/* Pagination */}
             {!loading && filtered.length > 0 && (
-                <p className="text-xs text-muted-foreground text-right">
-                    Showing {filtered.length} of {drivers.length} active drivers
-                </p>
+                <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground">
+                        Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length} drivers
+                    </p>
+                    <div className="flex items-center gap-1">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            disabled={page <= 1}
+                            onClick={() => setPage(p => p - 1)}
+                        >
+                            <ChevronLeft className="h-4 w-4" />
+                        </Button>
+                        {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                            let p: number;
+                            if (totalPages <= 7) {
+                                p = i + 1;
+                            } else if (page <= 4) {
+                                p = i + 1;
+                            } else if (page >= totalPages - 3) {
+                                p = totalPages - 6 + i;
+                            } else {
+                                p = page - 3 + i;
+                            }
+                            return (
+                                <Button
+                                    key={p}
+                                    variant={p === page ? "default" : "outline"}
+                                    size="sm"
+                                    className="h-8 w-8 p-0 text-xs"
+                                    onClick={() => setPage(p)}
+                                >
+                                    {p}
+                                </Button>
+                            );
+                        })}
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            disabled={page >= totalPages}
+                            onClick={() => setPage(p => p + 1)}
+                        >
+                            <ChevronRight className="h-4 w-4" />
+                        </Button>
+                    </div>
+                </div>
             )}
         </div>
     );

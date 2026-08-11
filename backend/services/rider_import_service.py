@@ -104,6 +104,18 @@ def _select_in(table: str, columns: str, column: str, values: list[str], chunk: 
     return out
 
 
+# Matched-user statuses the importer must never auto-update PII for (P0-C,
+# docs/audit/2026-08-11-driver-rider-migration-audit.md). A pending_deletion
+# account keeps `phone` live for reactivation but has had email/first_name/
+# last_name NULLed by migration 296's 30-day PIPEDA scrub — exactly the
+# falsy state build_plan's existing "repopulate if falsy" logic would
+# otherwise treat as safe to fill back in. Real reactivation
+# (POST /auth/reactivate) is OTP-gated and audit-logged; a bulk CSV import
+# has neither, so it must never silently perform the equivalent of a
+# reactivation as a side effect of updating a phone-number match.
+_PII_PROTECTED_STATUSES = {"pending_deletion", "deleted"}
+
+
 def _prefetch_existing(
     phones: list[str], emails: list[str]
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -117,7 +129,10 @@ def _prefetch_existing(
 
     if phones:
         for u in _select_in(
-            "users", "id,phone,email,first_name,last_name,is_rider,is_driver,stripe_customer_id", "phone", phones
+            "users",
+            "id,phone,email,first_name,last_name,is_rider,is_driver,stripe_customer_id,status",
+            "phone",
+            phones,
         ):
             key = u.get("phone")
             if key and key not in users_by_phone:
@@ -129,7 +144,10 @@ def _prefetch_existing(
 
     if emails:
         for u in _select_in(
-            "users", "id,phone,email,first_name,last_name,is_rider,is_driver,stripe_customer_id", "email", emails
+            "users",
+            "id,phone,email,first_name,last_name,is_rider,is_driver,stripe_customer_id,status",
+            "email",
+            emails,
         ):
             key = (u.get("email") or "").strip().lower()
             if key and key not in users_by_email:
@@ -216,6 +234,22 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
                 "is_rider": bool(existing_user.get("is_rider")),
                 "has_driver_profile": existing_driver is not None,
             }
+
+            existing_status = existing_user.get("status")
+            if existing_status in _PII_PROTECTED_STATUSES:
+                # P0-C: never auto-repopulate PII on an account mid-deletion —
+                # see _PII_PROTECTED_STATUSES' comment. Flagged for manual
+                # review, not silently dropped or auto-fixed.
+                plan.duplicates.append({**dup_info, "match_type": "protected_skip"})
+                plan.warnings.append(
+                    ImportReportItem(
+                        idx,
+                        "phone",
+                        f"SKIPPED — matched account status is '{existing_status}'; no fields were modified. "
+                        "Requires manual review before this row can be imported.",
+                    )
+                )
+                continue
 
             if existing_driver:
                 plan.duplicates.append({**dup_info, "match_type": "driver"})

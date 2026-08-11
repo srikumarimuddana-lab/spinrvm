@@ -78,6 +78,10 @@ def _report(plan: import_svc.RiderImportPlan, batch: str, total_rows: int) -> di
             "to_update": len(plan.users_to_update),
             "duplicates": len(plan.duplicates),
             "duplicate_drivers": sum(1 for d in plan.duplicates if d.get("match_type") == "driver"),
+            # P0-C (docs/audit/2026-08-11-driver-rider-migration-audit.md):
+            # rows matched to a pending_deletion/deleted account — PII was
+            # not touched, flagged here for manual admin review.
+            "protected_skips": sum(1 for d in plan.duplicates if d.get("match_type") == "protected_skip"),
         },
         "duplicates": _serialize_duplicates(plan.duplicates),
         "warnings": _serialize_items(plan.warnings),

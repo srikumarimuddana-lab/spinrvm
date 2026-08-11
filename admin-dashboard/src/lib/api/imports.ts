@@ -311,7 +311,10 @@ export interface RiderImportReportItem {
 export interface RiderImportDuplicate {
     row: number;
     phone: string;
-    match_type: "rider" | "driver";
+    // "protected_skip" (P0-C, docs/audit/2026-08-11-driver-rider-migration-audit.md):
+    // the matched account is pending_deletion/deleted — no fields were
+    // modified, flagged here for manual review rather than auto-updated.
+    match_type: "rider" | "driver" | "protected_skip";
     is_driver: boolean;
     existing_user_id: string;
 }
@@ -324,6 +327,7 @@ export interface RiderImportReport {
         to_update: number;
         duplicates: number;
         duplicate_drivers: number;
+        protected_skips: number;
     };
     duplicates: RiderImportDuplicate[];
     warnings: RiderImportReportItem[];

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { render, fireEvent } from '@testing-library/react-native';
 import { RideOfferPanel } from '../../components/panels/RideOfferPanel';
 
 jest.mock('@shared/config/spinr.config', () => ({
@@ -126,6 +126,43 @@ describe('RideOfferPanel', () => {
       <RideOfferPanel {...defaultProps} incomingRide={{ ...mockRide, quiet_mode: false }} />,
     );
     expect(queryByText('Quiet ride')).toBeNull();
+  });
+
+  describe('isLoading (double-tap guard on accept/decline)', () => {
+    it('fires onAccept and onDecline when not loading', () => {
+      const onAccept = jest.fn();
+      const onDecline = jest.fn();
+      const { getByLabelText } = render(
+        <RideOfferPanel {...defaultProps} isLoading={false} onAccept={onAccept} onDecline={onDecline} />,
+      );
+      fireEvent.press(getByLabelText('Accept ride'));
+      fireEvent.press(getByLabelText('Decline ride'));
+      expect(onAccept).toHaveBeenCalledTimes(1);
+      expect(onDecline).toHaveBeenCalledTimes(1);
+    });
+
+    it('disables both Accept and Decline while an accept/decline call is in flight', () => {
+      const onAccept = jest.fn();
+      const onDecline = jest.fn();
+      const { getByLabelText } = render(
+        <RideOfferPanel {...defaultProps} isLoading={true} onAccept={onAccept} onDecline={onDecline} />,
+      );
+      // A double-tap while the store's accept/decline request is still
+      // in flight must not fire a second request — this is what wiring the
+      // real store `isLoading` (instead of a hardcoded `false`) protects.
+      fireEvent.press(getByLabelText('Accept ride'));
+      fireEvent.press(getByLabelText('Decline ride'));
+      expect(onAccept).not.toHaveBeenCalled();
+      expect(onDecline).not.toHaveBeenCalled();
+    });
+
+    it('shows a spinner instead of the Accept label while loading', () => {
+      const { queryByText, UNSAFE_root } = render(
+        <RideOfferPanel {...defaultProps} isLoading={true} />,
+      );
+      expect(queryByText('Accept')).toBeNull();
+      expect(UNSAFE_root.findAllByType(require('react-native').ActivityIndicator).length).toBeGreaterThan(0);
+    });
   });
 
   describe('vibration preference (Settings → Sound & Haptics)', () => {

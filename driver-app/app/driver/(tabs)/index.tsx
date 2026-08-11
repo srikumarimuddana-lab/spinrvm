@@ -86,6 +86,7 @@ function DriverDashboard() {
     clearError,
     earnings,
     rateRider,
+    isLoading,
   } = useDriverStore();
 
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
@@ -324,6 +325,37 @@ function DriverDashboard() {
     // don't re-run on every tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState]);
+
+  // Resync the offer countdown against wall-clock time when the app returns
+  // to the foreground. The interval above only decrements while JS is
+  // running — RN suspends timers while backgrounded, so after a background
+  // stretch the interval resumes ticking down from wherever it was paused
+  // instead of where the offer actually is, and the driver can see a stale
+  // (too-high) number for a beat after returning. The server remains
+  // authoritative here (the `ride_offer_expired` WS event and the 409 on a
+  // stale accept both already resolve correctly) — this only corrects the
+  // *displayed* countdown so a driver doesn't visually think they have more
+  // time left on the offer than they do.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      const { rideState: curRideState, incomingRide: curIncomingRide } = useDriverStore.getState();
+      if (curRideState !== 'ride_offered' || !curIncomingRide?.offer_expires_at) return;
+      const remaining = Math.max(
+        0,
+        Math.floor((new Date(curIncomingRide.offer_expires_at).getTime() - Date.now()) / 1000),
+      );
+      setCountdownState(remaining);
+      // Only push the terminal 0 back to the store, mirroring the interval's
+      // own convention above (it likewise leaves the store's countdownSeconds
+      // alone on intermediate ticks and only syncs at zero, which is what
+      // drives the store's own auto-decline-on-expiry side effect).
+      if (remaining <= 0) {
+        setCountdown(0);
+      }
+    });
+    return () => sub.remove();
+  }, [setCountdown]);
 
   // Clear route + ETA when ride state changes (new phase = new route).
   // Stable boolean: true when the store already holds a saved polyline for the
@@ -937,7 +969,7 @@ function DriverDashboard() {
                 })()
               : null
           }
-          isLoading={false}
+          isLoading={isLoading}
           onAccept={() => acceptRide(incomingRide.ride_id)}
           onDecline={() => declineRide(incomingRide.ride_id)}
         />

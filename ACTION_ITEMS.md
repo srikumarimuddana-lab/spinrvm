@@ -5019,6 +5019,43 @@ Remaining, roughly in order of user impact:
   was alerted (R38); corporate allowance reset and exhaustion are silent, with
   exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
   "new device signed in" alert (R8).
+  **R31/R33/R34 sub-piece done (2026-08-11, branch
+  `claude/n15b-wallet-promo-loyalty-notify`):** discovery-first pass, scoped to
+  the rider's *personal* wallet only (corporate wallet/allowance is R43/R44,
+  a separate parallel workstream) —
+  - **R31 (wallet)**: `routes/wallet.py`'s `/top-up` was already covered (a
+    push already fires in `routes/webhooks.py`'s `payment_intent.succeeded`
+    handler — verified by reading it, not a gap). The genuinely silent
+    central choke point was `routes/admin/wallet.py`'s `admin_credit_wallet`
+    / `admin_debit_wallet` (an admin moving money in/out of a rider or
+    driver's wallet with zero trace to the user) — now sends a best-effort
+    push, `target_app` resolved from the user's role. **Deliberately left
+    open**: `utils/referral_payout.py`'s rider-referral wallet credit
+    (`wallet_increment_balance`) is a separate money flow/audience from admin
+    adjustments and would need its own file + tests to do properly — not
+    done here, scope discipline; and driver-side cancellation/no-show fee
+    wallet debits in `routes/rides/cancellation.py` were explicitly
+    off-limits this round (owned by a parallel session).
+  - **R33 (promos)**: the rider-initiated `POST /promotions/apply` already
+    returns `discount_applied` synchronously to the caller that requested it
+    — not silent, left alone. The real gap was the admin "apply promo on
+    behalf of a rider" path (`apply_promo_for_admin`, called from
+    `routes/admin/rides.py::admin_create_ride`) — the rider had zero
+    visibility into a promo an admin redeemed for them. Now sends a
+    best-effort push with the promo code + discount amount.
+  - **R34 (loyalty)**: `routes/loyalty.py::earn_points_for_ride` already
+    computed `tier_upgraded` in its response but never notified — now sends
+    a best-effort push when a rider crosses a tier threshold.
+  - All three: best-effort, `priority="normal"` (already gated on
+    `notification_preferences.push_enabled` inside `send_push_notification`
+    itself — no new preference plumbing needed), wrapped in try/except so a
+    push failure can never surface as a failed money/promo/loyalty write
+    that already committed. New tests in `test_admin_wallet_endpoints.py`,
+    `test_admin_rides_coverage.py`, `test_loyalty.py`.
+  - **Not done** (left for a future pass, per this fix's scope discipline):
+    R19 (rider-initiated ride completion), R35/R37 (scheduled ride
+    confirmations), R38 (SOS rider confirmation), R43/R44 (corporate
+    allowance), R8 (new-device alert) — all untouched by this branch.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

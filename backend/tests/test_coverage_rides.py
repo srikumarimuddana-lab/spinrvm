@@ -3738,12 +3738,16 @@ async def test_get_share_trip_link_not_found():
 
 @pytest.mark.anyio
 async def test_get_share_trip_link_wrong_rider():
+    """A caller who is neither the ride's rider nor its assigned driver
+    (no drivers row at all) must stay 403 -- confirms B16's driver-allow
+    fix didn't loosen authorization for a true stranger."""
     from fastapi import HTTPException
 
     from backend.routes.rides import get_share_trip_link
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other"))
+        mock_db.get_rows = AsyncMock(return_value=[])
         with pytest.raises(HTTPException) as exc:
             await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
     assert exc.value.status_code == 403
@@ -3757,6 +3761,7 @@ async def test_get_share_trip_link_completed():
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID))
+        mock_db.get_rows = AsyncMock(return_value=[])
         with pytest.raises(HTTPException) as exc:
             await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
     assert exc.value.status_code == 400
@@ -3770,8 +3775,28 @@ async def test_get_share_trip_link_success_new_token():
         mock_db.get_ride = AsyncMock(
             return_value=_ride(status="in_progress", rider_id=_RIDER_ID, shared_trip_token=None)
         )
+        mock_db.get_rows = AsyncMock(return_value=[])
         mock_db.update_ride = AsyncMock()
         result = await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["success"] is True
+    assert "share_token" in result
+
+
+@pytest.mark.anyio
+async def test_get_share_trip_link_assigned_driver_success():
+    """B16: the ride's assigned driver (not the rider) must also be able to
+    fetch the share link, for the driver-app Safety overlay's 'Share Live
+    Trip Link' action."""
+    from backend.routes.rides import get_share_trip_link
+
+    driver_row = {"id": _DRIVER_ID, "user_id": "driver-user"}
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(
+            return_value=_ride(status="in_progress", rider_id=_RIDER_ID, driver_id=_DRIVER_ID, shared_trip_token=None)
+        )
+        mock_db.get_rows = AsyncMock(return_value=[driver_row])
+        mock_db.update_ride = AsyncMock()
+        result = await get_share_trip_link(ride_id=_RIDE_ID, current_user={"id": "driver-user"})
     assert result["success"] is True
     assert "share_token" in result
 

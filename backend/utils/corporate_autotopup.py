@@ -81,6 +81,12 @@ logger = logging.getLogger(__name__)
 
 async def run_autotopup_tick() -> None:
     settings = await get_app_settings()
+    # Kill switch (ACTION_ITEMS.md E5): pauses automatic corporate money
+    # movement for an incident. Shared with settle_corporate and the other
+    # 3 corporate loops (low-balance, allowance reset, KYB reverification).
+    if not settings.get("corporate_billing_enabled", True):
+        logger.info("autotopup: corporate_billing_enabled is False, skipping tick")
+        return
     stripe_secret = settings.get("stripe_secret_key", "")
     if not stripe_secret:
         logger.error("autotopup: no stripe secret configured, skipping tick")

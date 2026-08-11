@@ -282,7 +282,6 @@ class TestGetDriverBalance:
         payouts = [
             {"amount": 30.0, "status": "completed", "payout_type": "standard"},  # deduct
             {"amount": 500.0, "status": "completed", "payout_type": "stripe_sync"},  # history only
-            {"amount": 20.0, "status": "completed", "payout_type": "legacy_import"},  # deduct (paired rides)
         ]
 
         def get_rows_mock(table, filters=None, **kw):
@@ -297,9 +296,51 @@ class TestGetDriverBalance:
         with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
             result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
 
-        # 100 - 30 - 20 = 50; the $500 synced legacy payout never deducts.
-        assert result["payable_balance"] == "50.00"
-        assert result["total_paid_out"] == "50.00"
+        # 100 - 30 = 70; the $500 synced legacy payout never deducts.
+        assert result["payable_balance"] == "70.00"
+        assert result["total_paid_out"] == "30.00"
+
+    def test_balance_drops_legacy_import_rides_and_their_offset_together(self):
+        """Previous-app rides are history, not Spinr income (utils/legacy_rides).
+        The ride query filters them server-side and the paired 'legacy_import'
+        offset payout is dropped in Python — BOTH halves, or the balance moves.
+
+        The importer wrote the offset to exactly cancel the imported earnings,
+        so removing the pair must leave payable_balance identical while
+        total_earnings/total_paid_out stop reporting previous-app money.
+        """
+        from backend.routes import drivers as drv
+
+        legacy_ride = {"base_fare": 400.0, "legacy_import_metadata": {"source": "legacy_mongo_booking_import"}}
+        new_ride = {"base_fare": 100.0}
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                # Honour the server-side exclusion the route now sends, so this
+                # asserts the real filter is applied rather than assuming it.
+                rows = [new_ride, legacy_ride]
+                if (filters or {}).get("legacy_import_metadata", "absent") is None:
+                    rows = [r for r in rows if not r.get("legacy_import_metadata")]
+                return rows
+            if table == "payouts":
+                return [
+                    {"amount": 30.0, "status": "completed", "payout_type": "standard"},
+                    # Offset for the $400 legacy ride — must NOT deduct now that
+                    # the ride it cancels is gone.
+                    {"amount": 400.0, "status": "completed", "payout_type": "legacy_import"},
+                ]
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # Previous-app money is invisible on both sides: 100 earned - 30 paid.
+        assert result["total_earnings"] == "100.00"
+        assert result["total_paid_out"] == "30.00"
+        # Unchanged from the pre-exclusion behaviour ((100+400) - (30+400) = 70).
+        assert result["payable_balance"] == "70.00"
 
     def test_db_error_raises_503_not_zeroed_balance(self):
         # Regression: a DB error fetching rides/payouts must surface as 503, not

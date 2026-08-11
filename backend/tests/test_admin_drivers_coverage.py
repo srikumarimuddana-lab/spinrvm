@@ -1992,3 +1992,33 @@ class TestAdminUpdateSin:
         body = resp.json()
         assert body["stripe_push"] == "failed"
         assert "old number" in body["message"]
+
+
+class TestFleetWidePayoutTools:
+    """The two fleet-wide money buttons. Both write payout/statement records,
+    so both are super_admin-gated server-side — the dashboard hides them for
+    lower roles, but the gate must not depend on the UI."""
+
+    def test_refresh_all_payouts_forbidden_for_regular_admin(self, test_client, regular_admin_override):
+        resp = test_client.post("/api/admin/drivers/refresh-stripe-payouts", json={})
+        assert resp.status_code == 403
+
+    def test_recompute_totals_forbidden_for_regular_admin(self, test_client, regular_admin_override):
+        resp = test_client.post("/api/admin/drivers/statements/recompute-totals", json={})
+        assert resp.status_code == 403
+
+    def test_recompute_totals_defaults_to_dry_run(self, test_client, super_admin_override):
+        """An empty body must NOT write — apply has to be asked for."""
+        from services import statement_totals_backfill as svc
+
+        captured = {}
+
+        async def _fake(**kwargs):
+            captured.update(kwargs)
+            return svc.BackfillResult(applied=kwargs.get("apply", False), scanned=0)
+
+        with patch.object(svc, "recompute_statement_totals", AsyncMock(side_effect=_fake)):
+            resp = test_client.post("/api/admin/drivers/statements/recompute-totals", json={})
+        assert resp.status_code == 200, resp.text
+        assert captured["apply"] is False
+        assert resp.json()["applied"] is False

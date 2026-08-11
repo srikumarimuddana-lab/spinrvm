@@ -3184,6 +3184,139 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
     }
 
 
+class RefreshAllPayoutsRequest(BaseModel):
+    """Scope for the fleet-wide Stripe payout refresh. Empty body = every
+    driver with a Stripe account, full history."""
+
+    model_config = {"extra": "forbid"}
+
+    driver_ids: Optional[List[str]] = Field(None, max_length=500)
+
+
+@router.post("/drivers/refresh-stripe-payouts")
+async def admin_refresh_all_driver_stripe_payouts(
+    body: RefreshAllPayoutsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-click Stripe payout sync across the fleet.
+
+    Same two syncs the per-driver button runs — Stripe Transfers into
+    ``payouts``, then the connected-account bank-payout/balance ledger — with
+    ``driver_ids=None`` meaning every mapped driver (the sync services already
+    fan out with bounded concurrency).
+
+    Unlike the per-driver endpoint this does NOT fail the whole request on a
+    per-driver Stripe error: across a fleet, one retired or unreachable
+    account must not block everyone else's history from being materialized.
+    Errors are returned per driver so nothing is silently dropped, and the
+    response says plainly that a re-run is safe.
+
+    super_admin only — it writes payout history, the same bar as the
+    per-driver button and the dedicated /admin/stripe/* sync routes.
+    """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super_admin")
+
+    try:
+        from ...services import stripe_payout_sync_service as sync_svc
+        from ...services.stripe_connect_ledger_service import sync_connect_ledger
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from services import stripe_payout_sync_service as sync_svc  # type: ignore
+        from services.stripe_connect_ledger_service import sync_connect_ledger  # type: ignore
+        from settings_loader import get_app_settings  # type: ignore
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured — set stripe_secret_key in Settings.",
+        )
+
+    batch = f"admin-refresh-all-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    plan = await sync_svc.build_plan(stripe_secret, batch, driver_ids=body.driver_ids)
+
+    transfers_inserted = 0
+    transfers_skipped = 0
+    plan_errors = [{"row_ref": e.row_ref, "field": e.field, "message": e.message} for e in plan.errors]
+
+    # commit_plan refuses a plan carrying errors — that all-or-nothing rule is
+    # right for the per-driver button but would let one unreachable account
+    # block the entire fleet here. Commit the drivers that listed cleanly and
+    # report the rest, rather than writing nothing and calling it a success.
+    clean_rows = [r for r in plan.payouts_to_insert if r["driver_id"] not in {e.row_ref for e in plan.errors}]
+    if clean_rows:
+        committable = sync_svc.StripePayoutSyncPlan(batch=batch)
+        committable.payouts_to_insert = clean_rows
+        try:
+            commit_result = await asyncio.to_thread(sync_svc.commit_plan, committable)
+            transfers_inserted = commit_result.get("inserted", 0)
+            transfers_skipped = commit_result.get("skipped_existing", 0)
+        except Exception:
+            logger.error("[STRIPE-REFRESH-ALL] commit failed for batch %s", batch, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to write synced transfers to the database. Nothing partial was reported — re-run.",
+            )
+
+    try:
+        ledger_result = await sync_connect_ledger(stripe_secret, driver_ids=body.driver_ids)
+    except Exception:
+        logger.error("[STRIPE-REFRESH-ALL] connect-ledger sync failed for batch %s", batch, exc_info=True)
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh_all",
+            "drivers",
+            "*",
+            {"status": "ledger_sync_failed", "transfers_inserted": transfers_inserted, "batch": batch},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger sync failed. "
+                "Re-run — it is safe to repeat."
+            ),
+        )
+
+    await log_admin_action(
+        admin,
+        "stripe_payout_refresh_all",
+        "drivers",
+        "*",
+        {
+            "batch": batch,
+            "drivers_scanned": plan.stats.get("drivers_scanned"),
+            "transfers_inserted": transfers_inserted,
+            "transfers_skipped": transfers_skipped,
+            "sum_planned": plan.stats.get("sum_planned"),
+            "payouts_upserted": ledger_result.payouts_upserted,
+            "ledger_upserted": ledger_result.ledger_upserted,
+            "driver_errors": len(plan_errors),
+        },
+    )
+
+    return {
+        # False when any driver could not be read, so the dashboard cannot
+        # toast an unqualified success over a partial sync.
+        "synced": not plan_errors and not ledger_result.errors,
+        "message": (
+            f"Synced {transfers_inserted} new transfer(s) across "
+            f"{plan.stats.get('drivers_scanned', 0)} driver(s); {transfers_skipped} already tracked. "
+            f"{ledger_result.payouts_upserted} bank payout(s), {ledger_result.ledger_upserted} ledger entries."
+            + (f" {len(plan_errors)} driver(s) could not be read — re-run, it is safe to repeat." if plan_errors else "")
+        ),
+        "drivers_scanned": plan.stats.get("drivers_scanned", 0),
+        "transfers_inserted": transfers_inserted,
+        "transfers_skipped": transfers_skipped,
+        "bank_payouts_synced": ledger_result.payouts_upserted,
+        "ledger_entries_synced": ledger_result.ledger_upserted,
+        "plan_warnings": [{"row_ref": w.row_ref, "field": w.field, "message": w.message} for w in plan.warnings],
+        "plan_errors": plan_errors,
+        "ledger_errors": [{"row_ref": e.row_ref, "field": e.field, "message": e.message} for e in ledger_result.errors],
+    }
+
+
 class RefreshAllKycRequest(BaseModel):
     """Scope for the bulk KYC refresh. Empty body = every driver with a
     Stripe account. `retire_unreachable` is opt-in because retiring detaches

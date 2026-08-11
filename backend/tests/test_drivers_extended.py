@@ -30,6 +30,20 @@ RIDE_ID = "ride_drv_ext"
 RIDER_ID = "rider_drv_ext"
 
 
+class _FakeRequest:
+    """Minimal stand-in for fastapi.Request — only `.json()` is used by
+    decline_ride/cancel_ride to read an optional body reason."""
+
+    def __init__(self, body=None, raise_on_json=False):
+        self._body = body
+        self._raise = raise_on_json
+
+    async def json(self):
+        if self._raise:
+            raise ValueError("no body")
+        return self._body
+
+
 def _driver(**extra):
     return {
         "id": DRIVER_ID,
@@ -1040,6 +1054,75 @@ class TestCancelRide:
 
         assert result == {"success": True}
 
+    def test_cancel_with_service_animal_reason_writes_safety_audit_event(self):
+        """Gap #13 (post-accept side): CancelReasonSheet.tsx now has a
+        'Service animal — could not accommodate' preset. Confirm the
+        existing free-text cancellation_reason path still works AND a
+        dedicated audit_logs row is written for trust & safety, carrying
+        only IDs — no rider/driver PII."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_accepted")
+        cancelled = _ride("cancelled")
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(side_effect=[ride, cancelled])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", insert_mock),
+        ):
+            result = asyncio.run(
+                drv.cancel_ride(
+                    ride_id=RIDE_ID,
+                    reason="Service animal — could not accommodate",
+                    current_user={"id": USER_ID},
+                )
+            )
+
+        assert result == {"success": True}
+        insert_mock.assert_awaited_once()
+        table_name = insert_mock.call_args.args[0]
+        row = insert_mock.call_args.args[1]
+        assert table_name == "audit_logs"
+        assert row["action"] == "ride_cancel_service_animal_refusal"
+        assert row["entity_id"] == RIDE_ID
+        assert row["details"] == {"driver_id": DRIVER_ID}
+        assert not any(k in row for k in ("rider_name", "phone", "email", "address"))
+
+    def test_cancel_with_ordinary_reason_does_not_write_safety_audit_event(self):
+        """Regression guard: an everyday cancel reason (no 'service animal'
+        substring) must not trigger the new safety audit_logs insert —
+        only the pre-existing cancellation_reason column write."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_accepted")
+        cancelled = _ride("cancelled")
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(side_effect=[ride, cancelled])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", insert_mock),
+        ):
+            result = asyncio.run(drv.cancel_ride(ride_id=RIDE_ID, reason="Rider no-show", current_user={"id": USER_ID}))
+
+        assert result == {"success": True}
+        insert_mock.assert_not_awaited()
+
     def test_rejects_cancel_of_in_progress_ride(self):
         from backend.routes import drivers as drv
         from backend.utils.error_handling import RideStateError
@@ -1116,6 +1199,109 @@ class TestDeclineRide:
             result = asyncio.run(drv.decline_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
 
         assert result == {"success": True}
+
+    def test_decline_with_no_request_stays_backward_compatible(self):
+        """A caller that never passes `request` (e.g. this direct-call test
+        style, or any legacy client) must not error — `request` defaults to
+        None and `reason` stays None, exactly the pre-existing behaviour."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_assigned", driver_id=DRIVER_ID)
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.insert_one", insert_mock),
+        ):
+            result = asyncio.run(drv.decline_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
+
+        assert result == {"success": True}
+        audit_details = insert_mock.call_args.args[1]["details"]
+        assert audit_details["reason"] is None
+
+    def test_decline_with_service_animal_reason_is_captured_in_audit_log(self):
+        """Gap #13: a pre-accept decline had no reason at all, so trust &
+        safety had no way to detect a driver refusing a service animal. The
+        offer card's long-press flag now posts reason='service_animal' —
+        confirm it lands in the audit_logs details, and that the details
+        blob carries only IDs (driver_id) and the reason code, never PII."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_assigned", driver_id=DRIVER_ID)
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.insert_one", insert_mock),
+        ):
+            result = asyncio.run(
+                drv.decline_ride(
+                    ride_id=RIDE_ID,
+                    request=_FakeRequest({"reason": "service_animal"}),
+                    current_user={"id": USER_ID},
+                )
+            )
+
+        assert result == {"success": True}
+        insert_mock.assert_awaited_once()
+        table_name = insert_mock.call_args.args[0]
+        row = insert_mock.call_args.args[1]
+        assert table_name == "audit_logs"
+        assert row["action"] == "ride_declined"
+        assert row["entity_id"] == RIDE_ID
+        assert row["details"] == {"driver_id": DRIVER_ID, "reason": "service_animal"}
+        # PIPEDA: no rider/driver names, phone numbers, emails, or exact
+        # addresses anywhere in the audit row — only IDs and the reason code.
+        assert "rider_id" not in row["details"]
+        assert not any(k in row for k in ("rider_name", "phone", "email", "address"))
+
+    def test_decline_ignores_malformed_body(self):
+        """A body that fails to parse as JSON (e.g. no body at all, which
+        Starlette's request.json() raises on) must not crash the decline —
+        it degrades to the same reason=None path as no body sent."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_assigned", driver_id=DRIVER_ID)
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.insert_one", insert_mock),
+        ):
+            result = asyncio.run(
+                drv.decline_ride(
+                    ride_id=RIDE_ID,
+                    request=_FakeRequest(raise_on_json=True),
+                    current_user={"id": USER_ID},
+                )
+            )
+
+        assert result == {"success": True}
+        assert insert_mock.call_args.args[1]["details"]["reason"] is None
 
 
 # ---------------------------------------------------------------------------

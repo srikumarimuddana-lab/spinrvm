@@ -1,6 +1,10 @@
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react-native';
-import { RideOfferPanel } from '../../components/panels/RideOfferPanel';
+import { RideOfferPanel, DECLINE_REASON_SERVICE_ANIMAL } from '../../components/panels/RideOfferPanel';
+
+jest.mock('../../components/AlertDialog', () => ({
+  showAlert: jest.fn(),
+}));
 
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -112,6 +116,62 @@ describe('RideOfferPanel', () => {
   it('renders nothing when incomingRide is null', () => {
     const { toJSON } = render(<RideOfferPanel {...defaultProps} incomingRide={null} />);
     expect(toJSON()).toBeNull();
+  });
+
+  // Gap #13: a pre-accept decline had no reason at all, so trust & safety
+  // had no way to detect a driver refusing a service animal. A long-press
+  // on Decline now offers a single, optional flag for that reason. The
+  // plain tap (the fast, common decline path) must stay exactly as before.
+  describe('decline reason flag (service animal refusal, gap #13)', () => {
+    const { showAlert } = require('../../components/AlertDialog');
+    const mockShowAlert = showAlert as jest.Mock;
+
+    beforeEach(() => {
+      mockShowAlert.mockClear();
+    });
+
+    it('a plain tap on Decline calls onDecline with no reason', () => {
+      const onDecline = jest.fn();
+      const { getByText } = render(<RideOfferPanel {...defaultProps} onDecline={onDecline} />);
+      fireEvent.press(getByText('Decline'));
+      expect(onDecline).toHaveBeenCalledWith(undefined);
+      expect(mockShowAlert).not.toHaveBeenCalled();
+    });
+
+    it('long-pressing Decline opens a reason prompt mentioning service animals', () => {
+      const { getByText } = render(<RideOfferPanel {...defaultProps} />);
+      fireEvent(getByText('Decline'), 'longPress');
+      expect(mockShowAlert).toHaveBeenCalledTimes(1);
+      const [title, message] = mockShowAlert.mock.calls[0];
+      expect(title).toMatch(/reason/i);
+      expect(message.toLowerCase()).toContain('service animal');
+    });
+
+    it('choosing the service-animal option decline+reports with the shared reason code', () => {
+      const onDecline = jest.fn();
+      const { getByText } = render(<RideOfferPanel {...defaultProps} onDecline={onDecline} />);
+      fireEvent(getByText('Decline'), 'longPress');
+
+      const buttons = mockShowAlert.mock.calls[0][2];
+      const serviceAnimalButton = buttons.find((b: any) => /service animal/i.test(b.text));
+      expect(serviceAnimalButton).toBeTruthy();
+      serviceAnimalButton.onPress();
+
+      expect(onDecline).toHaveBeenCalledWith(DECLINE_REASON_SERVICE_ANIMAL);
+    });
+
+    it('choosing Cancel in the reason prompt does not decline', () => {
+      const onDecline = jest.fn();
+      const { getByText } = render(<RideOfferPanel {...defaultProps} onDecline={onDecline} />);
+      fireEvent(getByText('Decline'), 'longPress');
+
+      const buttons = mockShowAlert.mock.calls[0][2];
+      const cancelButton = buttons.find((b: any) => b.style === 'cancel');
+      expect(cancelButton).toBeTruthy();
+      cancelButton.onPress?.();
+
+      expect(onDecline).not.toHaveBeenCalled();
+    });
   });
 
   it('shows the Quiet ride badge when the rider requested a quiet ride', () => {

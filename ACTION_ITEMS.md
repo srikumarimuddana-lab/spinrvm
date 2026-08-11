@@ -5573,7 +5573,7 @@ Remaining, roughly in order of user impact:
   categorically could not. Flagging this explicitly since it's a real,
   immediately-live behavior change on a corporate-adjacent endpoint even
   though no new gating code was written.
-- [ ] **N15. Remaining silent rider surfaces** — grouped rather than split,
+- [x] **N15. Remaining silent rider surfaces** — grouped rather than split,
   since they share one cause (no notification call of any kind at the site):
   rider-initiated ride completion sends the rider nothing while the
   driver-initiated path does (R19, `routes/rides/lifecycle.py:126`); wallet
@@ -5672,8 +5672,61 @@ Remaining, roughly in order of user impact:
     `send_push_notification` and assert exact fire/no-fire per scenario. Full
     Change Impact & Risk Log:
     `docs/change-log/2026-08-11-n15-r43-r44-corporate-allowance-notify.md`.
-    Only R8 (new-device-signed-in alert) remains open under N15; this
-    checkbox stays `[ ]` until that's done too.
+  - [x] **R8 closed** (2026-08-11): new-device sign-in alert, the last open
+    piece of N15. No device-fingerprint infra existed before this — built
+    on the substrate `refresh_tokens` already had rather than adding a new
+    table: `issue_refresh_token` (`utils/refresh_tokens.py`) has always
+    persisted `user_agent` per session, so a new `is_new_device(user_id,
+    audience, user_agent)` checks whether that exact User-Agent string has
+    ever minted a refresh token for this user+audience before. `ip` was
+    deliberately not used as a fingerprint component — too unstable on
+    mobile networks, would false-positive on every login. A blank/missing
+    User-Agent can't be fingerprinted at all and is treated as "not new"
+    (never alerts) rather than risking a false positive on every client
+    that omits the header; a DB error on the check also fails quiet
+    (returns "not new") so a notification-path hiccup can never block or
+    slow down login. New `send_new_device_notice` in `utils/rider_emails.py`
+    mirrors `send_email_changed_notice` (R7)'s established security-notice
+    pattern — email, not push, since the new device's push token may
+    belong to whoever is actually signing in. Wired into the 3 rider login
+    call sites that represent a genuine new sign-in — `verify_otp`'s
+    existing-user branch (the primary phone-OTP login),
+    `reactivate_account` (PIPEDA self-serve reactivation — still a real
+    sign-in), and `verify_company_email_otp`'s existing-user branch
+    (`_issue_company_email_session`) — via one shared `_alert_if_new_device`
+    helper in `routes/auth.py`, called BEFORE `issue_refresh_token` mints
+    the current login's own row (otherwise that row would satisfy its own
+    "have we seen this before" check). Fire-and-forget
+    (`asyncio.create_task`), matching every other post-login side effect in
+    this file (audit log, corporate invite activation) — never blocks or
+    delays the auth response. Deliberately NOT wired: brand-new signups
+    (both the OTP-verify new-user branch and the company-email new-user
+    branch) — every device is "new" by definition on account creation, so
+    alerting there would be pure noise, not a security signal; the driver
+    Firebase-auth login (`audience="driver"`) — R8 is scoped to riders
+    (N15's own title), and driver push-token/device conventions are a
+    separate surface not touched here; the `/auth/refresh` token-rotation
+    endpoint — rotating an already-issued session is not a new sign-in.
+    Tests: 5 new in `tests/test_refresh_tokens_lifecycle.py`
+    (`is_new_device`'s blank-UA/no-prior-row/prior-row-exists/DB-error/
+    audience-scoping branches), 4 new in `tests/test_rider_account_emails.py`
+    (`send_new_device_notice`'s addressing, copy, transactional class,
+    failure-never-propagates), 4 new wiring tests across
+    `tests/test_verify_otp_login_flow.py` and
+    `tests/test_auth_remaining_endpoints.py` confirming `_alert_if_new_device`
+    fires for each of the 3 existing-user login paths and is skipped for
+    both new-signup paths — 90 tests total across the 4 touched test files,
+    all passing (up from 78 before this change, confirming nothing existing
+    broke). **What was NOT verified**: no live-Redis/live-Supabase
+    integration test exercising the actual `refresh_tokens` round-trip
+    across two real logins with the same/different User-Agent — unit tests
+    confirm `is_new_device`'s own logic against a mocked `db.find_one`, not
+    the full query-storage path (same level of verification the file's
+    other DB-touching helpers already have). No rider-app UI change — this
+    is backend/email-only, matching how R7's email-change notice shipped;
+    a rider who signs in from a new device sees nothing different in the
+    app itself, only an email. No frontend build/test run — no frontend
+    files touched by this change.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

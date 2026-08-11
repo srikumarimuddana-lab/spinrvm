@@ -388,3 +388,65 @@ async def test_revoke_all_for_user_no_rows_returns_zero():
         from utils.refresh_tokens import revoke_all_for_user
 
         assert await revoke_all_for_user("user-1") == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# is_new_device (ACTION_ITEMS.md N15/R8)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_is_new_device_blank_user_agent_returns_false_without_querying():
+    from utils.refresh_tokens import is_new_device
+
+    find_mock = AsyncMock()
+    with patch("utils.refresh_tokens.db.find_one", find_mock):
+        assert await is_new_device("user-1", "rider", "") is False
+        assert await is_new_device("user-1", "rider", None) is False
+        assert await is_new_device("user-1", "rider", "   ") is False
+
+    find_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_is_new_device_no_prior_row_is_new():
+    from utils.refresh_tokens import is_new_device
+
+    with patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=None)) as find_mock:
+        assert await is_new_device("user-1", "rider", "spinr-ios/4.2") is True
+
+    find_mock.assert_awaited_once_with(
+        "refresh_tokens",
+        {"user_id": "user-1", "audience": "rider", "user_agent": "spinr-ios/4.2"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_new_device_prior_row_exists_is_not_new():
+    from utils.refresh_tokens import is_new_device
+
+    with patch(
+        "utils.refresh_tokens.db.find_one",
+        AsyncMock(return_value={"id": "rtk-1", "user_agent": "spinr-ios/4.2"}),
+    ):
+        assert await is_new_device("user-1", "rider", "spinr-ios/4.2") is False
+
+
+@pytest.mark.asyncio
+async def test_is_new_device_db_error_fails_quiet_returns_false():
+    from utils.refresh_tokens import is_new_device
+
+    with patch("utils.refresh_tokens.db.find_one", AsyncMock(side_effect=RuntimeError("boom"))):
+        assert await is_new_device("user-1", "rider", "spinr-ios/4.2") is False
+
+
+@pytest.mark.asyncio
+async def test_is_new_device_scoped_by_audience():
+    """Same user_agent under a different audience (rider vs driver) must not
+    cross-pollinate — each audience's device history is independent."""
+    from utils.refresh_tokens import is_new_device
+
+    with patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=None)) as find_mock:
+        await is_new_device("user-1", "driver", "spinr-ios/4.2")
+
+    assert find_mock.await_args.args[1]["audience"] == "driver"

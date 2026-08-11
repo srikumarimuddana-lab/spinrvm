@@ -273,3 +273,47 @@ class TestStatementBranding:
 
         report_branding.render_branded_pdf_footer(_PDF())
         assert report_branding.COMPANY_LINE.split()[0] in drawn[0]
+
+
+class TestUnsafeBuildGuard:
+    """The recompute must refuse to run on a build that still drops range
+    upper bounds — running there rewrites every statement with fresh wrong
+    numbers and marks them corrected (observed in production when the
+    dashboard deployed ahead of the backend)."""
+
+    def test_probe_passes_on_this_build(self):
+        assert mod._filter_compiler_honors_ranges() is True
+
+    @pytest.mark.anyio
+    async def test_recompute_refuses_on_broken_build(self, monkeypatch):
+        reads = []
+
+        async def _get_rows(table, filters=None, **kw):
+            reads.append(table)
+            return []
+
+        monkeypatch.setattr(mod.db_supabase, "get_rows", _get_rows)
+        monkeypatch.setattr(mod, "_filter_compiler_honors_ranges", lambda: False)
+        with pytest.raises(mod.UnsafeBuildError):
+            await mod.recompute_statement_totals(apply=True)
+        # Refused BEFORE touching anything — not even a read.
+        assert reads == []
+
+    def test_probe_false_when_compiler_drops_a_bound(self, monkeypatch):
+        """Simulate the pre-fix if/elif compiler: only the first operator
+        applies. The probe must catch exactly this."""
+        import backend.repositories._base as base
+
+        def _broken(q, filters):
+            for k, v in (filters or {}).items():
+                if isinstance(v, dict):
+                    if "$gte" in v:
+                        q = q.gte(k, v["$gte"])
+                    elif "$lt" in v:
+                        q = q.lt(k, v["$lt"])
+                else:
+                    q = q.eq(k, v)
+            return q
+
+        monkeypatch.setattr(base, "_apply_filters", _broken)
+        assert mod._filter_compiler_honors_ranges() is False

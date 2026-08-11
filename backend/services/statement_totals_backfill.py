@@ -61,6 +61,58 @@ except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
 
 logger = logging.getLogger(__name__)
 
+
+class UnsafeBuildError(RuntimeError):
+    """The running build still has the dropped-upper-bound filter bug.
+
+    Recomputing on such a build rewrites every statement with FRESH wrong
+    numbers — each figure summing from its period start to "now" — and marks
+    them corrected. That exact failure happened in production: the dashboard
+    (deployed separately) had the Fix Statement Totals button while the
+    backend still ran a pre-fix build, so the button overwrote the stored
+    totals with a new generation of unbounded-window values.
+    """
+
+
+def _filter_compiler_honors_ranges() -> bool:
+    """Probe the live filter compiler with a two-sided range.
+
+    A version check can't protect here — frontend and backend deploy
+    independently, so the only trustworthy evidence is the behavior of the
+    code actually running this process. The probe is pure and in-process:
+    compile ``{"$gte": ..., "$lt": ...}`` against a recording stub and
+    require BOTH bounds to come out.
+    """
+    try:
+        from ..repositories._base import _apply_filters
+    except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+        from repositories._base import _apply_filters  # type: ignore
+
+    class _Probe:
+        def __init__(self):
+            self.ops: list[str] = []
+
+        def _rec(self, op):
+            self.ops.append(op)
+            return self
+
+        def gte(self, _c, _v):
+            return self._rec("gte")
+
+        def lt(self, _c, _v):
+            return self._rec("lt")
+
+        def eq(self, _c, _v):
+            return self._rec("eq")
+
+    probe = _Probe()
+    try:
+        _apply_filters(probe, {"created_at": {"$gte": "a", "$lt": "b"}})
+    except Exception:  # noqa: BLE001 - any failure means "cannot trust this build"
+        return False
+    return "gte" in probe.ops and "lt" in probe.ops
+
+
 # PostgREST caps an unbounded select at db-max-rows without signalling it.
 PAGE_SIZE = 500
 
@@ -192,7 +244,17 @@ async def recompute_statement_totals(
 
     ``apply=False`` is a pure read: the full diff is returned and nothing is
     written, which is what the admin UI previews before asking to confirm.
+
+    Raises :class:`UnsafeBuildError` before touching anything when the running
+    build would recompute with the very bug this backfill corrects.
     """
+    if not _filter_compiler_honors_ranges():
+        raise UnsafeBuildError(
+            "This backend build still drops the upper bound of date-range filters, so the "
+            "recompute would rewrite every statement with a fresh generation of wrong numbers "
+            "(each summing from its period start to today). Deploy the build containing the "
+            "filter-compiler fix, then run this again — nothing was changed."
+        )
     if limit is not None:
         limit = max(1, min(int(limit), MAX_LIMIT))
 

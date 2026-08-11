@@ -287,12 +287,19 @@ async def admin_recompute_statement_totals(
     if (admin.get("role") or "").lower() != "super_admin":
         raise HTTPException(status_code=403, detail="Recomputing statement totals requires super_admin")
 
-    result = await backfill_svc.recompute_statement_totals(
-        driver_ids=body.driver_ids,
-        since=body.since,
-        limit=body.limit,
-        apply=body.apply,
-    )
+    try:
+        result = await backfill_svc.recompute_statement_totals(
+            driver_ids=body.driver_ids,
+            since=body.since,
+            limit=body.limit,
+            apply=body.apply,
+        )
+    except backfill_svc.UnsafeBuildError as e:
+        # The service probed the live filter compiler and found the very bug
+        # this recompute exists to correct — running would rewrite statements
+        # with fresh wrong numbers. 503: the fix is a deploy, then retry.
+        logger.error("[STATEMENT-TOTALS] refused: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
     await log_admin_action(
         admin,

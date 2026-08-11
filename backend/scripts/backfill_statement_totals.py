@@ -89,16 +89,24 @@ async def main() -> int:
     # The admin "Fix Statement Totals" button calls this same service, so the
     # CLI and the UI can never apply a different correction.
     try:
-        from services.statement_totals_backfill import recompute_statement_totals
+        from services.statement_totals_backfill import UnsafeBuildError, recompute_statement_totals
     except ImportError:  # pragma: no cover - CLI convenience
-        from backend.services.statement_totals_backfill import recompute_statement_totals  # type: ignore
+        from backend.services.statement_totals_backfill import (  # type: ignore
+            UnsafeBuildError,
+            recompute_statement_totals,
+        )
 
-    result = await recompute_statement_totals(
-        driver_ids=args.driver_ids,
-        since=args.since,
-        limit=args.limit,
-        apply=args.apply,
-    )
+    try:
+        result = await recompute_statement_totals(
+            driver_ids=args.driver_ids,
+            since=args.since,
+            limit=args.limit,
+            apply=args.apply,
+        )
+    except UnsafeBuildError as e:
+        # Refusing beats rewriting every statement with fresh wrong numbers.
+        logger.error("refused: %s", e)
+        return 2
 
     for c in result.changes:
         logger.info(

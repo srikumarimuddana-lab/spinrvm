@@ -192,7 +192,7 @@ async def admin_credit_wallet(
                 "old_balance": _money_str(old_balance),
                 "new_balance": _money_str(new_balance),
                 "reason": req.reason,
-                "transaction_id": txn["id"],
+                "transaction_id": txn["transaction_id"],
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
@@ -211,19 +211,19 @@ async def admin_credit_wallet(
             data={
                 "type": "wallet_admin_credit",
                 "amount": _money_str(credit),
-                "transaction_id": txn["id"],
+                "transaction_id": txn["transaction_id"],
             },
             target_app=_wallet_target_app(user),
         )
     except Exception as e:
         logger.warning(
-            f"admin_credit_wallet: push failed user_id={req.user_id} txn={txn['id']}: {e}",
+            f"admin_credit_wallet: push failed user_id={req.user_id} txn={txn['transaction_id']}: {e}",
             exc_info=True,
         )
 
     return {
         "balance": _money_str(new_balance),
-        "transaction_id": txn["id"],
+        "transaction_id": txn["transaction_id"],
         "audit_log_id": audit_id,
     }
 
@@ -303,7 +303,7 @@ async def admin_debit_wallet(
                 "old_balance": _money_str(old_balance),
                 "new_balance": _money_str(new_balance),
                 "reason": req.reason,
-                "transaction_id": txn["id"],
+                "transaction_id": txn["transaction_id"],
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
@@ -320,18 +320,18 @@ async def admin_debit_wallet(
             data={
                 "type": "wallet_admin_debit",
                 "amount": _money_str(debit),
-                "transaction_id": txn["id"],
+                "transaction_id": txn["transaction_id"],
             },
             target_app=_wallet_target_app(user),
         )
     except Exception as e:
         logger.warning(
-            f"admin_debit_wallet: push failed user_id={req.user_id} txn={txn['id']}: {e}",
+            f"admin_debit_wallet: push failed user_id={req.user_id} txn={txn['transaction_id']}: {e}",
             exc_info=True,
         )
 
     return {
         "balance": _money_str(new_balance),
-        "transaction_id": txn["id"],
+        "transaction_id": txn["transaction_id"],
         "audit_log_id": audit_id,
     }

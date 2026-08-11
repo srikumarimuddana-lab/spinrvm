@@ -34,6 +34,18 @@ ALTER TABLE public.rider_email_verification_otp ENABLE ROW LEVEL SECURITY;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.rider_email_verification_otp TO service_role;
 
+-- The backend service role bypasses RLS by design; all access goes through
+-- it (verify-email-otp request/confirm are backend-only endpoints, per this
+-- table's docstring). This policy exists to satisfy "every RLS-enabled
+-- table needs an explicit policy" and to deny the anon/authenticated keys
+-- direct access, matching the sibling service-role-only table
+-- push_retry_queue's pattern (76_push_retry_queue.sql).
+CREATE POLICY rider_email_verification_otp_service_only
+    ON public.rider_email_verification_otp
+    FOR ALL
+    TO authenticated
+    USING (false);
+
 COMMENT ON TABLE public.rider_email_verification_otp IS
     'Short-lived hashed email OTP records for the rider self-serve email-verification flow. Service-role-only; no frontend direct access.';
 

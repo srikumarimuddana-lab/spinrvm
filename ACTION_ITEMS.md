@@ -3530,25 +3530,53 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   made.
 
 ### B16. Driver SOS UX doesn't implement the discretion the design sketch chose it for
-- [ ] **Status:** open — found 2026-07-30, same trace session as B15, this
-  time against the actual design-decision artifacts rather than a context
-  doc: `.planning/sketches/010-rider-sos/index.html` and
-  `.planning/sketches/011-driver-sos/index.html`. Product/design call, not
-  a pure code bug — logging as a tracked finding per user instruction
-  rather than redesigning inline. **2026-08-01 update (product call,
-  relayed via engineering — not directly reviewed against the sketch by the
-  product owner, noted explicitly per that relay): design intent
-  confirmed — the discreet-hold-shield design is still wanted for the
-  driver surface. Implementation is explicitly deferred to its own
-  dedicated follow-up, not scheduled as part of this task.** Rationale for
-  the deferral (not the design call itself): this is real mobile
-  safety-UX work — new component, hold-vs-tap duality, a Safety overlay
-  screen, per-contact notified list, discreet-mode toggle — and bundling
-  live UI changes to a safety-critical surface into the same
-  CI-usage-constrained combined change as B15(b)'s backend paging work
-  would be irresponsible. No code changed for B16 by this update — see
-  Approach below for the scoping note carried forward for whoever picks
-  this up next.
+- [x] **Status:** CLOSED (2026-08-11) — implemented per the confirmed design
+  intent (2026-08-01 relay, see below), dark-launched behind
+  `app_settings.driver_discreet_sos_enabled` (default `False`). Shipped
+  across two branches: `claude/b16-driver-sos-discreet-shield` (backend,
+  merged PR #3596 — per-contact SOS status field, driver access to the
+  trip share link, flag schema + `GET /settings` exposure) and
+  `claude/b16-driver-sos-frontend` (new shared `SafetyShield.tsx` /
+  `SafetyOverlay.tsx` components, `useHoldToConfirm`/`useEmergencyContacts`
+  shared hooks, `useDriverSafetyTrigger`/`useDriverDiscreetSosFlag`
+  driver-app hooks, and the flag-gated wiring into
+  `driver-app/app/driver/(tabs)/index.tsx`). Full 12-subtask implementation
+  plan (design sketch spec, exact file list, verification per subtask) is
+  in the session transcript; each subtask landed as its own commit with
+  its own tests.
+  - **Bundled fix:** the driver-app `SOSButton` `onTrigger` swallowed its
+    POST error (`try{...}catch(err){console.error}`, never rethrew) —
+    `SOSButton`'s own retry/FAILED state could never activate for a real
+    driver-side backend failure. Fixed as part of the wiring commit
+    (rethrow instead); this is the one deliberate behavior change on the
+    flag-off (default) path, called out explicitly rather than hidden.
+  - **Not done, tracked as a fast-follow, not blocking closure:** (1) the
+    bottom-action-bar "🛡 Safety" entry point on `ActiveRidePanel.tsx`
+    (plan's subtask 12) — the shield's own hold-and-tap gestures already
+    provide full functionality without it; (2) an admin-dashboard checkbox
+    UI for the flag — flip via `PUT /api/admin/settings` directly until
+    built; (3) the rideless/standalone SOS path question from B15(c) is
+    still separately open, unrelated to this item.
+  - **Verification:** backend — `pytest` across `test_p2_sos.py`,
+    `test_coverage_rides.py`, `test_driver_discreet_sos_flag.py`,
+    `test_public_settings.py` (new/extended, all pass). Frontend — new
+    Jest/RNTL tests for every new hook and component (hold-gesture timing,
+    contacts fetch, retry/backoff, flag fail-closed, shield/overlay
+    render+interaction, and the invariant that a failed silent alert never
+    shows `Alert.alert`): 50/51 driver-app suites pass (the one failure,
+    `ActivityView.test.tsx`, is a pre-existing, unrelated
+    `expo-router/react-navigation` resolution gap, confirmed via
+    `git stash` to fail identically without any B16 changes present).
+    `tsc --noEmit` clean on every touched file.
+  - **NOT verified — explicit gap, not silently assumed covered:** no
+    manual QA on a real device/simulator (gesture timing, blur/toast
+    rendering, and the actual flag-off vs flag-on visual behavior aren't
+    testable under Jest); no visual/snapshot regression tooling exists in
+    this repo at all (standing gap); the flag has not been flipped on
+    anywhere (dark-launch by design, same as every other `app_settings`
+    rollout flag in this codebase).
+  - Superseded text below (original finding + design rationale) kept for
+    record.
 - **Why:** sketch 011's stated design question is *"Can a driver call for
   help with one hand while driving [without alerting a threatening
   passenger]?"* It mocks 3 variants and explicitly rejects the
@@ -3576,22 +3604,29 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   closer to the sketch's own **rejected** Variant A than to the winning
   Variant C — the exact pattern the design process ruled out as most
   dangerous for the driver's actual threat scenario.
-- **Files (reference only, no code changed by this entry):**
+- **Files (original finding; superseded — see the CLOSED status block
+  above for what actually shipped):**
   `shared/components/SOSButton.tsx`, `driver-app/app/driver/(tabs)/index.tsx`,
   `.planning/sketches/010-rider-sos/index.html`,
   `.planning/sketches/011-driver-sos/index.html`.
-- **Approach:** (a) is now **decided** — design intent confirmed, see Status
-  above. Still needed before any code, carried forward for the dedicated
-  follow-up: (b) scope it as its own feature build (new component or a
-  `discreet` prop on `SOSButton` that swaps the success path from
-  `Alert.alert()` to a silent toast, plus the tap-opens-overlay affordance)
-  rather than folding it into B15's DB-fallback fix, since this is UX
-  surface area, not a backend reliability fix, (c) if the rider/driver split
-  was intentionally abandoned in favor of one shared component, update the
-  sketches or archive them so they stop describing intent nobody plans to
-  build.
-- **Acceptance:** not yet defined — pending the dedicated follow-up
-  scoping (b)/(c) above into concrete acceptance criteria.
+- **Approach (original — (b)/(c) resolved by the 2026-08-11 implementation,
+  kept for record):** (a) is now **decided** — design intent confirmed, see
+  Status above. (b) scoped as its own feature build: new
+  `SafetyShield.tsx`/`SafetyOverlay.tsx` components rather than a
+  `discreet` prop on `SOSButton` — `SOSButton.tsx` itself stayed untouched,
+  so rider-app's own SOS UX carries zero risk from this change. (c) the
+  rider/driver split was *not* abandoned — `SOSButton.tsx` remains
+  rider-app's only SOS UI (sketch 010's own different winning design is
+  out of scope for this item and still not implemented; not tracked here).
+- **Acceptance:** met for the driver-only discreet-hold-shield build —
+  hold 3s fires a silent alert (badge + toast, never `Alert.alert`); a
+  short tap opens the Safety overlay (911 / alert-contacts / share-trip-
+  link / per-contact notified list / "I'm Safe — Close"); dark-launched
+  behind a flag with a zero-code rollback. Not part of this item's
+  acceptance: flipping the flag on (operational follow-up, tracked in the
+  Status block's "not done" list), the bottom-bar entry point (subtask 12,
+  optional convenience), and rider-app's own sketch-010 redesign (separate,
+  unopened scope).
 
 ### B17. `purge_pii_retention` Step B will FK-abort the entire daily retention purge once any paid ride crosses 7 years
 - [x] **Status:** CLOSED (2026-08-10), **with an erratum found and fixed the

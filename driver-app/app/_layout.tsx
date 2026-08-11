@@ -43,15 +43,20 @@ import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
 
-// EAS Observe (SDK 55 API: AppMetricsRoot / AppMetrics). Native module —
-// present only in binaries built with it, so the guarded require keeps older
-// installed builds and Expo Go booting with metrics simply off.
+// EAS Observe. Native module — present only in binaries built with it, so the
+// guarded require keeps older installed builds and Expo Go booting with
+// metrics simply off. API note: expo-observe ~57 renamed the root wrapper to
+// ObserveRoot (same .wrap() surface, now wrapping expo-app-metrics'
+// AppMetricsRoot); the SDK 55-era AppMetricsRoot export no longer exists on
+// the package, which made this lookup silently resolve null — metrics were
+// off in every SDK 57 build until the ObserveRoot fallback below (2026-08-11).
+// AppMetrics itself is still re-exported unchanged.
 let ObserveMetricsRoot: any = null;
 let ObserveMetrics: any = null;
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const _observe = require('expo-observe');
-  ObserveMetricsRoot = _observe.AppMetricsRoot ?? null;
+  ObserveMetricsRoot = _observe.ObserveRoot ?? _observe.AppMetricsRoot ?? null;
   ObserveMetrics = _observe.AppMetrics ?? null;
 } catch {
   ObserveMetricsRoot = null;

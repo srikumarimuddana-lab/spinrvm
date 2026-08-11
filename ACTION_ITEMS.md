@@ -3822,6 +3822,13 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   the invariant (see `test_lock_ttl_expires_before_the_earliest_next_wake` and
   `test_projection_loop_reacquires_its_own_lock_on_the_next_wake`), and
   `payment_retry.py`'s misleading comment corrected.
+- **2026-08-11 addendum:** a 5th instance of the identical bug found in
+  `utils/suspension_reactivation.py` while working N7 (ACTION_ITEMS.md) —
+  this item's own "not audited beyond this list" caveat held. Fixed with
+  the same `interval * 0.85` formula and test pattern (2 new tests in
+  `test_suspension_reactivation_coverage.py`). If another instance turns
+  up, it's the same root cause, not a new item — extend this note rather
+  than filing separately.
 
 ### B22. `G4a · pip-audit` is red on four advisories in three backend dependencies
 - [x] **Status:** CLOSED (2026-08-11) — all three dependencies now bumped
@@ -4893,9 +4900,15 @@ Remaining, roughly in order of user impact:
 - [x] ~~**N4. Rider blocked from booking is never told (R32)**~~ — done:
   `_alert_admins_payment_exhausted` now emails the rider first, before the
   admin WS broadcast and pushes, and is self-swallowing so those still fire.
-- [ ] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
-  (D29)** — `routes/rides/cancellation.py:356`. A driver en route to pickup
-  with a backgrounded app is not notified.
+- [x] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
+  (D29)** — CLOSED (2026-08-11). `routes/rides/cancellation.py`'s driver-notify
+  block now also sends a push (`priority="dispatch"`, `target_app="driver"`,
+  backgrounded via `spawn()`) alongside the existing WS message, mirroring
+  the new-offer push convention in `matching.py`. 48 tests passing across
+  `test_e2e_cancellation.py` (10, including a new one asserting the push
+  fires with the correct driver `user_id`/priority/target_app/data),
+  `test_corporate_company_bookings_routes.py`, and
+  `test_ride_cancellation_branches.py`.
 - [x] ~~**N6. Stripe Connect KYC blocking payouts notifies nobody (D24)**~~ —
   done: `apply_account_update` now detects a genuine
   `stripe_payouts_enabled` True→False edge (comparing the pre-update
@@ -4921,12 +4934,16 @@ Remaining, roughly in order of user impact:
   same copy and the same `target_app=None`. Push-only, no email, matching
   that same manual precedent (it doesn't email either). 25 tests passing
   (`test_suspension_reactivation.py`, `test_suspension_reactivation_coverage.py`),
-  6 new specifically on the notification behavior.
-- [ ] **N8. Delete dead `utils/receipt_email.py` (X4)** — no production callers
-  (only `tests/test_receipt_email.py`), and it hardcodes `_GST_RATE = 0.05` /
-  `_PST_RATE = 0.06` (`:18-19`) instead of reading the service area, so it will
-  silently mis-tax if anyone wires it up. The name collision with the live
-  `utils/email_receipt.py` is itself a trap.
+  6 new specifically on the notification behavior. **2026-08-11 follow-up:**
+  a 5th instance of the B21 lock-TTL bug (`interval * 2` against a `1x`
+  sleep, halving cadence) found in this same file while working this item —
+  fixed separately, see B21's addendum below.
+- [x] **N8. Delete dead `utils/receipt_email.py` (X4)** — CLOSED (2026-08-11).
+  Deleted the file and its test; confirmed via repo-wide grep that every
+  remaining `receipt_email`/`send_receipt_email` reference resolves to the
+  live `utils/email_receipt.py` module, not the deleted one. Dropped the
+  now-stale exemption entry from `test_all_emails_are_branded.py`'s
+  `_UNBRANDED_BY_DESIGN` map.
 - [ ] **N9. Five notification preferences are still dead columns (X2)** —
   `sms_enabled`, `ride_updates`, `promotions`, `safety_alerts`,
   `earnings_summary` are persisted, surfaced in the app, and read by nothing.

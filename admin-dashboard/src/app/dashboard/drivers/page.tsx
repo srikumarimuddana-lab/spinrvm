@@ -1949,7 +1949,7 @@ function VerificationSummaryCard({
     );
 }
 
-const DRIVER_RIDES_PAGE_SIZE = 25;
+const DRIVER_RIDES_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 type RidesSortKey = "created_at" | "rider_name" | "status" | "distance_km" | "duration_seconds" | "total_fare" | "tip_amount";
 
@@ -2769,8 +2769,11 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     const [sortKey, setSortKey] = useState<RidesSortKey>("created_at");
     const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [page, setPage] = useState(0);
+    const [pageSize, setPageSize] = useState<number>(25);
+    const [dateFrom, setDateFrom] = useState("");
+    const [dateTo, setDateTo] = useState("");
 
-    useEffect(() => { setPage(0); }, [statusFilter, search, sortKey, sortDir]);
+    useEffect(() => { setPage(0); }, [statusFilter, search, sortKey, sortDir, dateFrom, dateTo, pageSize]);
 
     const fmtDuration = (s?: number) => {
         if (!s) return "—";
@@ -2810,6 +2813,16 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
         const q = search.trim().toLowerCase();
         let out = rides;
         if (statusFilter !== "all") out = out.filter(r => r.status === statusFilter);
+        if (dateFrom) {
+            const from = new Date(dateFrom);
+            from.setHours(0, 0, 0, 0);
+            out = out.filter(r => r.created_at && new Date(r.created_at) >= from);
+        }
+        if (dateTo) {
+            const to = new Date(dateTo);
+            to.setHours(23, 59, 59, 999);
+            out = out.filter(r => r.created_at && new Date(r.created_at) <= to);
+        }
         if (q) out = out.filter(r => {
             const haystack = `${riderDisplay(r)} ${r.id || ""} ${r.pickup_address || ""} ${r.dropoff_address || ""}`.toLowerCase();
             return haystack.includes(q);
@@ -2828,10 +2841,10 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
             return 0;
         });
         return sorted;
-    }, [rides, statusFilter, search, sortKey, sortDir]);
+    }, [rides, statusFilter, search, sortKey, sortDir, dateFrom, dateTo]);
 
-    const paged = processed.slice(page * DRIVER_RIDES_PAGE_SIZE, (page + 1) * DRIVER_RIDES_PAGE_SIZE);
-    const hasNextPage = processed.length > (page + 1) * DRIVER_RIDES_PAGE_SIZE;
+    const paged = processed.slice(page * pageSize, (page + 1) * pageSize);
+    const hasNextPage = processed.length > (page + 1) * pageSize;
 
     const handleSort = (k: RidesSortKey) => {
         if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -2839,6 +2852,25 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
             setSortKey(k);
             setSortDir(k === "rider_name" ? "asc" : "desc");
         }
+    };
+
+    const handleExportRides = () => {
+        if (processed.length === 0) return;
+        const cols = [
+            { key: "ride_code", label: "Ride Code" },
+            { label: "Date", value: (r: any) => r.created_at ? new Date(r.created_at).toLocaleString() : "" },
+            { label: "Rider", value: (r: any) => riderDisplay(r) },
+            { label: "Driver", value: () => driverName },
+            { key: "pickup_address", label: "Pickup" },
+            { key: "dropoff_address", label: "Dropoff" },
+            { key: "status", label: "Status" },
+            { label: "Distance (km)", value: (r: any) => r.distance_km != null ? Number(r.distance_km).toFixed(1) : "" },
+            { label: "Duration (min)", value: (r: any) => r.duration_seconds ? Math.round(r.duration_seconds / 60) : "" },
+            { label: "Tip", value: (r: any) => r.tip_amount != null && Number(r.tip_amount) > 0 ? Number(r.tip_amount).toFixed(2) : "" },
+            { label: "Fare", value: (r: any) => { const f = r.total_fare ?? r.fare_amount ?? r.base_fare; return f != null ? Number(f).toFixed(2) : ""; } },
+        ];
+        const safeName = driverName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+        exportToCsv(`driver_rides_${safeName}`, processed, cols);
     };
 
     const SortIcon = ({ col }: { col: RidesSortKey }) => {
@@ -2887,9 +2919,19 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
                         ))}
                     </SelectContent>
                 </Select>
+                <div className="flex items-center gap-1.5">
+                    <CalendarRange className="h-4 w-4 text-muted-foreground" />
+                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-8 text-xs w-[130px]" />
+                    <span className="text-xs text-muted-foreground">to</span>
+                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-8 text-xs w-[130px]" />
+                </div>
                 <span className="ml-auto text-xs text-muted-foreground tabular-nums">
                     {processed.length} of {rides.length}
                 </span>
+                <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handleExportRides} disabled={processed.length === 0}>
+                    <Download className="h-3.5 w-3.5" />
+                    Export CSV
+                </Button>
             </div>
 
             <div className="rounded-xl border border-border overflow-x-auto">
@@ -3001,15 +3043,31 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
                 </Table>
             </div>
 
-            {processed.length > DRIVER_RIDES_PAGE_SIZE && (
-                <Pagination
-                    page={page}
-                    pageSize={DRIVER_RIDES_PAGE_SIZE}
-                    hasNextPage={hasNextPage}
-                    totalCount={processed.length}
-                    onPageChange={setPage}
-                />
-            )}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Show</span>
+                    <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                        <SelectTrigger className="h-8 text-xs w-[70px]">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {DRIVER_RIDES_PAGE_SIZE_OPTIONS.map(n => (
+                                <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <span className="text-xs text-muted-foreground">per page</span>
+                </div>
+                {processed.length > pageSize && (
+                    <Pagination
+                        page={page}
+                        pageSize={pageSize}
+                        hasNextPage={hasNextPage}
+                        totalCount={processed.length}
+                        onPageChange={setPage}
+                    />
+                )}
+            </div>
         </div>
     );
 }

@@ -31,6 +31,11 @@ from ._shared import (  # noqa: F401
     _ride_income,
 )
 
+try:
+    from ...utils.legacy_rides import drop_legacy_rides
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils.legacy_rides import drop_legacy_rides  # type: ignore
+
 router = APIRouter()
 
 
@@ -42,21 +47,30 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    rides = await db_supabase.get_rides_for_driver(
-        driver["id"],
-        statuses=[RideStatus.COMPLETED],
-        from_date=f"{year}-01-01",
-        to_date=f"{year + 1}-01-01",
-        limit=10000,
+    # Previous-app rides brought in by the booking importer are NOT Spinr
+    # income: that money was earned and paid out by the old app, and where it
+    # was paid through Stripe it is already reported below via the
+    # 'stripe_sync' rows. Counting both would report the same legacy dollars
+    # to the CRA twice. The repo helper takes no extra filters, so the
+    # exclusion is applied here (see utils/legacy_rides).
+    rides = drop_legacy_rides(
+        await db_supabase.get_rides_for_driver(
+            driver["id"],
+            statuses=[RideStatus.COMPLETED],
+            from_date=f"{year}-01-01",
+            to_date=f"{year + 1}-01-01",
+            limit=10000,
+        )
     )
 
     # Legacy-era income synced from Stripe transfer history
-    # (services/stripe_payout_sync_service.py): the old app's rides were never
-    # imported, so payouts rows with payout_type='stripe_sync' are the only
-    # record of that income — the T4A must report it, attributed to the year of
-    # the transfer (CRA reports amounts PAID). App-native payouts are cash-outs
-    # of the ride earnings summed below, and 'legacy_import' offsets pair with
-    # imported rides — only the synced type is added, so nothing double-counts.
+    # (services/stripe_payout_sync_service.py): payouts rows with
+    # payout_type='stripe_sync' are the record of legacy income actually PAID
+    # through Stripe — the T4A must report it, attributed to the year of the
+    # transfer (CRA reports amounts paid). App-native payouts are cash-outs of
+    # the ride earnings summed below, and 'legacy_import' offsets pair with
+    # imported rides now excluded above — only the synced type is added, so
+    # nothing double-counts.
     # Queried via this module's db binding so the established
     # _deps.db_supabase patch point covers it in tests.
     synced_rows = await db_supabase.get_rows(

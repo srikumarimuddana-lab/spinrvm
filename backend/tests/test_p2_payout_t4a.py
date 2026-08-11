@@ -355,6 +355,35 @@ class TestGetT4ASummary:
         assert result["legacy_synced_earnings"] == "500.10"
         assert result["total_trips"] == 1  # synced payouts are not trips
 
+    async def test_t4a_excludes_previous_app_imported_rides(self):
+        """Rides imported from the old app (utils/legacy_rides) are that app's
+        income, and where it was paid through Stripe it is already reported by
+        the 'stripe_sync' rows — counting both would report the same legacy
+        dollars to the CRA twice and could push a driver over the $500 T4A
+        threshold on money Spinr never paid."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = _driver_row()
+        legacy = _ride_row(400.00)
+        legacy["legacy_import_metadata"] = {"source": "legacy_mongo_booking_import"}
+        rides = [_ride_row(20.00), legacy]
+
+        async def _get_rows(table, query=None, **kwargs):
+            if table == "drivers":
+                return [driver]
+            return []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=rides)),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        # Only the $20 Spinr ride counts; the $400 imported ride is not income
+        # this payer paid, so it is neither in the total nor in the trip count.
+        assert result["total_earnings"] == "20.00"
+        assert result["total_trips"] == 1
+
     async def test_driver_not_found_raises_404(self):
         from fastapi import HTTPException
 

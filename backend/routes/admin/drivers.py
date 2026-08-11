@@ -43,6 +43,11 @@ except ImportError:
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
+try:
+    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
+
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
@@ -2618,9 +2623,13 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         raise HTTPException(status_code=404, detail="Driver not found")
 
     # ---- Aggregate from rides ----
+    # Legacy-imported rides and their 'legacy_import' offset payout are both
+    # excluded, matching routes/drivers/earnings.py — the driver's own screen
+    # and this tab must not disagree about what Spinr owes. See
+    # utils/legacy_rides for why dropping both halves leaves the math intact.
     rides = await db_supabase.get_rows(
         "rides",
-        {"driver_id": driver_id, "status": "completed"},
+        {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES},
         limit=10000,
     )
 
@@ -2674,12 +2683,14 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     # their oldest payouts silently drop out of the math and pending_balance
     # would overstate what is owed. The display list is still capped by
     # `limit` at serialization.
-    payouts = await db_supabase.get_rows(
-        "payouts",
-        {"driver_id": driver_id},
-        order="created_at",
-        desc=True,
-        limit=5000,
+    payouts = drop_legacy_offset_payouts(
+        await db_supabase.get_rows(
+            "payouts",
+            {"driver_id": driver_id},
+            order="created_at",
+            desc=True,
+            limit=5000,
+        )
     )
 
     def _sum_by_status(*statuses: str) -> Decimal:

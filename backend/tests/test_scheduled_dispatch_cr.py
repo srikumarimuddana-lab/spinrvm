@@ -679,6 +679,26 @@ class _FakePolicyResult:
 
 @pytest.mark.asyncio
 class TestCorporatePolicyRecheck:
+    @pytest.fixture(autouse=True)
+    def _default_company_and_membership_gates(self):
+        """Baseline: company bookable, rider has an active membership at
+        corp-1. Tests below that exercise gate 1 (company-active) or gate 3
+        (membership-active) specifically override these within their own
+        `with` block. Without this, every test in this class would trip the
+        new gates added by the 2026-08-11 corporate scheduled-ride audit,
+        since the default mock_supabase_client response (empty rows) reads
+        as "company not found" / "no active memberships" for gates that
+        don't mock their own lookup.
+        """
+        with (
+            patch("services.corporate_policy_service.require_company_bookable", AsyncMock(return_value=None)),
+            patch(
+                "db_supabase.list_active_memberships_for_user",
+                AsyncMock(return_value=[{"id": "member-1", "company_id": "corp-1"}]),
+            ),
+        ):
+            yield
+
     async def test_non_corporate_ride_is_unaffected(self):
         from backend.utils import scheduled_rides as sr
 
@@ -787,3 +807,158 @@ class TestCorporatePolicyRecheck:
             await sr._dispatch_scheduled_ride(_corp_ride())
 
         update_mock.assert_not_awaited()
+
+    # ── 2026-08-11 corporate scheduled-ride audit: gate 1 (company-active) ──
+
+    async def test_company_inactive_blocks_dispatch(self):
+        """A company suspended/closed between booking and dispatch must
+        block dispatch -- previously this gate didn't exist at all, so the
+        ride sailed through and only failed at settlement (stuck 'pending'
+        with no valid payer)."""
+        from fastapi import HTTPException
+
+        from backend.utils import scheduled_rides as sr
+
+        eval_mock = AsyncMock()
+        with (
+            patch(
+                "services.corporate_policy_service.require_company_bookable",
+                AsyncMock(side_effect=HTTPException(status_code=403, detail={"code": "company_not_active"})),
+            ),
+            patch("services.corporate_policy_service.evaluate_policy_for_ride", eval_mock),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is False
+        # Blocked before the fare/policy rules even ran.
+        eval_mock.assert_not_awaited()
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+        push.assert_awaited_once()
+        admin_bcast.assert_awaited_once()
+        assert admin_bcast.await_args.args[0]["failed_rules"] == ["company_inactive"]
+
+    async def test_company_check_lookup_error_fails_open(self):
+        """A transient error evaluating company status (not a confirmed
+        inactive company) must not strand the ride -- fail open and let the
+        rest of the checks run."""
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "services.corporate_policy_service.require_company_bookable",
+                AsyncMock(side_effect=RuntimeError("db hiccup")),
+            ),
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=True)),
+            ),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+
+    async def test_settings_fetch_error_skips_new_gates_but_not_policy_rules(self):
+        """If app_settings can't be loaded at all, the new company/membership
+        gates are skipped (fail open) but the pre-existing fare/policy check
+        still runs and can still block."""
+        from backend.utils import scheduled_rides as sr
+
+        require_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(side_effect=RuntimeError("settings down"))),
+            patch("services.corporate_policy_service.require_company_bookable", require_mock),
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=False, failed_rules=["max_fare_per_ride"])),
+            ),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        require_mock.assert_not_awaited()
+        assert allowed is False
+
+    # ── 2026-08-11 corporate scheduled-ride audit: gate 3 (membership-active) ──
+
+    async def test_membership_removed_blocks_dispatch(self):
+        """A member removed between booking and dispatch, with the
+        suspension/offboarding sweep missing this specific ride, must block
+        dispatch rather than sail through with a silently-empty allowance."""
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch("db_supabase.list_active_memberships_for_user", AsyncMock(return_value=[])),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride(corporate_member_id="member-9"))
+
+        assert allowed is False
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+        push.assert_awaited_once()
+        assert admin_bcast.await_args.args[0]["failed_rules"] == ["membership_inactive"]
+
+    async def test_membership_check_matches_stamped_member_id_not_just_company(self):
+        """A company_allowance ride stamps the exact membership it was
+        booked under -- if THAT membership is gone, it must block even if
+        the rider has since joined a different active membership row at the
+        same company."""
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "db_supabase.list_active_memberships_for_user",
+                AsyncMock(return_value=[{"id": "member-new", "company_id": "corp-1"}]),
+            ),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride(corporate_member_id="member-old"))
+
+        assert allowed is False
+
+    async def test_membership_lookup_error_fails_open(self):
+        from backend.utils import scheduled_rides as sr
+
+        with patch("db_supabase.list_active_memberships_for_user", AsyncMock(side_effect=RuntimeError("db down"))):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+
+    async def test_membership_removal_kill_switch_disabled_allows_dispatch(self):
+        """corporate_member_removal_blocks_booking=False (the same kill
+        switch routes/rides/booking.py's fail-closed membership check
+        respects) must also gate this dispatch-time re-check."""
+        from backend.utils import scheduled_rides as sr
+
+        list_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(
+                sr,
+                "get_app_settings",
+                AsyncMock(return_value={"corporate_member_removal_blocks_booking": False}),
+            ),
+            patch("services.corporate_policy_service.require_company_bookable", AsyncMock(return_value=None)),
+            # evaluate_policy_for_ride's own real implementation also calls
+            # list_active_memberships_for_user internally to resolve the
+            # allowance -- mock it out (passed=True) so list_mock only
+            # observes calls from gate 3, the thing under test here.
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=True)),
+            ),
+            patch("db_supabase.list_active_memberships_for_user", list_mock),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+        list_mock.assert_not_awaited()

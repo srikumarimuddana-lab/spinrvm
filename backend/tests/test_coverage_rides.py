@@ -2284,6 +2284,47 @@ async def test_rider_complete_ride_success():
 
 
 @pytest.mark.anyio
+async def test_rider_complete_ride_also_pushes_rider_not_just_ws():
+    """N15/R19 (ACTION_ITEMS.md): rider-initiated completion must push the
+    rider, not just send a WS message -- a backgrounded app previously got
+    no confirmation at all that the ride it just ended was recorded, while
+    the driver-initiated completion path (drivers/ride_complete.py) already
+    pushed. Mirrors that path's title/body/data; priority="normal" and
+    target_app="rider" since this is informational, not dispatch/safety.
+    """
+    import asyncio
+
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed", "grand_total": 25.50, "total_fare": 25.50}
+    push_mock = AsyncMock()
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.send_push_notification", push_mock),
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_ride = AsyncMock()
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+        # The push is fired via spawn() (fire-and-forget) -- yield once so
+        # the scheduled task actually runs before asserting on it.
+        await asyncio.sleep(0)
+
+    assert result["status"] == "completed"
+    push_mock.assert_awaited_once()
+    call = push_mock.await_args
+    assert call.args[0] == _RIDER_ID
+    assert call.kwargs.get("priority") == "normal"
+    assert call.kwargs.get("target_app") == "rider"
+    assert call.kwargs.get("data", {}).get("type") == "ride_completed"
+    assert call.kwargs.get("data", {}).get("ride_id") == str(_RIDE_ID)
+
+
+@pytest.mark.anyio
 async def test_simulate_driver_arrival_ride_not_found():
     from fastapi import HTTPException
 
@@ -2599,17 +2640,18 @@ async def test_rider_complete_ride_quest_scheduling_failure_is_swallowed():
     ride = _ride(status="in_progress", rider_id=_RIDER_ID)
     completed_ride = {**ride, "status": "completed"}
 
-    # _deps.spawn is used for BOTH the live-activity update (unwrapped) and
-    # the quest-progress scheduling (wrapped in try/except) -- let the first
-    # call through and only fail the second. Each call still gets its
-    # coroutine argument closed (via close_spawned_coro) so it doesn't leak
-    # un-awaited and fail an unrelated test on GC (A8).
+    # _deps.spawn is used for the rider completion push (N15/R19, unwrapped),
+    # the live-activity update (unwrapped) and the quest-progress scheduling
+    # (wrapped in try/except) -- let the first two calls through and only
+    # fail the third. Each call still gets its coroutine argument closed
+    # (via close_spawned_coro) so it doesn't leak un-awaited and fail an
+    # unrelated test on GC (A8).
     _spawn_call_count = [0]
 
     def _spawn_first_ok_then_fails(coro, *_args, **_kwargs):
         close_spawned_coro(coro)
         _spawn_call_count[0] += 1
-        if _spawn_call_count[0] == 1:
+        if _spawn_call_count[0] <= 2:
             return None
         raise RuntimeError("event loop full")
 

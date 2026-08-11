@@ -899,6 +899,7 @@ function DriverDashboard() {
                 // behavior change flag-off drivers see.
                 await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
               }}
+              t={t}
             />
           </View>
         )

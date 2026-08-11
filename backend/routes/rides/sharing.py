@@ -44,7 +44,15 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("rider_id") != current_user["id"]:
+    # B16: the driver's own Safety overlay needs "Share Live Trip Link" too
+    # (previously rider-only). Same driver-lookup pattern as
+    # routes/rides/safety.py::trigger_emergency's membership check.
+    is_rider = ride.get("rider_id") == current_user["id"]
+    driver = (lambda _r: _r[0] if _r else None)(
+        await _deps.db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    is_driver = driver and ride.get("driver_id") == driver["id"]
+    if not (is_rider or is_driver):
         raise HTTPException(status_code=403, detail="Not authorized to share this ride")
 
     if ride.get("status") in RideStatus.terminal_statuses():

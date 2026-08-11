@@ -318,7 +318,15 @@ async def _process_driver(driver: dict, period_type: str, start_d: date) -> None
             or "Driver"
         )
         stmt = await build_statement(driver, period_type, start_d, driver_name=name)
-        totals = {"earnings": stmt["earnings"], "payouts_total": stmt["payouts_total"], "trips": stmt["trips"]}
+        totals = {
+            "earnings": stmt["earnings"],
+            "payouts_total": stmt["payouts_total"],
+            # Era split, so the admin statements list can label previous-app
+            # money instead of blending it into one "paid out" figure.
+            "payouts_spinr_total": stmt.get("payouts_spinr_total"),
+            "payouts_previous_app_total": stmt.get("payouts_previous_app_total"),
+            "trips": stmt["trips"],
+        }
 
         if not stmt["has_activity"]:
             await _finish("skipped_inactive", {"totals": totals})

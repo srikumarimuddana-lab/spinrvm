@@ -41,7 +41,9 @@ query's row budget.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 # Merge into a `rides` filter dict to exclude legacy-imported rides.
 # `None` compiles to PostgREST `is.null` (repositories/_base.py) — a plain
@@ -65,6 +67,35 @@ def drop_legacy_rides(rides: list[dict[str, Any]]) -> list[dict[str, Any]]:
     with a fixed signature, or rows already in hand).
     """
     return [r for r in rides if not is_legacy_ride(r)]
+
+
+# ── Driver-facing sunset for previous-app payout history ────────────────
+#
+# The "Previous app" presentation (payout-history section, statement PDF
+# notes and rows, the balance-card note) is TRANSITION messaging: it exists
+# so migrated drivers can reconcile what they remember being paid. The
+# operator set an end date — after 2026-08-31 (inclusive, America/Regina,
+# the statements timezone) driver-facing surfaces stop showing previous-app
+# money entirely.
+#
+# The sunset is PRESENTATION ONLY. The stripe_sync rows themselves are never
+# deleted or filtered from admin surfaces, T4A/tax exports, or the stored
+# statement totals — tax reporting and the 7-year Saskatchewan retention
+# rules do not care about the app's transition UX.
+PREVIOUS_APP_VISIBLE_UNTIL = date(2026, 8, 31)
+_OPS_TZ = ZoneInfo("America/Regina")
+
+
+def previous_app_history_visible(today: date | None = None) -> bool:
+    """True while driver-facing surfaces should still show previous-app money.
+
+    ``today`` is injectable for tests; production callers pass nothing and
+    get the operator's calendar day (America/Regina), so the switch flips at
+    local midnight, not UTC.
+    """
+    if today is None:
+        today = datetime.now(_OPS_TZ).date()
+    return today <= PREVIOUS_APP_VISIBLE_UNTIL
 
 
 def is_legacy_offset_payout(payout: dict[str, Any]) -> bool:

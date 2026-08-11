@@ -212,3 +212,55 @@ class TestStaleByMode:
         by assuming here.
         """
         assert stale_by_mode(stored, current) is False
+
+
+class TestConnectAccountModeMismatch:
+    """A Connect account stranded by a test->live key rotation.
+
+    Stripe's wording for accounts matches none of the customer/payment-method
+    phrasings and carries no `resource_missing` code:
+
+        "The account acct_X was a test account created with a testmode key,
+         and therefore can only be used with testmode keys."
+
+    Before this was recognised, every stranded acct_ was classified as an
+    unknown error, so the whole test->live repair path stayed inert for the
+    exact accounts it exists to clean up: the KYC refresh never retired them,
+    and the payout / connect-ledger syncs logged a hard error (and paged
+    Sentry) on every run instead of skipping them as unreachable.
+    """
+
+    def _account_err(self, acct: str, mode: str = "test"):
+        import stripe
+
+        return stripe.error.InvalidRequestError(
+            f"The account {acct} was a {mode} account created with a {mode}mode key, "
+            f"and therefore can only be used with {mode}mode keys.",
+            None,
+        )
+
+    def test_test_account_on_live_key_is_unreachable(self):
+        from backend.utils.stripe_mode import is_missing_on_key
+
+        assert is_missing_on_key(self._account_err("acct_1TvqdnJwirZM5kbo"), "acct_1TvqdnJwirZM5kbo") is True
+
+    def test_live_account_on_test_key_is_unreachable(self):
+        from backend.utils.stripe_mode import is_missing_on_key
+
+        assert is_missing_on_key(self._account_err("acct_LIVE1", mode="live"), "acct_LIVE1") is True
+
+    def test_still_fails_closed_for_a_different_account(self):
+        """Precision matters more than recall here: a false positive detaches
+        a healthy driver's payout destination."""
+        from backend.utils.stripe_mode import is_missing_on_key
+
+        assert is_missing_on_key(self._account_err("acct_THEIRS"), "acct_OURS") is False
+
+    def test_auth_error_is_still_not_a_missing_object(self):
+        """A revoked key makes every account look unreachable — retiring them
+        all would be catastrophic and must stay excluded."""
+        import stripe
+
+        from backend.utils.stripe_mode import is_missing_on_key
+
+        assert is_missing_on_key(stripe.error.AuthenticationError("Invalid API Key"), "acct_X") is False

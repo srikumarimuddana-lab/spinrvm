@@ -2048,6 +2048,24 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                 </div>
             )}
 
+            {/* Migrated-driver context. One sentence up front beats four
+                cards that each look wrong for a different reason: without
+                this, "$0.00 lifetime" sits beside a Rides tab showing
+                previous-app trips and a paid-out card full of previous-app
+                transfers, and every number invites a support escalation. */}
+            {((summary.imported_rides_excluded ?? 0) > 0 || (summary.legacy_stripe_transfers ?? 0) > 0) && (
+                <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/10 p-3 flex items-start gap-3">
+                    <Clock className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-blue-700 dark:text-blue-300">
+                        <span className="font-semibold">Migrated from the previous app.</span>{" "}
+                        {(summary.imported_rides_excluded ?? 0) > 0 && `${summary.imported_rides_excluded} imported ride${(summary.imported_rides_excluded ?? 0) === 1 ? "" : "s"}`}
+                        {(summary.imported_rides_excluded ?? 0) > 0 && (summary.legacy_stripe_transfers ?? 0) > 0 && " and "}
+                        {(summary.legacy_stripe_transfers ?? 0) > 0 && `${fmtMoney(summary.legacy_stripe_transfers ?? 0)} in previous-app payouts`}
+                        {" "}are kept for history and tax, but are not counted in Spinr earnings or the owed balance below.
+                    </p>
+                </div>
+            )}
+
             {/* Top 4 metric cards: Pending / Paid out / Lifetime / YTD */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <PayoutMetric
@@ -2061,17 +2079,26 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     value={fmtMoney(summary.total_paid_out)}
                     tone="emerald"
                     // legacy_stripe_transfers is a slice OF this total, not an
-                    // addition to it — say "incl.", never "+".
+                    // addition to it — say "incl.", never "+". When the whole
+                    // total is previous-app money, say THAT: "incl. $327.02"
+                    // under a $327.02 headline reads like double-speak.
                     sub={(summary.legacy_stripe_transfers ?? 0) > 0
-                        ? `${payouts.filter(p => p.status === "completed").length} payouts · incl. ${fmtMoney(summary.legacy_stripe_transfers ?? 0)} synced from Stripe`
+                        ? ((summary.legacy_stripe_transfers ?? 0) >= summary.total_paid_out
+                            ? `${payouts.filter(p => p.status === "completed").length} payouts · all paid by the previous app`
+                            : `${payouts.filter(p => p.status === "completed").length} payouts · incl. ${fmtMoney(summary.legacy_stripe_transfers ?? 0)} from the previous app`)
                         : `${payouts.filter(p => p.status === "completed").length} completed payouts`}
                 />
                 <PayoutMetric
                     label="Lifetime earnings"
                     value={fmtMoney(summary.lifetime_earnings)}
-                    sub={hasBonuses
-                        ? `${fmtMoney(summary.lifetime_ride_earnings ?? 0)} rides + ${fmtMoney(summary.lifetime_bonuses ?? 0)} bonuses · ${fmtMoney(summary.lifetime_tips)} tips`
-                        : `${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`
+                    // Spell out imported rides. Otherwise this reads "0
+                    // completed rides · $0.00" next to a Rides tab showing 15,
+                    // and nothing explains why — which looks like data loss.
+                    sub={(summary.imported_rides_excluded ?? 0) > 0
+                        ? `${summary.rides_count.toLocaleString()} Spinr rides · ${summary.imported_rides_excluded} imported from previous app (not counted)`
+                        : hasBonuses
+                            ? `${fmtMoney(summary.lifetime_ride_earnings ?? 0)} rides + ${fmtMoney(summary.lifetime_bonuses ?? 0)} bonuses · ${fmtMoney(summary.lifetime_tips)} tips`
+                            : `${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`
                     }
                 />
                 <PayoutMetric

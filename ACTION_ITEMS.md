@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed to `ON DELETE SET NULL` (migration 294) so `purge_pii_retention()` Step B no longer FK-aborts the entire daily retention purge once a paid ride crosses 7 years; `docs/runbooks/data-retention.md` extended to cover Steps H–M. Prior same-day (2026-08-10): B20 CLOSED: `ledger_projection.py`'s `_decompose` now degrades (whole amount to `platform_revenue`, Sentry-escalated) instead of silently decomposing from stale `driver_earnings`/`tax_amount` when a fare-settlement event's ride isn't yet `payment_status='paid'` — source-aware by construction (cancellation-fee/notice-fee events never reach the check). Also found and fixed in the same change: `_RIDE_COLUMNS` omitted `payment_status` entirely, which would have made the new check degrade *every* fare charge unconditionally had it shipped alone — added a column-membership regression test for it, mirroring the existing `discount_amount` one. 23 + 122 tests pass. Prior same-day (2026-08-10): B19 and B21 CLOSED: `payment_retry.py`'s `requires_capture` branch now routes through `_finalize_card_settlement` (picking up the atomic RPC + Sentry escalation + WS notify the other two settlement paths already had), and all 4 background loops (`payment_retry.py`, `driver_claim_reaper.py`, `offer_expiry_reaper.py`, `orphaned_hold_reconciler.py`) now have correct throttle-lock TTL arithmetic (`interval * 0.85` instead of `1.5x`/`2x`), each with the same two regression tests `ledger_projection.py` already used to catch this class of bug. 165 + 113 tests pass across the affected surfaces. Prior same-day (2026-08-10): A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-11 — B25 ADDED (open): Maestro real-device mobile E2E (`.github/workflows/maestro-e2e.yml`) is wired but never fires — missing `EXPO_TOKEN`/`MAESTRO_CLOUD_API_KEY` secrets unconfirmed, opt-in-only trigger (`workflow_dispatch`/`run-maestro` label), no iOS lane. Found while explaining the Playwright-vs-Maestro split to a user; Playwright (`rider-app/e2e/`, `driver-app/e2e/`) only covers the Expo web export, not a real native device. Prior (2026-08-10): B17 CLOSED: `financial_events.ride_id` FK changed to `ON DELETE SET NULL` (migration 294) so `purge_pii_retention()` Step B no longer FK-aborts the entire daily retention purge once a paid ride crosses 7 years; `docs/runbooks/data-retention.md` extended to cover Steps H–M. Prior same-day (2026-08-10): B20 CLOSED: `ledger_projection.py`'s `_decompose` now degrades (whole amount to `platform_revenue`, Sentry-escalated) instead of silently decomposing from stale `driver_earnings`/`tax_amount` when a fare-settlement event's ride isn't yet `payment_status='paid'` — source-aware by construction (cancellation-fee/notice-fee events never reach the check). Also found and fixed in the same change: `_RIDE_COLUMNS` omitted `payment_status` entirely, which would have made the new check degrade *every* fare charge unconditionally had it shipped alone — added a column-membership regression test for it, mirroring the existing `discount_amount` one. 23 + 122 tests pass. Prior same-day (2026-08-10): B19 and B21 CLOSED: `payment_retry.py`'s `requires_capture` branch now routes through `_finalize_card_settlement` (picking up the atomic RPC + Sentry escalation + WS notify the other two settlement paths already had), and all 4 background loops (`payment_retry.py`, `driver_claim_reaper.py`, `offer_expiry_reaper.py`, `orphaned_hold_reconciler.py`) now have correct throttle-lock TTL arithmetic (`interval * 0.85` instead of `1.5x`/`2x`), each with the same two regression tests `ledger_projection.py` already used to catch this class of bug. 165 + 113 tests pass across the affected surfaces. Prior same-day (2026-08-10): A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -4199,6 +4199,70 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   or E2E verification was done for any of the 3 apps (pure dependency
   version bumps, no application code touched) — reasoned as low-risk given
   every real test suite passed, not screenshotted/manually driven.
+
+### B25. Maestro real-device mobile E2E (`.github/workflows/maestro-e2e.yml`) is wired but never fires — missing secrets, opt-in-only trigger, no iOS lane
+- [ ] **Status:** open. Found while explaining the Playwright vs. Maestro
+  split to a user (2026-08-11) — not a new regression, a pre-existing gap
+  that was never tracked here.
+- **Why this matters:** `rider-app/e2e/` and `driver-app/e2e/` (Playwright)
+  only exercise the Expo **web export** (react-native-web), with backend
+  API, WebSocket, Google Maps, and Firebase all mocked via `page.route()`.
+  That suite cannot reproduce a native-module-only bug (the workflow's own
+  header comment cites #3174 as the motivating example). `.maestro/rider/`
+  and `.maestro/driver/` (12 YAML flows: 5 rider + 7 driver, covering
+  login, ride request/cancel, schedule+cancel, SOS, mid-trip chat,
+  go-online, accept-ride, verify-OTP, complete-trip, payout, in-trip chat)
+  are the only thing in this repo that drives a real native build as an
+  actual user would. `maestro-e2e.yml` exists and is a real implementation
+  (EAS-builds a native Android APK on the `test` profile, uploads it to
+  Maestro Cloud's hosted device farm, runs the flows there) — it is not a
+  stub — but it currently cannot run at all.
+- **Blockers, per the workflow's own inline comments:**
+  1. Two required secrets are undocumented-as-present: `EXPO_TOKEN` (EAS
+     Build permission) and `MAESTRO_CLOUD_API_KEY` (from
+     console.mobile.dev, upload+run permission). Every run fails at the
+     corresponding CLI login step until both exist — confirm with whoever
+     owns repo secrets whether either has actually been added; do not
+     assume from the workflow file's presence that they have.
+  2. Trigger is `workflow_dispatch` or a PR labeled `run-maestro` only —
+     by design, for EAS/Maestro Cloud billing discipline — so even once
+     the secrets exist, this never runs passively; someone has to
+     dispatch it or apply the label.
+  3. iOS has no lane at all. `eas.json`'s `"test"` build profile has no
+     iOS override because no Apple Developer credentials are configured
+     in EAS yet. The workflow comment says to add an iOS job "once Apple
+     credentials are provisioned" — that provisioning hasn't happened.
+- **Historical drift (context, already resolved but worth knowing):**
+  several audit docs (`reports/remediation/driver-new-issues-2026-04-23.md`,
+  `reports/audits/2026-04-23-driver-P4-verification.md`,
+  `reports/audits/OPEN-ITEMS-TRACKER.md`) flag that the original P4-5
+  remediation item was scoped as Maestro E2E flows, but the team shipped
+  Playwright-style web-export specs instead, leaving the `.maestro/` YAML
+  flows "previously unwired to any CI job" (direct quote from
+  `maestro-e2e.yml`'s own header) until this workflow was added. The
+  flows and the workflow both exist now — the remaining gap is purely
+  "never actually fires," not "doesn't exist."
+- **Action:**
+  1. Confirm with a repo/org admin whether `EXPO_TOKEN` and
+     `MAESTRO_CLOUD_API_KEY` are already set; add them if not.
+  2. Run the workflow once (`workflow_dispatch`, `apps: both`) to prove
+     the Android lane actually completes end-to-end against Maestro
+     Cloud, not just that CI YAML parses.
+  3. Decide whether `run-maestro` should be applied automatically (e.g.
+     via label-on-path-touch for `rider-app/`/`driver-app/` native code)
+     rather than purely manual, given it's currently opt-in-only and easy
+     to forget on a PR that actually needs native-device coverage.
+  4. Provision Apple Developer credentials in EAS and add an iOS
+     `eas.json` "test" profile override + iOS job to this workflow —
+     until then there is zero real-device E2E coverage for iOS, Playwright
+     included (Playwright's `chromium` project doesn't emulate iOS Safari
+     / native iOS behavior either).
+- **What was NOT verified:** whether the two secrets are actually present
+  in repo/org settings (no access to check from this session — this item
+  is written assuming they may be missing, per the workflow's own
+  caveat, not confirmed missing); whether `run-maestro` has ever been
+  applied to a real PR; whether a Maestro Cloud account/org is even
+  provisioned yet at console.mobile.dev.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

@@ -55,6 +55,159 @@ async def test_reset_runs_for_stale_allowances():
 
 
 @pytest.mark.asyncio
+async def test_reset_notifies_rider_on_successful_reset():
+    """R43 (ACTION_ITEMS.md N15): a non-rollover reset must push the member
+    a heads-up that their allowance zeroed out for the new period."""
+    stale = {
+        "id": "a1",
+        "member_id": "m1",
+        "type": "fixed_recurring",
+        "status": "active",
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "rollover": False,
+        "used": -100,
+    }
+    with (
+        patch(
+            "utils.allowance_reset.list_allowances_due_for_reset",
+            AsyncMock(return_value=[stale]),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active", "user_id": "user_1"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "status": "active"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "utils.allowance_reset.apply_reset",
+            AsyncMock(return_value={"master_balance_after": 0, "allowance_used_after": 0}),
+        ),
+        patch(
+            "utils.allowance_reset.reset_allowance_period",
+            AsyncMock(return_value={"id": "a1"}),
+        ),
+        patch(
+            "utils.allowance_reset.send_push_notification",
+            AsyncMock(),
+        ) as m_push,
+    ):
+        from utils.allowance_reset import run_allowance_reset_tick
+
+        processed = await run_allowance_reset_tick(now=date(2026, 4, 1))
+
+    assert processed == 1
+    m_push.assert_awaited_once()
+    args, kwargs = m_push.await_args
+    assert args[0] == "user_1"
+    assert kwargs["data"] == {"type": "corporate_allowance_reset"}
+    assert kwargs["priority"] == "normal"
+    assert kwargs["target_app"] == "rider"
+
+
+@pytest.mark.asyncio
+async def test_reset_rollover_does_not_notify():
+    """A rollover allowance's `used` is untouched — no notice is fired
+    because nothing changed from the rider's perspective."""
+    rollover = {
+        "id": "a2",
+        "member_id": "m2",
+        "type": "fixed_recurring",
+        "status": "active",
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "rollover": True,
+        "used": -100,
+    }
+    with (
+        patch(
+            "utils.allowance_reset.list_allowances_due_for_reset",
+            AsyncMock(return_value=[rollover]),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m2", "company_id": "c2", "status": "active", "user_id": "user_2"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c2", "status": "active"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w2", "soft_negative_floor": -50}),
+        ),
+        patch("utils.allowance_reset.apply_reset", AsyncMock()),
+        patch(
+            "utils.allowance_reset.reset_allowance_period",
+            AsyncMock(return_value={"id": "a2"}),
+        ),
+        patch(
+            "utils.allowance_reset.send_push_notification",
+            AsyncMock(),
+        ) as m_push,
+    ):
+        from utils.allowance_reset import run_allowance_reset_tick
+
+        await run_allowance_reset_tick(now=date(2026, 4, 1))
+
+    m_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reset_push_failure_does_not_abort_processing():
+    """A push failure is non-fatal — the reset itself already succeeded and
+    must still count as processed."""
+    stale = {
+        "id": "a1",
+        "member_id": "m1",
+        "type": "fixed_recurring",
+        "status": "active",
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "rollover": False,
+        "used": -100,
+    }
+    with (
+        patch(
+            "utils.allowance_reset.list_allowances_due_for_reset",
+            AsyncMock(return_value=[stale]),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1", "status": "active", "user_id": "user_1"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "status": "active"}),
+        ),
+        patch(
+            "utils.allowance_reset.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "soft_negative_floor": -50}),
+        ),
+        patch("utils.allowance_reset.apply_reset", AsyncMock()),
+        patch(
+            "utils.allowance_reset.reset_allowance_period",
+            AsyncMock(return_value={"id": "a1"}),
+        ),
+        patch(
+            "utils.allowance_reset.send_push_notification",
+            AsyncMock(side_effect=RuntimeError("push down")),
+        ),
+    ):
+        from utils.allowance_reset import run_allowance_reset_tick
+
+        processed = await run_allowance_reset_tick(now=date(2026, 4, 1))
+
+    assert processed == 1
+
+
+@pytest.mark.asyncio
 async def test_reset_skips_rollover_flag():
     rollover = {
         "id": "a2",

@@ -32,6 +32,7 @@ try:
         list_allowances_due_for_reset,
         reset_allowance_period,
     )
+    from ..features import send_push_notification  # type: ignore
     from ..services.corporate_allowance_service import apply_reset  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
@@ -41,6 +42,7 @@ except ImportError:
         list_allowances_due_for_reset,
         reset_allowance_period,
     )
+    from features import send_push_notification  # type: ignore
     from services.corporate_allowance_service import apply_reset  # type: ignore
 
 try:
@@ -121,6 +123,32 @@ async def run_allowance_reset_tick(now: Optional[date] = None) -> int:
                     actor_user_id=None,
                     notes=f"period reset {new_start} -> {new_end}",
                 )
+                # R43 (ACTION_ITEMS.md N15): the reset previously had zero
+                # notification of any kind — a rider whose allowance zeroed
+                # out found out only by noticing their next receipt looked
+                # different. Only fired for the non-rollover branch: a
+                # rollover allowance's `used` is untouched by this reset (the
+                # period dates just roll forward), so there is nothing that
+                # changed from the rider's perspective to notify about.
+                # Rate-limited for free by the CAS claim above — `claimed`
+                # is only True for the replica that wins the compare-and-swap
+                # on this allowance's period_end, so this fires at most once
+                # per allowance per period regardless of how many replicas
+                # run the tick concurrently (same F8 replay-safety this loop
+                # already relies on for the DB writes).
+                _member_user_id = member.get("user_id")
+                if _member_user_id:
+                    try:
+                        await send_push_notification(
+                            _member_user_id,
+                            "Corporate ride allowance reset",
+                            "Your company ride allowance has reset for the new period.",
+                            data={"type": "corporate_allowance_reset"},
+                            priority="normal",
+                            target_app="rider",
+                        )
+                    except Exception as _notify_err:
+                        logger.warning("allowance reset push failed for member %s: %s", r.get("member_id"), _notify_err)
             processed += 1
         except Exception:
             logger.exception("allowance reset failed for %s", r.get("id"))

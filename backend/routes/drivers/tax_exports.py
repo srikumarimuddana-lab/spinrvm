@@ -31,7 +31,100 @@ from ._shared import (  # noqa: F401
     _ride_income,
 )
 
+try:
+    from ...utils.legacy_rides import drop_legacy_rides
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils.legacy_rides import drop_legacy_rides  # type: ignore
+
 router = APIRouter()
+
+# Matches the Saskatchewan trip-record retention window (7 years, see
+# CLAUDE.md § regulatory) — there is no reportable income older than the
+# records we are required to keep.
+_T4A_YEAR_LOOKBACK = 7
+
+
+# MUST stay declared BEFORE `/t4a/{year}`: that route types `year` as int, so
+# a request for /t4a/years would otherwise be matched there and 422 on the
+# path coercion instead of reaching this handler.
+@router.get("/t4a/years")
+async def get_t4a_years(current_user: dict = Depends(get_current_user)):
+    """Tax years this driver actually has reportable income for.
+
+    The apps used to synthesize "the last three completed years" client-side
+    and offer a T4A for each, so a new driver — or a migrated one whose only
+    income was previous-app rides now excluded from Spinr's books
+    (utils/legacy_rides) — was offered slips for years they earned nothing,
+    and emailing one produced a $0.00 document. Years with no income are
+    simply absent here so the client can render nothing instead of guessing.
+
+    Buckets by ``created_at`` because that is the field
+    ``get_rides_for_driver`` filters the slip on — using a different field
+    here would let this list disagree with the slip it advertises.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    this_year = datetime.now(timezone.utc).year
+    earliest = this_year - _T4A_YEAR_LOOKBACK + 1
+
+    # Same two income sources, and the same legacy exclusion, as the slip.
+    rides = drop_legacy_rides(
+        await db_supabase.get_rides_for_driver(
+            driver["id"],
+            statuses=[RideStatus.COMPLETED],
+            from_date=f"{earliest}-01-01",
+            to_date=f"{this_year + 1}-01-01",
+            limit=10000,
+        )
+    )
+    synced_rows = await db_supabase.get_rows(
+        "payouts",
+        {
+            "driver_id": driver["id"],
+            "payout_type": "stripe_sync",
+            "created_at": {
+                "$gte": f"{earliest}-01-01T00:00:00+00:00",
+                "$lt": f"{this_year + 1}-01-01T00:00:00+00:00",
+            },
+        },
+        limit=10000,
+    )
+
+    totals: dict[int, Decimal] = {}
+    trips: dict[int, int] = {}
+
+    def _year_of(row: dict) -> int | None:
+        stamp = str(row.get("created_at") or "")[:4]
+        return int(stamp) if stamp.isdigit() else None
+
+    for r in rides:
+        y = _year_of(r)
+        if y is None:
+            continue
+        totals[y] = totals.get(y, Decimal("0")) + _ride_income(r)
+        trips[y] = trips.get(y, 0) + 1
+    for p in synced_rows:
+        y = _year_of(p)
+        if y is None:
+            continue
+        totals[y] = totals.get(y, Decimal("0")) + Decimal(str(p.get("amount") or "0"))
+
+    years = [
+        {
+            "year": y,
+            "total_earnings": _money_str(total),
+            "total_trips": trips.get(y, 0),
+        }
+        for y, total in sorted(totals.items(), reverse=True)
+        # A year that nets to zero (or negative, via reversals) is not income
+        # worth offering a slip for.
+        if total > Decimal("0")
+    ]
+    return {"years": years}
 
 
 @router.get("/t4a/{year}")
@@ -42,21 +135,30 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    rides = await db_supabase.get_rides_for_driver(
-        driver["id"],
-        statuses=[RideStatus.COMPLETED],
-        from_date=f"{year}-01-01",
-        to_date=f"{year + 1}-01-01",
-        limit=10000,
+    # Previous-app rides brought in by the booking importer are NOT Spinr
+    # income: that money was earned and paid out by the old app, and where it
+    # was paid through Stripe it is already reported below via the
+    # 'stripe_sync' rows. Counting both would report the same legacy dollars
+    # to the CRA twice. The repo helper takes no extra filters, so the
+    # exclusion is applied here (see utils/legacy_rides).
+    rides = drop_legacy_rides(
+        await db_supabase.get_rides_for_driver(
+            driver["id"],
+            statuses=[RideStatus.COMPLETED],
+            from_date=f"{year}-01-01",
+            to_date=f"{year + 1}-01-01",
+            limit=10000,
+        )
     )
 
     # Legacy-era income synced from Stripe transfer history
-    # (services/stripe_payout_sync_service.py): the old app's rides were never
-    # imported, so payouts rows with payout_type='stripe_sync' are the only
-    # record of that income — the T4A must report it, attributed to the year of
-    # the transfer (CRA reports amounts PAID). App-native payouts are cash-outs
-    # of the ride earnings summed below, and 'legacy_import' offsets pair with
-    # imported rides — only the synced type is added, so nothing double-counts.
+    # (services/stripe_payout_sync_service.py): payouts rows with
+    # payout_type='stripe_sync' are the record of legacy income actually PAID
+    # through Stripe — the T4A must report it, attributed to the year of the
+    # transfer (CRA reports amounts paid). App-native payouts are cash-outs of
+    # the ride earnings summed below, and 'legacy_import' offsets pair with
+    # imported rides now excluded above — only the synced type is added, so
+    # nothing double-counts.
     # Queried via this module's db binding so the established
     # _deps.db_supabase patch point covers it in tests.
     synced_rows = await db_supabase.get_rows(

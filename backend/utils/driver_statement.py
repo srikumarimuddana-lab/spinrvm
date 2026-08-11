@@ -34,8 +34,11 @@ from zoneinfo import ZoneInfo
 
 try:
     from .. import db_supabase
+    from .legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
 except ImportError:  # pragma: no cover
     import db_supabase  # type: ignore
+
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
 
 STATEMENT_TZ = ZoneInfo("America/Regina")
 
@@ -187,10 +190,21 @@ async def _build(
     driver_id = driver["id"]
     window = {"$gte": win_gte, "$lt": win_lt}
 
+    # Legacy-imported rides are excluded here, and their 'legacy_import' offset
+    # payout is dropped below. Keeping either would break this statement badly:
+    # an imported ride keeps its ORIGINAL completion date while the offset is
+    # stamped with the import date, so the two halves land in different
+    # periods — one statement showing inflated earnings with no offset, another
+    # showing a large payout with no earnings. See utils/legacy_rides.
     rides = (
         await db_supabase.get_rows(
             "rides",
-            {"driver_id": driver_id, "status": "completed", "ride_completed_at": window},
+            {
+                "driver_id": driver_id,
+                "status": "completed",
+                "ride_completed_at": window,
+                **EXCLUDE_LEGACY_RIDES,
+            },
             limit=10000,
         )
         or []
@@ -211,7 +225,7 @@ async def _build(
         )
         or []
     )
-    payout_rows = (
+    payout_rows = drop_legacy_offset_payouts(
         await db_supabase.get_rows(
             "payouts",
             {"driver_id": driver_id, "created_at": window},

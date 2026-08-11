@@ -20,6 +20,7 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
@@ -242,6 +243,81 @@ class TestTriggerEmergency:
         _, row = persisted[0]
         assert row["latitude"] == _Req.latitude
         assert row["longitude"] == _Req.longitude
+
+    async def test_rider_sos_confirmation_push_sent_to_triggering_rider(self):
+        """N15/R38 (ACTION_ITEMS.md): the rider who triggered SOS must get a
+        confirmation push, not just the admin/safety-team/contacts channels.
+        Fired via spawn() (fire-and-forget, matching the N5 cancellation-push
+        pattern) -- yield once so the scheduled task actually runs."""
+        from backend.routes import rides as rides_mod
+
+        push_mock = AsyncMock()
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
+            ),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides._deps.send_push_notification", push_mock),
+        ):
+            await rides_mod.trigger_emergency(
+                ride_id=RIDE_ID,
+                body=_Req(),
+                current_user={"id": RIDER_ID},
+            )
+            await asyncio.sleep(0)
+
+        push_mock.assert_awaited_once()
+        call = push_mock.await_args
+        assert call.args[0] == RIDER_ID
+        assert call.kwargs.get("priority") == "safety"
+        assert call.kwargs.get("target_app") == "rider"
+        assert call.kwargs.get("data", {}).get("type") == "sos_confirmation"
+        # Copy must confirm receipt without claiming to replace/guarantee
+        # emergency response -- "What Spinr Is NOT" guardrail.
+        body_text = call.args[2].lower()
+        assert "reached" in body_text or "received" in body_text
+        assert "911" in body_text
+
+    async def test_driver_sos_confirmation_push_targets_driver_app(self):
+        """Same confirmation must reach a driver-triggered SOS too, routed to
+        the driver app's token column, not the rider's."""
+        from backend.routes import rides as rides_mod
+
+        push_mock = AsyncMock()
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver_row()]),
+            ),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "Test", "last_name": "Driver"}),
+            ),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides._deps.send_push_notification", push_mock),
+        ):
+            await rides_mod.trigger_emergency(
+                ride_id=RIDE_ID,
+                body=_Req(),
+                current_user={"id": DRIVER_USER_ID},
+            )
+            await asyncio.sleep(0)
+
+        push_mock.assert_awaited_once()
+        call = push_mock.await_args
+        assert call.args[0] == DRIVER_USER_ID
+        assert call.kwargs.get("target_app") == "driver"
+        assert call.kwargs.get("priority") == "safety"
 
     async def test_emergency_contacts_receive_sms(self):
         contacts = [

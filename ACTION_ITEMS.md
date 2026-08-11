@@ -5621,13 +5621,42 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   this endpoint. No code change needed; correcting the stale item.
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
-- [ ] **D8. No rate limiting on SIN-touching admin endpoints** — flagged by the
-  2026-08-10 security audit of the SIN-enforcement branch: `reveal-sin`
-  (pre-existing), `update-sin`, and `/tax-ids/import/{validate,commit}` are
-  all absent from `utils/rate_limiter.py`. Not exploitable past the
-  super_admin gate + audit rows, but three SIN surfaces with zero throttling
-  should be a deliberate decision, not an inherited omission. Decide a limit
-  (e.g. reveal/update: 10/hour per admin) and wire it, or document why not.
+- [x] **D8. No rate limiting on SIN-touching admin endpoints** — done: added
+  4 new `default_limiter.limit(...)` entries in `utils/rate_limiter.py` —
+  `admin_sin_reveal_limit` (10/hour) on `POST /admin/drivers/{id}/reveal-sin`,
+  `admin_sin_update_limit` (10/hour) on `POST /admin/drivers/{id}/update-sin`,
+  `tax_id_import_validate_limit` (30/hour) on `POST /admin/tax-ids/import/validate`,
+  `tax_id_import_commit_limit` (10/hour) on `POST /admin/tax-ids/import/commit`.
+  10/hour for reveal/update is D8's own suggested figure. The two import
+  endpoints reuse the validate/commit asymmetry already established by
+  `data_transfer_import_*_limit`/`booking_import_*_limit`/`driver_import_commit_limit`
+  (read-only dry-run gets the looser 30/hour, the write path gets 10/hour) —
+  the per-call `MAX_ROWS` (500) cap already bounds blast radius per call, so
+  the per-hour cap only needs to guard unbounded scripted looping. All 4 are
+  keyed per-admin via `get_user_or_ip_key` (existing function, unmodified —
+  decodes the JWT's `user_id` claim without verifying the signature; safe
+  because `Depends(get_admin_user)` still re-verifies before any handler body
+  runs), not per-IP like every other `admin_*` limiter in the file — a
+  deliberate deviation, since IP keying would let multiple super_admins
+  behind one office/VPN egress IP share (and exhaust) one bucket, or
+  under-count a single admin who rotates IPs. Confirmed admin JWTs carry
+  `user_id` (`routes/admin/auth.py::_mint_admin_access_token`), so no new key
+  function was needed. Both `reveal-sin`/`update-sin`
+  (`routes/admin/drivers.py`) and the two `tax-ids/import` endpoints
+  (`routes/admin/tax_id_import.py`) needed a `request: Request` parameter
+  added — `AsyncLimiter.limit` requires one to find the connection to key on,
+  and none of the 4 endpoints previously took one. Still purely
+  defense-in-depth per the audit's own framing: all 4 stay super_admin-gated
+  + audit-logged before the limiter ever runs. New tests in
+  `tests/test_admin_sin_rate_limiting.py` (5 cases) prove the actual
+  `AsyncLimiter`/`MemoryStorage` mechanics at each configured rate — N
+  allowed calls succeed, the N+1th raises `RateLimitExceeded` — plus one case
+  proving two different admin JWTs from the same source IP get independent
+  buckets (the per-admin-not-per-IP guarantee this item exists for). Grepped
+  every other consumer of `get_user_or_ip_key`/`default_limiter`: both are
+  unmodified, and only new module-level limiter objects were added — no
+  shared behavior changed for any of the ~30 other `default_limiter.limit(...)`
+  call sites across `routes/`.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.
 - [x] **D7. Admin analytics Redis cache** — done: `GET /admin/analytics/cancellation-reasons`
   now caches its response for 5 minutes (`_OVERVIEW_CACHE_TTL`, same TTL

@@ -306,3 +306,33 @@ async def send_payment_blocked_email(
         ],
         email_type="rider_payment_blocked",
     )
+
+
+async def send_email_verification_code(
+    user: dict[str, Any],
+    code: str,
+    expiry_minutes: int,
+) -> bool:
+    """OTP for the rider self-serve "verify your email" flow (N14,
+    ACTION_ITEMS.md — ``POST /users/verify-email/request``).
+
+    Distinct from `send_welcome_email`: welcome only proves the address
+    didn't hard-bounce at send time, this proves the rider can actually read
+    what lands in it. Not sent automatically on any lifecycle event — issued
+    only when explicitly requested via the verify-email endpoint, so unlike
+    every other sender in this module it is never fired from a route the
+    rider didn't just call for exactly this purpose.
+    """
+    company = await load_company_details()
+    return await _send(
+        company=company,
+        user_id=user["id"],
+        user=user,
+        subject="Your Spinr verification code",
+        heading="Verify your email",
+        paragraphs=[
+            f"Your Spinr verification code is {code}.",
+            f"It expires in {expiry_minutes} minutes. If you didn't request it, you can ignore this email.",
+        ],
+        email_type="rider_email_verification",
+    )

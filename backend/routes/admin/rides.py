@@ -27,6 +27,7 @@ try:
         places_new_headers,
     )
     from ...utils.insurance_periods import record_period_transition
+    from ...utils.legacy_rides import drop_legacy_rides
     from ...utils.money import dollars_to_cents
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
@@ -48,6 +49,7 @@ except ImportError:
         places_new_headers,
     )
     from utils.insurance_periods import record_period_transition
+    from utils.legacy_rides import drop_legacy_rides
     from utils.money import dollars_to_cents
     from utils.rate_limiter import default_limiter as limiter
 
@@ -2149,6 +2151,19 @@ async def admin_get_earnings_rides(
         desc=True,
         limit=fetch_size,
     )
+    # P0-B (docs/audit/2026-08-11-driver-rider-migration-audit.md): a
+    # legacy-imported ride has no real Stripe charge — finance uses this
+    # export to reconcile against Stripe/bank ledger, so an unfiltered
+    # export is indistinguishable from a real charge row unless finance
+    # separately knows to filter it. Dropped post-fetch (not via a
+    # server-side EXCLUDE_LEGACY_RIDES filter): that constant compiles to a
+    # real SQL `legacy_import_metadata IS NULL`, which can never match this
+    # column (NOT NULL DEFAULT '{}'::jsonb, migration 268) — see
+    # ACTION_ITEMS.md's EXCLUDE_LEGACY_RIDES entry. drop_legacy_rides() uses
+    # the same Python-truthy check utils/legacy_rides.py's own
+    # is_legacy_ride() defines and is documented as exactly the "post-fetch
+    # companion for callers that cannot add a filter to their query."
+    rides = drop_legacy_rides(rides)
     page = rides[offset : offset + limit]
 
     # Batch-fetch driver + rider names. The reconciliation flow often

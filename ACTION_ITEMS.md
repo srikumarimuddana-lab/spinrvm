@@ -2639,14 +2639,80 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
     rider row, mirroring the driver importer's pattern.
 - **P0-B — 3 admin financial dashboards double-count legacy-imported ride
   earnings.**
-  - [ ] **Status:** open. Needs `legacy_import_metadata IS NULL` added to
-    `admin_ride_money_rollup` (`backend/migrations/161_ride_money_rollup_fn.sql`)
-    and `admin_payouts_overview_aggregates`
-    (`backend/migrations/159_payouts_overview_aggregates_fn.sql`), plus an
-    `**EXCLUDE_LEGACY_RIDES` filter in the CSV export at
-    `routes/admin/rides.py:2145-2151`.
+  - [x] **Status:** DONE (2026-08-11) — new migrations
+    `backend/migrations/302_ride_money_rollup_exclude_legacy.sql` and
+    `backend/migrations/303_payouts_overview_ytd_exclude_legacy.sql` add a
+    legacy-exclusion predicate to `admin_ride_money_rollup` (unconditional)
+    and `admin_payouts_overview_aggregates`'s `ytd`/T4A CTE only
+    (`earned_up_to_end`/`earned_up_to_prev`/`blocked_outstanding` stay
+    unfiltered — they're paired with the offsetting `payouts` rows and are
+    already arithmetically correct). The CSV export at
+    `routes/admin/rides.py`'s `/earnings/rides` now drops legacy rides
+    **post-fetch** via `drop_legacy_rides()`, not via a server-side filter —
+    see A26 below for why. Full change impact log:
+    `docs/change-log/2026-08-11-admin-legacy-earnings-exclusion.md`.
 - P1/P2 findings from the same audit (3 P1, 4 P2) not yet triaged into this
   file — see the audit doc directly.
+
+### A26. `EXCLUDE_LEGACY_RIDES` compiles to an unsatisfiable SQL predicate — may already be zeroing driver-facing earnings in production (CRITICAL, found 2026-08-11 while fixing A25/P0-B)
+- **Status:** open — **needs live-DB verification before anyone touches the
+  9+ call sites below.** Found by `spinr-migration-reviewer` while reviewing
+  the P0-B migrations above; user directed: file it, don't fix broadly this
+  session (no live Supabase access to verify safely).
+- **What:** `utils/legacy_rides.py`'s
+  `EXCLUDE_LEGACY_RIDES = {"legacy_import_metadata": None}` is merged
+  directly into real `db_supabase.get_rows(...)` filter dicts at 9+ call
+  sites. `repositories/_base.py`'s `_apply_filters` compiles a `None` value
+  to `q.is_(k, "null")` → PostgREST `is.null` → real SQL `column IS NULL`.
+  But `rides.legacy_import_metadata` (migration 268),
+  `users.legacy_import_metadata` (256), and `drivers.legacy_import_metadata`
+  (221) are all declared `NOT NULL DEFAULT '{}'::jsonb` — **no row in any of
+  these tables can ever be SQL NULL** in that column, imported or not.
+  `IS NULL` against a `NOT NULL` column matches **zero rows, always** — not
+  "exclude legacy rides," but "exclude every row the filter touches."
+- **Confirmed technically** (not yet confirmed live): traced
+  `postgrest.base_request_builder.BaseFilterRequestBuilder.is_()` →
+  `value = "null"` → `Filters.IS` → PostgREST `is.null` → Postgres
+  `IS NULL`; cross-checked all three columns' DDL
+  (`NOT NULL DEFAULT '{}'::jsonb`). If this reaches production traffic as
+  analyzed, every query merging `EXCLUDE_LEGACY_RIDES` returns **zero rows**,
+  not "zero legacy rows" — meaning `payable_balance`/`total_earnings` would
+  compute as `$0` for every driver at those call sites, not just ones
+  touched by legacy import.
+- **Why not fixed here:** severity (driver payouts, live-tested surface) +
+  the fact that a bug this size going unnoticed strains credulity — there
+  may be a mitigating factor not visible from static analysis alone (e.g. a
+  different code path in production, a compensating fallback, or the bug
+  simply not being live yet). No live Supabase access in this sandbox to
+  confirm actual behavior before touching money-critical driver-facing code.
+- **Call sites to check/fix together** (all currently assume the filter
+  works as a server-side exclusion):
+  - `routes/drivers/earnings.py` — 7 places (driver balance + earnings
+    endpoints)
+  - `utils/driver_statement.py:216`
+  - `utils/t4a_annual_job.py:194`
+  - `routes/admin/drivers.py:2642`
+- **What already avoids the bug:** the post-fetch companion
+  `drop_legacy_rides()` (Python-truthy check on the fetched rows, not a
+  DB-level filter) is unaffected and correct. A26's P0-B fix
+  (`routes/admin/rides.py`'s `/earnings/rides` CSV export) deliberately uses
+  `drop_legacy_rides()` instead of `EXCLUDE_LEGACY_RIDES` for this reason —
+  see A25/P0-B above.
+- **Suggested fix** (once live-verified): change
+  `EXCLUDE_LEGACY_RIDES = {"legacy_import_metadata": None}` to something
+  `_apply_filters` can actually compile against a `NOT NULL DEFAULT '{}'`
+  column — e.g. add an `$eq` operator to `_SUPPORTED_FILTER_OPS` /
+  `_build_or_clause_term` and use
+  `{"legacy_import_metadata": {"$eq": {}}}`, or simplest: swap every
+  `**EXCLUDE_LEGACY_RIDES`-in-a-filter call site to fetch normally and
+  `drop_legacy_rides()` post-fetch (already proven safe, no `_apply_filters`
+  change needed, but loses server-side row reduction on
+  `limit=10000`-style calls).
+- **First action for whoever picks this up:** confirm live in staging/prod
+  whether `routes/drivers/earnings.py`'s balance/earnings endpoints are
+  currently returning `0`/empty for drivers who have ANY completed ride
+  (not just legacy-touched ones) — that's the smoking-gun symptom if this
+  analysis is correct.
 
 ## P1 — Fix before launch (code)
 

@@ -6,6 +6,7 @@ here re-checks auth. Credits and debits recorded via this module carry
 ``admin_id`` in the ledger metadata so refunds/adjustments are auditable.
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -17,16 +18,30 @@ try:
     from ... import db_supabase
     from ...db import db
     from ...dependencies import get_admin_user
+    from ...features import send_push_notification
     from ...utils.rate_limiter import admin_wallet_limit
     from ..wallet import _money_str, get_or_create_wallet
 except ImportError:
     import db_supabase
     from db import db
     from dependencies import get_admin_user
+    from features import send_push_notification
     from routes.wallet import _money_str, get_or_create_wallet
     from utils.rate_limiter import admin_wallet_limit
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/wallet", tags=["Admin Wallet"])
+
+
+def _wallet_target_app(user: dict) -> str:
+    """Resolve which per-app FCM token column a wallet-change push should use.
+
+    Both riders and drivers have a personal wallet (get_or_create_wallet is
+    role-agnostic), so this endpoint's push must route to whichever app the
+    affected user actually has installed rather than assuming rider.
+    """
+    return "driver" if user.get("role") == "driver" else "rider"
+
 
 _TWO = Decimal("0.01")
 
@@ -183,6 +198,29 @@ async def admin_credit_wallet(
         },
     )
 
+    # N15/R31 (ACTION_ITEMS.md): admin wallet adjustments previously had zero
+    # notification call anywhere — a rider/driver could see their balance
+    # change with no idea why. Best-effort, informational (priority="normal",
+    # respects the push opt-out); the credit + audit row above have already
+    # committed, so a push failure here must never surface as a failed credit.
+    try:
+        await send_push_notification(
+            req.user_id,
+            "Wallet credited",
+            f"${_money_str(credit)} was added to your wallet.",
+            data={
+                "type": "wallet_admin_credit",
+                "amount": _money_str(credit),
+                "transaction_id": txn["id"],
+            },
+            target_app=_wallet_target_app(user),
+        )
+    except Exception as e:
+        logger.warning(
+            f"admin_credit_wallet: push failed user_id={req.user_id} txn={txn['id']}: {e}",
+            exc_info=True,
+        )
+
     return {
         "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
@@ -270,6 +308,27 @@ async def admin_debit_wallet(
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
+
+    # N15/R31 (ACTION_ITEMS.md): see admin_credit_wallet — same gap, debit
+    # side. Best-effort/informational; the debit + audit row above already
+    # committed, so a push failure here must never surface as a failed debit.
+    try:
+        await send_push_notification(
+            req.user_id,
+            "Wallet debited",
+            f"${_money_str(debit)} was deducted from your wallet.",
+            data={
+                "type": "wallet_admin_debit",
+                "amount": _money_str(debit),
+                "transaction_id": txn["id"],
+            },
+            target_app=_wallet_target_app(user),
+        )
+    except Exception as e:
+        logger.warning(
+            f"admin_debit_wallet: push failed user_id={req.user_id} txn={txn['id']}: {e}",
+            exc_info=True,
+        )
 
     return {
         "balance": _money_str(new_balance),

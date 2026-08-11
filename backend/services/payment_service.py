@@ -459,13 +459,17 @@ async def settle_corporate(
         # allowance-covered corporate ride CREDITED the company's master wallet
         # instead of charging it (migration 248).
         try:
-            await corporate_allowance_service.apply_ride_debit(
+            _allowance_debit_result = await corporate_allowance_service.apply_ride_debit(
                 wallet_id=corp_wallet["id"],
                 allowance_id=allowance["id"],
                 member_id=membership["id"],
                 amount=_f(allowance_debit),
                 actor_user_id=membership.get("user_id") or ride.get("rider_id"),
                 notes=f"ride:{ride_id}:allowance",
+                # Ride-scoped idempotency (migration 297) — a retried
+                # settle_corporate call for this ride no-ops here instead of
+                # debiting the allowance a second time.
+                ride_id=ride_id,
                 # Corporate + admin portal review, Critical #2: this call
                 # previously passed no floor at all, so the master-wallet
                 # floor check never engaged for the allowance-funded debit
@@ -480,6 +484,12 @@ async def settle_corporate(
                 floor=0.0,
             )
             allowance_applied = True
+            if isinstance(_allowance_debit_result, dict) and _allowance_debit_result.get("deduped"):
+                logger.info(
+                    "[PAYMENT] allowance debit for ride {} was already applied (idempotent retry, migration 297) "
+                    "— no-op, no second debit",
+                    ride_id,
+                )
         except Exception as _cap_err:
             # The RPC enforces the per-member ceiling under its row lock
             # (migration 258). Our allowance_debit was computed from a
@@ -530,7 +540,7 @@ async def settle_corporate(
 
     if master_debit > 0 and corp_wallet.get("id"):
         try:
-            await corporate_wallet_service.apply_adjustment(
+            _master_debit_result = await corporate_wallet_service.apply_adjustment(
                 wallet_id=corp_wallet["id"],
                 amount=-_f(master_debit),
                 notes=f"Ride fallback debit {ride_id}",
@@ -538,7 +548,16 @@ async def settle_corporate(
                 # the rider is the company's customer, not the payer.
                 actor_user_id=membership.get("user_id") or ride.get("rider_id", "system"),
                 floor=0.0,
+                # Ride-scoped idempotency (migration 297) — see the matching
+                # ride_id on the allowance debit above.
+                ride_id=ride_id,
             )
+            if isinstance(_master_debit_result, dict) and _master_debit_result.get("deduped"):
+                logger.info(
+                    "[PAYMENT] master-fallback debit for ride {} was already applied (idempotent retry, "
+                    "migration 297) — no-op, no second debit",
+                    ride_id,
+                )
         except Exception as master_err:
             if allowance_applied:
                 try:
@@ -551,6 +570,7 @@ async def settle_corporate(
                         member_id=membership["id"],
                         amount=_f(allowance_debit),
                         notes=f"ride:{ride_id}:allowance_compensation",
+                        ride_id=ride_id,
                     )
                 except Exception as comp_err:
                     logger.opt(exception=True).error(

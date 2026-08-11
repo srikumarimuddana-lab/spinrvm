@@ -4064,7 +4064,7 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   would mean the fix didn't actually reach the built image.
 
 ### B24. `G4b · yarn audit` / `G4c · npm audit` (JS deps) red on pre-existing transitive findings — blocks all open dependency-bump PRs identically
-- [ ] **Status:** open. Same shape as B22 (which covers `G4a · pip-audit`
+- [x] **CLOSED 2026-08-11.** Same shape as B22 (which covers `G4a · pip-audit`
   only) but for the JS side — no existing item covered this half.
 - **Why:** found while verifying whether the 10 open dependabot PRs
   (#3473–#3487, admin-dashboard + backend) would break anything. `G4b`
@@ -4107,12 +4107,68 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   advisory. `G4b` (all three JS matrix legs) and `G4c` both green is the
   signal the fix is real, same "two gates, one fix" logic as B22's
   `cryptography`/`G4a`+`G6` pairing.
-- **What was NOT verified:** `rider-app`/`driver-app` `npm audit` output
-  directly (see above — inferred, not independently pulled); whether any
-  of these findings are already stale (i.e. already fixed on `main` by
-  unrelated work) as of whenever this item is next picked up — re-run the
-  audit fresh rather than trusting this list, the way B22's own dated
-  updates did each time.
+- **Resolution (2026-08-11):** all three surfaces re-audited fresh (not the
+  stale list above — `rider-app`/`driver-app` use `yarn audit`, not `npm
+  audit`; `admin-dashboard` uses `npm audit`):
+  - **admin-dashboard** (`npm audit fix`, resolves within existing semver
+    ranges declared by parents — no `package.json` change, lockfile only):
+    `brace-expansion` 5.0.8→5.0.9, `dompurify` 3.4.12→3.4.13, `fast-uri`
+    3.1.4→3.1.5, `hono` 4.12.32→4.13.1, `ip-address` 10.2.0→10.5.0,
+    `js-yaml` 4.3.0→4.3.1, `nanoid` 3.3.16→3.3.18. `npm audit
+    --audit-level=high` → 0 vulnerabilities.
+  - **rider-app** and **driver-app** (Yarn Classic 1.22.22, no `npm audit`
+    equivalent — fixed via `package.json`'s `resolutions` block, since both
+    apps pin transitive deps that way already): bumped the existing
+    `js-yaml` floor `^4.3.0`→`^4.3.1` and `fast-uri` floor `^3.1.4`→`^3.1.5`;
+    added `"nanoid": "^3.3.17"`. `brace-expansion` needed 4 **scoped**
+    resolutions, not one blanket pin — it's present via 3 independent
+    incompatible-major chains simultaneously (`minimatch`→1.x,
+    `glob`/`@expo/fingerprint`/`@typescript-eslint/typescript-estree`→5.x)
+    and a blanket resolution would force one major onto a consumer that
+    doesn't want it. Yarn 1's syntax for a deeply-nested scoped resolution
+    needs a `**/` glob prefix — a first attempt without it
+    (`"minimatch/brace-expansion"`) silently no-opped, confirmed via `yarn
+    why brace-expansion` showing unchanged versions before switching to
+    `"**/minimatch/brace-expansion": "^1.1.18"` etc., which collapsed every
+    instance to a single patched version in both apps. `driver-app` turned
+    out to have the identical chain shape as `rider-app` (same 3 parents),
+    so the same 4 scoped keys applied unchanged.
+  - **Unpatchable, left as-is, documented rather than silently dropped:**
+    `image-size` (HIGH, GHSA — via `expo > @expo/cli > @expo/metro >
+    metro > image-size`) in both `rider-app` and `driver-app` — upstream
+    has no patched version yet ("No patch available" per the npm
+    advisory). This is a genuine gap, not a fix we chose to skip; re-check
+    on the next dependency-bump pass rather than assuming it's resolved.
+  - `admin-dashboard`'s `dompurify`/`hono`/`ip-address` findings named in
+    the original writeup above were fixed incidentally by the same `npm
+    audit fix` run (they were transitive siblings of the packages actually
+    named in the `[ ]` acceptance criteria) — not a separate pass.
+- **Verification:** real test suites run against the bumped versions in
+  every surface, not just the audit tool re-run:
+  - `admin-dashboard`: `npx vitest run` (160/160), `npx tsc --noEmit`
+    (clean), a real `npm run build` (succeeded, full route manifest
+    printed — not just dev server/`tsc --noEmit`, per this repo's
+    CLAUDE.md convention), `npx eslint .` (0 errors, pre-existing warnings
+    only).
+  - `rider-app`: `npx jest --silent` → 440/440 passed, 52/52 suites. (A
+    handful of non-fatal "Jest environment torn down" warnings appeared in
+    the output from `privacySettingsToggles.test.tsx` — that file was not
+    touched by this change and the suite fully passed, so this reads as
+    pre-existing async-teardown noise, not a regression, though it was not
+    independently bisected against a pre-change run to prove it.)
+  - `driver-app`: `npx jest --silent` → 364/364 passed, 51/51 suites, no
+    warnings.
+  - Confirmed via `yarn audit --level high --json` in each app that the
+    fix actually landed (not just that `yarn install` succeeded): both
+    `rider-app` and `driver-app` went from `{brace-expansion, image-size}`
+    down to just `{image-size}` (the known-unpatchable one above).
+- **What was NOT verified:** this fix bumps versions but does not add any
+  new automated dependency-audit regression tooling — the next unrelated
+  dependency bump on any of these 3 surfaces can reintroduce a similar
+  finding and won't be caught until CI's `G4b`/`G4c` next runs. No visual
+  or E2E verification was done for any of the 3 apps (pure dependency
+  version bumps, no application code touched) — reasoned as low-risk given
+  every real test suite passed, not screenshotted/manually driven.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

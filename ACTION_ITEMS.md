@@ -5016,9 +5016,31 @@ Remaining, roughly in order of user impact:
   debits/credits, promos and loyalty tier changes have zero notification calls
   (R31/R33/R34); scheduled rides have one reminder tier and no booking
   confirmation (R35/R37); rider SOS sends the rider no confirmation that help
-  was alerted (R38); corporate allowance reset and exhaustion are silent, with
-  exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
-  "new device signed in" alert (R8).
+  was alerted (R38); ~~corporate allowance reset and exhaustion are silent,
+  with exhaustion surfacing only as a 4xx at booking (R43/R44)~~; and there is
+  no "new device signed in" alert (R8).
+  - [x] **R43/R44 done** (2026-08-11): `utils/allowance_reset.py` now pushes
+    the member a "your allowance has reset" notice right after a successful
+    non-rollover reset (rollover allowances don't fire — `used` is untouched
+    by that reset, so nothing changed for the rider); rate-limited for free
+    by the loop's existing period-CAS claim, no new column. `services/
+    payment_service.py::settle_corporate` now pushes "running low" (crosses
+    below 20% remaining) or "allowance used up" (crosses to 0) exactly on
+    the ride debit that causes the crossing — comparing this debit's own
+    remaining-before/after is enough to fire at most once per crossing, no
+    new rate-limit column either. Both `priority="normal"` (best-effort,
+    non-time-critical; reasoning in the payment_service.py docstring —
+    `"account"` tier is reserved for driver accept/reject/suspend per
+    features.py, not a fit here). Deliberately NOT done: no in-app UI
+    surfacing of these events beyond the existing Notifications inbox row
+    every `send_push_notification` call already writes; no admin-configurable
+    threshold (20% is hardcoded, not sourced from a product spec); the 4xx at
+    booking time itself (`routes/rides/booking.py`'s `allowance_low`,
+    `services/company_booking_service.py`'s `allowance_only` check) is
+    unchanged — this is advance warning, not a removal of the block. Tests:
+    `tests/test_corporate_allowance_reset.py` (3 new),
+    `tests/test_corporate_ride_payment.py` (6 new) — all mock
+    `send_push_notification` and assert exact fire/no-fire per scenario.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

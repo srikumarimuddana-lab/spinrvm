@@ -138,6 +138,121 @@ async def test_push_opt_out_does_not_block_dispatch_safety_or_account():
         deliver.assert_awaited_once()
 
 
+async def test_push_suppressed_when_ride_updates_disabled():
+    """ACTION_ITEMS.md N9: ride_updates=false must suppress a push whose
+    data.type is in features._RIDE_UPDATE_PUSH_TYPES, even when push_enabled
+    is still true — the two toggles are independent."""
+    try:
+        import features
+    except ImportError:  # pragma: no cover
+        from backend import features  # type: ignore
+
+    deliver = AsyncMock(return_value=True)
+    with (
+        patch.object(features, "_record_inbox_notification"),
+        patch.object(features, "_deliver_push_now", deliver),
+        patch.object(
+            features.db,
+            "get_rows",
+            AsyncMock(return_value=[{"user_id": _USER["id"], "push_enabled": True, "ride_updates": False}]),
+        ),
+        patch.object(features.db, "find_one", AsyncMock()) as find_one,
+    ):
+        result = await features.send_push_notification(_USER["id"], "t", "b", data={"type": "driver_arrived"})
+
+    assert result is False
+    deliver.assert_not_awaited()
+    find_one.assert_not_awaited()
+
+
+async def test_push_not_suppressed_by_ride_updates_for_unrelated_type():
+    """ride_updates=false must not touch pushes outside the narrow ride-status
+    set (e.g. a wallet top-up notice) — only push_enabled governs those."""
+    try:
+        import features
+    except ImportError:  # pragma: no cover
+        from backend import features  # type: ignore
+
+    deliver = AsyncMock(return_value=True)
+    with (
+        patch.object(features, "_record_inbox_notification"),
+        patch.object(features, "_deliver_push_now", deliver),
+        patch.object(
+            features.db,
+            "get_rows",
+            AsyncMock(return_value=[{"user_id": _USER["id"], "push_enabled": True, "ride_updates": False}]),
+        ),
+        patch.object(
+            features.db,
+            "find_one",
+            AsyncMock(return_value={"id": _USER["id"], "fcm_token": "tok"}),
+        ),
+    ):
+        result = await features.send_push_notification(_USER["id"], "t", "b", data={"type": "wallet_topup"})
+
+    assert result is True
+    deliver.assert_awaited_once()
+
+
+async def test_push_ride_update_type_sent_when_ride_updates_enabled():
+    try:
+        import features
+    except ImportError:  # pragma: no cover
+        from backend import features  # type: ignore
+
+    deliver = AsyncMock(return_value=True)
+    with (
+        patch.object(features, "_record_inbox_notification"),
+        patch.object(features, "_deliver_push_now", deliver),
+        patch.object(
+            features.db,
+            "get_rows",
+            AsyncMock(return_value=[{"user_id": _USER["id"], "push_enabled": True, "ride_updates": True}]),
+        ),
+        patch.object(
+            features.db,
+            "find_one",
+            AsyncMock(return_value={"id": _USER["id"], "fcm_token": "tok"}),
+        ),
+    ):
+        result = await features.send_push_notification(_USER["id"], "t", "b", data={"type": "ride_started"})
+
+    assert result is True
+    deliver.assert_awaited_once()
+
+
+async def test_push_ride_updates_opt_out_does_not_block_dispatch_priority():
+    """ride_cancelled sent at priority='dispatch' (to a driver) must bypass
+    the ride_updates gate the same way it bypasses push_enabled — the
+    time_critical short-circuit runs before any preference is read."""
+    try:
+        import features
+    except ImportError:  # pragma: no cover
+        from backend import features  # type: ignore
+
+    deliver = AsyncMock(return_value=True)
+    with (
+        patch.object(features, "_record_inbox_notification"),
+        patch.object(features, "_deliver_push_now", deliver),
+        patch.object(
+            features.db,
+            "get_rows",
+            AsyncMock(return_value=[{"user_id": _USER["id"], "push_enabled": True, "ride_updates": False}]),
+        ),
+        patch.object(
+            features.db,
+            "find_one",
+            AsyncMock(return_value={"id": _USER["id"], "fcm_token": "tok"}),
+        ),
+    ):
+        result = await features.send_push_notification(
+            _USER["id"], "t", "b", data={"type": "ride_cancelled"}, priority="dispatch"
+        )
+
+    assert result is True
+    deliver.assert_awaited_once()
+
+
 async def test_push_preference_lookup_failure_fails_open():
     """A prefs-table hiccup must not start dropping pushes."""
     try:

@@ -24,7 +24,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
+    runtimeVersion: '3.0.0', // bumped from 2.0.0: SDK 57→56 migration (RN 0.86.2→0.85.3) changes every native module — 57-era binaries must never pull 56 JS over the air, and vice versa. (2.0.0 was the New Architecture break; New Arch stays ON.)
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',
@@ -193,6 +193,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 // for parameter 'bundleConfiguration'"). Building from source aligns
                 // every RN header with what expo-dev-launcher expects. The 4-arg
                 // API only lands in SDK 56; until we migrate, source build is the fix.
+                // NOW ON SDK 56: by the note above the prebuilt core should align —
+                // kept ON conservatively (cost: slower EAS builds only). Try
+                // flipping to false after the first green SDK 56 native build.
                 buildReactNativeFromSource: true,
                 // @react-native-firebase Swift pods (AppCheckCore,
                 // FirebaseCoreInternal, FirebaseCrashlytics, FirebaseSessions)

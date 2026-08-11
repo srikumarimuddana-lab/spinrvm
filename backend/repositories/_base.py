@@ -616,7 +616,7 @@ def _postgrest_or_value(value: Any) -> str:
 # `$regex`, not an operator of its own. Anything outside this set raises rather
 # than being silently ignored — see the comment in _apply_filters.
 _SUPPORTED_FILTER_OPS = frozenset(
-    {"$in", "$nin", "$gt", "$gte", "$lt", "$lte", "$ne", "$notnull", "$regex", "$options"}
+    {"$in", "$nin", "$gt", "$gte", "$lt", "$lte", "$ne", "$eq", "$notnull", "$regex", "$options"}
 )
 
 
@@ -749,6 +749,19 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 if not isinstance(v["$in"], (list, tuple)):
                     raise ValueError(f"filter {k!r}: $in expects a list/tuple, got {v['$in']!r}")
                 q = q.in_(k, [_unwrap_enum(x) for x in v["$in"]])
+            if "$eq" in v:
+                # Explicit equality, distinct from the bare `{col: value}` form
+                # below: a bare `None` value compiles to `IS NULL` (needed for
+                # nullable columns), but some columns are NOT NULL with a
+                # non-null default (e.g. `legacy_import_metadata JSONB NOT
+                # NULL DEFAULT '{}'::jsonb`) where "no data" is represented by
+                # that default value, not SQL NULL — `{col: None}` against
+                # such a column is unsatisfiable and silently matches zero
+                # rows instead of raising (found live via A26,
+                # docs/audit/2026-08-11-driver-rider-migration-audit.md).
+                # `{col: {"$eq": <value>}}` lets a caller filter on the exact
+                # value (including a dict/list, e.g. `{}`) without that trap.
+                q = q.eq(k, _unwrap_enum(v["$eq"]))
             if "$gt" in v:
                 q = q.gt(k, _unwrap_enum(v["$gt"]))
             if "$gte" in v:

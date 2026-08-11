@@ -320,8 +320,14 @@ class TestGetDriverBalance:
             if table == "rides":
                 # Honour the server-side exclusion the route now sends, so this
                 # asserts the real filter is applied rather than assuming it.
+                # A26 (docs/audit/2026-08-11-driver-rider-migration-audit.md):
+                # EXCLUDE_LEGACY_RIDES compiles to {"$eq": {}}, not a bare
+                # `None` — a bare `None` would compile to real SQL `IS NULL`,
+                # which can never match `legacy_import_metadata` (NOT NULL
+                # DEFAULT '{}'::jsonb) and would zero out every row, not just
+                # legacy ones.
                 rows = [new_ride, legacy_ride]
-                if (filters or {}).get("legacy_import_metadata", "absent") is None:
+                if (filters or {}).get("legacy_import_metadata") == {"$eq": {}}:
                     rows = [r for r in rows if not r.get("legacy_import_metadata")]
                 return rows
             if table == "payouts":

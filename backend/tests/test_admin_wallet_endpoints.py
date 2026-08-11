@@ -66,7 +66,12 @@ def _stop(patches):
 
 
 def _wallet_txn(balance_after="60.00", txn_id="txn-1"):
-    return {"id": txn_id, "balance_after": balance_after}
+    # wallet_apply_delta's real RPC row is {"transaction_id", "balance_after",
+    # "applied_delta", "deduped"} (see repositories/wallet_repo.py's
+    # docstring) — this fixture drifted to "id" at some point, silently
+    # breaking every test that reads txn["transaction_id"] the same way the
+    # real route code does. Pre-existing, unrelated to this PR's own change.
+    return {"transaction_id": txn_id, "balance_after": balance_after}
 
 
 # ---------- GET /wallet/{user_id} ----------

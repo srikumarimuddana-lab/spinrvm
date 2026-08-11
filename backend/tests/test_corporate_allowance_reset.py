@@ -338,3 +338,66 @@ async def test_reset_skips_suspended_company():
     m_wallet.assert_not_awaited()
     m_reset.assert_not_awaited()
     m_period.assert_not_awaited()
+
+
+# ── E5 kill switch: corporate_billing_enabled ──────────────────────────────
+#
+# get_app_settings is a lazy (function-local) dual import in this file --
+# see settle_corporate's identical pattern in services/payment_service.py
+# for why -- so these tests patch it at its source (settings_loader) rather
+# than as an allowance_reset module attribute.
+
+
+@pytest.mark.asyncio
+async def test_no_op_when_corporate_billing_disabled():
+    with (
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"corporate_billing_enabled": False}),
+        ),
+        patch("utils.allowance_reset.list_allowances_due_for_reset", AsyncMock()) as m_list,
+    ):
+        from utils.allowance_reset import run_allowance_reset_tick
+
+        processed = await run_allowance_reset_tick(now=date(2026, 4, 1))
+
+    assert processed == 0
+    m_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_proceeds_when_corporate_billing_key_missing():
+    """A settings dict with no corporate_billing_enabled key (legacy row)
+    must still proceed -- the flag defaults to enabled."""
+    with (
+        patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "utils.allowance_reset.list_allowances_due_for_reset",
+            AsyncMock(return_value=[]),
+        ) as m_list,
+    ):
+        from utils.allowance_reset import run_allowance_reset_tick
+
+        await run_allowance_reset_tick(now=date(2026, 4, 1))
+
+    m_list.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fails_open_on_settings_lookup_error():
+    """A settings-read error must never itself block the tick."""
+    with (
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(side_effect=RuntimeError("settings down")),
+        ),
+        patch(
+            "utils.allowance_reset.list_allowances_due_for_reset",
+            AsyncMock(return_value=[]),
+        ) as m_list,
+    ):
+        from utils.allowance_reset import run_allowance_reset_tick
+
+        await run_allowance_reset_tick(now=date(2026, 4, 1))
+
+    m_list.assert_awaited_once()

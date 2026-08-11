@@ -5014,11 +5014,18 @@ Remaining, roughly in order of user impact:
   rider-initiated ride completion sends the rider nothing while the
   driver-initiated path does (R19, `routes/rides/lifecycle.py:126`); wallet
   debits/credits, promos and loyalty tier changes have zero notification calls
-  (R31/R33/R34); scheduled rides have one reminder tier and no booking
-  confirmation (R35/R37); rider SOS sends the rider no confirmation that help
-  was alerted (R38); corporate allowance reset and exhaustion are silent, with
-  exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
-  "new device signed in" alert (R8).
+  (R31/R33/R34); ~~scheduled rides have one reminder tier and no booking
+  confirmation (R35/R37)~~ **done** — `routes/rides/booking.py::create_ride`
+  now fires a "Scheduled ride confirmed" push (`priority="normal"`, no
+  `target_app` override, matching `utils/scheduled_rides.py`'s existing
+  rider-facing scheduled-ride pushes) at the moment a deferred scheduled ride
+  is inserted, backgrounded via `_deps.spawn()` alongside this function's
+  other post-insert side effects; the pre-existing ~10-minute reminder
+  (`_send_reminder`) and driver-nudge/delay-notice tiers are unchanged; rider
+  SOS sends the rider no confirmation that help was alerted (R38); corporate
+  allowance reset and exhaustion are silent, with exhaustion surfacing only
+  as a 4xx at booking (R43/R44); and there is no "new device signed in" alert
+  (R8).
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

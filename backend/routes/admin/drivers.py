@@ -2694,49 +2694,48 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     )
 
     def _sum_by_status(*statuses: str) -> Decimal:
-        return sum(
-            (
-                _dec(p.get("amount"))
-                for p in payouts
-                if p.get("status") in statuses and p.get("payout_type") != "stripe_sync"
-            ),
-            Decimal("0"),
-        )
+        return sum((_dec(p.get("amount")) for p in payouts if p.get("status") in statuses), Decimal("0"))
 
-    # Money-out mirrors routes/drivers/earnings.py exactly: deduct EVERY
-    # payout that represents money sent or in-flight — only 'reversed' and
-    # 'failed' (money returned or never left) are excluded, so persistent
-    # intermediate statuses like 'reserved' and 'transfer_completed' (a stuck
-    # instant payout whose Transfer succeeded) still count as money-out
-    # rather than silently inflating pending_balance. An unknown/new status
-    # defaults to deducting: worst case the admin view under-states what is
-    # owed (recoverable), never invites a double payment.
+    # Two DIFFERENT questions, and conflating them is what made "Total paid
+    # out" read $0.00 for migrated drivers right after a Stripe sync:
     #
-    # payout_type='stripe_sync' rows are the one exception: legacy-app payout
-    # HISTORY materialized from Stripe transfer records
-    # (services/stripe_payout_sync_service.py). The earnings they cashed out
-    # were paid in the OLD app and are not in this DB's rides, so counting
-    # them as money-out would wrongly zero pending_balance for every migrated
-    # driver the moment "Refresh Payouts from Stripe" runs. ('legacy_import'
-    # rows still deduct — they pair with imported rides counted above.)
+    #   "What has this driver been paid?"   -> HISTORY. Includes 'stripe_sync':
+    #       those rows mirror real Stripe Transfers, real money that really
+    #       left the platform to this driver. Reporting $0 paid when Stripe
+    #       shows thousands is simply wrong.
+    #   "What does Spinr still owe them?"   -> BALANCE. Excludes 'stripe_sync':
+    #       those transfers settled earnings from the OLD app which are not in
+    #       this DB's rides, so counting them here would drive pending_balance
+    #       to zero for every migrated driver.
+    #
+    # Both sums otherwise mirror routes/drivers/earnings.py: only 'reversed'
+    # and 'failed' (money returned or never left) are excluded, so persistent
+    # intermediate statuses like 'reserved' and 'transfer_completed' (a stuck
+    # instant payout whose Transfer succeeded) still count. An unknown/new
+    # status defaults to counting as money-out: worst case the owed figure is
+    # understated (recoverable), never overstated into a double payment.
+    # ('legacy_import' offsets were dropped from `payouts` entirely above —
+    # they are synthetic, never a real transfer.)
     _not_money_out = {"reversed", "failed"}
-    money_out = sum(
-        (
-            _dec(p.get("amount"))
-            for p in payouts
-            if str(p.get("status") or "").lower() not in _not_money_out and p.get("payout_type") != "stripe_sync"
-        ),
+
+    def _is_money_out(p: dict) -> bool:
+        return str(p.get("status") or "").lower() not in _not_money_out
+
+    gross_money_out = sum((_dec(p.get("amount")) for p in payouts if _is_money_out(p)), Decimal("0"))
+    balance_money_out = sum(
+        (_dec(p.get("amount")) for p in payouts if _is_money_out(p) and p.get("payout_type") != "stripe_sync"),
         Decimal("0"),
     )
+    # stripe_sync rows are always 'completed', so they never land in flight.
     pending_in_flight = _sum_by_status("pending", "processing")
-    # Everything sent and not merely queued — completed, transfer_completed,
-    # reserved, and any future status — so the card agrees with what the
-    # driver's own balance has already deducted.
-    total_paid_out = money_out - pending_in_flight
+    # Everything actually sent — completed, transfer_completed, reserved, and
+    # any future status — minus what is still only queued.
+    total_paid_out = gross_money_out - pending_in_flight
     on_hold = _sum_by_status("failed")
 
-    # Legacy money surfaced separately so the operator still sees the full
-    # Stripe picture without it distorting the owed-balance math.
+    # The slice of total_paid_out that came from synced Stripe transfer
+    # history — an "of which" breakdown, NOT a separate bucket. Shown so an
+    # operator can tell previous-app money from Spinr-era payouts.
     legacy_stripe_transfers = sum(
         (
             _dec(p.get("amount"))
@@ -2747,9 +2746,9 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     )
 
     # Amount owed to the driver that hasn't been queued for payout yet.
-    # Includes ride earnings + bonuses - all money out, matching the
+    # Ride earnings + bonuses - balance-affecting money out, matching the
     # driver-facing balance in routes/drivers/earnings.py.
-    pending_balance = max(lifetime_earnings - money_out, Decimal("0"))
+    pending_balance = max(lifetime_earnings - balance_money_out, Decimal("0"))
 
     last_completed = next((p for p in payouts if p.get("status") == "completed"), None)
     last_failed = next((p for p in payouts if p.get("status") == "failed"), None)

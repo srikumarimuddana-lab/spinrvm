@@ -1649,10 +1649,53 @@ class TestPayoutsSummary:
             resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
         assert resp.status_code == 200, resp.text
         summary = resp.json()["summary"]
-        # Only the app-native $40 deducts; the legacy $200 is surfaced separately.
-        assert summary["total_paid_out"] == 40.0
+        # Paid-out is HISTORY: the $200 Stripe transfer really left, so it
+        # counts. Only the balance math excludes it.
+        assert summary["total_paid_out"] == 240.0
         assert summary["legacy_stripe_transfers"] == 200.0
+        # 50 earned - 40 app-native paid = 10 still owed; the legacy $200
+        # settled old-app earnings that are not in this DB's rides.
         assert summary["pending_balance"] == 10.0
+
+    def test_paid_out_not_zeroed_for_fully_migrated_driver(self, test_client, super_admin_override):
+        """Regression: a migrated driver whose entire payout history is synced
+        Stripe transfers showed 'Total paid out: $0.00' right after the
+        Refresh-from-Stripe button ran, because the stripe_sync exclusion that
+        protects pending_balance was also applied to the paid-out figure.
+        Those rows mirror real Stripe Transfers — real money that left."""
+
+        def rows(table, filters=None, **kwargs):
+            if table == "payouts":
+                return [
+                    {
+                        "id": "stripe-sync-tr_1",
+                        "amount": "200.00",
+                        "status": "completed",
+                        "payout_type": "stripe_sync",
+                        "created_at": "2025-03-01T00:00:00Z",
+                    },
+                    {
+                        "id": "stripe-sync-tr_2",
+                        "amount": "150.00",
+                        "status": "completed",
+                        "payout_type": "stripe_sync",
+                        "created_at": "2025-04-01T00:00:00Z",
+                    },
+                ]
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["summary"]
+        assert summary["total_paid_out"] == 350.0
+        assert summary["legacy_stripe_transfers"] == 350.0
+        # No Spinr rides, so nothing is owed — but that must come from having
+        # no earnings, not from the payouts being invisible.
+        assert summary["pending_balance"] == 0.0
 
     def test_stuck_intermediate_statuses_still_count_as_money_out(self, test_client, super_admin_override):
         """'reserved' and 'transfer_completed' are persistent statuses (an

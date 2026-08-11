@@ -1980,8 +1980,10 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     label="Total paid out"
                     value={fmtMoney(summary.total_paid_out)}
                     tone="emerald"
+                    // legacy_stripe_transfers is a slice OF this total, not an
+                    // addition to it — say "incl.", never "+".
                     sub={(summary.legacy_stripe_transfers ?? 0) > 0
-                        ? `+ ${fmtMoney(summary.legacy_stripe_transfers ?? 0)} legacy Stripe transfers`
+                        ? `${payouts.filter(p => p.status === "completed").length} payouts · incl. ${fmtMoney(summary.legacy_stripe_transfers ?? 0)} synced from Stripe`
                         : `${payouts.filter(p => p.status === "completed").length} completed payouts`}
                 />
                 <PayoutMetric

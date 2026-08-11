@@ -939,7 +939,7 @@ function DriverDashboard() {
           }
           isLoading={false}
           onAccept={() => acceptRide(incomingRide.ride_id)}
-          onDecline={() => declineRide(incomingRide.ride_id)}
+          onDecline={(reason) => declineRide(incomingRide.ride_id, reason)}
         />
       )}
       {(rideState === 'navigating_to_pickup' ||

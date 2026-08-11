@@ -306,6 +306,9 @@ export interface DriverPayoutSummary {
         pending_balance: number;
         on_hold: number;
         rides_count: number;
+        /** Completed rides imported from the previous app, excluded from
+         *  lifetime_earnings. -1 means the count was unavailable. */
+        imported_rides_excluded?: number;
         active_days_30d: number;
         last_payout: {
             id: string;
@@ -496,6 +499,9 @@ export interface DriverStatement {
     totals: {
         earnings?: Record<string, string>;
         payouts_total?: string;
+        /** Era split (statements stored before it existed lack these). */
+        payouts_spinr_total?: string | null;
+        payouts_previous_app_total?: string | null;
         trips?: number;
     } | null;
     email_sent_at: string | null;

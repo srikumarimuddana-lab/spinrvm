@@ -233,7 +233,16 @@ export function DriverStatementsPanel({ driverId, driverName, notify }: DriverSt
                                         {s.totals?.earnings?.total && (
                                             <span className="text-[10px] text-muted-foreground tabular-nums">
                                                 ${s.totals.earnings.total} earned
-                                                {s.totals.payouts_total ? ` · $${s.totals.payouts_total} paid out` : ""}
+                                                {/* One era per number: previous-app money gets its
+                                                    own label instead of inflating "paid out".
+                                                    Rows stored before the split fall back to the
+                                                    gross figure. */}
+                                                {s.totals.payouts_previous_app_total != null && parseFloat(s.totals.payouts_previous_app_total) > 0 ? (
+                                                    <>
+                                                        {` · $${s.totals.payouts_spinr_total ?? "0.00"} paid out`}
+                                                        {` · $${s.totals.payouts_previous_app_total} previous app`}
+                                                    </>
+                                                ) : s.totals.payouts_total ? ` · $${s.totals.payouts_total} paid out` : ""}
                                             </span>
                                         )}
                                     </div>

@@ -35,6 +35,7 @@ from ._deps import (  # noqa: F401
 )
 from ._shared import (  # noqa: F401
     RideOTPRequest,
+    check_driver_documents_current,
 )
 
 router = APIRouter()
@@ -59,6 +60,28 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
             action_hint="Contact support",
         )
+
+    # Mid-session document-expiry re-check (P1 #12): go_online fail-closes on
+    # expired license/insurance/inspection/CRC-VSC documents, but that's only
+    # enforced again by the 12h document_expiry background sweep — a document
+    # that expires while the driver is already online could otherwise keep
+    # accepting NEW rides for up to 12h, a regulatory + insurance-liability
+    # gap (regulatory-sk.md: "re-check cadence: on expiry"). Uses the driver
+    # row already loaded above plus one indexed driver_documents lookup — see
+    # _shared.check_driver_documents_current for the scope/cost rationale.
+    # Fails CLOSED on a check error: this is a regulatory eligibility gate on
+    # a liability-bearing action, same posture as go_online's own checks —
+    # a DB hiccup must never silently wave an accept through.
+    try:
+        await check_driver_documents_current(driver)
+    except SpinrException:
+        raise
+    except Exception:
+        logger.error("accept_ride: document expiry re-check failed for driver=%s", driver["id"], exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Could not verify your documents right now. Please try again.",
+        ) from None
 
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")

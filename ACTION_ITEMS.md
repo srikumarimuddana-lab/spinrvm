@@ -5123,15 +5123,37 @@ Remaining, roughly in order of user impact:
   additionally now **escapes** admin-authored free text, which the previous
   bare `<h2>`/`<p>` interpolation did not. See
   `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
-- [ ] **N17. Product name in email copy is still literal "Spinr"** — "Open the
-  Spinr driver app", "your Spinr wallet", "— The Spinr Team". Deliberate, not
-  an oversight: the `company_name` setting holds the *legal entity* name, and
-  "Open the Spinr Technologies Inc. driver app" reads badly, so settings drive
-  the footer identity, mailing address, logo, logo alt text and sentence-final
-  legal-name usage only. A rebrand of the product name itself needs a separate
-  `company_app_name` setting plus a copy sweep across `utils/rider_emails.py`,
-  `utils/driver_status_notifications.py`, `utils/document_expiry.py` and
-  `routes/drivers/tax_exports.py`. Worth doing before, not after, any rename.
+- [x] **N17 closed**: added `company_app_name` (default `"Spinr"`) as a new,
+  independent setting alongside `company_name` (the legal entity) —
+  `schemas.AppSettings.company_app_name`, wired through
+  `routes/admin/settings.py`'s `SettingsUpdateRequest` the same way
+  `company_logo_url` etc. are, and surfaced on the admin Settings page →
+  Company Info tab (new "App Name" field next to "Company Name", each with a
+  help line pointing at the other). `utils/company_details.CompanyDetails`
+  gained an `app_name` field, resolved in `load_company_details()` from
+  `company_app_name` with the same "falls back to Spinr" rule as every other
+  field there. Swept all four named files to interpolate
+  `company.app_name`/`{app_name}` instead of the literal word "Spinr" in
+  BODY copy (subjects, "Open the ... app", "your ... wallet", "— The ...
+  Team", the DSAR README/HTML/link-email copy) — footer/mailing-address/logo
+  usages correctly stayed on `company_name` via the existing
+  `company_details.py` plumbing, untouched.
+  `utils/driver_status_notifications.py` and `utils/document_expiry.py`
+  build their next-step copy as static/module-level strings ahead of the
+  async settings load, so those two use a `{app_name}` placeholder
+  substituted at send time (mirroring the existing `{support}` placeholder
+  pattern already in `driver_status_notifications.py`) rather than an
+  f-string. Tests: `tests/test_company_details.py` (schema default +
+  independence from `company_name`), `tests/test_admin_settings_company_app_name.py`
+  (request-model/loader wiring, mirroring `test_admin_settings_company_logo.py`),
+  and one fallback+configured-value test per swept file
+  (`tests/test_rider_emails_app_name.py`,
+  `tests/test_driver_status_email_app_name.py`,
+  `tests/test_document_expiry_app_name.py`,
+  `tests/test_tax_exports_app_name.py`) — 61 new tests, all passing, plus the
+  181 pre-existing tests across these files' own test suites re-verified
+  green. Admin-dashboard: `npm run build` run and passed (exit 0), not just
+  `tsc`/dev server, per CLAUDE.md's explicit requirement.
 - [ ] **N11c. Delete the pre-retrofit receipt/invoice shell and its flag** —
   once the branded version has been seen in real inboxes. Two shells and a
   switch are a real carrying cost; both `_LEGACY_*` constants are commented

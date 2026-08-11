@@ -60,6 +60,13 @@ class CompanyDetails(NamedTuple):
     support_email: str
     #: Absolute URL of the logo to render in the header.
     logo_url: str
+    #: Product/brand name for email BODY copy ("Open the {app_name} driver
+    #: app", "your {app_name} wallet"), independent of the legal entity
+    #: ``name`` above. Falls back to "Spinr" — see ``company_app_name`` in
+    #: ``schemas.AppSettings`` and ACTION_ITEMS.md N17. Defaulted (rather than
+    #: required) so existing keyword-only ``CompanyDetails(...)`` test
+    #: fixtures built before this field existed keep constructing.
+    app_name: str = "Spinr"
 
     @property
     def name_sentence(self) -> str:
@@ -150,6 +157,7 @@ async def load_company_details() -> CompanyDetails:
         settings = {}
 
     name = _coalesce(settings, "company_name") or "Spinr"
+    app_name = _coalesce(settings, "company_app_name") or "Spinr"
     address = _postal_address(settings)
     # Only claim an assembled identity line when an address is actually
     # configured; otherwise keep the shipped constant, which already carries
@@ -176,6 +184,7 @@ async def load_company_details() -> CompanyDetails:
 
     return CompanyDetails(
         name=name,
+        app_name=app_name,
         identity_line=identity_line,
         address=address,
         contact_line=contact_line,

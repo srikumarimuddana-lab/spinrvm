@@ -606,3 +606,21 @@ export const getDriverStats = (params?: {
 export const updateDriver = (id: string, data: Record<string, any>) =>
     request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
 
+export async function generateDecalPdf(driverIds: string[]): Promise<Blob> {
+    const { useAuthStore } = await import("@/store/authStore");
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/drivers/decals/generate-pdf", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || body.message || res.statusText);
+    }
+    return res.blob();
+}
+

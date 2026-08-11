@@ -53,6 +53,79 @@ def _money_str(v: Decimal) -> str:
     return f"{_round(v):.2f}"
 
 
+# R44 (ACTION_ITEMS.md N15): a corporate rider previously learned their
+# allowance ran out only from a 4xx at their NEXT booking attempt
+# (routes/rides/booking.py's allowance_low / company_booking_service.py's
+# allowed_source == "allowance_only" checks). 20% is a conventional
+# "running low" line — same order of magnitude as the personal-wallet
+# low-balance nudge's own threshold pattern in utils/corporate_low_balance.py
+# — chosen here as a first cut; not sourced from a product spec.
+_ALLOWANCE_LOW_THRESHOLD_RATIO = Decimal("0.20")
+
+
+async def _notify_allowance_threshold(
+    *,
+    membership: Dict[str, Any],
+    allowance_amount: Decimal,
+    remaining_before: Decimal,
+    remaining_after: Decimal,
+) -> None:
+    """Best-effort push when THIS ride debit crosses the member's allowance
+    from "has budget" down through the low-balance line, or down to fully
+    exhausted (R44). Deliberately does not touch the debit math above — it
+    only reads the before/after remaining figures the settlement already
+    computed.
+
+    Rate-limiting note: no dedicated "already notified" column/flag was
+    added. Comparing remaining_before vs remaining_after of *this single
+    debit* is enough to fire "just exhausted" at most once per exhaustion
+    event — once remaining_after <= 0, the next ride's remaining_before is
+    already <= 0 too, so the crossing condition (remaining_before > 0 AND
+    remaining_after <= 0) does not re-fire on every subsequent ride charged
+    against the exhausted allowance. The same crossing logic bounds the
+    "running low" push to firing once per dip below the threshold. This
+    mirrors the allowance_reset loop's own no-extra-state, crossing-based
+    replay safety (see utils/allowance_reset.py) rather than introducing a
+    new rate-limit column purely for notification bookkeeping.
+
+    priority="normal": unlike a ride offer (expires in ~15s) this is not
+    time-critical, and — per features.py's send_push_notification docstring
+    — "account" tier is reserved for a driver being rejected/suspended/
+    banned (told why they can no longer earn), a materially different
+    situation from a rider allowance simply running low or out for the
+    period. A rider whose company enforces allowance_only will still see the
+    4xx with its own in-context error at their next booking attempt; this
+    push is only the advance heads-up, so best-effort delivery is
+    appropriate.
+    """
+    user_id = membership.get("user_id")
+    if not user_id or allowance_amount <= 0:
+        return
+    if remaining_before > 0 and remaining_after <= 0:
+        await send_push_notification(
+            user_id,
+            "Corporate ride allowance used up",
+            "Your company ride allowance is fully used for this period. "
+            "Depending on your company's policy, future rides may be "
+            "declined or charged to another payment method.",
+            data={"type": "corporate_allowance_exhausted"},
+            priority="normal",
+            target_app="rider",
+        )
+        return
+    low_before = (remaining_before / allowance_amount) > _ALLOWANCE_LOW_THRESHOLD_RATIO
+    low_after = (remaining_after / allowance_amount) <= _ALLOWANCE_LOW_THRESHOLD_RATIO
+    if low_before and low_after and remaining_after > 0:
+        await send_push_notification(
+            user_id,
+            "Corporate ride allowance running low",
+            f"You have ${_money_str(remaining_after)} left on your company ride allowance for this period.",
+            data={"type": "corporate_allowance_low"},
+            priority="normal",
+            target_app="rider",
+        )
+
+
 async def _refuse_unconfigured_settlement(ride_id: str, context: str) -> "PaymentResult":
     """Production guard for the Stripe-unconfigured settlement paths.
 
@@ -712,6 +785,21 @@ async def settle_corporate(
             **_tip_ride_update(ride, tip_amount),
         },
     )
+
+    # R44 (ACTION_ITEMS.md N15): advance warning / exhaustion notice. Never
+    # blocks or alters settlement (already committed above) — a push failure
+    # here must not turn a successful ride payment into an error response.
+    if allowance_applied and allowance.get("type") != "unlimited":
+        try:
+            await _notify_allowance_threshold(
+                membership=membership,
+                allowance_amount=_d(str(allowance.get("amount") or 0)),
+                remaining_before=remaining,
+                remaining_after=remaining - allowance_debit,
+            )
+        except Exception as _notify_err:
+            logger.debug(f"Allowance threshold push to rider failed: {_notify_err}")
+
     return PaymentResult(success=True, charged_amount=_money_str(total_charge))
 
 

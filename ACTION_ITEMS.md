@@ -5094,8 +5094,32 @@ Remaining, roughly in order of user impact:
     `backend/tests/test_p2_sos.py::TestTriggerEmergency::test_rider_sos_confirmation_push_sent_to_triggering_rider`
     and `..._test_driver_sos_confirmation_push_targets_driver_app`, plus the
     26 pre-existing SOS tests re-run green.
-    R43/R44 and R8 remain open; this checkbox stays `[ ]` until all of them
-    are.
+  - [x] **R43/R44 closed** (2026-08-11): `utils/allowance_reset.py` now pushes
+    the member a "your allowance has reset" notice right after a successful
+    non-rollover reset (rollover allowances don't fire — `used` is untouched
+    by that reset, so nothing changed for the rider); rate-limited for free
+    by the loop's existing period-CAS claim, no new column. `services/
+    payment_service.py::settle_corporate` now pushes "running low" (crosses
+    below 20% remaining) or "allowance used up" (crosses to 0) exactly on
+    the ride debit that causes the crossing — comparing this debit's own
+    remaining-before/after is enough to fire at most once per crossing, no
+    new rate-limit column either. Both `priority="normal"` (best-effort,
+    non-time-critical; reasoning in the payment_service.py docstring —
+    `"account"` tier is reserved for driver accept/reject/suspend per
+    features.py, not a fit here). Deliberately NOT done: no in-app UI
+    surfacing of these events beyond the existing Notifications inbox row
+    every `send_push_notification` call already writes; no admin-configurable
+    threshold (20% is hardcoded, not sourced from a product spec); the 4xx at
+    booking time itself (`routes/rides/booking.py`'s `allowance_low`,
+    `services/company_booking_service.py`'s `allowance_only` check) is
+    unchanged — this is advance warning, not a removal of the block. Tests:
+    `tests/test_corporate_allowance_reset.py` (3 new),
+    `tests/test_corporate_ride_payment.py` (6 new) — all mock
+    `send_push_notification` and assert exact fire/no-fire per scenario. Full
+    Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-n15-r43-r44-corporate-allowance-notify.md`.
+    Only R8 (new-device-signed-in alert) remains open under N15; this
+    checkbox stays `[ ]` until that's done too.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

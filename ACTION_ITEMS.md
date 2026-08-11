@@ -5230,6 +5230,59 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   flagged for a human with repo-admin access).
 - **Files:** `.github/workflows/mobile-bundle-smoke.yml` (new).
 
+### C18. GitHub Actions steps use mutable version tags repo-wide, not pinned commit SHAs — Semgrep/GHAS flags it on every new workflow line
+- [ ] **Status:** open — found 2026-08-11, via GitHub Advanced Security /
+  Semgrep OSS comments on PR #3668 (6 findings, rule
+  `yaml.github-actions.security.github-actions-mutable-action-tag`) on the
+  new `mobile-bundle-smoke.yml` workflow added by that PR. Confirmed real:
+  every `uses: actions/checkout@v7` / `actions/setup-node@v7` /
+  `actions/cache@v6` line resolves a floating major-version tag, which the
+  action owner (or anyone who compromises their account) can silently
+  repoint to different code — the exact supply-chain mechanism behind the
+  real-world `tj-actions/changed-files` and `reviewdog/action-setup`
+  incidents Semgrep's rule description cites.
+- **Why not fixed in this PR:** two reasons, not one.
+  1. **Scope/consistency** — this is not specific to the new file. Repo-wide
+     grep: **154 unpinned `uses:` references across 23 of the 24 files** in
+     `.github/workflows/`. Pinning only the 6 lines Semgrep happened to flag
+     (because they're new, not because they're uniquely risky) would leave
+     the actual exposure — the other 148 references — untouched, while
+     making this one file inconsistent with the rest of the repo's own
+     convention.
+  2. **Verification reliability** — pinning to a SHA means hardcoding a
+     40-character string that, if wrong, breaks the workflow outright (a
+     bad SHA doesn't degrade gracefully, it fails to resolve the action at
+     all). This session has no reliable way to confirm one: this repo's
+     GitHub access is scoped to `srikumarimuddana-lab/spinrvm` only — a
+     direct API check against `api.github.com/repos/actions/checkout/...`
+     is rejected at the proxy ("GitHub access to this repository is not
+     enabled for this session"). The only alternative available here was
+     scraping a rendered release page through a small-model web-fetch tool,
+     which is exactly the kind of source you should *not* trust for a
+     character-exact hash — a transposed digit is invisible until CI runs.
+     Guessing was rejected on purpose, consistent with this repo's own
+     "verify a newer/patched version actually works before pinning it"
+     pre-merge gate (`CLAUDE.md` § Pre-merge release gates, item 8) — that
+     principle applies just as much to *what you pin to* as to *what
+     version you bump to*.
+- **What this needs:** a session/operator with real `gh`/authenticated
+  GitHub API access (or Dependabot's own SHA-pinning update mode, if
+  enabled) to resolve all 154 references to verified commit SHAs in one
+  sweep, plus a comment noting the human-readable version next to each pin
+  (`uses: actions/checkout@<sha> # v7`) so future readers don't have to
+  resolve the SHA back to a version themselves.
+- **Risk if left as-is:** repo-wide supply-chain exposure to a compromised
+  or repointed Action tag — not unique to CI/CD pipelines in general, but
+  worth weighing against this repo's existing Trivy/cosign image-signing
+  investment elsewhere in `ci.yml`, which addresses container supply chain
+  but not this GitHub-Actions-level one.
+- **Effort estimate:** small per-reference (find current SHA, replace,
+  comment) but multiplies across 154 references in 23 files — realistically
+  a half-day sweep plus a follow-up PR review pass, not a quick fix.
+- **Files:** all of `.github/workflows/*.yml` except the one file (if any)
+  that's already fully pinned — not individually enumerated here; run the
+  grep in this entry's own investigation to get the current list.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

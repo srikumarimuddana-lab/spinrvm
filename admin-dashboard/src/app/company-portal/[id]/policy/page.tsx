@@ -262,7 +262,7 @@ export default function PolicyPage() {
                                 </div>
                             ))}
                             {invalidWindow && (
-                                <p className="text-xs text-red-600">
+                                <p className="text-xs text-destructive">
                                     Every window end must be after start.
                                 </p>
                             )}

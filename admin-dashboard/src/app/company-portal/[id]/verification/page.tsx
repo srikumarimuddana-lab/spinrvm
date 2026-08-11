@@ -164,7 +164,7 @@ export default function VerificationPage() {
                             <CardContent className="space-y-3 text-sm">
                                 <p>We couldn&apos;t approve your documents yet.</p>
                                 {kyb.review_note && (
-                                    <p className="rounded bg-red-50 p-3 text-red-800">
+                                    <p className="rounded bg-destructive/10 p-3 text-destructive">
                                         Reviewer note: {kyb.review_note}
                                     </p>
                                 )}
@@ -234,12 +234,12 @@ export default function VerificationPage() {
                     )}
 
                     {notice && (
-                        <p className="rounded bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>
+                        <p className="rounded bg-emerald-50 dark:bg-emerald-900/20 p-3 text-sm text-emerald-800 dark:text-emerald-300">{notice}</p>
                     )}
                 </>
             )}
 
-            {error && <p className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+            {error && <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
         </div>
     );
 }

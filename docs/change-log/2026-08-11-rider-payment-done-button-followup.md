@@ -104,3 +104,31 @@ involved.
   `eas.json` use). If they run a `test`-channel build, that channel received
   no OTA today; a `workflow_dispatch` of `eas-build.yml` with profile
   `test` would be needed.
+
+## 11. Addendum (same day): iOS re-report explained — TestFlight is on the `production` channel, which today's OTAs never targeted
+
+The reporter retested on iOS after the OTAs above and still saw the dead
+button. Resolved by reading the EAS Native Build dispatch history:
+
+- iOS live-testing installs come from TestFlight (`eas.json` `production`
+  profile, `distribution: store`, channel **production**). Push-triggered
+  OTA publishes go to **preview only** — so no iOS TestFlight device has
+  ever received an OTA'd JS fix, today's included.
+- The installed rider iOS binary (buildNumber ≤ 15) predates the fix: the
+  2026-08-11 20:42 UTC dispatch (run 31534253986) was the first rider-iOS
+  native build since the fix merged, incrementing buildNumber 15 → 16.
+- That dispatch built **rider iOS 2.0.0 (16) from `main` @ `f196671`
+  (fix embedded), `--auto-submit` to TestFlight** — EAS build
+  `ea6b3a55-dc3c-45da-ad9a-8c3994a60e52`, queued 20:44 UTC. Confirming step
+  for iOS: install **2.0.0 (16)** from TestFlight once processed, retest.
+- A parallel rider **Android preview** APK (versionCode 7, EAS build
+  `2f6dae34-e70a-47d7-af32-abdc9f211084`) was queued 20:20 UTC; existing
+  Android preview installs also pick up the fix via the 19:00/19:56 UTC
+  OTAs after two relaunches.
+
+**Standing gap (ops):** JS-only fixes shipped by the push-triggered OTA
+workflow reach `preview`-channel devices only. TestFlight (production-
+channel) testers receive nothing until someone either dispatches the
+"EAS Mobile Update" workflow with profile `production` or cuts a new
+native build. Until that's decided deliberately, every "fixed but still
+broken on my iPhone" report should be checked against this split first.

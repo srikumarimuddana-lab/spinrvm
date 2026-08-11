@@ -5626,6 +5626,59 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `rider-app/package.json`, `rider-app/yarn.lock`, `driver-app/package.json`,
   `driver-app/yarn.lock` (durable fix).
 
+### C20. SDK 57 alignment follow-ups that are EAS-build-gated (from the 2026-08-11 dependency-alignment pass — see `docs/change-log/2026-08-11-sdk57-dependency-alignment.md`)
+- [ ] **Status:** OPEN — the alignment branch (`claude/sdk-55-57-upgrade-jrz0iv`)
+  brought both apps to SDK 57's expected dependency versions and verified with
+  tsc + jest + production `expo export` in both apps, but this environment
+  cannot run EAS/native builds. Each sub-item below needs one EAS build (or a
+  release-build device test) to close; none should be batched blind with the
+  others — one variable per build, per `docs/dependency-upgrade-runbook.md`.
+- [ ] **First EAS Android + iOS build off the alignment branch** — proves the
+  native side of RNGH 2.32 / safe-area 5.7 / netinfo 12 / datetimepicker 9 /
+  rider picker removals (a green `expo export` is NOT a green `eas build` —
+  C17/C19 lesson). Then a device smoke: gestures (bottom sheets, map pan,
+  hold-to-confirm SOS), safe-area insets, offline banner, driver onboarding
+  date picker, and confirm EAS Observe app-start metrics resume (the
+  `ObserveRoot` fix in `driver-app/app/_layout.tsx`).
+- [ ] **Try removing `ios.buildReactNativeFromSource: true`** (both
+  app.config.ts): the expo-dev-launcher header mismatch it worked around was
+  fixed upstream in SDK 56. One EAS iOS build with it off; if green, also
+  retire `plugins/withFirebaseNonModularHeaders.js` in the same test (it
+  exists to support the source-build + static-frameworks combo). Large iOS
+  build-time win.
+- [ ] **Try removing `plugins/withForceCompileSdk.js` and
+  `plugins/withKspVersion.js`** — their documented removal criteria ("Expo SDK
+  ≥56 ships compileSdk 36 default"; "expo-updates ksp mapping fixed") are now
+  testable on 57. One EAS Android build with them disabled. See the
+  removal-criteria table in `docs/android-build-strategy.md`.
+- [ ] **@stripe/stripe-react-native 0.63.0 → 0.64.0** (rider; SDK 57 expects
+  0.64.0) — HELD on 2026-08-11 by explicit user decision (payments surface
+  mid-live-testing + Option C Kotlin-toolchain entanglement). Bump criteria:
+  check 0.64.0's Kotlin/Stripe-Android versions against Option C first, EAS
+  Android + iOS builds, `spinr-money-auditor` review, manual payment smoke
+  (add card, PaymentSheet, ride payment, tip, Google Pay). Until then
+  `expo install --check` will keep flagging it — that residue is intentional.
+- [ ] **Try re-enabling Metro `unstable_enablePackageExports`** (both
+  metro.config.js): @sentry/react-native now resolves ≥7.11 which may fix the
+  frozen-ESM-namespace crash — but that crash was RELEASE-BUILD-ONLY under
+  Hermes, so this needs a release-build device test + the bundle-diff check
+  documented in the metro comment. Not flippable on tsc/jest evidence.
+- [ ] **expo-speech-recognition 57.x watch** (rider): no 57-line release
+  exists (npm latest = 56.0.1, verified 2026-08-11). Works on 57 today;
+  re-check each SDK cycle and bump when the community package catches up.
+- [ ] **Mobile lint debt under the SDK 57 ruleset**: rider 379 problems (176
+  errors) after eslint-config-expo ~57.0.1; driver 240 problems (105 errors)
+  on the config it already had. Mobile lint is not a CI gate (ci.yml lints
+  only frontend/ + admin-dashboard/), so this is cleanup debt, not a red
+  pipeline — but the new react-hooks 7 "refs during render" errors are the
+  kind that become real bugs; burn down by surface, don't bulk-disable rules.
+- [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
+  ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
+  SDK across the fleet, both still gated OFF on Android (hidden-API hang, see
+  `docs/android-build-strategy.md` runtime section). Converge on one major
+  (likely 3.x) next time either app cuts a binary, and re-test the Android 16
+  hang before any re-enable.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

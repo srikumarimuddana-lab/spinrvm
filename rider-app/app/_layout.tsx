@@ -926,6 +926,7 @@ function RootLayoutInner({
             <Stack.Screen name="privacy-settings" />
             <Stack.Screen name="accessibility" />
             <Stack.Screen name="settings" />
+            <Stack.Screen name="verify-email" />
             <Stack.Screen name="ride-details" />
             <Stack.Screen name="work-profile" />
             <Stack.Screen name="work-allowance-request" />

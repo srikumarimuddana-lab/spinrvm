@@ -466,6 +466,16 @@ function PayoutScreen() {
                             </Text>
                         </View>
                     </View>
+
+                    {/* Migrated drivers: name the previous-app money instead of
+                        letting "Total Earnings $0.00" sit unexplained above a
+                        payment history full of transfers they remember. */}
+                    {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (
+                        <Text style={styles.previousAppNote}>
+                            Payments from the previous Spinr app ({formatCurrency(driverBalance!.previous_app_paid_total!)})
+                            stay in your payment history, but aren't part of your Spinr earnings above.
+                        </Text>
+                    )}
                 </View>
 
                 {/* Bonuses & Rewards — quest/referral payable earnings, included in balance */}
@@ -879,6 +889,12 @@ function createStyles(colors: ThemeColors) {
             paddingTop: 16,
             borderTopWidth: 1,
             borderTopColor: 'rgba(255,255,255,0.2)',
+        },
+        previousAppNote: {
+            marginTop: 12,
+            fontSize: 11,
+            lineHeight: 15,
+            color: 'rgba(255,255,255,0.75)',
         },
         balanceItem: { flex: 1, alignItems: 'center' },
         balanceItemLabel: {

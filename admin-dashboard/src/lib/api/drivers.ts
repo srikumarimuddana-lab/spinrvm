@@ -499,6 +499,9 @@ export interface DriverStatement {
     totals: {
         earnings?: Record<string, string>;
         payouts_total?: string;
+        /** Era split (statements stored before it existed lack these). */
+        payouts_spinr_total?: string | null;
+        payouts_previous_app_total?: string | null;
         trips?: number;
     } | null;
     email_sent_at: string | null;

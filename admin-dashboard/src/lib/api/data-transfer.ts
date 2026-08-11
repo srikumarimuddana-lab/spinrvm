@@ -296,7 +296,7 @@ const COMPLIANCE_FILE_EXTENSIONS: Record<ComplianceReportFormat, string> = {
 /** Shared GET-and-download for the Compliance & Tax Reporting endpoints —
  *  both return a branded PDF/CSV/Excel/Word file, not JSON, so they use a
  *  raw authed fetch like generateSgiForm rather than request<T>. */
-async function downloadComplianceReport(path: string, fallbackFilename: string): Promise<Blob> {
+async function downloadComplianceReport(path: string): Promise<Blob> {
     const store = useAuthStore.getState();
     const headers: Record<string, string> = {};
     if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
@@ -334,10 +334,7 @@ export async function downloadGstPstRemittance(
     dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
-    const blob = await downloadComplianceReport(
-        `/api/admin/compliance/gst-pst-remittance?${sp.toString()}`,
-        "gst_pst_remittance",
-    );
+    const blob = await downloadComplianceReport(`/api/admin/compliance/gst-pst-remittance?${sp.toString()}`);
     return { blob, filename: `gst_pst_remittance.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
@@ -352,7 +349,7 @@ export async function downloadDriverRoster(
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ format });
     if (status) sp.set("status", status);
-    const blob = await downloadComplianceReport(`/api/admin/compliance/driver-roster?${sp.toString()}`, "driver_roster");
+    const blob = await downloadComplianceReport(`/api/admin/compliance/driver-roster?${sp.toString()}`);
     return { blob, filename: `driver_roster.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
@@ -365,7 +362,7 @@ export async function downloadT4aFilerHandoff(
     format: ComplianceReportFormat,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ year: String(year), format });
-    const blob = await downloadComplianceReport(`/api/admin/compliance/t4a-filer-handoff?${sp.toString()}`, "t4a_filer_handoff");
+    const blob = await downloadComplianceReport(`/api/admin/compliance/t4a-filer-handoff?${sp.toString()}`);
     return { blob, filename: `t4a_filer_handoff_${year}.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
@@ -378,10 +375,7 @@ export async function downloadInsuranceBillingSgi(
     dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
-    const blob = await downloadComplianceReport(
-        `/api/admin/compliance/insurance-billing-sgi?${sp.toString()}`,
-        "insurance_billing_sgi",
-    );
+    const blob = await downloadComplianceReport(`/api/admin/compliance/insurance-billing-sgi?${sp.toString()}`);
     return { blob, filename: `insurance_billing_sgi.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
@@ -396,7 +390,6 @@ export async function downloadInsuranceBillingKnightArcher(
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
     const blob = await downloadComplianceReport(
         `/api/admin/compliance/insurance-billing-knight-archer?${sp.toString()}`,
-        "insurance_billing_knight_archer",
     );
     return { blob, filename: `insurance_billing_knight_archer.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
@@ -409,7 +402,7 @@ export async function downloadAirportTrips(
     dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
-    const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`, "airport_trips");
+    const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`);
     return { blob, filename: `airport_trips.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 

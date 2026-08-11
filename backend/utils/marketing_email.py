@@ -28,20 +28,17 @@ logger = logging.getLogger(__name__)
 try:
     from ..core.config import settings as _cfg
     from ..services import marketing_consent
+    from ..utils.address_format import coalesce_setting as _coalesce
+    from ..utils.address_format import postal_address as _postal_address
     from ..utils.email_provider import send_transactional_email
     from ..utils.unsubscribe_token import sign_unsubscribe_token
 except ImportError:  # pragma: no cover - direct module imports in tests
     from core.config import settings as _cfg  # type: ignore
     from services import marketing_consent  # type: ignore
+    from utils.address_format import coalesce_setting as _coalesce  # type: ignore
+    from utils.address_format import postal_address as _postal_address  # type: ignore
     from utils.email_provider import send_transactional_email  # type: ignore
     from utils.unsubscribe_token import sign_unsubscribe_token  # type: ignore
-
-
-def _coalesce(settings: dict, key: str) -> str:
-    """Settings value as a clean string. The settings loader can surface a DB
-    NULL as Python None (it overrides the schema default), so a bare
-    settings.get() could render 'None' in the footer — coalesce to ''."""
-    return (settings.get(key) or "").strip()
 
 
 def unsubscribe_url(user_id: str) -> str:
@@ -49,17 +46,6 @@ def unsubscribe_url(user_id: str) -> str:
     token = sign_unsubscribe_token(user_id=user_id, channel="email")
     base = (_cfg.PUBLIC_API_BASE_URL or "").rstrip("/")
     return f"{base}/api/v1/marketing/unsubscribe?token={token}"
-
-
-def _postal_address(settings: dict) -> str:
-    """CASL-required physical mailing address, assembled from configured parts.
-    Falls back gracefully when a part is blank."""
-    street = _coalesce(settings, "company_address")
-    city = _coalesce(settings, "company_city")
-    province = _coalesce(settings, "company_province")
-    postal = _coalesce(settings, "company_postal_code")
-    locality = " ".join(p for p in (city, province, postal) if p)
-    return ", ".join(p for p in (street, locality) if p)
 
 
 def build_footer_html(settings: dict, unsub_url: str) -> str:

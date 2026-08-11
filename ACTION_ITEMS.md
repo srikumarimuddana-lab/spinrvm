@@ -5056,18 +5056,53 @@ Remaining, roughly in order of user impact:
   path). Each got a regression test asserting `target_app="rider"` is passed
   (verified to fail if reverted). ~19 call sites remain, inventoried in
   `docs/change-log/2026-08-11-n10-rider-push-target-app-batch1.md`'s
-  "Remaining scope" section — the clearest next batch is
-  `routes/disputes.py:98,308` and
-  `services/guest_notification_service.py:167`, all confirmed unambiguously
-  rider-directed but not yet fixed. `routes/rides/cancellation.py` and
-  `utils/receipt_email.py` were excluded from this sweep entirely (owned by
-  parallel N5/N8 sessions this run) and still need their own inventory pass.
-- [ ] **N16. Consolidate the two copies of the company-address assembly** —
-  `utils/company_details.py` and `utils/marketing_email.py` both carry
-  `_coalesce` / `_postal_address`. Deliberately not merged: marketing's copy
-  sits on a CASL consent-critical path and produces a legally-required footer,
-  so touching it needs its own review rather than being folded into an
-  unrelated change.
+  "Remaining scope" section.
+  **2026-08-11 update — Batch 2 done:** fixed the 3 sites flagged as the
+  next clearest batch — `routes/disputes.py:98` (dispute-created push),
+  `routes/disputes.py:308` (dispute-resolved push), and
+  `services/guest_notification_service.py:167` (corporate app-holder guest
+  booking push) — all confirmed unambiguously rider-directed
+  (`ride.get("rider_id")`/`dispute.get("user_id")`/`guest_user["id"]`, all
+  rider accounts), each with a new regression test asserting
+  `target_app="rider"`. Also closed out the two items this batch's parent
+  note had deferred: `routes/rides/cancellation.py`'s two push call sites
+  both already target the driver (`target_app="driver"`) — no rider-push
+  gap there, nothing to fix; `utils/receipt_email.py` no longer exists
+  (deleted by N8) — moot. That empties the batch-1 change-log's
+  "clearly rider-directed, ready to fix" list. What's left per that same
+  doc: 3 driver-directed sites missing `target_app="driver"` (a related but
+  distinct, not-yet-tracked gap —
+  `routes/rides/matching.py:1071`, `services/cancellation_service.py:206`,
+  `utils/document_expiry.py:216`), plus an "ambiguous/admin" bucket
+  (`routes/notifications.py:108`'s `/test-push`, and the `routes/admin/*.py`
+  broadcast endpoints where recipient role varies per admin selection) that
+  needs its own per-call-site read rather than a batch sweep.
+- [x] ~~**N16. Consolidate the two copies of the company-address assembly**~~
+  — done 2026-08-11: `_coalesce`/`_postal_address` were byte-identical logic
+  duplicated across `utils/company_details.py` and `utils/marketing_email.py`.
+  Extracted into a new shared `utils/address_format.py`
+  (`coalesce_setting`/`postal_address`, public names since it's now a real
+  shared module, not a private per-file helper), imported back into both
+  files under their original `_coalesce`/`_postal_address` local names so
+  every call site is unchanged. Zero output-behavior change by design: the
+  marketing CASL footer (`build_footer_html`/`build_footer_text`) and the
+  transactional-email `CompanyDetails` both still receive exactly the same
+  string for the same settings input — proven by running both files'
+  existing test suites unmodified (`test_company_details.py` 22 tests,
+  `test_marketing_email.py` 3 tests, plus `test_marketing_broadcast.py`,
+  `test_all_emails_are_branded.py`, `test_branded_documents.py`,
+  `test_branded_receipt_flag.py`, `test_email_layout.py`,
+  `test_receipt_shell_snapshot.py` — 121 total, all pass unmodified) and by
+  adding 9 new direct unit tests for the shared module in
+  `tests/test_address_format.py`. Blast radius: grepped every other
+  importer of `company_details`/`marketing_email` repo-wide — all import
+  only public functions (`load_company_details`, `to_latin1`,
+  `send_marketing_email`), none import the private `_coalesce`/
+  `_postal_address` names directly, so no other file needed a change. This
+  satisfies the item's own deferral condition — "touching it needs its own
+  review" — by making the marketing copy's only change an import swap with
+  a byte-for-byte-identical function body and proven zero output delta,
+  rather than folding a behavior change into an unrelated commit.
 - [x] ~~**N11. Retrofit the ride receipt and Spinr Pass invoice**~~ — done:
   both now use the shared header/footer, the real logo, `#FF3B30`, and the
   company name and address from the admin Settings page, in the email **and**

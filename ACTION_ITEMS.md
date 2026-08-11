@@ -2894,7 +2894,15 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   production via the Session pooler connection string once convenient.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
-- [ ] **Status:** open — parked pending a pricing decision (2026-07-27).
+- [ ] **Status:** open — **parked 2026-08-11 pending contributor sign-off on the
+  multiplier proposal below** (superseding the earlier "parked pending a
+  pricing decision (2026-07-27)" note — same blocker, now with the exact
+  statements ready to run once approved). No code change needed; the join
+  logic is already correct and tested. Do not run the `UPDATE` statements
+  below until a contributor with pricing authority has explicitly approved
+  the multipliers (or supplied different target rates) — this is a
+  live-pricing change, not a docs/test change, and needs the same
+  sign-off discipline as any other money-touching action per CLAUDE.md.
   **Root cause confirmed against production data** (queried live Supabase):
   this is a **data problem, not a code bug**. All 5 active `service_areas`
   rows have real `vehicle_pricing` JSONB entries — the fare service's
@@ -2927,11 +2935,50 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   `UPDATE service_areas SET vehicle_pricing = ...` per area. No code change
   needed; the join logic is already correct and tested
   (`backend/tests/test_fares.py`).
+  - **Proposed `UPDATE` statements, drafted and ready to run once
+    approved** (Regina/Saskatoon only — `riyadh`/`riyadh airport` are
+    intentionally out of scope per the product confirmation above; each
+    area's own current Economy row is the multiplier base, values rounded
+    to 2dp, `Decimal`-safe since this is direct SQL, not app-layer float
+    arithmetic):
+    ```sql
+    -- Regina: Economy base_fare=2, per_km=2, per_min=0, min_fare=0, booking_fee=0
+    UPDATE service_areas
+    SET vehicle_pricing = jsonb_set(
+      jsonb_set(
+        vehicle_pricing,
+        '{XL}', '{"base_fare": 2.80, "per_km": 2.80, "per_min": 0, "min_fare": 0, "booking_fee": 0}'::jsonb
+      ),
+      '{Premium}', '{"base_fare": 3.60, "per_km": 3.60, "per_min": 0, "min_fare": 0, "booking_fee": 0}'::jsonb
+    )
+    WHERE name = 'Regina';
+
+    -- Saskatoon: Economy base_fare=4, per_km=1, per_min=0, min_fare=0, booking_fee=0
+    UPDATE service_areas
+    SET vehicle_pricing = jsonb_set(
+      jsonb_set(
+        vehicle_pricing,
+        '{XL}', '{"base_fare": 5.60, "per_km": 1.40, "per_min": 0, "min_fare": 0, "booking_fee": 0}'::jsonb
+      ),
+      '{Premium}', '{"base_fare": 7.20, "per_km": 1.80, "per_min": 0, "min_fare": 0, "booking_fee": 0}'::jsonb
+    )
+    WHERE name = 'Saskatoon';
+    ```
+    Both areas' current per_min/min_fare/booking_fee are already 0 across
+    the board, so the ~1.2×/~1.5× multiplier on those fields is a no-op
+    here (0 × anything = 0) — only base_fare/per_km actually move. `Van`
+    is not present as a distinct row in either area's current
+    `vehicle_pricing` (only Economy/XL configured per the root-cause
+    section above) — added scope note rather than guessing a Van row
+    shape; confirm with the contributor whether Van needs seeding too
+    before running. **Not yet executed against any environment** — this is
+    a drafted proposal only, contingent on approval.
 - **Files:** none (data-only fix) — reference only:
   `backend/routes/fares.py::build_fares_for_area`,
   `backend/tests/test_fares.py`
 - **Acceptance:** each vehicle type in each area quotes genuinely different
   rates reflecting its class (XL/Premium priced above Economy).
+
 
 ### B9. Address+coordinate pairs are stored server-side with zero consistency validation
 - [x] **Status:** partially done — geocode-verify + dedupe fix shipped; `place_id`

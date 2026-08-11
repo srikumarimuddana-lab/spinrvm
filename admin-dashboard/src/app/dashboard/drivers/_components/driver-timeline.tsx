@@ -134,6 +134,14 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
 
     const toggleDate = (date: string) => setExpanded(prev => ({ ...prev, [date]: !prev[date] }));
 
+    // Must run unconditionally, before the early returns below — a hook
+    // called only on some renders (e.g. once `loading`/`activities.length`
+    // flips) violates React's Rules of Hooks (react-hooks/rules-of-hooks).
+    const pagedActivities = useMemo(() =>
+        activities.slice(timelinePage * timelinePageSize, (timelinePage + 1) * timelinePageSize),
+        [activities, timelinePage, timelinePageSize]
+    );
+
     if (loading) {
         return (
             <div className="flex items-center justify-center py-10">
@@ -152,10 +160,6 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
         );
     }
 
-    const pagedActivities = useMemo(() =>
-        activities.slice(timelinePage * timelinePageSize, (timelinePage + 1) * timelinePageSize),
-        [activities, timelinePage, timelinePageSize]
-    );
     const hasNextTimelinePage = activities.length > (timelinePage + 1) * timelinePageSize;
 
     const groups = groupByDate(pagedActivities);

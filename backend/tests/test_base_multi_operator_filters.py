@@ -163,3 +163,38 @@ def test_or_leaf_still_accepts_regex_with_options():
     from backend.repositories._base import _build_or_clause_term
 
     assert _build_or_clause_term("name", {"$regex": "ann", "$options": "i"}).startswith("name.ilike.")
+
+
+def test_eq_operator_compiles_to_eq_not_is_null():
+    """A26 (docs/audit/2026-08-11-driver-rider-migration-audit.md): a bare
+    `{col: None}` filter compiles to `IS NULL`, which is correct for a
+    nullable column but unsatisfiable for a NOT NULL DEFAULT column — it
+    matches zero rows, always, not just "empty" rows. `$eq` must compile to
+    a real equality filter regardless of the value's type, including a dict
+    (needed to filter `legacy_import_metadata = '{}'::jsonb`)."""
+    from backend.repositories._base import _apply_filters
+
+    q = _FakeQuery()
+    _apply_filters(q, {"legacy_import_metadata": {"$eq": {}}})
+    assert q.ops == [("eq", "legacy_import_metadata", {})]
+
+
+def test_eq_operator_with_scalar_value():
+    from backend.repositories._base import _apply_filters
+
+    q = _FakeQuery()
+    _apply_filters(q, {"status": {"$eq": "completed"}})
+    assert q.ops == [("eq", "status", "completed")]
+
+
+def test_bare_dict_value_with_no_known_operator_keys_applies_no_filter():
+    """Documents the trap $eq was added to avoid: a bare `{}` (or any dict
+    with no recognized operator key) as a filter VALUE is read as "an
+    operator-map with zero operators", not as "match rows where the column
+    equals this dict" — it silently applies no filter at all. This is why
+    EXCLUDE_LEGACY_RIDES must use {"$eq": {}}, never a bare {}."""
+    from backend.repositories._base import _apply_filters
+
+    q = _FakeQuery()
+    _apply_filters(q, {"legacy_import_metadata": {}})
+    assert q.ops == []

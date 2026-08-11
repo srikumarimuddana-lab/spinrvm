@@ -1,14 +1,24 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile  # type: ignore
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile  # type: ignore
+from pydantic import BaseModel, Field  # type: ignore
 
 try:
     from .. import db_supabase  # type: ignore
-    from ..dependencies import get_current_user  # type: ignore
+    from ..dependencies import OTP_EXPIRY_MINUTES, generate_otp, get_current_user  # type: ignore
+    from ..routes.auth import (  # type: ignore
+        _check_otp_lockout,
+        _clear_otp_failures,
+        _enforce_otp_send_cap,
+        _record_otp_failure,
+    )
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
-    from ..utils.audit_logger import log_admin_action  # type: ignore
+    from ..settings_loader import get_app_settings  # type: ignore
+    from ..utils.audit_logger import log_admin_action, log_user_action  # type: ignore
     from ..utils.background import spawn  # type: ignore
+    from ..utils.crypto import hash_otp, verify_otp_hash  # type: ignore
     from ..utils.error_handling import ErrorCode, SpinrException  # type: ignore
     from ..utils.error_keys import ErrorKeys  # type: ignore
     from ..utils.insurance_periods import record_period_transition  # type: ignore
+    from ..utils.rate_limiter import dsar_export_limit, rider_email_verify_request_limit  # type: ignore
     from ..utils.redis_client import redis_delete  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
@@ -20,17 +30,27 @@ try:
     from ..utils.rider_emails import (  # type: ignore
         send_account_deletion_notice,
         send_email_changed_notice,
+        send_email_verification_code,
         send_welcome_email,
     )
 except ImportError:
     import db_supabase  # type: ignore
-    from dependencies import get_current_user  # type: ignore
+    from dependencies import OTP_EXPIRY_MINUTES, generate_otp, get_current_user  # type: ignore  # noqa: F811
+    from routes.auth import (  # type: ignore  # noqa: F811
+        _check_otp_lockout,
+        _clear_otp_failures,
+        _enforce_otp_send_cap,
+        _record_otp_failure,
+    )
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
-    from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
+    from settings_loader import get_app_settings  # type: ignore  # noqa: F811
+    from utils.audit_logger import log_admin_action, log_user_action  # type: ignore  # noqa: F811
     from utils.background import spawn  # type: ignore  # noqa: F811
+    from utils.crypto import hash_otp, verify_otp_hash  # type: ignore  # noqa: F811
     from utils.error_handling import ErrorCode, SpinrException  # type: ignore  # noqa: F811
     from utils.error_keys import ErrorKeys  # type: ignore  # noqa: F811
     from utils.insurance_periods import record_period_transition  # type: ignore  # noqa: F811
+    from utils.rate_limiter import dsar_export_limit, rider_email_verify_request_limit  # type: ignore  # noqa: F811
     from utils.redis_client import redis_delete  # type: ignore  # noqa: F811
     from utils.referral_terms import (  # type: ignore  # noqa: F811
         area_id_for_rider,
@@ -42,15 +62,19 @@ except ImportError:
     from utils.rider_emails import (  # type: ignore  # noqa: F811
         send_account_deletion_notice,
         send_email_changed_notice,
+        send_email_verification_code,
         send_welcome_email,
     )
 import asyncio
 import base64
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Dict, Optional
+
+_RIDER_EMAIL_OTP_TABLE = "rider_email_verification_otp"
 
 logger = logging.getLogger(__name__)
 
@@ -149,10 +173,75 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
     return UserProfile(**updated_user)
 
 
+async def _fulfill_rider_data_export(user_id: str, email: str, request_id: str) -> None:
+    """Background task: actually build and email the DSAR export, then reflect
+    the real outcome on the queued `data_export_requests` row.
+
+    Reuses `_build_and_email_data_export` from the driver module rather than
+    duplicating it (N1, ACTION_ITEMS.md). That function now includes a
+    rider-shaped `rides_as_rider` + `saved_addresses` read alongside its
+    original driver-shaped `rides`/`payouts`/`documents` (gated on having a
+    `drivers` row) — an earlier version of this fix reused it before that
+    branch existed and shipped an export containing only account +
+    notification-preferences for a rider-only account, which is not a real
+    answer to a PIPEDA access request from someone whose relationship with
+    Spinr is as a rider. The export itself never raises out (its own
+    try/except logs the full traceback at error level on failure).
+    """
+    try:
+        from .drivers.tax_exports import _build_and_email_data_export  # type: ignore
+    except ImportError:
+        from routes.drivers.tax_exports import _build_and_email_data_export  # type: ignore
+
+    succeeded = await _build_and_email_data_export(user_id, email)
+    try:
+        await db_supabase.update_one(
+            "data_export_requests",
+            {"id": request_id},
+            {
+                "status": "completed" if succeeded else "pending",
+                "completed_at": datetime.now(timezone.utc).isoformat() if succeeded else None,
+            },
+        )
+    except Exception:
+        # The export itself already succeeded or failed and was logged by
+        # _build_and_email_data_export above — a failure here only means the
+        # DSAR queue row's status didn't update, not that the export was
+        # lost. Still surfaced loudly: an admin relying on the queue's status
+        # to track SLA compliance needs to know it may be stale.
+        logger.error(
+            "Failed to update data_export_requests status for request %s (user %s)",
+            request_id,
+            user_id,
+            exc_info=True,
+        )
+
+
 @api_router.post("/data-export")
-async def request_data_export(current_user: dict = Depends(get_current_user)):
-    """R-P1-6 / DV-17 PIPEDA DSAR: Queue a data-export request with 30-day SLA tracking.
-    PIPEDA s.9 requires a response within 30 days of receipt.
+@dsar_export_limit
+async def request_data_export(request: Request = None, current_user: dict = Depends(get_current_user)):
+    """R-P1-6 / DV-17 / N1 PIPEDA DSAR: queue a data-export request with 30-day
+    SLA tracking, and actually fulfil it.
+
+    Previously this only inserted the `data_export_requests` row and stopped —
+    nothing built the export or emailed it, so a rider's access request sat
+    unfulfilled until an admin noticed it (there is no admin-side automation
+    either; ACTION_ITEMS.md N1). Now it also spawns the same build-and-email
+    flow the driver-side `/drivers/me/export-data` endpoint already uses,
+    self-swallowing per the shared `spawn()` helper's contract so a background
+    failure can't affect this response.
+
+    Rate-limited (@dsar_export_limit, 3/hour) — this now fans out the same
+    DB-reads + ZIP-build + Storage-upload + email pipeline the driver export
+    does, not just a single insert, so it needs the same abuse cap (storage
+    fill / SES exhaustion). SlowAPI needs a parameter named ``request`` typed
+    as starlette Request; do not remove it (mirrors
+    routes/drivers/tax_exports.py::export_driver_data).
+
+    PIPEDA s.9 requires a response within 30 days of receipt — the queued row
+    with its SLA deadline is recorded either way, so even if no email is on
+    file (fulfilment is skipped, logged, and the row stays 'pending' for an
+    admin to handle manually) the request itself is never lost.
     """
     user_id = current_user["id"]
     request_id = str(uuid.uuid4())
@@ -174,6 +263,21 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
             exc_info=True,
         )
         raise HTTPException(status_code=503, detail="data_export_request_failed") from e
+
+    email = (current_user.get("email") or "").strip()
+    if "@" in email:
+        spawn(_fulfill_rider_data_export(user_id, email, request_id))
+    else:
+        # Matches the driver endpoint's own requirement (a phone-number
+        # fallback would leak a raw phone number to the email provider and
+        # fail to send anyway) — the request row stays 'pending' for an
+        # admin to fulfil manually via the existing DSAR admin queue.
+        logger.warning(
+            "DSAR request %s for user %s has no email on file — request recorded but not auto-fulfilled",
+            request_id,
+            user_id,
+        )
+
     return {
         "success": True,
         "request_id": request_id,
@@ -439,9 +543,6 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Account deletion failed for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete account. Please contact support.") from e
-
-
-from pydantic import BaseModel  # type: ignore  # noqa: E402
 
 
 class UpdatePhoneRequest(BaseModel):
@@ -898,3 +999,276 @@ async def apply_rider_referral(req: ApplyRiderReferralRequest, current_user: dic
         },
     )
     return {"success": True, "referral_code": code}
+
+
+# ── Rider email verification (N14, ACTION_ITEMS.md) ─────────────────────────
+#
+# Reuses the SAME OTP mechanics as the corporate portal's
+# `POST /auth/verify-email-otp` (routes/auth.py:744) — SHA-256-hashed code at
+# rest (utils/crypto.hash_otp/verify_otp_hash), the shared brute-force lockout
+# (_check_otp_lockout/_record_otp_failure/_clear_otp_failures) and per-
+# destination send cap (_enforce_otp_send_cap), and the same dev-bypass
+# ("1234" only when ENV != production, refused outright in production when no
+# email provider is configured). This is a NEW, separate flow rather than a
+# call into the corporate endpoints, because the two differ in what they are
+# proving: the corporate flow authenticates an inbox to *log in as* (and will
+# create a user row if none exists); this flow proves the rider who is
+# ALREADY authenticated owns the email already on their account, and only
+# ever flips `email_verified` on that one existing row. Correspondingly this
+# keys its lockout/send-cap on `user_id`, not on the email address, so the
+# codes for "log in as this email" (corporate) and "prove I read this inbox"
+# (rider) never share a bucket even if the same address is used both ways.
+#
+# Scope boundary (deliberate, see ACTION_ITEMS.md N14): these two endpoints
+# are additive only. Nothing calls them automatically and nothing gates on
+# `email_verified` — no rider-app UI exists yet to call them, and whether to
+# require verification before booking/payouts/etc. is a product decision this
+# backend-only change does not make.
+
+
+class RiderEmailVerifyConfirmRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=6, pattern=r"^\d{4,6}$")
+
+
+def _rider_email_verify_lockout_key(user_id: str) -> str:
+    """Synthetic lockout-key namespace, mirroring auth.py's
+    `_synthetic_phone_for_company_email` pattern but keyed on user_id (see
+    module docstring above for why this flow must NOT share a bucket with the
+    corporate email-OTP flow)."""
+    return f"rider_email_verify:{user_id}"
+
+
+def _email_log_id(email: str) -> str:
+    """Log-safe identifier for an email address (PIPEDA: never log the
+    address itself). Mirrors auth.py's `_email_log_id`."""
+    digest = hashlib.sha256((email or "").strip().lower().encode()).hexdigest()[:16]
+    return f"email_sha256:{digest}"
+
+
+async def _latest_rider_email_otp(user_id: str) -> Optional[Dict[str, Any]]:
+    rows = await db_supabase.get_rows(
+        _RIDER_EMAIL_OTP_TABLE,
+        {"user_id": user_id, "verified": False},
+        order="created_at",
+        desc=True,
+        limit=1,
+    )
+    return rows[0] if rows else None
+
+
+@api_router.post("/verify-email/request")
+@rider_email_verify_request_limit
+async def request_rider_email_verification(request: Request, current_user: dict = Depends(get_current_user)):
+    """Issue a verification code to the email already on the rider's account.
+
+    Does not accept an email in the request body — it verifies whatever is
+    already on file, exactly like the corporate flow's "email you're logging
+    in as" model but scoped to the signed-in user's own row, so there is no
+    way to use this endpoint to probe or verify an address you do not already
+    own on this account.
+    """
+    email = (current_user.get("email") or "").strip().lower()
+    if not email:
+        raise SpinrException(
+            message="Add an email to your profile before verifying it",
+            error_code=ErrorCode.VALIDATION_ERROR,
+            status_code=400,
+            message_key=ErrorKeys.PROFILE_EMAIL_MISSING,
+        )
+    if current_user.get("email_verified"):
+        return {"success": True, "already_verified": True, "message": "Your email is already verified"}
+
+    user_id = current_user["id"]
+    lockout_key = _rider_email_verify_lockout_key(user_id)
+    await _enforce_otp_send_cap(lockout_key)
+
+    # Same email-provider bypass as routes/auth.py's send_company_email_otp:
+    #  - SES or Resend configured  → real random OTP delivered via email.
+    #  - Neither configured + non-production → fixed code "1234" (dev/test).
+    #  - Neither configured + production      → refuse (no static-code bypass).
+    app_settings = None
+    try:
+        app_settings = await get_app_settings()
+    except Exception as e:
+        logger.error(f"Could not read app_settings from DB: {e}", exc_info=True)
+
+    try:
+        from ..core.config import settings as _settings  # type: ignore
+    except ImportError:
+        from core.config import settings as _settings  # type: ignore
+
+    email_provider_configured = bool(
+        app_settings
+        and (
+            (app_settings.get("aws_ses_access_key_id") and app_settings.get("aws_ses_secret_access_key"))
+            or app_settings.get("resend_api_key")
+        )
+    )
+    is_production = _settings.ENV.lower() == "production"
+    deliver_via_email = True
+    if email_provider_configured:
+        otp_code = generate_otp()
+    elif not is_production:
+        otp_code = "1234"
+        deliver_via_email = False
+        logger.info(
+            "Email provider not configured — rider email-verify OTP bypass active (code=1234) for %s (ENV=%s)",
+            _email_log_id(email),
+            _settings.ENV,
+        )
+    else:
+        logger.error(
+            "Email provider not configured in production — refusing to issue rider email-verify OTP "
+            "(static-code bypass is disabled in production)"
+        )
+        raise SpinrException(
+            message="Verification is temporarily unavailable, please try again later",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
+
+    otp_row = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "email": email,
+        "code_hash": hash_otp(otp_code),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)).isoformat(),
+        "verified": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        await db_supabase.delete_many(_RIDER_EMAIL_OTP_TABLE, {"user_id": user_id})
+        await db_supabase.insert_one(_RIDER_EMAIL_OTP_TABLE, otp_row)
+    except Exception as e:
+        logger.error("rider email verify: OTP persist failed for %s", _email_log_id(email), exc_info=True)
+        raise SpinrException(
+            message="Could not store verification code, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
+
+    if deliver_via_email:
+        sent = await send_email_verification_code(current_user, otp_code, OTP_EXPIRY_MINUTES)
+        if not sent:
+            try:
+                await db_supabase.delete_many(_RIDER_EMAIL_OTP_TABLE, {"id": otp_row["id"]})
+            except Exception:
+                logger.error(
+                    "rider email verify: failed-code cleanup failed for %s", _email_log_id(email), exc_info=True
+                )
+            raise HTTPException(status_code=502, detail="Could not send verification code")
+
+    return {"success": True, "message": "Verification code sent"}
+
+
+@api_router.post("/verify-email/confirm")
+async def confirm_rider_email_verification(
+    body: RiderEmailVerifyConfirmRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Verify the code and flip `email_verified` on the caller's own row.
+
+    Never touches any user other than the authenticated caller — the row to
+    update is `current_user["id"]`, not anything derived from the request
+    body.
+    """
+    user_id = current_user["id"]
+    email = (current_user.get("email") or "").strip().lower()
+    lockout_key = _rider_email_verify_lockout_key(user_id)
+    code = body.code.strip()
+
+    await _check_otp_lockout(lockout_key)
+
+    try:
+        otp_record = await _latest_rider_email_otp(user_id)
+    except Exception as e:
+        logger.error("rider email verify: OTP lookup failed for %s", _email_log_id(email), exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
+
+    if not otp_record or not verify_otp_hash(str(otp_record.get("code_hash", "")), code):
+        await _record_otp_failure(lockout_key)
+        raise SpinrException(
+            message="ERR_OTP_INVALID",
+            error_code=ErrorCode.AUTH_OTP_INVALID,
+            status_code=400,
+            message_key=ErrorKeys.AUTH_OTP_INVALID,
+            action_hint="Re-enter the verification code",
+        )
+
+    expires_at = otp_record.get("expires_at")
+    if isinstance(expires_at, str):
+        try:
+            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            logger.error("rider email verify: invalid OTP expires_at for %s", _email_log_id(email), exc_info=True)
+            raise SpinrException(
+                message="Internal error processing verification code",
+                error_code=ErrorCode.INTERNAL_ERROR,
+                status_code=500,
+                message_key=ErrorKeys.SYSTEM_INTERNAL,
+            ) from None
+    if not expires_at:
+        raise SpinrException(
+            message="Internal error processing verification code",
+            error_code=ErrorCode.INTERNAL_ERROR,
+            status_code=500,
+            message_key=ErrorKeys.SYSTEM_INTERNAL,
+        )
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        raise SpinrException(
+            message="ERR_OTP_EXPIRED",
+            error_code=ErrorCode.AUTH_OTP_EXPIRED,
+            status_code=400,
+            message_key=ErrorKeys.AUTH_OTP_EXPIRED,
+            action_hint="Request a new code",
+        )
+
+    # Guard against a mid-flow email change: the code was minted for whatever
+    # address was on the account at request time. If the rider's current email
+    # has since changed (another tab, a support edit), flipping email_verified
+    # now would wrongly verify the NEW address using a code sent to the OLD
+    # one.
+    otp_email = (otp_record.get("email") or "").strip().lower()
+    if otp_email and email and otp_email != email:
+        raise SpinrException(
+            message="Your email address has changed since this code was sent — request a new code",
+            error_code=ErrorCode.VALIDATION_ERROR,
+            status_code=409,
+            message_key=ErrorKeys.PROFILE_EMAIL_VERIFICATION_STALE,
+        )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        await db_supabase.update_one(_RIDER_EMAIL_OTP_TABLE, {"id": otp_record["id"]}, {"verified": True})
+        await db_supabase.update_one(
+            "users",
+            {"id": user_id},
+            {"email_verified": True, "email_verified_at": now_iso},
+        )
+    except Exception as e:
+        logger.error("rider email verify: flag update failed for user_id=%s", user_id, exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
+
+    await _clear_otp_failures(lockout_key)
+
+    try:
+        await log_user_action(current_user, "email_verified", "users", user_id, {"email": _email_log_id(email)})
+    except Exception:
+        logger.debug("audit_log write failed for rider email_verified event", exc_info=True)
+
+    return {"success": True, "message": "Email verified", "email_verified": True}

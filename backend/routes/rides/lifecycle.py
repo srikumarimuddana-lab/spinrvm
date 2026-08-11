@@ -115,6 +115,7 @@ async def rider_start_ride(
                 "Ride Started! ▶️",
                 "Your ride has started. Have a safe trip!",
                 data={"type": "ride_started", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
     await _deps.manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=rider_id)
@@ -279,6 +280,25 @@ async def rider_complete_ride(
     await _deps.manager.send_personal_message(
         {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare, "grand_total": rider_bill},
         f"rider_{current_user['id']}",
+    )
+    # N15/R19 (ACTION_ITEMS.md): the WS message above only reaches a
+    # foreground app. drivers/ride_complete.py::complete_ride (the
+    # driver-initiated completion path) already sends the rider this push
+    # alongside its WS message; this rider-initiated path previously sent
+    # only the WS message, so a rider who ended their own ride with the app
+    # backgrounded got no confirmation at all. Mirrors that path's title/body
+    # and priority="normal" (informational, not time-critical like dispatch
+    # or safety) -- backgrounded via spawn() so a slow FCM/Expo round-trip
+    # doesn't hold up this endpoint's response.
+    _deps.spawn(
+        _deps.send_push_notification(
+            current_user["id"],
+            "Ride Completed! ✅",
+            f"Your ride has finished. Total fare: ${rider_bill}",
+            data={"type": "ride_completed", "ride_id": str(ride_id)},
+            priority="normal",
+            target_app="rider",
+        )
     )
     await _deps.manager.broadcast_ride_status(
         ride_id,

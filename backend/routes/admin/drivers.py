@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 try:
@@ -23,6 +23,7 @@ try:
         status_message,
         verification_message,
     )
+    from ...utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
     from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
 except ImportError:
@@ -40,8 +41,14 @@ except ImportError:
         status_message,
         verification_message,
     )
+    from utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit  # noqa: F401
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
+
+try:
+    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -2618,9 +2625,13 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         raise HTTPException(status_code=404, detail="Driver not found")
 
     # ---- Aggregate from rides ----
+    # Legacy-imported rides and their 'legacy_import' offset payout are both
+    # excluded, matching routes/drivers/earnings.py — the driver's own screen
+    # and this tab must not disagree about what Spinr owes. See
+    # utils/legacy_rides for why dropping both halves leaves the math intact.
     rides = await db_supabase.get_rows(
         "rides",
-        {"driver_id": driver_id, "status": "completed"},
+        {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES},
         limit=10000,
     )
 
@@ -2674,58 +2685,59 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     # their oldest payouts silently drop out of the math and pending_balance
     # would overstate what is owed. The display list is still capped by
     # `limit` at serialization.
-    payouts = await db_supabase.get_rows(
-        "payouts",
-        {"driver_id": driver_id},
-        order="created_at",
-        desc=True,
-        limit=5000,
+    payouts = drop_legacy_offset_payouts(
+        await db_supabase.get_rows(
+            "payouts",
+            {"driver_id": driver_id},
+            order="created_at",
+            desc=True,
+            limit=5000,
+        )
     )
 
     def _sum_by_status(*statuses: str) -> Decimal:
-        return sum(
-            (
-                _dec(p.get("amount"))
-                for p in payouts
-                if p.get("status") in statuses and p.get("payout_type") != "stripe_sync"
-            ),
-            Decimal("0"),
-        )
+        return sum((_dec(p.get("amount")) for p in payouts if p.get("status") in statuses), Decimal("0"))
 
-    # Money-out mirrors routes/drivers/earnings.py exactly: deduct EVERY
-    # payout that represents money sent or in-flight — only 'reversed' and
-    # 'failed' (money returned or never left) are excluded, so persistent
-    # intermediate statuses like 'reserved' and 'transfer_completed' (a stuck
-    # instant payout whose Transfer succeeded) still count as money-out
-    # rather than silently inflating pending_balance. An unknown/new status
-    # defaults to deducting: worst case the admin view under-states what is
-    # owed (recoverable), never invites a double payment.
+    # Two DIFFERENT questions, and conflating them is what made "Total paid
+    # out" read $0.00 for migrated drivers right after a Stripe sync:
     #
-    # payout_type='stripe_sync' rows are the one exception: legacy-app payout
-    # HISTORY materialized from Stripe transfer records
-    # (services/stripe_payout_sync_service.py). The earnings they cashed out
-    # were paid in the OLD app and are not in this DB's rides, so counting
-    # them as money-out would wrongly zero pending_balance for every migrated
-    # driver the moment "Refresh Payouts from Stripe" runs. ('legacy_import'
-    # rows still deduct — they pair with imported rides counted above.)
+    #   "What has this driver been paid?"   -> HISTORY. Includes 'stripe_sync':
+    #       those rows mirror real Stripe Transfers, real money that really
+    #       left the platform to this driver. Reporting $0 paid when Stripe
+    #       shows thousands is simply wrong.
+    #   "What does Spinr still owe them?"   -> BALANCE. Excludes 'stripe_sync':
+    #       those transfers settled earnings from the OLD app which are not in
+    #       this DB's rides, so counting them here would drive pending_balance
+    #       to zero for every migrated driver.
+    #
+    # Both sums otherwise mirror routes/drivers/earnings.py: only 'reversed'
+    # and 'failed' (money returned or never left) are excluded, so persistent
+    # intermediate statuses like 'reserved' and 'transfer_completed' (a stuck
+    # instant payout whose Transfer succeeded) still count. An unknown/new
+    # status defaults to counting as money-out: worst case the owed figure is
+    # understated (recoverable), never overstated into a double payment.
+    # ('legacy_import' offsets were dropped from `payouts` entirely above —
+    # they are synthetic, never a real transfer.)
     _not_money_out = {"reversed", "failed"}
-    money_out = sum(
-        (
-            _dec(p.get("amount"))
-            for p in payouts
-            if str(p.get("status") or "").lower() not in _not_money_out and p.get("payout_type") != "stripe_sync"
-        ),
+
+    def _is_money_out(p: dict) -> bool:
+        return str(p.get("status") or "").lower() not in _not_money_out
+
+    gross_money_out = sum((_dec(p.get("amount")) for p in payouts if _is_money_out(p)), Decimal("0"))
+    balance_money_out = sum(
+        (_dec(p.get("amount")) for p in payouts if _is_money_out(p) and p.get("payout_type") != "stripe_sync"),
         Decimal("0"),
     )
+    # stripe_sync rows are always 'completed', so they never land in flight.
     pending_in_flight = _sum_by_status("pending", "processing")
-    # Everything sent and not merely queued — completed, transfer_completed,
-    # reserved, and any future status — so the card agrees with what the
-    # driver's own balance has already deducted.
-    total_paid_out = money_out - pending_in_flight
+    # Everything actually sent — completed, transfer_completed, reserved, and
+    # any future status — minus what is still only queued.
+    total_paid_out = gross_money_out - pending_in_flight
     on_hold = _sum_by_status("failed")
 
-    # Legacy money surfaced separately so the operator still sees the full
-    # Stripe picture without it distorting the owed-balance math.
+    # The slice of total_paid_out that came from synced Stripe transfer
+    # history — an "of which" breakdown, NOT a separate bucket. Shown so an
+    # operator can tell previous-app money from Spinr-era payouts.
     legacy_stripe_transfers = sum(
         (
             _dec(p.get("amount"))
@@ -2736,9 +2748,9 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     )
 
     # Amount owed to the driver that hasn't been queued for payout yet.
-    # Includes ride earnings + bonuses - all money out, matching the
+    # Ride earnings + bonuses - balance-affecting money out, matching the
     # driver-facing balance in routes/drivers/earnings.py.
-    pending_balance = max(lifetime_earnings - money_out, Decimal("0"))
+    pending_balance = max(lifetime_earnings - balance_money_out, Decimal("0"))
 
     last_completed = next((p for p in payouts if p.get("status") == "completed"), None)
     last_failed = next((p for p in payouts if p.get("status") == "failed"), None)
@@ -3174,6 +3186,139 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
     }
 
 
+class RefreshAllPayoutsRequest(BaseModel):
+    """Scope for the fleet-wide Stripe payout refresh. Empty body = every
+    driver with a Stripe account, full history."""
+
+    model_config = {"extra": "forbid"}
+
+    driver_ids: Optional[List[str]] = Field(None, max_length=500)
+
+
+@router.post("/drivers/refresh-stripe-payouts")
+async def admin_refresh_all_driver_stripe_payouts(
+    body: RefreshAllPayoutsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-click Stripe payout sync across the fleet.
+
+    Same two syncs the per-driver button runs — Stripe Transfers into
+    ``payouts``, then the connected-account bank-payout/balance ledger — with
+    ``driver_ids=None`` meaning every mapped driver (the sync services already
+    fan out with bounded concurrency).
+
+    Unlike the per-driver endpoint this does NOT fail the whole request on a
+    per-driver Stripe error: across a fleet, one retired or unreachable
+    account must not block everyone else's history from being materialized.
+    Errors are returned per driver so nothing is silently dropped, and the
+    response says plainly that a re-run is safe.
+
+    super_admin only — it writes payout history, the same bar as the
+    per-driver button and the dedicated /admin/stripe/* sync routes.
+    """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super_admin")
+
+    try:
+        from ...services import stripe_payout_sync_service as sync_svc
+        from ...services.stripe_connect_ledger_service import sync_connect_ledger
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from services import stripe_payout_sync_service as sync_svc  # type: ignore
+        from services.stripe_connect_ledger_service import sync_connect_ledger  # type: ignore
+        from settings_loader import get_app_settings  # type: ignore
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured — set stripe_secret_key in Settings.",
+        )
+
+    batch = f"admin-refresh-all-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    plan = await sync_svc.build_plan(stripe_secret, batch, driver_ids=body.driver_ids)
+
+    transfers_inserted = 0
+    transfers_skipped = 0
+    plan_errors = [{"row_ref": e.row_ref, "field": e.field, "message": e.message} for e in plan.errors]
+
+    # commit_plan refuses a plan carrying errors — that all-or-nothing rule is
+    # right for the per-driver button but would let one unreachable account
+    # block the entire fleet here. Commit the drivers that listed cleanly and
+    # report the rest, rather than writing nothing and calling it a success.
+    clean_rows = [r for r in plan.payouts_to_insert if r["driver_id"] not in {e.row_ref for e in plan.errors}]
+    if clean_rows:
+        committable = sync_svc.StripePayoutSyncPlan(batch=batch)
+        committable.payouts_to_insert = clean_rows
+        try:
+            commit_result = await asyncio.to_thread(sync_svc.commit_plan, committable)
+            transfers_inserted = commit_result.get("inserted", 0)
+            transfers_skipped = commit_result.get("skipped_existing", 0)
+        except Exception:
+            logger.error("[STRIPE-REFRESH-ALL] commit failed for batch %s", batch, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to write synced transfers to the database. Nothing partial was reported — re-run.",
+            )
+
+    try:
+        ledger_result = await sync_connect_ledger(stripe_secret, driver_ids=body.driver_ids)
+    except Exception:
+        logger.error("[STRIPE-REFRESH-ALL] connect-ledger sync failed for batch %s", batch, exc_info=True)
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh_all",
+            "drivers",
+            "*",
+            {"status": "ledger_sync_failed", "transfers_inserted": transfers_inserted, "batch": batch},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger sync failed. "
+                "Re-run — it is safe to repeat."
+            ),
+        )
+
+    await log_admin_action(
+        admin,
+        "stripe_payout_refresh_all",
+        "drivers",
+        "*",
+        {
+            "batch": batch,
+            "drivers_scanned": plan.stats.get("drivers_scanned"),
+            "transfers_inserted": transfers_inserted,
+            "transfers_skipped": transfers_skipped,
+            "sum_planned": plan.stats.get("sum_planned"),
+            "payouts_upserted": ledger_result.payouts_upserted,
+            "ledger_upserted": ledger_result.ledger_upserted,
+            "driver_errors": len(plan_errors),
+        },
+    )
+
+    return {
+        # False when any driver could not be read, so the dashboard cannot
+        # toast an unqualified success over a partial sync.
+        "synced": not plan_errors and not ledger_result.errors,
+        "message": (
+            f"Synced {transfers_inserted} new transfer(s) across "
+            f"{plan.stats.get('drivers_scanned', 0)} driver(s); {transfers_skipped} already tracked. "
+            f"{ledger_result.payouts_upserted} bank payout(s), {ledger_result.ledger_upserted} ledger entries."
+            + (f" {len(plan_errors)} driver(s) could not be read — re-run, it is safe to repeat." if plan_errors else "")
+        ),
+        "drivers_scanned": plan.stats.get("drivers_scanned", 0),
+        "transfers_inserted": transfers_inserted,
+        "transfers_skipped": transfers_skipped,
+        "bank_payouts_synced": ledger_result.payouts_upserted,
+        "ledger_entries_synced": ledger_result.ledger_upserted,
+        "plan_warnings": [{"row_ref": w.row_ref, "field": w.field, "message": w.message} for w in plan.warnings],
+        "plan_errors": plan_errors,
+        "ledger_errors": [{"row_ref": e.row_ref, "field": e.field, "message": e.message} for e in ledger_result.errors],
+    }
+
+
 class RefreshAllKycRequest(BaseModel):
     """Scope for the bulk KYC refresh. Empty body = every driver with a
     Stripe account. `retire_unreachable` is opt-in because retiring detaches
@@ -3263,7 +3408,8 @@ async def admin_refresh_all_driver_kyc(body: RefreshAllKycRequest, admin: dict =
 
 
 @router.post("/drivers/{driver_id}/reveal-sin")
-async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admin_user)):
+@admin_sin_reveal_limit
+async def admin_reveal_driver_sin(request: Request, driver_id: str, admin: dict = Depends(get_admin_user)):
     """One-shot retrieval of a driver's SIN for T4A filing.
 
     **This is the only place in the codebase that decrypts `drivers.sin`.**
@@ -3350,7 +3496,10 @@ class AdminUpdateSinRequest(BaseModel):
 
 
 @router.post("/drivers/{driver_id}/update-sin")
-async def admin_update_driver_sin(driver_id: str, body: AdminUpdateSinRequest, admin: dict = Depends(get_admin_user)):
+@admin_sin_update_limit
+async def admin_update_driver_sin(
+    request: Request, driver_id: str, body: AdminUpdateSinRequest, admin: dict = Depends(get_admin_user)
+):
     """Admin-approved SIN correction — the only way to change a SIN once set.
 
     Drivers enter their SIN exactly once; `PUT /drivers/me` rejects any

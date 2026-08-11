@@ -192,15 +192,15 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-1">
-                        <Label htmlFor="zoho-client-id">Client ID {status?.has_client_id && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
+                        <Label htmlFor="zoho-client-id">Client ID {status?.has_client_id && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
                         <Input id="zoho-client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder={status?.has_client_id ? "•••••• (unchanged)" : ""} />
                     </div>
                     <div className="space-y-1">
-                        <Label htmlFor="zoho-client-secret">Client Secret {status?.has_client_secret && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
+                        <Label htmlFor="zoho-client-secret">Client Secret {status?.has_client_secret && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
                         <Input id="zoho-client-secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={status?.has_client_secret ? "•••••• (unchanged)" : ""} />
                     </div>
                     <div className="space-y-1 sm:col-span-2">
-                        <Label htmlFor="zoho-refresh-token">Refresh Token {status?.has_refresh_token && <span className="text-xs text-emerald-600">(saved)</span>}</Label>
+                        <Label htmlFor="zoho-refresh-token">Refresh Token {status?.has_refresh_token && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
                         <Input id="zoho-refresh-token" type="password" value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder={status?.has_refresh_token ? "•••••• (unchanged)" : ""} />
                         <p className="text-xs text-muted-foreground">
                             Generate a self-client refresh token in the Zoho API console with the

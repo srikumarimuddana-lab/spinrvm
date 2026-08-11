@@ -63,6 +63,11 @@ try:
 except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore
 
+try:
+    from ..utils.legacy_rides import EXCLUDE_LEGACY_RIDES  # type: ignore
+except ImportError:
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES  # type: ignore
+
 _SYSTEM_ACTOR = {"id": "system", "role": "system"}
 
 
@@ -162,13 +167,20 @@ async def _driver_annual_earnings(driver_id: str, year: int) -> Decimal:
     legacy-era income synced from Stripe transfer history.
 
     payout_type='stripe_sync' rows (services/stripe_payout_sync_service.py)
-    are the only record of income the OLD app paid out — its rides were never
-    imported — so the ≥$500 eligibility check and the notified amount must
-    include them, attributed to the year of the transfer (CRA reports amounts
-    PAID). App-native payouts are cash-outs of the ride earnings summed here,
-    and 'legacy_import' offsets pair with imported rides — only the synced
-    type is added, so nothing double-counts. Must stay consistent with
-    routes/drivers/tax_exports.get_t4a_summary (the slip the driver downloads).
+    record legacy-era income the OLD app actually PAID through Stripe, so the
+    ≥$500 eligibility check and the notified amount must include them,
+    attributed to the year of the transfer (CRA reports amounts paid).
+
+    Rides imported from the previous app (utils/legacy_rides) are EXCLUDED:
+    that income belongs to the old app and, where it was paid through Stripe,
+    is already reported by the synced rows above — counting both would report
+    the same legacy dollars to the CRA twice and could push a driver over the
+    $500 threshold on money Spinr never paid. App-native payouts are cash-outs
+    of the ride earnings summed here, and 'legacy_import' offsets pair with
+    the now-excluded imported rides, so nothing double-counts.
+
+    Must stay consistent with routes/drivers/tax_exports.get_t4a_summary (the
+    slip the driver downloads).
     """
     rides = await db_supabase.get_rows(
         "rides",
@@ -179,6 +191,7 @@ async def _driver_annual_earnings(driver_id: str, year: int) -> Decimal:
                 "$gte": f"{year}-01-01T00:00:00+00:00",
                 "$lt": f"{year + 1}-01-01T00:00:00+00:00",
             },
+            **EXCLUDE_LEGACY_RIDES,
         },
         limit=10000,
     )

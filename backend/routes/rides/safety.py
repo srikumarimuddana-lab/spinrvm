@@ -138,8 +138,43 @@ async def trigger_emergency(
             exc_info=True,
         )
 
+    # Confirm receipt to the rider/driver who triggered the alert (ACTION_ITEMS.md
+    # N15/R38). Every other side effect above notifies someone else (admin
+    # dashboard, safety-team email, on-call page, emergency contacts below) --
+    # the triggering user themselves got nothing beyond the synchronous HTTP
+    # response, which SOSButton.tsx already turns into an in-app "Alert Sent"
+    # dialog while the app is foregrounded. This closes the gap for the
+    # backgrounded/killed-app case with a real push. priority="safety" is one
+    # of the three guaranteed-delivery tiers (features.py::send_push_notification
+    # docstring) -- bypasses the push opt-out and falls back to the retry queue
+    # on a transient failure, same as the dispatch-offer and account-status
+    # pushes elsewhere in this package. Copy deliberately does not claim the
+    # alert "will get you help" or replace 911 -- it only confirms the alert
+    # reached our team, mirroring domain-safety.md's required phrasing ("We'll
+    # alert your emergency contacts and our safety team"). Self-swallowing via
+    # spawn(): a failure here must never affect the SOS response or block the
+    # SMS loop below, matching every other side effect in this function.
+    try:
+        _deps.spawn(
+            _deps.send_push_notification(
+                current_user["id"],
+                "SOS Alert Received",
+                "Your emergency alert reached our safety team and emergency contacts. "
+                "If you're in immediate danger, call 911.",
+                data={"type": "sos_confirmation", "ride_id": str(ride_id), "incident_id": incident["id"]},
+                priority="safety",
+                target_app="rider" if is_rider else "driver",
+            )
+        )
+    except Exception:  # pragma: no cover - best effort, never block the SMS path below
+        logger.error(
+            f"SOS confirmation push failed to spawn for ride={ride_id} incident={incident['id']}",
+            exc_info=True,
+        )
+
     # Notify emergency contacts via SMS (Twilio when configured, console log in dev)
     contacts_notified = 0
+    _notified_contact_ids: set = set()
     try:
         sms_settings = await _deps.get_app_settings()
         contacts_rows = await _deps.db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
@@ -180,6 +215,7 @@ async def trigger_emergency(
                 logger.error(f"SOS SMS failed for contact {contact.get('id')}: {type(result).__name__}")
             elif result.get("success"):
                 contacts_notified += 1
+                _notified_contact_ids.add(contact.get("id"))
             else:
                 # send_sms guarantees 'error' is a PII-free "type code=N
                 # status=N" string (never str(exception) — see sms_service).
@@ -195,13 +231,25 @@ async def trigger_emergency(
             "success": True,
             "incident_id": incident["id"],
             "contacts_notified": 0,
+            "contacts": [],
             "notification_warning": "Emergency contacts could not be reached — please call them directly.",
         }
+
+    # Per-contact status (B16): the driver-app Safety overlay's "✓ Notified"
+    # list needs to know which specific contacts were reached, not just the
+    # aggregate count above (kept unchanged for backward compatibility with
+    # existing callers/tests). Built from data the loop above already
+    # computed -- no extra DB/SMS work, purely additive.
+    contacts_status = [
+        {"id": c.get("id"), "name": c.get("name", ""), "notified": c.get("id") in _notified_contact_ids}
+        for c in contacts
+    ]
 
     return {
         "success": True,
         "incident_id": incident["id"],
         "contacts_notified": contacts_notified,
+        "contacts": contacts_status,
     }
 
 

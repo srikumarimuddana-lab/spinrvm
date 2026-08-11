@@ -2894,7 +2894,15 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   production via the Session pooler connection string once convenient.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
-- [ ] **Status:** open — parked pending a pricing decision (2026-07-27).
+- [ ] **Status:** open — **parked 2026-08-11 pending contributor sign-off on the
+  multiplier proposal below** (superseding the earlier "parked pending a
+  pricing decision (2026-07-27)" note — same blocker, now with the exact
+  statements ready to run once approved). No code change needed; the join
+  logic is already correct and tested. Do not run the `UPDATE` statements
+  below until a contributor with pricing authority has explicitly approved
+  the multipliers (or supplied different target rates) — this is a
+  live-pricing change, not a docs/test change, and needs the same
+  sign-off discipline as any other money-touching action per CLAUDE.md.
   **Root cause confirmed against production data** (queried live Supabase):
   this is a **data problem, not a code bug**. All 5 active `service_areas`
   rows have real `vehicle_pricing` JSONB entries — the fare service's
@@ -2927,16 +2935,58 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   `UPDATE service_areas SET vehicle_pricing = ...` per area. No code change
   needed; the join logic is already correct and tested
   (`backend/tests/test_fares.py`).
+  - **Proposed `UPDATE` statements, drafted and ready to run once
+    approved** (Regina/Saskatoon only — `riyadh`/`riyadh airport` are
+    intentionally out of scope per the product confirmation above; each
+    area's own current Economy row is the multiplier base, values rounded
+    to 2dp, `Decimal`-safe since this is direct SQL, not app-layer float
+    arithmetic):
+    ```sql
+    -- Regina: Economy base_fare=2, per_km=2, per_min=0, min_fare=0, booking_fee=0
+    UPDATE service_areas
+    SET vehicle_pricing = jsonb_set(
+      jsonb_set(
+        vehicle_pricing,
+        '{XL}', '{"base_fare": 2.80, "per_km": 2.80, "per_min": 0, "min_fare": 0, "booking_fee": 0}'::jsonb
+      ),
+      '{Premium}', '{"base_fare": 3.60, "per_km": 3.60, "per_min": 0, "min_fare": 0, "booking_fee": 0}'::jsonb
+    )
+    WHERE name = 'Regina';
+
+    -- Saskatoon: Economy base_fare=4, per_km=1, per_min=0, min_fare=0, booking_fee=0
+    UPDATE service_areas
+    SET vehicle_pricing = jsonb_set(
+      jsonb_set(
+        vehicle_pricing,
+        '{XL}', '{"base_fare": 5.60, "per_km": 1.40, "per_min": 0, "min_fare": 0, "booking_fee": 0}'::jsonb
+      ),
+      '{Premium}', '{"base_fare": 7.20, "per_km": 1.80, "per_min": 0, "min_fare": 0, "booking_fee": 0}'::jsonb
+    )
+    WHERE name = 'Saskatoon';
+    ```
+    Both areas' current per_min/min_fare/booking_fee are already 0 across
+    the board, so the ~1.2×/~1.5× multiplier on those fields is a no-op
+    here (0 × anything = 0) — only base_fare/per_km actually move. `Van`
+    is not present as a distinct row in either area's current
+    `vehicle_pricing` (only Economy/XL configured per the root-cause
+    section above) — added scope note rather than guessing a Van row
+    shape; confirm with the contributor whether Van needs seeding too
+    before running. **Not yet executed against any environment** — this is
+    a drafted proposal only, contingent on approval.
 - **Files:** none (data-only fix) — reference only:
   `backend/routes/fares.py::build_fares_for_area`,
   `backend/tests/test_fares.py`
 - **Acceptance:** each vehicle type in each area quotes genuinely different
   rates reflecting its class (XL/Premium priced above Economy).
 
+
 ### B9. Address+coordinate pairs are stored server-side with zero consistency validation
-- [x] **Status:** partially done — geocode-verify + dedupe fix shipped; `place_id`
-  storage and `CreateRideRequest` cross-field validation explicitly deferred
-  (see below)
+- [x] **Status:** CLOSED 2026-08-11 — geocode-verify + dedupe fix, `place_id`
+  storage, and `CreateRideRequest` cross-field validation are all now shipped
+  (see below). The only remaining piece named anywhere in this item's history
+  — `place_id` re-resolve-on-save for saved addresses — was already flagged
+  as its own separate, larger follow-up when `place_id` storage shipped, not
+  part of what this item's Action text asked for.
 - **Why:** the client-side carriers of mismatched pairs are fixed (recents v2,
   search-screen pin integrity, map-pick label binding), but the backend still
   accepts and replays unvalidated pairs:
@@ -2983,25 +3033,56 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
     Updated `tests/test_address_verification.py` (3-tuple return, `place_id`
     asserted in every branch) and
     `tests/test_p3_addresses_favorites_safety_disputes.py` (2 new tests:
-    `place_id` persisted on success, `None` when verification fails open) —
-    **verification of these tests is deferred to the end-of-batch full-suite
-    run**, per this session's token-budget constraint; not run individually.
-  - `CreateRideRequest` cross-field validation in `schemas.py` — **still not
-    attempted**, deliberately. Ride creation is a live, state-machine-critical,
-    money-adjacent surface; changing what it accepts needs its own dedicated
-    pass (dry run against `mock_supabase_client`, feature-flag consideration)
-    per CLAUDE.md's pre-merge release gates — which itself conflicts with
-    this session's "no testing until the end of the batch" instruction, so
-    attempting it blind here would violate the item's own stated
-    prerequisite. Left open for a dedicated pass with its own dry run.
+    `place_id` persisted on success, `None` when verification fails open).
+    **Verification note:** the "deferred to end-of-batch full-suite run" note
+    left here by the original pass was never actually confirmed run —
+    re-verified 2026-08-11 as its own explicit step before starting the
+    `CreateRideRequest` work below: `pytest tests/test_address_verification.py
+    tests/test_p3_addresses_favorites_safety_disputes.py -q --no-cov` → **40
+    passed**, 0 failures.
+  - `CreateRideRequest` cross-field validation — **done 2026-08-11**, in
+    `routes/rides/booking.py`'s `create_ride` handler rather than
+    `schemas.py` itself: pydantic `field_validator`s are synchronous and
+    can't make the network call a geocode check requires, so this was
+    structurally impossible to add as a schema validator — it has to live
+    in the route. Reuses the existing `verify_address_matches_coordinate`
+    helper (no new geocode logic), running both legs concurrently via
+    `asyncio.gather` (bounds added latency to one Maps round-trip, not two).
+    Placed *after* the existing pickup/dropoff/stop geofence gates so an
+    out-of-service-area request is rejected by the free in-memory polygon
+    check first, without spending a paid Maps call on a booking that would
+    be rejected anyway. Same fail-open contract as the other two call
+    sites. Dry run performed per CLAUDE.md's pre-merge release gate for
+    state-machine/money-adjacent changes: 671 tests across every
+    ride-booking-adjacent test file found via grep (`test_rides.py`,
+    `test_create_ride_guard_clauses.py` — 3 new tests added here,
+    `test_wav_dispatch.py`, `test_corporate_ride_payment.py`,
+    `test_coverage_rides.py`, `test_admin_rides_coverage.py`,
+    `test_corporate_surge_bypass.py`, `test_p0_ship_blockers.py`,
+    `test_ai_tools_booking.py`) — 0 failures, 0 hangs, ~20s combined;
+    confirmed the unmocked existing tests don't make a real network call
+    (the internal `get_app_settings()` lookup resolves through the same
+    mocked `db_supabase.get_rows` autouse fixture every other test already
+    relies on). `ruff check` clean on all touched files. Full Change Impact
+    Log: `docs/change-log/2026-08-11-b9-create-ride-address-coordinate-validation.md`.
+    **Not verified:** no manual/staging repro against a real Maps API key;
+    production Maps-budget/latency impact of the 2 extra geocode calls per
+    booking is unmeasured (same open question B6 already documents for the
+    Directions call); the rider-app's handling of the new 400 response was
+    not implemented (backend-only change — a raw error string surfacing
+    to the rider instead of a friendly retry prompt is a real, disclosed
+    gap, not silently assumed covered); full ~9000-test backend suite was
+    not run, only the targeted 671-test slice above.
 - **Files:** `backend/routes/addresses.py`, `backend/routes/favorites.py`,
+  `backend/routes/rides/_deps.py`, `backend/routes/rides/booking.py`,
   `backend/utils/address_verification.py` (new),
   `backend/tests/test_address_verification.py` (new),
-  `backend/tests/test_p3_addresses_favorites_safety_disputes.py`
-- **Acceptance:** no endpoint persists an address whose stored coordinate is
-  more than ~1 km from where that address geocodes, when Google is confident
-  about the geocode (met for `/addresses` and `/favorites`; `CreateRideRequest`
-  still open — see deferred above).
+  `backend/tests/test_p3_addresses_favorites_safety_disputes.py`,
+  `backend/tests/test_create_ride_guard_clauses.py`
+- **Acceptance:** met — no endpoint (`/addresses`, `/favorites`, or
+  `POST /rides`) persists an address whose stored coordinate is more than
+  ~1 km from where that address geocodes, when Google is confident about
+  the geocode.
 
 ### B10. Compliance-module exports have no dual-approval gate (extends open AI-3)
 - [x] **Status:** DONE (2026-07-29) — shipped across PR #2819 (schema,
@@ -3449,25 +3530,53 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   made.
 
 ### B16. Driver SOS UX doesn't implement the discretion the design sketch chose it for
-- [ ] **Status:** open — found 2026-07-30, same trace session as B15, this
-  time against the actual design-decision artifacts rather than a context
-  doc: `.planning/sketches/010-rider-sos/index.html` and
-  `.planning/sketches/011-driver-sos/index.html`. Product/design call, not
-  a pure code bug — logging as a tracked finding per user instruction
-  rather than redesigning inline. **2026-08-01 update (product call,
-  relayed via engineering — not directly reviewed against the sketch by the
-  product owner, noted explicitly per that relay): design intent
-  confirmed — the discreet-hold-shield design is still wanted for the
-  driver surface. Implementation is explicitly deferred to its own
-  dedicated follow-up, not scheduled as part of this task.** Rationale for
-  the deferral (not the design call itself): this is real mobile
-  safety-UX work — new component, hold-vs-tap duality, a Safety overlay
-  screen, per-contact notified list, discreet-mode toggle — and bundling
-  live UI changes to a safety-critical surface into the same
-  CI-usage-constrained combined change as B15(b)'s backend paging work
-  would be irresponsible. No code changed for B16 by this update — see
-  Approach below for the scoping note carried forward for whoever picks
-  this up next.
+- [x] **Status:** CLOSED (2026-08-11) — implemented per the confirmed design
+  intent (2026-08-01 relay, see below), dark-launched behind
+  `app_settings.driver_discreet_sos_enabled` (default `False`). Shipped
+  across two branches: `claude/b16-driver-sos-discreet-shield` (backend,
+  merged PR #3596 — per-contact SOS status field, driver access to the
+  trip share link, flag schema + `GET /settings` exposure) and
+  `claude/b16-driver-sos-frontend` (new shared `SafetyShield.tsx` /
+  `SafetyOverlay.tsx` components, `useHoldToConfirm`/`useEmergencyContacts`
+  shared hooks, `useDriverSafetyTrigger`/`useDriverDiscreetSosFlag`
+  driver-app hooks, and the flag-gated wiring into
+  `driver-app/app/driver/(tabs)/index.tsx`). Full 12-subtask implementation
+  plan (design sketch spec, exact file list, verification per subtask) is
+  in the session transcript; each subtask landed as its own commit with
+  its own tests.
+  - **Bundled fix:** the driver-app `SOSButton` `onTrigger` swallowed its
+    POST error (`try{...}catch(err){console.error}`, never rethrew) —
+    `SOSButton`'s own retry/FAILED state could never activate for a real
+    driver-side backend failure. Fixed as part of the wiring commit
+    (rethrow instead); this is the one deliberate behavior change on the
+    flag-off (default) path, called out explicitly rather than hidden.
+  - **Not done, tracked as a fast-follow, not blocking closure:** (1) the
+    bottom-action-bar "🛡 Safety" entry point on `ActiveRidePanel.tsx`
+    (plan's subtask 12) — the shield's own hold-and-tap gestures already
+    provide full functionality without it; (2) an admin-dashboard checkbox
+    UI for the flag — flip via `PUT /api/admin/settings` directly until
+    built; (3) the rideless/standalone SOS path question from B15(c) is
+    still separately open, unrelated to this item.
+  - **Verification:** backend — `pytest` across `test_p2_sos.py`,
+    `test_coverage_rides.py`, `test_driver_discreet_sos_flag.py`,
+    `test_public_settings.py` (new/extended, all pass). Frontend — new
+    Jest/RNTL tests for every new hook and component (hold-gesture timing,
+    contacts fetch, retry/backoff, flag fail-closed, shield/overlay
+    render+interaction, and the invariant that a failed silent alert never
+    shows `Alert.alert`): 50/51 driver-app suites pass (the one failure,
+    `ActivityView.test.tsx`, is a pre-existing, unrelated
+    `expo-router/react-navigation` resolution gap, confirmed via
+    `git stash` to fail identically without any B16 changes present).
+    `tsc --noEmit` clean on every touched file.
+  - **NOT verified — explicit gap, not silently assumed covered:** no
+    manual QA on a real device/simulator (gesture timing, blur/toast
+    rendering, and the actual flag-off vs flag-on visual behavior aren't
+    testable under Jest); no visual/snapshot regression tooling exists in
+    this repo at all (standing gap); the flag has not been flipped on
+    anywhere (dark-launch by design, same as every other `app_settings`
+    rollout flag in this codebase).
+  - Superseded text below (original finding + design rationale) kept for
+    record.
 - **Why:** sketch 011's stated design question is *"Can a driver call for
   help with one hand while driving [without alerting a threatening
   passenger]?"* It mocks 3 variants and explicitly rejects the
@@ -3495,22 +3604,29 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   closer to the sketch's own **rejected** Variant A than to the winning
   Variant C — the exact pattern the design process ruled out as most
   dangerous for the driver's actual threat scenario.
-- **Files (reference only, no code changed by this entry):**
+- **Files (original finding; superseded — see the CLOSED status block
+  above for what actually shipped):**
   `shared/components/SOSButton.tsx`, `driver-app/app/driver/(tabs)/index.tsx`,
   `.planning/sketches/010-rider-sos/index.html`,
   `.planning/sketches/011-driver-sos/index.html`.
-- **Approach:** (a) is now **decided** — design intent confirmed, see Status
-  above. Still needed before any code, carried forward for the dedicated
-  follow-up: (b) scope it as its own feature build (new component or a
-  `discreet` prop on `SOSButton` that swaps the success path from
-  `Alert.alert()` to a silent toast, plus the tap-opens-overlay affordance)
-  rather than folding it into B15's DB-fallback fix, since this is UX
-  surface area, not a backend reliability fix, (c) if the rider/driver split
-  was intentionally abandoned in favor of one shared component, update the
-  sketches or archive them so they stop describing intent nobody plans to
-  build.
-- **Acceptance:** not yet defined — pending the dedicated follow-up
-  scoping (b)/(c) above into concrete acceptance criteria.
+- **Approach (original — (b)/(c) resolved by the 2026-08-11 implementation,
+  kept for record):** (a) is now **decided** — design intent confirmed, see
+  Status above. (b) scoped as its own feature build: new
+  `SafetyShield.tsx`/`SafetyOverlay.tsx` components rather than a
+  `discreet` prop on `SOSButton` — `SOSButton.tsx` itself stayed untouched,
+  so rider-app's own SOS UX carries zero risk from this change. (c) the
+  rider/driver split was *not* abandoned — `SOSButton.tsx` remains
+  rider-app's only SOS UI (sketch 010's own different winning design is
+  out of scope for this item and still not implemented; not tracked here).
+- **Acceptance:** met for the driver-only discreet-hold-shield build —
+  hold 3s fires a silent alert (badge + toast, never `Alert.alert`); a
+  short tap opens the Safety overlay (911 / alert-contacts / share-trip-
+  link / per-contact notified list / "I'm Safe — Close"); dark-launched
+  behind a flag with a zero-code rollback. Not part of this item's
+  acceptance: flipping the flag on (operational follow-up, tracked in the
+  Status block's "not done" list), the bottom-bar entry point (subtask 12,
+  optional convenience), and rider-app's own sketch-010 redesign (separate,
+  unopened scope).
 
 ### B17. `purge_pii_retention` Step B will FK-abort the entire daily retention purge once any paid ride crosses 7 years
 - [x] **Status:** CLOSED (2026-08-10), **with an erratum found and fixed the
@@ -3822,6 +3938,13 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   the invariant (see `test_lock_ttl_expires_before_the_earliest_next_wake` and
   `test_projection_loop_reacquires_its_own_lock_on_the_next_wake`), and
   `payment_retry.py`'s misleading comment corrected.
+- **2026-08-11 addendum:** a 5th instance of the identical bug found in
+  `utils/suspension_reactivation.py` while working N7 (ACTION_ITEMS.md) —
+  this item's own "not audited beyond this list" caveat held. Fixed with
+  the same `interval * 0.85` formula and test pattern (2 new tests in
+  `test_suspension_reactivation_coverage.py`). If another instance turns
+  up, it's the same root cause, not a new item — extend this note rather
+  than filing separately.
 
 ### B22. `G4a · pip-audit` is red on four advisories in three backend dependencies
 - [x] **Status:** CLOSED (2026-08-11) — all three dependencies now bumped
@@ -4587,8 +4710,28 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   repo).
 
 ### C12. Codecov uploads on `main` pushes silently fail — no token configured
-- [ ] **Status:** open — found 2026-08-10 while checking A1c's current
-  coverage number against the latest `main` CI run.
+- [ ] **Status:** open — partially addressed 2026-08-11 (the "also worth
+  doing alongside" half, not the actual fix — see below). The `CODECOV_TOKEN`
+  secret itself is still missing; do not close this checkbox until it's
+  added and `token: ${{ secrets.CODECOV_TOKEN }}` is wired into the 3 steps
+  below.
+- **2026-08-11 update:** added a follow-up step after each of the 3
+  *actually-running* `codecov/codecov-action@v6` calls (`backend-test`,
+  `driver-app-test`, `rider-app-test`) that checks `steps.codecov_upload.outcome
+  == 'failure'` (the step's real result, unmasked by `continue-on-error`) and
+  emits a `::warning::` annotation plus a `$GITHUB_STEP_SUMMARY` entry when
+  the upload fails. Does **not** change the job's overall conclusion — still
+  green until the token exists — only stops the failure from being invisible.
+  **Correction to the "4 times... backend/rider-app/driver-app/admin" count
+  below: `admin-test` has no Codecov upload step at all** — checked directly
+  against `ci.yml`, only `backend-test`, the disabled `frontend-test` (`if:
+  false`, dead code, not touched), `driver-app-test`, and `rider-app-test`
+  have one. So the real count of live jobs affected is 3, not 4. YAML
+  validated via `yaml.safe_load` (parses clean, correct step count per job);
+  no live GitHub Actions run available in this session to confirm the
+  `::warning::`/summary actually fires on a real rejected upload — next
+  push-triggered `main` run (which reliably rejects tokenless, per the
+  original finding) is the real confirmation.
 - **What's wrong:** `.github/workflows/ci.yml`'s `backend-test` job uploads
   to Codecov via `codecov/codecov-action@v6` with no `token:` input (tokenless
   upload) and `continue-on-error: true`. On push-triggered runs (as opposed to
@@ -4808,6 +4951,76 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   against (a super-admin's role changing mid-session without a remount) was
   not manually reproduced.
 
+### C16. `admin-dashboard` test files were never covered by `next build`'s type-check, and where they briefly were (dependabot PR #3483), it broke the build
+- [ ] **Status:** open. Not gating — no user-facing effect (see below); sized
+  S, well under 2 hours for whoever picks it up.
+- **Why:** `tsconfig.json`'s `exclude` list only excluded `src/__tests__` by
+  directory name. 11 of the app's 20 `*.test.ts(x)`/`*.spec.ts(x)` files live
+  outside that directory (colocated `_components/*.test.tsx`, `hooks/*.test.tsx`,
+  `lib/__tests__/*`, etc.) and were silently included in `next build`'s
+  type-check scope all along — invisible only because nothing in the
+  toolchain's own type-checking had ever surfaced an error in them, not
+  because they were actually excluded. Found while verifying dependabot PR
+  #3483 (`next` 16.2.12→16.3.0, one of the "next-stack" group bump): that
+  PR's own changelog includes "Enable TypeScript CLI by default," and under
+  the new stricter check `npm run build` fails with "Failed to type check"
+  on 3 of those 11 files — confirmed via a clean before/after (`main`
+  builds, the bump branch doesn't) that this is a real regression surfaced
+  by the bump, not a flake. The three failures are two different root
+  causes: missing `vitest`/`@testing-library/jest-dom` global types
+  (`route-segments.test.ts`, `driver-statements-panel.test.tsx`), and one
+  genuine type-narrowing bug in test code itself
+  (`companyApi.test.ts:105` — `as {_data:...}` doesn't structurally overlap
+  with the real `NextResponse<any>` return type; the test already passes at
+  runtime under `vitest run`, so this is a compile-time-only strictness
+  complaint, not a hidden behavioral bug).
+- **Immediate unblock (applied to PR #3483 directly, not a fix for this item):**
+  broadened `tsconfig.json`'s `exclude` to a filename-pattern match
+  (`**/*.test.ts`, `**/*.test.tsx`, `**/*.spec.ts`, `**/*.spec.tsx`) covering
+  all 20 test files consistently, instead of the incomplete
+  directory-name-only pattern. Verified: `tsc --noEmit` clean, real
+  `npm run build` passes, and the 3 previously-failing files still run and
+  pass under `npx vitest run` (18/18) — the exclusion only removes them from
+  the build's type-check, not from actual test execution.
+- **The real fix (not yet done):** add `"types": ["vitest/globals",
+  "@testing-library/jest-dom"]` to `tsconfig.json`'s `compilerOptions`, drop
+  the test-file exclusions entirely, then fix what that surfaces. Already
+  dry-ran this in a scratch worktree with **zero exclusions** (the honest
+  full scope, including the 9 files under the old `src/__tests__` exclude
+  that had never been type-checked at all): only **2 files, 4 error sites**
+  total across the whole 20-file suite.
+  - `companyApi.test.ts:105` — one-line `as unknown as {...}` cast, zero
+    functional risk (confirmed above).
+  - `src/__tests__/dashboard/pages.smoke.test.tsx` (3 sites) — a shared
+    `renderPage()` smoke-test helper called with page components whose
+    inferred return type doesn't satisfy `ComponentType<{}>`; root cause
+    (helper's generic signature vs. specific page export types) not yet
+    diagnosed — this is the one part of the estimate that's a real unknown
+    until someone opens it.
+- **User-experience effect:** none, either way. `*.test.ts(x)` files are
+  never bundled into anything Next.js ships — no route, page, or API output
+  includes them regardless of whether the build's `tsc` pass checks them.
+  The benefit of doing the real fix is dev-experience/CI-signal quality
+  only: correct IDE type-hints in test files, and a genuine safety net
+  against test-code bugs like the `companyApi.test.ts` one (harmless today,
+  but the pattern — a test file invisible to type-checking — is exactly how
+  a *behavioral* mismatch could hide next time, not just a strictness
+  complaint).
+- **Files:** `admin-dashboard/tsconfig.json` (unblock, applied);
+  `admin-dashboard/src/lib/__tests__/companyApi.test.ts`,
+  `admin-dashboard/src/__tests__/dashboard/pages.smoke.test.tsx` (real fix,
+  not yet applied).
+- **Effort estimate for the real fix:** tsconfig change ~5 min +
+  `companyApi.test.ts` one-liner ~5 min + `pages.smoke.test.tsx`
+  investigation 30–60 min (unknown until opened) + full re-verification
+  (`tsc` + `npm run build` + `vitest run`) ~15 min ≈ **under 2 hours** total.
+- **What was NOT verified:** the `pages.smoke.test.tsx` root cause itself —
+  scoped by error count and file count, not by actually fixing it. Not
+  checked whether other admin-dashboard-adjacent surfaces (rider-app,
+  driver-app) have the same directory-name-only test-exclude gap in their
+  own `tsconfig.json`s — this item is scoped to admin-dashboard only,
+  where it was found.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
@@ -4832,60 +5045,250 @@ when payment retries are exhausted (R32, formerly N4)._
 
 Remaining, roughly in order of user impact:
 
-- [ ] **N1. Rider DSAR export assembles no data and sends no email (R10)** —
-  `POST /users/data-export` (`routes/users.py:152`) inserts a
-  `data_export_requests` row with a 30-day SLA and stops. Nothing builds the
-  export, nothing emails it, and the admin status-change endpoint
-  (`routes/admin/users.py:486`) notifies nobody either. A working export exists
-  driver-side (`routes/drivers/tax_exports.py:668`, handles rider-only
-  accounts at `:721`) but the rider app never calls it. **This is a PIPEDA
-  access-right obligation, not a nice-to-have** — own change, own review.
-  Now the largest open item in this group.
+- [x] **N1. Rider DSAR export assembles no data and sends no email (R10)** —
+  CLOSED (2026-08-11): `POST /users/data-export` now spawns a background task
+  that reuses (and extends) the driver-side export builder
+  (`routes/drivers/tax_exports.py::_build_and_email_data_export`) to actually
+  build and email the export, then reflects the real outcome on the queued
+  `data_export_requests` row. Rate-limited to match the driver endpoint
+  (`@dsar_export_limit`, 3/hour), since it now runs the same fan-out DB-reads
+  + ZIP-build + Storage-upload + email pipeline. The reused function's own
+  handling of a rider-only account was found to be incomplete during this
+  fix (it previously exported only account + notification_preferences, no
+  ride history) and was extended with a `rides_as_rider` + `saved_addresses`
+  read, independent of the existing driver-shaped `rides` (gated on having a
+  `drivers` row). Caught by an independent `spinr-regulatory-compliance-
+  checker` subagent pass before merge. The admin status-change endpoint
+  (`routes/admin/users.py:486`) still notifies nobody on manual status
+  changes, and the DSAR queue's `status` CHECK constraint has no distinct
+  `'failed'` value (a silently-failed auto-fulfillment currently looks
+  identical to "not yet attempted") — both left as smaller, explicitly noted
+  follow-ups rather than expanding this fix's scope further.
 - [x] ~~**N2. Corporate guest rides get no receipt (R26)**~~ — done: the
   receipt hook now sits beside the Meta conversion hook in
   `auto_settle_guest_corporate`, gated on `not already_paid` so a replayed
   settlement does not re-send. A phone-only guest still has no email on file
   and is skipped silently.
-- [ ] **N3. Two push call sites pass the wrong ID and are silently dropped (X6)**
-  — `utils/payment_retry.py:183` passes `drivers.id` and `:412` passes
-  `ride["driver_id"]` where `user_id` is required; `features.py:1659` then finds
-  no user and drops the push at `:1661`. Every "Payout failed" notice from
-  `retry_stuck_payouts` is lost. Same defect shape at
-  `routes/admin/vehicle_fleet.py:541`, which passes `fcm_token`.
+- [x] **N3. Three push call sites pass the wrong ID and are silently dropped (X6)**
+  — CLOSED (2026-08-11). Confirmed a third site beyond the two originally
+  named: `utils/payment_retry.py::notify_driver_payout_failed` (called from
+  `retry_stuck_payouts` with `payouts.driver_id`) and the in-progress-retry
+  push in `retry_failed_payments` (`rides.driver_id`) both passed a
+  `drivers.id` where `send_push_notification` requires `users.id`;
+  `routes/admin/vehicle_fleet.py`'s lost-and-found notify passed the raw
+  `fcm_token` string instead of any id. Fixed the two `payment_retry.py`
+  sites with a shared batched `drivers.id → users.id` resolver
+  (`_resolve_driver_user_ids`, one `$in` query per sweep tick rather than
+  per row) and the `vehicle_fleet.py` site by passing the already-fetched
+  `driver["user_id"]` instead of the token. 143 tests passing; new
+  assertions specifically pin the resolved `users.id` (not the driver id or
+  token) as what reaches `send_push_notification`'s first argument.
 - [x] ~~**N4. Rider blocked from booking is never told (R32)**~~ — done:
   `_alert_admins_payment_exhausted` now emails the rider first, before the
   admin WS broadcast and pushes, and is self-swallowing so those still fire.
-- [ ] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
-  (D29)** — `routes/rides/cancellation.py:356`. A driver en route to pickup
-  with a backgrounded app is not notified.
-- [ ] **N6. Stripe Connect KYC blocking payouts notifies nobody (D24)** —
-  `routes/webhooks.py:1297` → `services/stripe_kyc_sync.apply_account_update`
-  persists the cache columns and stops. A driver whose payouts Stripe has
-  blocked learns nothing.
-- [ ] **N7. Auto-reactivation after `suspended_until` lapses is silent (D21)** —
-  `utils/suspension_reactivation.py` writes an audit row; the driver is never
-  told they can work again.
-- [ ] **N8. Delete dead `utils/receipt_email.py` (X4)** — no production callers
-  (only `tests/test_receipt_email.py`), and it hardcodes `_GST_RATE = 0.05` /
-  `_PST_RATE = 0.06` (`:18-19`) instead of reading the service area, so it will
-  silently mis-tax if anyone wires it up. The name collision with the live
-  `utils/email_receipt.py` is itself a trap.
-- [ ] **N9. Five notification preferences are still dead columns (X2)** —
-  `sms_enabled`, `ride_updates`, `promotions`, `safety_alerts`,
-  `earnings_summary` are persisted, surfaced in the app, and read by nothing.
-  `earnings_summary` in particular is ignored by the statement job
-  (`utils/driver_statement_job.py`). Either wire them or remove them from the UI.
+- [x] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
+  (D29)** — CLOSED (2026-08-11). `routes/rides/cancellation.py`'s driver-notify
+  block now also sends a push (`priority="dispatch"`, `target_app="driver"`,
+  backgrounded via `spawn()`) alongside the existing WS message, mirroring
+  the new-offer push convention in `matching.py`. 48 tests passing across
+  `test_e2e_cancellation.py` (10, including a new one asserting the push
+  fires with the correct driver `user_id`/priority/target_app/data),
+  `test_corporate_company_bookings_routes.py`, and
+  `test_ride_cancellation_branches.py`.
+  **2026-08-11 follow-up:** the same WS-only gap existed in the same
+  function's batch-dispatch pending-offers loop (a driver with a pending,
+  not-yet-accepted offer, notified only if this ride is cancelled before
+  any driver is assigned) — verified directly by grep before this follow-up
+  landed, and closed the same way: identical `priority`/`target_app`/`data`
+  push added alongside the existing WS message, inside the loop's existing
+  try/except so a push failure is handled the same as a WS failure. 27 tests
+  passing (`test_ride_cancellation_branches.py` + `test_e2e_cancellation.py`),
+  1 new test pinning the push's exact args. Broader `-k cancel` sweep: 262
+  passed. See `docs/change-log/2026-08-11-n5-batch-dispatch-push-fallback.md`.
+- [x] ~~**N6. Stripe Connect KYC blocking payouts notifies nobody (D24)**~~ —
+  done: `apply_account_update` now detects a genuine
+  `stripe_payouts_enabled` True→False edge (comparing the pre-update
+  `drivers` row already in scope against the freshly computed mirror
+  update) and fires a guaranteed-delivery (`priority="account"`) push with a
+  `/driver/payout` deeplink — never on a redelivery of an already-blocked
+  account, and never on a driver's first-ever sync (pre-update value unset)
+  being misread as a transition. A symmetric False→True "payouts resumed"
+  push (`priority="normal"`) is included too. Notification failure is
+  swallowed (logged, matching the subscription-cancelled push above it in
+  `routes/webhooks.py`) so it can never undo the already-committed mirror
+  write.
+- [x] ~~**N7. Auto-reactivation after `suspended_until` lapses is silent (D21)**~~
+  — done: `_reactivate_tick` now sends a push (`"Account reactivated" / "Your
+  account is active again. Welcome back!"`) right after the audit-log insert,
+  gated on the same "did our conditional update actually stick" check so a
+  replica that loses the reactivation race never double-notifies. Applies to
+  both riders and drivers (the `users` table query has no role filter).
+  `target_app=None` (legacy `fcm_token`) is deliberate, not unresolved: the
+  `users.role` column is admin-RBAC-only, not a rider/driver signal, and an
+  account can be both via `is_rider`/`is_driver` — mirrors
+  `routes/admin/users.py`'s manual-reactivation push, which already uses the
+  same copy and the same `target_app=None`. Push-only, no email, matching
+  that same manual precedent (it doesn't email either). 25 tests passing
+  (`test_suspension_reactivation.py`, `test_suspension_reactivation_coverage.py`),
+  6 new specifically on the notification behavior. **2026-08-11 follow-up:**
+  a 5th instance of the B21 lock-TTL bug (`interval * 2` against a `1x`
+  sleep, halving cadence) found in this same file while working this item —
+  fixed separately, see B21's addendum below.
+- [x] **N8. Delete dead `utils/receipt_email.py` (X4)** — CLOSED (2026-08-11).
+  Deleted the file and its test; confirmed via repo-wide grep that every
+  remaining `receipt_email`/`send_receipt_email` reference resolves to the
+  live `utils/email_receipt.py` module, not the deleted one. Dropped the
+  now-stale exemption entry from `test_all_emails_are_branded.py`'s
+  `_UNBRANDED_BY_DESIGN` map.
+- [x] ~~**N9. Five notification preferences are still dead columns (X2)**~~ —
+  partially closed 2026-08-11: investigated every one of the 5
+  `notification_preferences` columns end-to-end (grepped every read/write
+  site backend-wide) and made a WIRE-or-REMOVE call per column, documented
+  below. 2 wired (backend only); 3 determined genuinely dead after
+  investigation, with frontend toggle removal flagged as follow-up (this
+  session was backend-only, per scope).
+  - **`earnings_summary` — WIRED.** `utils/driver_statement_job.py`'s
+    `_process_driver` now calls a new `_earnings_summary_enabled(user_id)`
+    (reads `notification_preferences.earnings_summary`, defaults True on a
+    missing row or a lookup error — fails open, same posture as
+    `push_enabled` in `features.send_push_notification`) right after the
+    existing activity check and before the PDF render / email send. A
+    driver who opted out gets a `driver_statements` row written with the new
+    terminal status `skipped_opted_out` (so the period still converges and
+    is never rescanned for them — same pattern as the pre-existing
+    `skipped_no_email`/`skipped_inactive`), with `totals` still populated so
+    the admin listing keeps the numbers even though nothing was emailed. No
+    schema change needed — `driver_statements.status` has no CHECK
+    constraint — but migration `300_driver_statements_skipped_opted_out_comment.sql`
+    updates the column COMMENT (the documented status-lifecycle source of
+    truth) to list the new value, per the append-only migration rule (never
+    edit merged migration 272 in place).
+  - **`ride_updates` — WIRED, centrally, in `backend/features.py`.**
+    `send_push_notification` already read `push_enabled` for every
+    non-time-critical push; it now also checks `ride_updates` for a narrow
+    `_RIDE_UPDATE_PUSH_TYPES` set (`driver_accepted`, `driver_arrived`,
+    `ride_started`, `ride_completed`, `ride_cancelled`, `ride_noshow`) —
+    exactly what the rider-app's own copy calls this toggle
+    (`rider-app/app/_layout.tsx`'s `ride-updates` Android channel: "Status
+    updates for your current ride"). Gated in the single choke-point
+    function rather than at each of the ~15 call sites, both to avoid
+    preference-check drift and to avoid touching the same route files N10
+    (in flight this same day) is editing per call site. Deliberately
+    excludes: anything already `priority="dispatch"/"safety"/"account"`
+    (the `time_critical` bypass runs first, so e.g. the driver-directed
+    dispatch-priority `ride_cancelled` push in
+    `routes/rides/cancellation.py` is unaffected — confirmed by a new
+    regression test); `ride_offer_expired`/`auto_offline`/`quota_exhausted`
+    (driver-availability bookkeeping, not "my ride's status"); and every
+    `scheduled_ride_*` type (a different "upcoming booking reminder" UX,
+    left for a follow-up rather than guessed at in this pass).
+  - **`sms_enabled` — determined DEAD, no safe wiring found.** Every
+    `send_sms`/`send_otp_sms` call site was inventoried
+    (`routes/auth.py` OTP login — must never be preference-gated;
+    `routes/rides/safety.py` SOS emergency-contact texts — safety-critical,
+    never gate; `services/guest_notification_service.py` guest-ride SMS —
+    carries the pickup OTP + tracking link, the guest's only channel,
+    transactional; `utils/marketing_sms.py` — already CASL-gated by the
+    *separate* `marketing_preferences.sms_opt_in` consent system, not this
+    column; `routes/admin/messaging.py`'s `_send_sms_one` non-marketing
+    branch — the file's own code comment documents this as deliberately
+    ungated because it may carry "safety, outage" content, and the endpoint
+    has no sub-classification to separate that from routine info, so gating
+    it risks silently suppressing an operational/outage broadcast). No
+    remaining call site is both real and safe to gate. Frontend follow-up:
+    remove the "SMS Notifications" toggle from rider-app/driver-app
+    settings (not verified/edited this session — backend-only scope).
+  - **`safety_alerts` — determined DEAD, no safe wiring found; actively
+    unsafe to wire.** The only `priority="safety"` push in the codebase is
+    the SOS self-confirmation in `routes/rides/safety.py`
+    ("Your emergency alert reached our safety team...") — one of the three
+    guaranteed-delivery tiers in `features.send_push_notification` that
+    *bypasses* the opt-out by design. Letting a `safety_alerts` toggle
+    suppress that would directly contradict CLAUDE.md's safety guardrails.
+    No other "safety advisory"-style informational push exists to gate
+    instead. Frontend follow-up: remove the toggle (not verified/edited
+    this session).
+  - **`promotions` — determined DEAD/redundant, not wired.** Spinr already
+    has a legally-scoped CASL consent system for marketing content
+    (`services/marketing_consent.py`'s `marketing_preferences` table, migration
+    190) that independently governs `utils/marketing_push.py` and
+    `utils/marketing_sms.py`. Wiring `notification_preferences.promotions`
+    as a second, differently-scoped opt-in for the same channel/category
+    would create two sources of truth for "may we send this user
+    promotional content" — a correctness and compliance risk, not a safe
+    win. Frontend follow-up: remove the toggle, or (better, not decided
+    here) point it at the existing `marketing_preferences.push_opt_in` /
+    `sms_opt_in` read path if product wants a single settings-screen
+    control — a product decision, not a backend one.
+  - Tests: `backend/tests/test_notification_preferences.py` (4 new cases —
+    ride_updates suppresses/doesn't-suppress by type, dispatch-priority
+    bypass, opted-in still sends) and
+    `backend/tests/test_driver_statement_job.py` (4 new cases — opted-out
+    skips email but still claims/records totals, opted-in still sends,
+    fail-open on lookup error, defaults-true with no prefs row).
 - [ ] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
   through to the legacy `users.fcm_token` column (`features.py:1664-1670`)
   rather than `fcm_token_rider`. Works today only because registration still
   mirrors both (`routes/notifications.py:329-336`); breaks silently if that
   mirroring is ever removed.
-- [ ] **N16. Consolidate the two copies of the company-address assembly** —
-  `utils/company_details.py` and `utils/marketing_email.py` both carry
-  `_coalesce` / `_postal_address`. Deliberately not merged: marketing's copy
-  sits on a CASL consent-critical path and produces a legally-required footer,
-  so touching it needs its own review rather than being folded into an
-  unrelated change.
+  **2026-08-11 update — Batch 1 done:** fixed the 10 clearest, unambiguous
+  rider-directed call sites across 5 files —
+  `routes/rides/lifecycle.py:113` (ride-started push),
+  `routes/rides/matching.py:1347` (no-drivers-found auto-cancel),
+  `utils/scheduled_rides.py:93,102,302,492,537` (delay notice ×2,
+  policy-blocked, dispatch-fired, 10-min reminder),
+  `utils/stuck_ride_sweeper.py:117` (stuck-ride auto-cancel), and
+  `services/payment_service.py:1355,1402` (payment-failed ×2, fresh-charge
+  path). Each got a regression test asserting `target_app="rider"` is passed
+  (verified to fail if reverted). ~19 call sites remain, inventoried in
+  `docs/change-log/2026-08-11-n10-rider-push-target-app-batch1.md`'s
+  "Remaining scope" section.
+  **2026-08-11 update — Batch 2 done:** fixed the 3 sites flagged as the
+  next clearest batch — `routes/disputes.py:98` (dispute-created push),
+  `routes/disputes.py:308` (dispute-resolved push), and
+  `services/guest_notification_service.py:167` (corporate app-holder guest
+  booking push) — all confirmed unambiguously rider-directed
+  (`ride.get("rider_id")`/`dispute.get("user_id")`/`guest_user["id"]`, all
+  rider accounts), each with a new regression test asserting
+  `target_app="rider"`. Also closed out the two items this batch's parent
+  note had deferred: `routes/rides/cancellation.py`'s two push call sites
+  both already target the driver (`target_app="driver"`) — no rider-push
+  gap there, nothing to fix; `utils/receipt_email.py` no longer exists
+  (deleted by N8) — moot. That empties the batch-1 change-log's
+  "clearly rider-directed, ready to fix" list. What's left per that same
+  doc: 3 driver-directed sites missing `target_app="driver"` (a related but
+  distinct, not-yet-tracked gap —
+  `routes/rides/matching.py:1071`, `services/cancellation_service.py:206`,
+  `utils/document_expiry.py:216`), plus an "ambiguous/admin" bucket
+  (`routes/notifications.py:108`'s `/test-push`, and the `routes/admin/*.py`
+  broadcast endpoints where recipient role varies per admin selection) that
+  needs its own per-call-site read rather than a batch sweep.
+- [x] ~~**N16. Consolidate the two copies of the company-address assembly**~~
+  — done 2026-08-11: `_coalesce`/`_postal_address` were byte-identical logic
+  duplicated across `utils/company_details.py` and `utils/marketing_email.py`.
+  Extracted into a new shared `utils/address_format.py`
+  (`coalesce_setting`/`postal_address`, public names since it's now a real
+  shared module, not a private per-file helper), imported back into both
+  files under their original `_coalesce`/`_postal_address` local names so
+  every call site is unchanged. Zero output-behavior change by design: the
+  marketing CASL footer (`build_footer_html`/`build_footer_text`) and the
+  transactional-email `CompanyDetails` both still receive exactly the same
+  string for the same settings input — proven by running both files'
+  existing test suites unmodified (`test_company_details.py` 22 tests,
+  `test_marketing_email.py` 3 tests, plus `test_marketing_broadcast.py`,
+  `test_all_emails_are_branded.py`, `test_branded_documents.py`,
+  `test_branded_receipt_flag.py`, `test_email_layout.py`,
+  `test_receipt_shell_snapshot.py` — 121 total, all pass unmodified) and by
+  adding 9 new direct unit tests for the shared module in
+  `tests/test_address_format.py`. Blast radius: grepped every other
+  importer of `company_details`/`marketing_email` repo-wide — all import
+  only public functions (`load_company_details`, `to_latin1`,
+  `send_marketing_email`), none import the private `_coalesce`/
+  `_postal_address` names directly, so no other file needed a change. This
+  satisfies the item's own deferral condition — "touching it needs its own
+  review" — by making the marketing copy's only change an import swap with
+  a byte-for-byte-identical function body and proven zero output delta,
+  rather than folding a behavior change into an unrelated commit.
 - [x] ~~**N11. Retrofit the ride receipt and Spinr Pass invoice**~~ — done:
   both now use the shared header/footer, the real logo, `#FF3B30`, and the
   company name and address from the admin Settings page, in the email **and**
@@ -4906,15 +5309,37 @@ Remaining, roughly in order of user impact:
   additionally now **escapes** admin-authored free text, which the previous
   bare `<h2>`/`<p>` interpolation did not. See
   `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
-- [ ] **N17. Product name in email copy is still literal "Spinr"** — "Open the
-  Spinr driver app", "your Spinr wallet", "— The Spinr Team". Deliberate, not
-  an oversight: the `company_name` setting holds the *legal entity* name, and
-  "Open the Spinr Technologies Inc. driver app" reads badly, so settings drive
-  the footer identity, mailing address, logo, logo alt text and sentence-final
-  legal-name usage only. A rebrand of the product name itself needs a separate
-  `company_app_name` setting plus a copy sweep across `utils/rider_emails.py`,
-  `utils/driver_status_notifications.py`, `utils/document_expiry.py` and
-  `routes/drivers/tax_exports.py`. Worth doing before, not after, any rename.
+- [x] **N17 closed**: added `company_app_name` (default `"Spinr"`) as a new,
+  independent setting alongside `company_name` (the legal entity) —
+  `schemas.AppSettings.company_app_name`, wired through
+  `routes/admin/settings.py`'s `SettingsUpdateRequest` the same way
+  `company_logo_url` etc. are, and surfaced on the admin Settings page →
+  Company Info tab (new "App Name" field next to "Company Name", each with a
+  help line pointing at the other). `utils/company_details.CompanyDetails`
+  gained an `app_name` field, resolved in `load_company_details()` from
+  `company_app_name` with the same "falls back to Spinr" rule as every other
+  field there. Swept all four named files to interpolate
+  `company.app_name`/`{app_name}` instead of the literal word "Spinr" in
+  BODY copy (subjects, "Open the ... app", "your ... wallet", "— The ...
+  Team", the DSAR README/HTML/link-email copy) — footer/mailing-address/logo
+  usages correctly stayed on `company_name` via the existing
+  `company_details.py` plumbing, untouched.
+  `utils/driver_status_notifications.py` and `utils/document_expiry.py`
+  build their next-step copy as static/module-level strings ahead of the
+  async settings load, so those two use a `{app_name}` placeholder
+  substituted at send time (mirroring the existing `{support}` placeholder
+  pattern already in `driver_status_notifications.py`) rather than an
+  f-string. Tests: `tests/test_company_details.py` (schema default +
+  independence from `company_name`), `tests/test_admin_settings_company_app_name.py`
+  (request-model/loader wiring, mirroring `test_admin_settings_company_logo.py`),
+  and one fallback+configured-value test per swept file
+  (`tests/test_rider_emails_app_name.py`,
+  `tests/test_driver_status_email_app_name.py`,
+  `tests/test_document_expiry_app_name.py`,
+  `tests/test_tax_exports_app_name.py`) — 61 new tests, all passing, plus the
+  181 pre-existing tests across these files' own test suites re-verified
+  green. Admin-dashboard: `npm run build` run and passed (exit 0), not just
+  `tsc`/dev server, per CLAUDE.md's explicit requirement.
 - [ ] **N11c. Delete the pre-retrofit receipt/invoice shell and its flag** —
   once the branded version has been seen in real inboxes. Two shells and a
   switch are a real carrying cost; both `_LEGACY_*` constants are commented
@@ -4928,13 +5353,51 @@ Remaining, roughly in order of user impact:
   (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
   `utils/rider_emails.py` and go through the policy layer, so the
   `lifecycle_emails_enabled` kill switch covers them.
-- [ ] **N14. Rider email addresses are never verified (R5)** — `email_verified`
-  is written `false` at `routes/users.py` and nothing ever flips it for a
-  rider; the only `verify-email-otp` endpoint (`routes/auth.py:744`) belongs to
-  the corporate business portal. The welcome email is now a *de facto*
-  deliverability signal — a hard bounce lands the address on the suppression
-  list — but that is not a verification flow, and nothing surfaces the
-  difference to the rider or to support.
+- [ ] **N14. Rider email addresses are never verified (R5)** — **partially
+  done.** The verification flow itself now exists and is tested:
+  `POST /users/verify-email/request` + `POST /users/verify-email/confirm`
+  (`routes/users.py`) reuse the corporate portal's exact OTP mechanics
+  (`routes/auth.py:744`'s `_check_otp_lockout`/`_record_otp_failure`/
+  `_clear_otp_failures`/`_enforce_otp_send_cap`, imported directly rather than
+  re-implemented) — SHA-256-hashed code at rest, 5-failures/hour lockout,
+  "1234" dev bypass only when `ENV != production`, refused outright in
+  production with no email provider configured. Codes are stored in a new
+  `rider_email_verification_otp` table (migration `299`, keyed on `user_id`
+  rather than the corporate table's bare `email`, so the two flows' lockout
+  buckets never collide even for the same address) and delivered through a
+  new `send_email_verification_code` in `utils/rider_emails.py`, going through
+  the same policy layer (`send_lifecycle_email`, TRANSACTIONAL class) as every
+  other rider email. The request endpoint carries its own outer rate limit
+  (`rider_email_verify_request_limit`, 3/hour, user-keyed) on top of the
+  reused per-destination send cap. Confirming flips `email_verified` +
+  `email_verified_at` on the caller's own `users` row only, and refuses if the
+  account's email changed between request and confirm (code was minted for
+  the old address). 12 tests in `tests/test_rider_email_verification.py`
+  cover hashing, success, wrong-code, expiry, lockout, the email-changed
+  guard, and both sides of the rate limit.
+  **Two things this pass deliberately did NOT do, both open:**
+  (a) **no rider-app UI calls either endpoint** — this was a backend-only
+  session, so there is no "verify your email" prompt, banner, or settings
+  entry anywhere in `rider-app/` yet. The capability exists and is safe to
+  call, but nothing in the product surfaces it to a rider today. Follow-up.
+  (b) **whether/how to gate anything on `email_verified` remains an open
+  product decision**, not resolved here — nothing was changed to require
+  verification before booking, payouts, or any other flow, and CLAUDE.md's
+  pre-merge gates (feature-flag anything user-visible; no silent behavior
+  change) mean that decision needs explicit product sign-off before any
+  gating ships, not a unilateral backend call.
+  **Discovered existing consumer (not introduced by this change):**
+  `routes/corporate_rider.py`'s `POST /corporate/join-domain` already 403s
+  with `ERR_EMAIL_UNVERIFIED` when `email_verified` is falsy (added in
+  migration 252, before this flow existed). Before this change that gate was
+  permanently unsatisfiable for a rider — there was no way for the flag to
+  ever become true — so join-domain 403'd for every rider, always. This
+  change doesn't add a new gate; it makes the pre-existing one work as
+  originally intended. The practical effect: a rider who runs the new
+  verify-email flow can now successfully call join-domain where before they
+  categorically could not. Flagging this explicitly since it's a real,
+  immediately-live behavior change on a corporate-adjacent endpoint even
+  though no new gating code was written.
 - [ ] **N15. Remaining silent rider surfaces** — grouped rather than split,
   since they share one cause (no notification call of any kind at the site):
   rider-initiated ride completion sends the rider nothing while the
@@ -4945,6 +5408,97 @@ Remaining, roughly in order of user impact:
   was alerted (R38); corporate allowance reset and exhaustion are silent, with
   exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
   "new device signed in" alert (R8).
+  - [x] **R19 closed**: `rider_complete_ride` (`routes/rides/lifecycle.py`)
+    now spawns the same "Ride Completed! ✅" push the driver-initiated path
+    (`routes/drivers/ride_complete.py::complete_ride`) already sends,
+    alongside the existing `ride_completed` WS message — `target_app="rider"`,
+    `priority="normal"` (informational, not dispatch/safety-tier).
+  - [x] **R31/R33/R34 closed** (discovery-first pass, scoped to the rider's
+    *personal* wallet only — corporate wallet/allowance is R43/R44, a
+    separate parallel workstream):
+    - **R31 (wallet)**: `routes/wallet.py`'s `/top-up` was already covered (a
+      push already fires in `routes/webhooks.py`'s `payment_intent.succeeded`
+      handler — verified by reading it, not a gap). The genuinely silent
+      choke point was `routes/admin/wallet.py`'s `admin_credit_wallet` /
+      `admin_debit_wallet` (an admin moving money in/out of a rider or
+      driver's wallet with zero trace to the user) — now sends a best-effort
+      push, `target_app` resolved from the user's role. Deliberately left
+      open: `utils/referral_payout.py`'s rider-referral wallet credit
+      (separate money flow/audience, needs its own file + tests) and
+      driver-side cancellation/no-show fee wallet debits in
+      `routes/rides/cancellation.py` (owned by a parallel session).
+    - **R33 (promos)**: the rider-initiated `POST /promotions/apply` already
+      returns `discount_applied` synchronously — not silent, left alone. The
+      real gap was the admin "apply promo on behalf of a rider" path
+      (`apply_promo_for_admin`, called from
+      `routes/admin/rides.py::admin_create_ride`) — now sends a best-effort
+      push with the promo code + discount amount.
+    - **R34 (loyalty)**: `routes/loyalty.py::earn_points_for_ride` already
+      computed `tier_upgraded` in its response but never notified — now
+      sends a best-effort push when a rider crosses a tier threshold.
+    - All three: best-effort, `priority="normal"`, wrapped in try/except so a
+      push failure can never surface as a failed money/promo/loyalty write
+      that already committed. New tests in `test_admin_wallet_endpoints.py`,
+      `test_admin_rides_coverage.py`, `test_loyalty.py`.
+  - [x] **R35/R37 closed**: `routes/rides/booking.py::create_ride` now fires
+    a "Scheduled ride confirmed" push (`priority="normal"`, no `target_app`
+    override, matching `utils/scheduled_rides.py`'s existing rider-facing
+    scheduled-ride pushes) at the moment a deferred scheduled ride is
+    inserted, backgrounded via `_deps.spawn()` alongside this function's
+    other post-insert side effects; the pre-existing ~10-minute reminder
+    (`_send_reminder`) and driver-nudge/delay-notice tiers are unchanged.
+    Known gap: `services/company_booking_service.py` (corporate guest
+    booking) bypasses `create_ride` and does not get this confirmation —
+    deliberate scope boundary, not a miss.
+  - [x] **R38 closed** (2026-08-11): `trigger_emergency`
+    (`backend/routes/rides/safety.py`) already notified the admin dashboard
+    (WS), the safety-team email list, on-call paging, and emergency contacts
+    (SMS) — but never told the triggering rider/driver themselves anything
+    beyond the synchronous HTTP 200 (which `SOSButton.tsx` already turns
+    into an "Alert Sent" dialog, foreground-only). Added one additive
+    `_deps.spawn(_deps.send_push_notification(...))` call, self-swallowing
+    (try/except, matches every other side effect in the function),
+    `priority="safety"` (guaranteed-delivery tier per
+    `features.py::send_push_notification`'s docstring — bypasses push
+    opt-out, falls back to the retry queue), `target_app` routed to
+    `"rider"`/`"driver"` by who triggered it. Copy: "SOS Alert Received" /
+    "Your emergency alert reached our safety team and emergency contacts. If
+    you're in immediate danger, call 911." — confirms receipt only, never
+    claims to replace or guarantee 911 response (`CLAUDE.md` → "What Spinr
+    Is NOT"). No existing SOS behavior touched (DB insert, admin broadcast,
+    paging, contact SMS all unchanged) — see
+    `docs/change-log/2026-08-11-n15d-rider-sos-confirmation.md` for full
+    blast-radius check (isolated — `trigger_emergency` has exactly one call
+    site, the route itself) and verification detail. Tests:
+    `backend/tests/test_p2_sos.py::TestTriggerEmergency::test_rider_sos_confirmation_push_sent_to_triggering_rider`
+    and `..._test_driver_sos_confirmation_push_targets_driver_app`, plus the
+    26 pre-existing SOS tests re-run green.
+  - [x] **R43/R44 closed** (2026-08-11): `utils/allowance_reset.py` now pushes
+    the member a "your allowance has reset" notice right after a successful
+    non-rollover reset (rollover allowances don't fire — `used` is untouched
+    by that reset, so nothing changed for the rider); rate-limited for free
+    by the loop's existing period-CAS claim, no new column. `services/
+    payment_service.py::settle_corporate` now pushes "running low" (crosses
+    below 20% remaining) or "allowance used up" (crosses to 0) exactly on
+    the ride debit that causes the crossing — comparing this debit's own
+    remaining-before/after is enough to fire at most once per crossing, no
+    new rate-limit column either. Both `priority="normal"` (best-effort,
+    non-time-critical; reasoning in the payment_service.py docstring —
+    `"account"` tier is reserved for driver accept/reject/suspend per
+    features.py, not a fit here). Deliberately NOT done: no in-app UI
+    surfacing of these events beyond the existing Notifications inbox row
+    every `send_push_notification` call already writes; no admin-configurable
+    threshold (20% is hardcoded, not sourced from a product spec); the 4xx at
+    booking time itself (`routes/rides/booking.py`'s `allowance_low`,
+    `services/company_booking_service.py`'s `allowance_only` check) is
+    unchanged — this is advance warning, not a removal of the block. Tests:
+    `tests/test_corporate_allowance_reset.py` (3 new),
+    `tests/test_corporate_ride_payment.py` (6 new) — all mock
+    `send_push_notification` and assert exact fire/no-fire per scenario. Full
+    Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-n15-r43-r44-corporate-allowance-notify.md`.
+    Only R8 (new-device-signed-in alert) remains open under N15; this
+    checkbox stays `[ ]` until that's done too.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 
@@ -5291,13 +5845,42 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   this endpoint. No code change needed; correcting the stale item.
 - [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
   VoIP is a cost/quality upgrade.
-- [ ] **D8. No rate limiting on SIN-touching admin endpoints** — flagged by the
-  2026-08-10 security audit of the SIN-enforcement branch: `reveal-sin`
-  (pre-existing), `update-sin`, and `/tax-ids/import/{validate,commit}` are
-  all absent from `utils/rate_limiter.py`. Not exploitable past the
-  super_admin gate + audit rows, but three SIN surfaces with zero throttling
-  should be a deliberate decision, not an inherited omission. Decide a limit
-  (e.g. reveal/update: 10/hour per admin) and wire it, or document why not.
+- [x] **D8. No rate limiting on SIN-touching admin endpoints** — done: added
+  4 new `default_limiter.limit(...)` entries in `utils/rate_limiter.py` —
+  `admin_sin_reveal_limit` (10/hour) on `POST /admin/drivers/{id}/reveal-sin`,
+  `admin_sin_update_limit` (10/hour) on `POST /admin/drivers/{id}/update-sin`,
+  `tax_id_import_validate_limit` (30/hour) on `POST /admin/tax-ids/import/validate`,
+  `tax_id_import_commit_limit` (10/hour) on `POST /admin/tax-ids/import/commit`.
+  10/hour for reveal/update is D8's own suggested figure. The two import
+  endpoints reuse the validate/commit asymmetry already established by
+  `data_transfer_import_*_limit`/`booking_import_*_limit`/`driver_import_commit_limit`
+  (read-only dry-run gets the looser 30/hour, the write path gets 10/hour) —
+  the per-call `MAX_ROWS` (500) cap already bounds blast radius per call, so
+  the per-hour cap only needs to guard unbounded scripted looping. All 4 are
+  keyed per-admin via `get_user_or_ip_key` (existing function, unmodified —
+  decodes the JWT's `user_id` claim without verifying the signature; safe
+  because `Depends(get_admin_user)` still re-verifies before any handler body
+  runs), not per-IP like every other `admin_*` limiter in the file — a
+  deliberate deviation, since IP keying would let multiple super_admins
+  behind one office/VPN egress IP share (and exhaust) one bucket, or
+  under-count a single admin who rotates IPs. Confirmed admin JWTs carry
+  `user_id` (`routes/admin/auth.py::_mint_admin_access_token`), so no new key
+  function was needed. Both `reveal-sin`/`update-sin`
+  (`routes/admin/drivers.py`) and the two `tax-ids/import` endpoints
+  (`routes/admin/tax_id_import.py`) needed a `request: Request` parameter
+  added — `AsyncLimiter.limit` requires one to find the connection to key on,
+  and none of the 4 endpoints previously took one. Still purely
+  defense-in-depth per the audit's own framing: all 4 stay super_admin-gated
+  + audit-logged before the limiter ever runs. New tests in
+  `tests/test_admin_sin_rate_limiting.py` (5 cases) prove the actual
+  `AsyncLimiter`/`MemoryStorage` mechanics at each configured rate — N
+  allowed calls succeed, the N+1th raises `RateLimitExceeded` — plus one case
+  proving two different admin JWTs from the same source IP get independent
+  buckets (the per-admin-not-per-IP guarantee this item exists for). Grepped
+  every other consumer of `get_user_or_ip_key`/`default_limiter`: both are
+  unmodified, and only new module-level limiter objects were added — no
+  shared behavior changed for any of the ~30 other `default_limiter.limit(...)`
+  call sites across `routes/`.
 - [ ] **D6. Read-only root filesystem** — blocked on host migration off Railway.
 - [x] **D7. Admin analytics Redis cache** — done: `GET /admin/analytics/cancellation-reasons`
   now caches its response for 5 minutes (`_OVERVIEW_CACHE_TTL`, same TTL

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshDriverStripePayouts, refreshAllDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshDriverStripePayouts, refreshAllDriverStripeKyc, refreshAllDriverStripePayouts, recomputeStatementTotals, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -633,6 +633,73 @@ export default function DriversPage() {
         }
     };
 
+    const [bulkPayoutsRunning, setBulkPayoutsRunning] = useState(false);
+    const handleBulkPayoutRefresh = async () => {
+        if (!window.confirm(
+            "Sync Stripe payout history for ALL drivers?\n\n" +
+            "Reads every mapped driver's Stripe Transfers, bank payouts and balance " +
+            "transactions and materializes anything missing. Nothing is changed on " +
+            "Stripe, and re-running is safe."
+        )) return;
+        setBulkPayoutsRunning(true);
+        try {
+            const res = await refreshAllDriverStripePayouts();
+            toast({
+                title: res.synced ? "Stripe payouts synced" : "Synced with errors",
+                description: res.message,
+                ...(res.synced ? {} : { variant: "destructive" as const }),
+            });
+            loadDrivers();
+        } catch (e: any) {
+            toast({ title: "Payout sync failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkPayoutsRunning(false);
+        }
+    };
+
+    const [bulkTotalsRunning, setBulkTotalsRunning] = useState(false);
+    const handleRecomputeStatementTotals = async () => {
+        // Preview FIRST, always. This rewrites stored money figures on a
+        // driver-facing audit surface, so the operator sees the exact count
+        // and net movement before anything is written.
+        setBulkTotalsRunning(true);
+        try {
+            const preview = await recomputeStatementTotals({ apply: false });
+            if (preview.corrected === 0) {
+                toast({
+                    title: "Nothing to correct",
+                    description: `${preview.scanned} statement${preview.scanned === 1 ? "" : "s"} checked — all totals already match a live recompute.`,
+                });
+                return;
+            }
+            const sample = preview.changes.slice(0, 3).map(c =>
+                `${c.period_type} ${String(c.period_start).slice(0, 10)}: paid out ${c.before.payouts_total} → ${c.after.payouts_total}`
+            ).join("\n");
+            if (!window.confirm(
+                `Rewrite stored totals for ${preview.corrected} of ${preview.scanned} statement(s)?\n\n` +
+                `Net movement — earnings ${preview.delta_earnings >= 0 ? "+" : ""}${preview.delta_earnings.toFixed(2)}, ` +
+                `paid out ${preview.delta_payouts >= 0 ? "+" : ""}${preview.delta_payouts.toFixed(2)}\n\n` +
+                `Examples:\n${sample}\n\n` +
+                "Previous figures are kept for rollback. Only the totals shown in the " +
+                "statements list change — what was emailed to drivers is untouched." +
+                (preview.has_more ? "\n\nMore statements remain beyond this batch — run again after this one." : "")
+            )) return;
+
+            const applied = await recomputeStatementTotals({ apply: true });
+            toast({
+                title: "Statement totals updated",
+                description:
+                    `${applied.corrected} corrected, ${applied.unchanged} already correct` +
+                    (applied.has_more ? " · more remain, run again" : "") +
+                    (applied.skipped.length ? ` · ${applied.skipped.length} skipped` : ""),
+            });
+        } catch (e: any) {
+            toast({ title: "Recompute failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkTotalsRunning(false);
+        }
+    };
+
     const handleExport = async () => {
         try {
             const res = await exportDrivers();
@@ -779,9 +846,22 @@ export default function DriversPage() {
                     </div>
                     {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
-                    <Button variant="outline" size="sm" onClick={handleBulkKycRefresh} disabled={bulkKycRunning} title="Pull live Stripe verification state for every driver with a Stripe account (super admin)">
-                        {bulkKycRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh Stripe KYC
-                    </Button>
+                    {/* Fleet-wide money tools are super_admin server-side —
+                        hide them for lower roles instead of surfacing buttons
+                        that can only 403. */}
+                    {isSuperAdmin && (
+                        <>
+                            <Button variant="outline" size="sm" onClick={handleBulkKycRefresh} disabled={bulkKycRunning} title="Pull live Stripe verification state for every driver with a Stripe account (super admin)">
+                                {bulkKycRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh Stripe KYC
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={handleBulkPayoutRefresh} disabled={bulkPayoutsRunning} title="Sync Stripe Transfers, bank payouts and balance transactions for every mapped driver (super admin). Safe to re-run.">
+                                {bulkPayoutsRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Sync All Payouts
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={handleRecomputeStatementTotals} disabled={bulkTotalsRunning} title="Recompute the stored totals shown in every driver's statements list. Previews the diff before writing (super admin).">
+                                {bulkTotalsRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Fix Statement Totals
+                            </Button>
+                        </>
+                    )}
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={sorted.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
             </div>

@@ -5023,8 +5023,18 @@ Remaining, roughly in order of user impact:
     now spawns the same "Ride Completed! ✅" push the driver-initiated path
     (`routes/drivers/ride_complete.py::complete_ride`) already sends,
     alongside the existing `ride_completed` WS message — `target_app="rider"`,
-    `priority="normal"` (informational, not dispatch/safety-tier). R31/R33/
-    R34, R35/R37, R38, R43/R44 and R8 remain open; this checkbox stays `[ ]`
+    `priority="normal"` (informational, not dispatch/safety-tier).
+  - [x] **R35/R37 closed**: `routes/rides/booking.py::create_ride` now fires
+    a "Scheduled ride confirmed" push (`priority="normal"`, no `target_app`
+    override, matching `utils/scheduled_rides.py`'s existing rider-facing
+    scheduled-ride pushes) at the moment a deferred scheduled ride is
+    inserted, backgrounded via `_deps.spawn()` alongside this function's
+    other post-insert side effects; the pre-existing ~10-minute reminder
+    (`_send_reminder`) and driver-nudge/delay-notice tiers are unchanged.
+    Known gap: `services/company_booking_service.py` (corporate guest
+    booking) bypasses `create_ride` and does not get this confirmation —
+    deliberate scope boundary, not a miss.
+    R31/R33/R34, R38, R43/R44 and R8 remain open; this checkbox stays `[ ]`
     until all of them are.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)

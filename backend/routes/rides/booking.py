@@ -1221,6 +1221,28 @@ async def create_ride(
             f"create_ride: ride {ride.id} scheduled for {body.scheduled_time} — "
             "parked in 'scheduled', deferring dispatch to scheduler loop"
         )
+        # N15/R35,R37 (ACTION_ITEMS.md): scheduled rides previously had a
+        # reminder ~10 minutes out (utils/scheduled_rides.py::_send_reminder)
+        # but nothing at the moment of booking itself — a rider tapping
+        # "Schedule" got no confirmation their request was actually saved,
+        # only silence until the reminder fired (or never fired, if the
+        # scheduler had an issue). Best-effort/informational, so this mirrors
+        # the existing scheduled-ride pushes in utils/scheduled_rides.py
+        # (_send_reminder, _notify_schedule_delayed): default priority
+        # ("normal") and no target_app override — none of those set either,
+        # so this keeps rider scheduled-ride copy on one consistent channel.
+        # Backgrounded via spawn() like the rest of this function's
+        # post-insert side effects, so a slow push send never holds up the
+        # booking response.
+        _deps.spawn(
+            _deps.send_push_notification(
+                ride.rider_id,
+                "Scheduled ride confirmed",
+                f"Your ride to {ride.dropoff_address} is booked. "
+                "We'll remind you before pickup and let you know once a driver is assigned.",
+                data={"type": "scheduled_ride_confirmed", "ride_id": ride.id},
+            )
+        )
     _deps.spawn(
         _prep_and_dispatch(
             ride.id,

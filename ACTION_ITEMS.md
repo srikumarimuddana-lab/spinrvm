@@ -4909,6 +4909,16 @@ Remaining, roughly in order of user impact:
   fires with the correct driver `user_id`/priority/target_app/data),
   `test_corporate_company_bookings_routes.py`, and
   `test_ride_cancellation_branches.py`.
+  **2026-08-11 follow-up:** the same WS-only gap existed in the same
+  function's batch-dispatch pending-offers loop (a driver with a pending,
+  not-yet-accepted offer, notified only if this ride is cancelled before
+  any driver is assigned) — verified directly by grep before this follow-up
+  landed, and closed the same way: identical `priority`/`target_app`/`data`
+  push added alongside the existing WS message, inside the loop's existing
+  try/except so a push failure is handled the same as a WS failure. 27 tests
+  passing (`test_ride_cancellation_branches.py` + `test_e2e_cancellation.py`),
+  1 new test pinning the push's exact args. Broader `-k cancel` sweep: 262
+  passed. See `docs/change-log/2026-08-11-n5-batch-dispatch-push-fallback.md`.
 - [x] ~~**N6. Stripe Connect KYC blocking payouts notifies nobody (D24)**~~ —
   done: `apply_account_update` now detects a genuine
   `stripe_payouts_enabled` True→False edge (comparing the pre-update
@@ -5016,10 +5026,52 @@ Remaining, roughly in order of user impact:
   debits/credits, promos and loyalty tier changes have zero notification calls
   (R31/R33/R34); scheduled rides have one reminder tier and no booking
   confirmation (R35/R37); rider SOS sends the rider no confirmation that help
-  was alerted (R38); ~~corporate allowance reset and exhaustion are silent,
-  with exhaustion surfacing only as a 4xx at booking (R43/R44)~~; and there is
-  no "new device signed in" alert (R8).
-  - [x] **R43/R44 done** (2026-08-11): `utils/allowance_reset.py` now pushes
+  was alerted (R38); corporate allowance reset and exhaustion are silent, with
+  exhaustion surfacing only as a 4xx at booking (R43/R44); and there is no
+  "new device signed in" alert (R8).
+  - [x] **R19 closed**: `rider_complete_ride` (`routes/rides/lifecycle.py`)
+    now spawns the same "Ride Completed! ✅" push the driver-initiated path
+    (`routes/drivers/ride_complete.py::complete_ride`) already sends,
+    alongside the existing `ride_completed` WS message — `target_app="rider"`,
+    `priority="normal"` (informational, not dispatch/safety-tier).
+  - [x] **R31/R33/R34 closed** (discovery-first pass, scoped to the rider's
+    *personal* wallet only — corporate wallet/allowance is R43/R44, a
+    separate parallel workstream):
+    - **R31 (wallet)**: `routes/wallet.py`'s `/top-up` was already covered (a
+      push already fires in `routes/webhooks.py`'s `payment_intent.succeeded`
+      handler — verified by reading it, not a gap). The genuinely silent
+      choke point was `routes/admin/wallet.py`'s `admin_credit_wallet` /
+      `admin_debit_wallet` (an admin moving money in/out of a rider or
+      driver's wallet with zero trace to the user) — now sends a best-effort
+      push, `target_app` resolved from the user's role. Deliberately left
+      open: `utils/referral_payout.py`'s rider-referral wallet credit
+      (separate money flow/audience, needs its own file + tests) and
+      driver-side cancellation/no-show fee wallet debits in
+      `routes/rides/cancellation.py` (owned by a parallel session).
+    - **R33 (promos)**: the rider-initiated `POST /promotions/apply` already
+      returns `discount_applied` synchronously — not silent, left alone. The
+      real gap was the admin "apply promo on behalf of a rider" path
+      (`apply_promo_for_admin`, called from
+      `routes/admin/rides.py::admin_create_ride`) — now sends a best-effort
+      push with the promo code + discount amount.
+    - **R34 (loyalty)**: `routes/loyalty.py::earn_points_for_ride` already
+      computed `tier_upgraded` in its response but never notified — now
+      sends a best-effort push when a rider crosses a tier threshold.
+    - All three: best-effort, `priority="normal"`, wrapped in try/except so a
+      push failure can never surface as a failed money/promo/loyalty write
+      that already committed. New tests in `test_admin_wallet_endpoints.py`,
+      `test_admin_rides_coverage.py`, `test_loyalty.py`.
+  - [x] **R35/R37 closed**: `routes/rides/booking.py::create_ride` now fires
+    a "Scheduled ride confirmed" push (`priority="normal"`, no `target_app`
+    override, matching `utils/scheduled_rides.py`'s existing rider-facing
+    scheduled-ride pushes) at the moment a deferred scheduled ride is
+    inserted, backgrounded via `_deps.spawn()` alongside this function's
+    other post-insert side effects; the pre-existing ~10-minute reminder
+    (`_send_reminder`) and driver-nudge/delay-notice tiers are unchanged.
+    Known gap: `services/company_booking_service.py` (corporate guest
+    booking) bypasses `create_ride` and does not get this confirmation —
+    deliberate scope boundary, not a miss.
+  - [x] **R43/R44 closed** (2026-08-11): `utils/allowance_reset.py` now pushes
     the member a "your allowance has reset" notice right after a successful
     non-rollover reset (rollover allowances don't fire — `used` is untouched
     by that reset, so nothing changed for the rider); rate-limited for free
@@ -5040,7 +5092,10 @@ Remaining, roughly in order of user impact:
     unchanged — this is advance warning, not a removal of the block. Tests:
     `tests/test_corporate_allowance_reset.py` (3 new),
     `tests/test_corporate_ride_payment.py` (6 new) — all mock
-    `send_push_notification` and assert exact fire/no-fire per scenario.
+    `send_push_notification` and assert exact fire/no-fire per scenario. Full
+    Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-n15-r43-r44-corporate-allowance-notify.md`.
+    R8 and R38 remain open; this checkbox stays `[ ]` until they are too.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

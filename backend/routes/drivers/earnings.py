@@ -30,9 +30,17 @@ from ._shared import (  # noqa: F401
 )
 
 try:
-    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+    from ...utils.legacy_rides import (
+        EXCLUDE_LEGACY_RIDES,
+        drop_legacy_offset_payouts,
+        previous_app_history_visible,
+    )
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
-    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
+    from utils.legacy_rides import (  # type: ignore
+        EXCLUDE_LEGACY_RIDES,
+        drop_legacy_offset_payouts,
+        previous_app_history_visible,
+    )
 
 router = APIRouter()
 
@@ -149,14 +157,18 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     # Stripe Transfers). Excluded from the balance math above by design; the
     # app shows it as its own labeled figure so a migrated driver can see
     # their history is intact without it inflating current earnings.
-    previous_app_paid = sum(
-        (
-            _d(p.get("amount") or 0)
-            for p in payout_rows
-            if p.get("payout_type") == "stripe_sync" and str(p.get("status") or "").lower() not in _not_money_out
-        ),
-        Decimal("0"),
-    )
+    # Transition messaging with a sunset: after the cutoff in
+    # utils/legacy_rides this reports 0.00 and the app note self-hides.
+    previous_app_paid = Decimal("0")
+    if previous_app_history_visible():
+        previous_app_paid = sum(
+            (
+                _d(p.get("amount") or 0)
+                for p in payout_rows
+                if p.get("payout_type") == "stripe_sync" and str(p.get("status") or "").lower() not in _not_money_out
+            ),
+            Decimal("0"),
+        )
 
     return {
         "total_earnings": _money_str(total_earnings + total_bonuses),

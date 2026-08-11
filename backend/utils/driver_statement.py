@@ -35,11 +35,15 @@ from zoneinfo import ZoneInfo
 
 try:
     from .. import db_supabase
-    from .legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+    from .legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, previous_app_history_visible
 except ImportError:  # pragma: no cover
     import db_supabase  # type: ignore
 
-    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
+    from utils.legacy_rides import (  # type: ignore
+        EXCLUDE_LEGACY_RIDES,
+        drop_legacy_offset_payouts,
+        previous_app_history_visible,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +337,12 @@ async def _build(
         "payouts_total": _money(payouts_total),
         "payouts_spinr_total": _money(payouts_spinr),
         "payouts_previous_app_total": _money(payouts_previous_app),
+        # Sunset flag for DRIVER-facing renders only (PDF/email): after the
+        # cutoff in utils/legacy_rides the PDF drops previous-app rows and
+        # notes. The DATA above stays complete regardless — admin stored
+        # totals, the statements list, and the totals recompute must keep
+        # the full picture forever.
+        "previous_app_visible": previous_app_history_visible(),
         # True when the ONLY money in the period is previous-app transfers:
         # the PDF renders an explainer instead of leaving "$0.00 earned"
         # sitting unexplained beside a real paid-out figure.

@@ -731,3 +731,47 @@ class TestGetMeFailureBranches:
 
         assert result.id == "user-me-1"
         assert "driver_onboarding_status" not in user or user.get("driver_onboarding_status") is None
+
+    @pytest.mark.asyncio
+    async def test_email_verified_fields_round_trip_through_response(self):
+        """N14 follow-up (ACTION_ITEMS.md): UserProfile(**current_user) used to
+        silently drop email_verified/email_verified_at, since neither was a
+        declared field -- Pydantic drops any unexpected kwarg by default. The
+        rider-app verify-email flow flips both columns server-side, but /auth/me
+        never reflected it, so the Account-screen badge reverted to "not
+        verified" on every full app restart. Pin both the verified-True and the
+        never-verified (missing key entirely, i.e. a pre-existing row that
+        predates the email_verified column) cases -- the second is exactly what
+        a legacy user row looks like before this pass, and must default to
+        False/None rather than error."""
+        from backend.routes.auth import get_me
+
+        verified_user = self._base_user()
+        verified_user["profile_complete"] = True
+        verified_ts = datetime.now(timezone.utc)
+        verified_user["email_verified"] = True
+        verified_user["email_verified_at"] = verified_ts.isoformat()
+
+        unverified_user = self._base_user()
+        unverified_user["profile_complete"] = True
+        # No email_verified/email_verified_at key at all -- a legacy row.
+
+        with (
+            patch("backend.routes.auth.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.auth.db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch.dict(
+                "sys.modules",
+                {
+                    "onboarding_status": MagicMock(
+                        derive_driver_onboarding_status=AsyncMock(return_value=(None, None, None))
+                    )
+                },
+            ),
+        ):
+            verified_result = await get_me(current_user=verified_user)
+            unverified_result = await get_me(current_user=unverified_user)
+
+        assert verified_result.email_verified is True
+        assert verified_result.email_verified_at == verified_ts
+        assert unverified_result.email_verified is False
+        assert unverified_result.email_verified_at is None

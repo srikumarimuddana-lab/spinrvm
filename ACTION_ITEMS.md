@@ -4909,6 +4909,16 @@ Remaining, roughly in order of user impact:
   fires with the correct driver `user_id`/priority/target_app/data),
   `test_corporate_company_bookings_routes.py`, and
   `test_ride_cancellation_branches.py`.
+  **2026-08-11 follow-up:** the same WS-only gap existed in the same
+  function's batch-dispatch pending-offers loop (a driver with a pending,
+  not-yet-accepted offer, notified only if this ride is cancelled before
+  any driver is assigned) — verified directly by grep before this follow-up
+  landed, and closed the same way: identical `priority`/`target_app`/`data`
+  push added alongside the existing WS message, inside the loop's existing
+  try/except so a push failure is handled the same as a WS failure. 27 tests
+  passing (`test_ride_cancellation_branches.py` + `test_e2e_cancellation.py`),
+  1 new test pinning the push's exact args. Broader `-k cancel` sweep: 262
+  passed. See `docs/change-log/2026-08-11-n5-batch-dispatch-push-fallback.md`.
 - [x] ~~**N6. Stripe Connect KYC blocking payouts notifies nobody (D24)**~~ —
   done: `apply_account_update` now detects a genuine
   `stripe_payouts_enabled` True→False edge (comparing the pre-update

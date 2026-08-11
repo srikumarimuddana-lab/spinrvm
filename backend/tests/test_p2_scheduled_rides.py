@@ -378,10 +378,15 @@ class TestDSTBoundary:
         assert "DST" in errors_text or "gap" in errors_text.lower() or "not exist" in errors_text
 
     def test_valid_scheduled_time_in_timezone_accepted(self):
-        """A time that's valid in the given timezone passes the DST guard."""
+        """A time that's valid in the given timezone passes the DST guard
+        AND is converted to the true UTC instant it represents (2026-08-11
+        fix) -- previously the validator passed DST-safety but then
+        returned the local digits mislabeled as UTC, so this same input
+        would have stored/dispatched at 2027-03-14 04:00 UTC (a 4-hour
+        error) instead of the correct 08:00 UTC."""
         from backend.schemas import CreateRideRequest
 
-        # 2027-03-14 04:00 (after spring-forward) is a valid EDT time.
+        # 2027-03-14 04:00 (after spring-forward) is a valid EDT (UTC-4) time.
         frozen_now = datetime(2027, 3, 10, tzinfo=timezone.utc)
         with _patch_schemas_now(frozen_now):
             ride_req = CreateRideRequest(
@@ -396,7 +401,7 @@ class TestDSTBoundary:
                 scheduled_timezone="America/Toronto",
                 scheduled_time=datetime(2027, 3, 14, 4, 0),
             )
-        assert ride_req.scheduled_time is not None
+        assert ride_req.scheduled_time == datetime(2027, 3, 14, 8, 0, tzinfo=timezone.utc)
 
     def test_dst_fall_back_ambiguous_hour_is_rejected(self):
         """Finding #10: the November fall-back repeated hour was previously
@@ -427,7 +432,8 @@ class TestDSTBoundary:
 
     def test_time_outside_fall_back_hour_is_unaffected(self):
         """A normal time on the same fall-back date, outside the repeated
-        hour, must not be rejected by the new ambiguity guard."""
+        hour, must not be rejected by the new ambiguity guard, and must
+        convert to the correct post-fall-back UTC offset (EST, UTC-5)."""
         from backend.schemas import CreateRideRequest
 
         frozen_now = datetime(2026, 10, 28, tzinfo=timezone.utc)
@@ -444,7 +450,36 @@ class TestDSTBoundary:
                 scheduled_timezone="America/Toronto",
                 scheduled_time=datetime(2026, 11, 1, 10, 0),
             )
-        assert ride_req.scheduled_time is not None
+        assert ride_req.scheduled_time == datetime(2026, 11, 1, 15, 0, tzinfo=timezone.utc)
+
+    def test_window_checks_apply_to_the_converted_utc_value_not_the_local_digits(self):
+        """The lead-time/advance-window checks must run against the
+        CONVERTED UTC instant, not the pre-conversion local-digits-
+        mislabeled-as-UTC value -- otherwise a Saskatchewan-zone booking
+        (UTC-6/-7) could be wrongly rejected as 'too soon' or wrongly
+        accepted as 'far enough out' by up to 7 hours of error."""
+        from backend.schemas import CreateRideRequest
+
+        # America/Regina (CST, UTC-6, no DST) -- 30 minutes local from "now"
+        # comfortably clears the 15-minute minimum lead time once correctly
+        # converted, but would look like it's dozens of minutes in the PAST
+        # if the mislabeled-as-UTC value were compared directly, since
+        # "now" here is itself expressed in UTC.
+        frozen_now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)  # 06:00 Regina local
+        with _patch_schemas_now(frozen_now):
+            ride_req = CreateRideRequest(
+                vehicle_type_id="standard",
+                pickup_address="123 Main St",
+                pickup_lat=50.4,
+                pickup_lng=-104.6,
+                dropoff_address="456 Broadway",
+                dropoff_lat=50.5,
+                dropoff_lng=-104.7,
+                is_scheduled=True,
+                scheduled_timezone="America/Regina",
+                scheduled_time=datetime(2026, 6, 1, 6, 30),  # 06:30 Regina local = 12:30 UTC
+            )
+        assert ride_req.scheduled_time == datetime(2026, 6, 1, 12, 30, tzinfo=timezone.utc)
 
     def test_utc_scheduled_time_unaffected_by_fall_back_guard(self):
         """No scheduled_timezone means the fall-back guard (which only

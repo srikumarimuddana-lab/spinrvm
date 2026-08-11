@@ -48,6 +48,7 @@ try:
     from ...settings_loader import get_app_settings
     from ...sms_service import send_sms
     from ...socket_manager import manager
+    from ...utils.address_verification import verify_address_matches_coordinate
     from ...utils.audit_logger import log_user_action
     from ...utils.background import spawn
     from ...utils.error_handling import (
@@ -94,6 +95,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from sms_service import send_sms
     from socket_manager import manager
+    from utils.address_verification import verify_address_matches_coordinate
     from utils.audit_logger import log_user_action
     from utils.background import spawn  # type: ignore
     from utils.error_handling import (

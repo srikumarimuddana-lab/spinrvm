@@ -1518,6 +1518,37 @@ async def _deliver_push_now(
         return False
 
 
+# data["type"] values that are, in the rider-app copy's own words (see
+# rider-app/app/_layout.tsx's "ride-updates" Android channel, "Status updates
+# for your current ride"), exactly what the notification_preferences.
+# ride_updates toggle describes: a live status change on the user's own
+# in-progress ride. Gated here (single choke point) rather than at each of
+# the ~15 call sites so the preference check can't drift from the send call,
+# and so wiring it touches one file instead of the many ride-lifecycle route
+# modules other in-flight work (ACTION_ITEMS.md N10) is already editing.
+#
+# Deliberately narrow — see ACTION_ITEMS.md N9 for the full per-type
+# reasoning. Excluded on purpose:
+#   - anything already priority="dispatch"/"safety"/"account": the
+#     time_critical check below always runs first, so those never reach this
+#     gate regardless of type overlap (ride_cancelled is sent both ways).
+#   - ride_offer_expired / auto_offline / quota_exhausted: dispatch-process
+#     bookkeeping for the DRIVER's own availability, not "my ride's status".
+#   - scheduled_ride_* (reminder/nudge/delayed/dispatched): a distinct
+#     "upcoming booking reminder" UX, not a live ride's status; left for a
+#     follow-up pass rather than guessing at scope here.
+_RIDE_UPDATE_PUSH_TYPES = frozenset(
+    {
+        "driver_accepted",
+        "driver_arrived",
+        "ride_started",
+        "ride_completed",
+        "ride_cancelled",
+        "ride_noshow",
+    }
+)
+
+
 _TRANSIENT_NOTIFICATION_TYPES = frozenset(
     {
         # Per-candidate dispatch offer: fires once per driver considered for a
@@ -1642,6 +1673,18 @@ async def send_push_notification(
                 logger.info(
                     f"push: suppressed by push_enabled=false for user {user_id} "
                     f"(priority={priority}); inbox row still recorded"
+                )
+                return False
+            # Finer-grained opt-out layered on top of push_enabled: a rider/
+            # driver who leaves push on in general may still turn off the
+            # "Ride Updates" toggle specifically (notification_preferences.
+            # ride_updates, default True). Only applies to the narrow
+            # _RIDE_UPDATE_PUSH_TYPES set — see that constant's comment.
+            notif_type = (data or {}).get("type")
+            if notif_type in _RIDE_UPDATE_PUSH_TYPES and pref_rows and pref_rows[0].get("ride_updates") is False:
+                logger.info(
+                    f"push: suppressed by ride_updates=false for user {user_id} "
+                    f"(type={notif_type}); inbox row still recorded"
                 )
                 return False
         except Exception:

@@ -129,7 +129,7 @@ export default function CompanyBookingsPage() {
                 </div>
             </header>
 
-            {error && <p className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+            {error && <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
             {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
             <Card>

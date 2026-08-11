@@ -146,6 +146,42 @@ def _patch_transfers(by_account):
     return patch("stripe.Transfer.list", side_effect=_list)
 
 
+class _FakeStripeObject:
+    """Mimics stripe.StripeObject on SDK builds where it is NOT a Mapping:
+    subscript access works, but attribute access for a missing key (like
+    ``.get``) raises AttributeError — the production crash on this loop
+    (KeyError 'get' → AttributeError via StripeObject.__getattr__)."""
+
+    def __init__(self, data):
+        self._data = dict(data)
+
+    def __getitem__(self, k):
+        return self._data[k]
+
+    def __getattr__(self, k):
+        try:
+            return self._data[k]
+        except KeyError as err:
+            raise AttributeError(*err.args) from err
+
+    def to_dict(self):
+        return dict(self._data)
+
+
+@pytest.mark.anyio
+async def test_paged_stripe_objects_without_get_are_converted(store):
+    """Regression: prod 500 'AttributeError: get' on refresh-stripe-payouts.
+    Paged StripeObjects must go through stripe_object_to_dict before any
+    .get() field access — never call .get on the raw object."""
+    with _patch_transfers({"acct_A1": [_FakeStripeObject(_transfer("tr_obj", 20000))]}):
+        plan = await svc.build_plan("sk_test_x", "batchobj")
+
+    assert plan.errors == []
+    assert len(plan.payouts_to_insert) == 1
+    assert plan.payouts_to_insert[0]["amount"] == 200.0
+    assert plan.payouts_to_insert[0]["stripe_transfer_id"] == "tr_obj"
+
+
 @pytest.mark.anyio
 async def test_plan_builds_rows_for_untracked_transfers(store):
     with _patch_transfers({"acct_A1": [_transfer("tr_1", 2999), _transfer("tr_2", 10000)]}):

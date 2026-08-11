@@ -328,7 +328,7 @@ export default function TicketDetailPage() {
             </div>
 
             {loading && <Card><CardContent className="p-6 text-muted-foreground">Loading…</CardContent></Card>}
-            {!loading && error && <Card><CardContent className="p-4 text-sm text-red-600">{error}</CardContent></Card>}
+            {!loading && error && <Card><CardContent className="p-4 text-sm text-destructive">{error}</CardContent></Card>}
 
             {!loading && ticket && (
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

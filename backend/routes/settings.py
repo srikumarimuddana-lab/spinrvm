@@ -53,6 +53,10 @@ async def get_public_settings():
         # `/track/[token]`). Set via the admin Settings panel so the URL can
         # be rotated without a mobile rebuild. Empty string until configured.
         "track_base_url": settings.get("track_base_url", ""),
+        # Driver SOS discreet-hold-shield rollout gate (ACTION_ITEMS.md
+        # B16) -- dark-launched, driver-app only. Default False = the
+        # driver dashboard keeps rendering the existing shared SOSButton.
+        "driver_discreet_sos_enabled": bool(settings.get("driver_discreet_sos_enabled", False)),
     }
 
 

@@ -353,6 +353,27 @@ async def cancel_ride_rider(
                 },
                 f"driver_{driver['user_id']}",
             )
+            # N5 (ACTION_ITEMS.md): the WS message above only reaches a
+            # foreground app. A driver already assigned to this ride is en
+            # route to (or waiting at) pickup -- if their app is
+            # backgrounded, locked, or killed, they'd keep driving toward a
+            # rider who is gone with zero indication. priority="dispatch"
+            # mirrors the new-offer push (matching.py) for the same reason:
+            # this is as time-critical as an offer, bypasses the push
+            # opt-out, and falls back to the retry queue on a transient
+            # failure instead of being silently lost. Backgrounded via
+            # spawn() so a slow FCM/Expo round-trip doesn't hold up the
+            # rider's own cancel response.
+            _deps.spawn(
+                _deps.send_push_notification(
+                    driver["user_id"],
+                    "Ride Cancelled",
+                    "The rider cancelled this ride.",
+                    data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+                    priority="dispatch",
+                    target_app="driver",
+                )
+            )
 
     # Batch dispatch: cancel pending ride_offers and notify those drivers.
     # With batch dispatch driver_id is NOT set on the ride row — offers
@@ -389,6 +410,25 @@ async def cancel_ride_rider(
                         await _deps.manager.send_personal_message(
                             {"type": "ride_cancelled", "ride_id": ride_id, "reason": "Rider cancelled"},
                             f"driver_{_uid}",
+                        )
+                        # N5 follow-up (ACTION_ITEMS.md): same WS-only gap as
+                        # the assigned-driver case above, for the pending-offer
+                        # (batch dispatch) path. A driver with a pending offer
+                        # for this ride is actively deciding whether to accept
+                        # -- if their app is backgrounded when the rider
+                        # cancels, the WS message never reaches them and the
+                        # stale offer panel keeps showing a ride that's gone.
+                        # Same priority/target_app/backgrounding rationale as
+                        # the assigned-driver push above.
+                        _deps.spawn(
+                            _deps.send_push_notification(
+                                _uid,
+                                "Ride Cancelled",
+                                "The rider cancelled this ride.",
+                                data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+                                priority="dispatch",
+                                target_app="driver",
+                            )
                         )
                 except Exception as _e:
                     logger.warning(f"[CANCEL] failed to notify batch-offer driver {_offer_did}: {_e}")

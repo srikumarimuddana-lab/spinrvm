@@ -282,7 +282,6 @@ class TestGetDriverBalance:
         payouts = [
             {"amount": 30.0, "status": "completed", "payout_type": "standard"},  # deduct
             {"amount": 500.0, "status": "completed", "payout_type": "stripe_sync"},  # history only
-            {"amount": 20.0, "status": "completed", "payout_type": "legacy_import"},  # deduct (paired rides)
         ]
 
         def get_rows_mock(table, filters=None, **kw):
@@ -297,9 +296,51 @@ class TestGetDriverBalance:
         with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
             result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
 
-        # 100 - 30 - 20 = 50; the $500 synced legacy payout never deducts.
-        assert result["payable_balance"] == "50.00"
-        assert result["total_paid_out"] == "50.00"
+        # 100 - 30 = 70; the $500 synced legacy payout never deducts.
+        assert result["payable_balance"] == "70.00"
+        assert result["total_paid_out"] == "30.00"
+
+    def test_balance_drops_legacy_import_rides_and_their_offset_together(self):
+        """Previous-app rides are history, not Spinr income (utils/legacy_rides).
+        The ride query filters them server-side and the paired 'legacy_import'
+        offset payout is dropped in Python — BOTH halves, or the balance moves.
+
+        The importer wrote the offset to exactly cancel the imported earnings,
+        so removing the pair must leave payable_balance identical while
+        total_earnings/total_paid_out stop reporting previous-app money.
+        """
+        from backend.routes import drivers as drv
+
+        legacy_ride = {"base_fare": 400.0, "legacy_import_metadata": {"source": "legacy_mongo_booking_import"}}
+        new_ride = {"base_fare": 100.0}
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                # Honour the server-side exclusion the route now sends, so this
+                # asserts the real filter is applied rather than assuming it.
+                rows = [new_ride, legacy_ride]
+                if (filters or {}).get("legacy_import_metadata", "absent") is None:
+                    rows = [r for r in rows if not r.get("legacy_import_metadata")]
+                return rows
+            if table == "payouts":
+                return [
+                    {"amount": 30.0, "status": "completed", "payout_type": "standard"},
+                    # Offset for the $400 legacy ride — must NOT deduct now that
+                    # the ride it cancels is gone.
+                    {"amount": 400.0, "status": "completed", "payout_type": "legacy_import"},
+                ]
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # Previous-app money is invisible on both sides: 100 earned - 30 paid.
+        assert result["total_earnings"] == "100.00"
+        assert result["total_paid_out"] == "30.00"
+        # Unchanged from the pre-exclusion behaviour ((100+400) - (30+400) = 70).
+        assert result["payable_balance"] == "70.00"
 
     def test_db_error_raises_503_not_zeroed_balance(self):
         # Regression: a DB error fetching rides/payouts must surface as 503, not
@@ -1040,7 +1081,9 @@ class TestDeclineRide:
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
             patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
             patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
             patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
@@ -1386,7 +1429,11 @@ class TestStripeOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+                # Onboarding is hard-gated on a SIN on file. The legacy flag
+                # (SIN already held by Stripe) satisfies the gate while keeping
+                # prefill_sin_to_stripe on its no-op path, so this test needs
+                # no stripe.Account.retrieve mock.
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123", stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1459,7 +1506,9 @@ class TestStripeEmbeddedOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+                # Legacy SIN-at-Stripe flag: passes the onboarding SIN gate
+                # without engaging prefill (no Account.retrieve mock needed).
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123", stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1486,7 +1535,8 @@ class TestStripeEmbeddedOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver()]),
+                # SIN gate precedes the secret check, so satisfy it here.
+                AsyncMock(return_value=[_driver(stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1720,7 +1770,9 @@ class TestDriverReferral:
 
         terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
         with (
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())
+            ),
             patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=3)),
             patch("backend.routes.drivers._deps.resolve_referral_terms", AsyncMock(return_value=terms)),
             patch("backend.routes.drivers._deps.paid_referral_earnings", AsyncMock(return_value=None)),
@@ -1738,7 +1790,9 @@ class TestDriverReferral:
 
         terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
         with (
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())
+            ),
             patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=12)),
             patch("backend.routes.drivers._deps.resolve_referral_terms", AsyncMock(return_value=terms)),
         ):

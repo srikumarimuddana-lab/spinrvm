@@ -172,7 +172,18 @@ async def run_chat_turn(
         return
 
     lock_key = f"ai:conv_lock:{conversation_id}"
-    acquired = await redis_set_nx(lock_key, "1", _CONV_LOCK_TTL_SECONDS)
+    try:
+        acquired = await redis_set_nx(lock_key, "1", _CONV_LOCK_TTL_SECONDS)
+    except Exception:
+        # redis_set_nx now raises on a real (Redis-configured-but-
+        # unavailable) error instead of silently falling back per-replica
+        # (2026-08-11 P1 fix). Fails OPEN with a loud log, mirroring
+        # _over_daily_cap's policy above — blocking every AI conversation on
+        # a Redis blip is worse than occasionally racing two concurrent
+        # turns on the same conversation (the AI10 bug this lock guards
+        # against), which is a data-quality edge case, not a safety one.
+        logger.error("ai conversation-lock acquisition failed — failing open", exc_info=True)
+        acquired = True
     if not acquired:
         _metric_inc("spinr_ai_chat_turns_total", {"outcome": "conversation_busy"})
         yield (

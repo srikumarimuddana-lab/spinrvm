@@ -139,6 +139,24 @@ class TestNotifyScheduleDelayed:
         args, kwargs = send_push.await_args
         assert args[0] == "rider-1"
         assert kwargs["data"]["ride_id"] == "ride-1"
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert kwargs["target_app"] == "rider"
+
+    @pytest.mark.anyio
+    async def test_escalated_notification_targets_rider_app(self, sr, monkeypatch):
+        """The escalated (defer-count-exhausted) push is a distinct call site
+        from the routine 'waiting' notice -- N10 regression covering it too."""
+        monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(return_value=True))
+        send_push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", send_push)
+
+        await sr._notify_schedule_delayed("ride-1", "rider-1", {}, escalated=True)
+
+        send_push.assert_awaited_once()
+        args, kwargs = send_push.await_args
+        assert args[0] == "rider-1"
+        assert kwargs["data"]["type"] == "scheduled_ride_delayed_escalated"
+        assert kwargs["target_app"] == "rider"
 
     @pytest.mark.anyio
     async def test_redis_unavailable_falls_through_and_still_notifies(self, sr, monkeypatch):
@@ -284,6 +302,8 @@ class TestDispatchScheduledRide:
         push_args, push_kwargs = send_push.await_args
         assert push_args[0] == "rider-1"
         assert push_kwargs["data"]["type"] == "scheduled_ride_dispatched"
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push_kwargs["target_app"] == "rider"
 
     @pytest.mark.anyio
     async def test_no_rider_id_skips_final_push_notification(
@@ -463,6 +483,8 @@ class TestSendReminder:
         push_args, push_kwargs = send_push.await_args
         assert push_args[0] == "rider-1"
         assert push_kwargs["data"]["type"] == "scheduled_ride_reminder"
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push_kwargs["target_app"] == "rider"
 
         update_one.assert_awaited_once_with("rides", {"id": "ride-1"}, {"$set": {"reminder_sent": True}})
 
@@ -528,6 +550,72 @@ class TestCheckScheduledRides:
 
         dispatch.assert_not_awaited()
         assert any("Failed to fetch scheduled rides" in r.message for r in caplog.records)
+
+    # ── leader-lock self-lockout fix (2026-08-11 P1) ────────────────────────
+    #
+    # The TTL (90s) previously outlived the loop's ~54-66s jittered interval
+    # and the lock was never explicitly released — the replica that won the
+    # lock would fail to re-acquire its OWN still-live lock on the very next
+    # tick, halving the real dispatch cadence to ~120s always, not just under
+    # contention.
+
+    @pytest.mark.anyio
+    async def test_lock_is_released_after_a_successful_tick(self, sr, monkeypatch):
+        monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(return_value=True))
+        monkeypatch.setattr(sr.db, "get_rows", AsyncMock(return_value=[]))
+        redis_delete = AsyncMock()
+        monkeypatch.setattr(sr, "redis_delete", redis_delete)
+
+        result = await sr.check_scheduled_rides()
+
+        assert result is True
+        redis_delete.assert_awaited_once_with("spinr:scheduled_rides:lock")
+
+    @pytest.mark.anyio
+    async def test_lock_is_released_even_when_the_fetch_fails(self, sr, monkeypatch):
+        """The lock must be freed on every exit path, not just the happy
+        one -- otherwise a DB hiccup would strand the lock for its full TTL
+        instead of freeing it immediately for the next tick/replica."""
+        monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(return_value=True))
+        monkeypatch.setattr(sr.db, "get_rows", AsyncMock(side_effect=RuntimeError("db down")))
+        redis_delete = AsyncMock()
+        monkeypatch.setattr(sr, "redis_delete", redis_delete)
+
+        result = await sr.check_scheduled_rides()
+
+        assert result is False
+        redis_delete.assert_awaited_once_with("spinr:scheduled_rides:lock")
+
+    @pytest.mark.anyio
+    async def test_lock_is_not_released_when_it_was_never_acquired(self, sr, monkeypatch):
+        """When Redis itself is unavailable (redis_set_nx raises), there is
+        no lock to release -- calling redis_delete anyway would be pointless
+        and could mask a real problem in a future refactor that assumes
+        `_holds_lock` tracking is meaningful."""
+        monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down")))
+        monkeypatch.setattr(sr.db, "get_rows", AsyncMock(return_value=[]))
+        redis_delete = AsyncMock()
+        monkeypatch.setattr(sr, "redis_delete", redis_delete)
+
+        await sr.check_scheduled_rides()
+
+        redis_delete.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_lock_ttl_is_below_the_loop_interval(self, sr, monkeypatch):
+        """The TTL is a crash-safety net, not the primary release mechanism
+        -- it must stay below the loop's minimum jittered interval (60-6=54s)
+        so a missed release (e.g. process killed mid-tick) self-heals within
+        under one cycle, not two."""
+        redis_set_nx = AsyncMock(return_value=True)
+        monkeypatch.setattr(sr, "redis_set_nx", redis_set_nx)
+        monkeypatch.setattr(sr.db, "get_rows", AsyncMock(return_value=[]))
+        monkeypatch.setattr(sr, "redis_delete", AsyncMock())
+
+        await sr.check_scheduled_rides()
+
+        _args, kwargs = redis_set_nx.await_args
+        assert kwargs["ttl"] < 54, "lock TTL must stay below the loop's minimum jittered interval"
 
     @pytest.mark.anyio
     async def test_ride_missing_scheduled_time_is_skipped(self, sr, monkeypatch):

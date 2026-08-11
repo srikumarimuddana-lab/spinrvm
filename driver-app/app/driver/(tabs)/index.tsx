@@ -21,6 +21,10 @@ import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
 import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
+import { SafetyShield } from '@shared/components/SafetyShield';
+import { SafetyOverlay } from '@shared/components/SafetyOverlay';
+import { useDriverSafetyTrigger } from '../../../hooks/useDriverSafetyTrigger';
+import { useDriverDiscreetSosFlag } from '../../../hooks/useDriverDiscreetSosFlag';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
@@ -87,6 +91,13 @@ function DriverDashboard() {
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
   const [completionConfirmationVisible, setCompletionConfirmationVisible] = useState(false);
   const [completionConfirmationRideId, setCompletionConfirmationRideId] = useState<string | null>(null);
+
+  // Driver SOS discreet-hold-shield rollout (ACTION_ITEMS.md B16). Flag
+  // defaults false -> the SOSButton branch below is byte-for-byte today's
+  // shipped behavior except for the swallowed-error bug fix noted there.
+  const discreetSosEnabled = useDriverDiscreetSosFlag();
+  const { trigger: safetyTrigger } = useDriverSafetyTrigger();
+  const [safetyOverlayOpen, setSafetyOverlayOpen] = useState(false);
 
   const requestRideCompletion = async (confirmation?: OffRouteConfirmation) => {
     const rideId = confirmation ? completionConfirmationRideId : activeRide?.ride.id;
@@ -853,16 +864,44 @@ function DriverDashboard() {
       {/* Top Bar */}
       <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
 
-      {/* SOS Button — visible during active ride */}
+      {/* SOS / Safety — visible during active ride. Flag-gated (ACTION_ITEMS.md
+          B16): discreetSosEnabled off (default) renders the unmodified
+          SOSButton path (plus the swallowed-error bug fix below); on, renders
+          the new discreet-hold shield + Safety overlay pair instead. */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
-        <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
-          <SOSButton
-            rideId={activeRide.ride.id}
-            onTrigger={async (rideId, lat, lng) => {
-              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch (err) { console.error('[index]', err); }
-            }}
-          />
-        </View>
+        discreetSosEnabled ? (
+          <>
+            <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
+              <SafetyShield
+                rideId={activeRide.ride.id}
+                onTrigger={safetyTrigger}
+                onOpenOverlay={() => setSafetyOverlayOpen(true)}
+              />
+            </View>
+            <SafetyOverlay
+              visible={safetyOverlayOpen}
+              onClose={() => setSafetyOverlayOpen(false)}
+              rideId={activeRide.ride.id}
+              onTrigger={safetyTrigger}
+            />
+          </>
+        ) : (
+          <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
+            <SOSButton
+              rideId={activeRide.ride.id}
+              onTrigger={async (rideId, lat, lng) => {
+                // Bug fix (B16): rethrow instead of swallowing. Previously
+                // this try/catch+console.error meant SOSButton's own
+                // retry/FAILED state could never activate for drivers even
+                // on a real backend failure -- a genuine 503 always looked
+                // like silent success after one attempt. Pure improvement,
+                // no plausible regression on the happy path: the only
+                // behavior change flag-off drivers see.
+                await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
+              }}
+            />
+          </View>
+        )
       )}
 
       {/* Map Controls */}

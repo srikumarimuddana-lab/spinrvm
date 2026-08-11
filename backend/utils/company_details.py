@@ -23,16 +23,20 @@ admin's keystroke is a different decision (see the 2026-08-08 change log).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, NamedTuple, Optional
+from typing import NamedTuple, Optional
 from urllib.parse import urlparse
 
 try:
     from ..core.config import settings as _cfg
     from ..settings_loader import get_app_settings
+    from ..utils.address_format import coalesce_setting as _coalesce
+    from ..utils.address_format import postal_address as _postal_address
     from ..utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE
 except ImportError:  # pragma: no cover - direct module imports in tests
     from core.config import settings as _cfg  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.address_format import coalesce_setting as _coalesce  # type: ignore
+    from utils.address_format import postal_address as _postal_address  # type: ignore
     from utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -56,6 +60,13 @@ class CompanyDetails(NamedTuple):
     support_email: str
     #: Absolute URL of the logo to render in the header.
     logo_url: str
+    #: Product/brand name for email BODY copy ("Open the {app_name} driver
+    #: app", "your {app_name} wallet"), independent of the legal entity
+    #: ``name`` above. Falls back to "Spinr" — see ``company_app_name`` in
+    #: ``schemas.AppSettings`` and ACTION_ITEMS.md N17. Defaulted (rather than
+    #: required) so existing keyword-only ``CompanyDetails(...)`` test
+    #: fixtures built before this field existed keep constructing.
+    app_name: str = "Spinr"
 
     @property
     def name_sentence(self) -> str:
@@ -68,40 +79,6 @@ class CompanyDetails(NamedTuple):
         in review, and it is now in front of customers on every email.
         """
         return self.name.rstrip(".") + "."
-
-
-def _coalesce(settings: Dict[str, Any], key: str) -> str:
-    """Settings value as a clean string.
-
-    The settings loader can surface a DB NULL as Python ``None`` (it overrides
-    the schema default), so a bare ``.get()`` would render the string "None" in
-    a footer. Same guard ``marketing_email._coalesce`` applies for the CASL
-    footer; kept separate because that one is on a consent-critical path this
-    module must not disturb.
-    """
-    return str(settings.get(key) or "").strip()
-
-
-def _postal_address(settings: Dict[str, Any]) -> str:
-    """Assemble the mailing address from its configured parts.
-
-    ``company_address`` is a free-text field on the admin Settings page and
-    often holds the whole address on its own; ``company_city`` /
-    ``company_province`` / ``company_postal_code`` came later (migration 192)
-    and are not on that page, so they are usually blank. Joining only the
-    non-empty parts handles both shapes without producing stray commas.
-    """
-    street = _coalesce(settings, "company_address")
-    locality = " ".join(
-        p
-        for p in (
-            _coalesce(settings, "company_city"),
-            _coalesce(settings, "company_province"),
-            _coalesce(settings, "company_postal_code"),
-        )
-        if p
-    )
-    return ", ".join(p for p in (street, locality) if p)
 
 
 def _bundled_logo_url() -> str:
@@ -180,6 +157,7 @@ async def load_company_details() -> CompanyDetails:
         settings = {}
 
     name = _coalesce(settings, "company_name") or "Spinr"
+    app_name = _coalesce(settings, "company_app_name") or "Spinr"
     address = _postal_address(settings)
     # Only claim an assembled identity line when an address is actually
     # configured; otherwise keep the shipped constant, which already carries
@@ -206,6 +184,7 @@ async def load_company_details() -> CompanyDetails:
 
     return CompanyDetails(
         name=name,
+        app_name=app_name,
         identity_line=identity_line,
         address=address,
         contact_line=contact_line,

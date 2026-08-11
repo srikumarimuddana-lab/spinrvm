@@ -224,6 +224,78 @@ class TestEarnPoints:
         assert resp.status_code == 403
 
 
+class TestTierUpgradeNotification:
+    """N15/R34 (ACTION_ITEMS.md): a tier upgrade must push-notify the rider."""
+
+    def test_tier_upgrade_sends_push_with_new_tier(self, client):
+        # bronze account 10 pts under the silver threshold (500); a $20 fare
+        # earns 20 base points at the bronze 1.0x multiplier -> lifetime 510,
+        # crossing into silver.
+        bronze_near_threshold = {
+            **SAMPLE_ACCOUNT,
+            "tier": "bronze",
+            "points": 490,
+            "lifetime_points": 490,
+        }
+        mock_db = make_mock_db()
+        mock_db.find_one = AsyncMock(side_effect=[SAMPLE_RIDE, bronze_near_threshold])
+        push = AsyncMock(return_value=True)
+
+        with patch("routes.loyalty.db", mock_db), patch("routes.loyalty.send_push_notification", push):
+            resp = client.post("/api/v1/loyalty/earn?ride_id=ride_123")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tier_upgraded"] is True
+        assert data["tier"] == "silver"
+
+        push.assert_awaited_once()
+        args, kwargs = push.await_args
+        assert args[0] == SAMPLE_USER["id"]
+        assert "tier" in args[1].lower() or "tier" in args[2].lower()
+        assert kwargs["data"]["type"] == "loyalty_tier_upgraded"
+        assert kwargs["data"]["tier"] == "silver"
+        assert kwargs["data"]["previous_tier"] == "bronze"
+        assert kwargs["target_app"] == "rider"
+
+    def test_no_tier_change_does_not_send_push(self, client):
+        # SAMPLE_ACCOUNT is already silver with plenty of lifetime points
+        # left before gold (1500) — a $20 fare stays inside the silver band.
+        mock_db = make_mock_db()
+        mock_db.find_one = AsyncMock(side_effect=[SAMPLE_RIDE, SAMPLE_ACCOUNT])
+        push = AsyncMock(return_value=True)
+
+        with patch("routes.loyalty.db", mock_db), patch("routes.loyalty.send_push_notification", push):
+            resp = client.post("/api/v1/loyalty/earn?ride_id=ride_123")
+
+        assert resp.status_code == 200
+        assert resp.json()["tier_upgraded"] is False
+        push.assert_not_awaited()
+
+    def test_push_failure_does_not_break_the_earn_response(self, client):
+        """A notification failure must never surface as a failed /earn call —
+        the loyalty account + points ledger already committed by that point."""
+        bronze_near_threshold = {
+            **SAMPLE_ACCOUNT,
+            "tier": "bronze",
+            "points": 490,
+            "lifetime_points": 490,
+        }
+        mock_db = make_mock_db()
+        mock_db.find_one = AsyncMock(side_effect=[SAMPLE_RIDE, bronze_near_threshold])
+        push = AsyncMock(side_effect=RuntimeError("fcm down"))
+
+        with patch("routes.loyalty.db", mock_db), patch("routes.loyalty.send_push_notification", push):
+            resp = client.post("/api/v1/loyalty/earn?ride_id=ride_123")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tier_upgraded"] is True
+        assert data["tier"] == "silver"
+        # the account update still happened despite the push failure
+        mock_db.update_one.assert_awaited_once()
+
+
 class TestRedeemPoints:
     """POST /api/v1/loyalty/redeem — redemption is withdrawn (returns 410).
 

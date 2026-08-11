@@ -162,6 +162,38 @@ async def test_loop_initial_stagger_sleep_then_skips_when_lock_not_acquired():
 
 
 @pytest.mark.anyio
+async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick():
+    """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+    instead of silently falling back per-replica. Previously this call sat
+    directly in `while True:` with no surrounding try/except -- an
+    unhandled exception here would have killed the loop task permanently."""
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        if len(sleep_calls) == 2:
+            raise _StopLoop()
+
+    reconcile_mock = AsyncMock(return_value={"found": 0})
+
+    with (
+        patch("asyncio.sleep", fake_sleep),
+        patch(
+            "backend.utils.orphaned_hold_reconciler.redis_set_nx",
+            AsyncMock(side_effect=ConnectionError("redis down")),
+        ),
+        patch("backend.utils.orphaned_hold_reconciler.reconcile_tick", reconcile_mock),
+        patch("backend.utils.orphaned_hold_reconciler._record_heartbeat", MagicMock()),
+    ):
+        from backend.utils.orphaned_hold_reconciler import orphaned_hold_reconciler_loop
+
+        with pytest.raises(_StopLoop):
+            await orphaned_hold_reconciler_loop()
+
+    reconcile_mock.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_loop_runs_tick_and_logs_summary_when_orphans_found(caplog):
     sleep_calls: list[float] = []
     heartbeats: list[str] = []

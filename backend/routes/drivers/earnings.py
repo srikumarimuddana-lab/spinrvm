@@ -29,6 +29,11 @@ from ._shared import (  # noqa: F401
     _ride_income,
 )
 
+try:
+    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
+
 router = APIRouter()
 
 
@@ -47,6 +52,10 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             {
                 "driver_id": driver["id"],
                 "status": RideStatus.COMPLETED,
+                # Previous-app rides are history, not Spinr income — see
+                # utils/legacy_rides. Their offsetting 'legacy_import' payout
+                # is dropped below, so the balance arithmetic is unchanged.
+                **EXCLUDE_LEGACY_RIDES,
             },
             limit=10000,
         )
@@ -74,15 +83,21 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         # 'transfer_completed' payout silently stopped reducing the balance, so
         # the driver could re-withdraw the same earnings.)
         #
-        # payout_type='stripe_sync' rows are the one exception: they are
-        # legacy-app payout HISTORY materialized from Stripe transfer records
-        # (services/stripe_payout_sync_service.py) for T4A/tax completeness.
-        # The earnings they cashed out were paid in the OLD app and are not in
-        # this DB's rides, so deducting them would drive every migrated
-        # driver's payable_balance negative and block real withdrawals.
-        # ('legacy_import' offset rows still deduct — they pair with imported
-        # rides whose earnings ARE counted above.)
-        payout_rows = await db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=5000)
+        # Two payout types are NOT money out of a Spinr balance:
+        #
+        # - 'stripe_sync': legacy-app payout HISTORY materialized from Stripe
+        #   transfer records (services/stripe_payout_sync_service.py) for
+        #   T4A/tax completeness. The earnings they cashed out were paid in the
+        #   OLD app and are not in this DB's rides, so deducting them would
+        #   drive every migrated driver's payable_balance negative and block
+        #   real withdrawals.
+        # - 'legacy_import': the synthetic offset the booking importer wrote to
+        #   cancel imported ride earnings. Those rides are now excluded above,
+        #   so their offset must go too — dropping only one half would move the
+        #   driver's payable balance (see utils/legacy_rides).
+        payout_rows = drop_legacy_offset_payouts(
+            await db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=5000)
+        )
         _not_money_out = {"reversed", "failed"}
         total_payouts = sum(
             (
@@ -224,6 +239,7 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         filters: Dict[str, Any] = {
             "driver_id": driver["id"],
             "status": RideStatus.COMPLETED,
+            **EXCLUDE_LEGACY_RIDES,
         }
         if use_date_filter and start_date:
             filters["ride_completed_at"] = {"$gte": start_date.isoformat()}
@@ -341,6 +357,7 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
                 "driver_id": driver["id"],
                 "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": start_date.isoformat()},
+                **EXCLUDE_LEGACY_RIDES,
             },
             order="ride_completed_at",
             limit=5000,
@@ -403,6 +420,7 @@ async def get_driver_trip_earnings(
     filters: Dict[str, Any] = {
         "driver_id": driver["id"],
         "status": RideStatus.COMPLETED,
+        **EXCLUDE_LEGACY_RIDES,
     }
     if days is not None:
         since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -514,6 +532,7 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
                 "driver_id": driver["id"],
                 "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": start_date.isoformat()},
+                **EXCLUDE_LEGACY_RIDES,
             },
             order="ride_completed_at",
             limit=5000,
@@ -619,6 +638,7 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
                 "driver_id": driver["id"],
                 "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": start_date.isoformat()},
+                **EXCLUDE_LEGACY_RIDES,
             },
             order="ride_completed_at",
             limit=10000,
@@ -684,6 +704,7 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
                 "driver_id": driver["id"],
                 "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": current_start.isoformat()},
+                **EXCLUDE_LEGACY_RIDES,
             },
             limit=5000,
         )
@@ -694,6 +715,7 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
                 "driver_id": driver["id"],
                 "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": previous_start.isoformat()},
+                **EXCLUDE_LEGACY_RIDES,
             },
             limit=10000,
         )
@@ -776,6 +798,7 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
                 "driver_id": driver["id"],
                 "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": window_start},
+                **EXCLUDE_LEGACY_RIDES,
             },
             limit=5000,
         )

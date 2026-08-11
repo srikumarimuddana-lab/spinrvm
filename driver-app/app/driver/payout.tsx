@@ -53,14 +53,28 @@ function PayoutScreen() {
     // re-seeds from the background refetch). NOTE: the column is gst_bn, not
     // gst_number — the latter is silently dropped by the backend schema.
     const { data: driverMeRaw } = useDriverMe();
-    const driverMe = driverMeRaw as { gst_bn?: string } | undefined;
+    const driverMe = driverMeRaw as { gst_bn?: string; sin_last4?: string | null } | undefined;
     const updateDriverMe = useUpdateDriverMe();
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);
     const [stripeAccountStatus, setStripeAccountStatus] = useState<string | null>(null);
-    const [sinOnFile, setSinOnFile] = useState(false);
+    // Stripe's own KYC flag. Kept because it still gates PAYOUTS — Stripe will
+    // not enable them without an identity on file — but it is NOT the T4A
+    // signal: Stripe never gives the number back (`individual.id_number` is
+    // write-only on Connect), so a slip cannot be filed from it.
+    const [stripeIdOnFile, setStripeIdOnFile] = useState(false);
+    // Our own copy, which is what T4A is actually filed from. Only ever the
+    // last 4 — the full number is Vault-encrypted server-side and no endpoint
+    // returns it.
+    const sinOnFile = !!driverMe?.sin_last4;
+    const [sinInput, setSinInput] = useState('');
+    const [showSinForm, setShowSinForm] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [bonuses, setBonuses] = useState<{ id: string; amount: string; kind: string; description: string; created_at: string }[]>([]);
+    // Tax years the driver actually earned in (GET /drivers/t4a/years). Empty
+    // means there is nothing to file, so the Tax Documents section is hidden
+    // rather than offering a $0.00 slip for a year they never drove.
+    const [taxYears, setTaxYears] = useState<{ year: number; total_earnings: string; total_trips: number }[]>([]);
 
     useEffect(() => {
         loadData();
@@ -74,6 +88,7 @@ function PayoutScreen() {
                 fetchBankAccount(),
                 loadStripeStatus(),
                 loadBonuses(),
+                loadTaxYears(),
                 // GST is sourced from useDriverMe — no manual fetch needed.
             ]);
         } catch (err) {
@@ -92,16 +107,27 @@ function PayoutScreen() {
         }
     };
 
+    const loadTaxYears = async () => {
+        try {
+            const res = await api.get<{ years?: typeof taxYears }>('/drivers/t4a/years');
+            setTaxYears(res.data?.years || []);
+        } catch {
+            // Hide the section rather than offering a document we can't
+            // confirm has any earnings behind it.
+            setTaxYears([]);
+        }
+    };
+
     const loadStripeStatus = async () => {
         try {
             const res = await api.get<{ stripe_account_onboarded?: boolean; stripe_id_number_provided?: boolean }>('/drivers/balance');
             setStripeAccountStatus(
                 res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
             );
-            setSinOnFile(!!res.data.stripe_id_number_provided);
+            setStripeIdOnFile(!!res.data.stripe_id_number_provided);
         } catch {
             setStripeAccountStatus('not_onboarded');
-            setSinOnFile(false);
+            setStripeIdOnFile(false);
         }
     };
 
@@ -124,8 +150,10 @@ function PayoutScreen() {
         // browser. A bare WebView dead-ends at Stripe's popup-based KYC step
         // (the popup has no window.opener and the page hangs); the system
         // browser supports the popup + redirect + camera/identity steps, so
-        // onboarding can actually complete. Stripe still collects and holds the
-        // SIN / government ID / bank account — we only ever mirror status. The
+        // onboarding can actually complete. Stripe collects the government ID
+        // and bank account here; the SIN is NOT among them if the driver
+        // already gave us one, because the backend pre-fills
+        // individual.id_number just before minting this link. The
         // backend return_url bounces back to spinr-driver://driver/payout.
         try {
             setStripeOnboarding(true);
@@ -191,6 +219,29 @@ function PayoutScreen() {
         }
     };
 
+    const handleSaveSin = async () => {
+        const cleaned = sinInput.replace(/\D/g, '');
+        // Length only. The checksum and the leading-digit rule live on the
+        // server (backend/utils/sin.py) and are returned as a clean 422 —
+        // duplicating them here would drift, and the server is authoritative.
+        if (cleaned.length !== 9) {
+            showToast('warning', 'Invalid Format', 'Your SIN is 9 digits.');
+            return;
+        }
+        try {
+            await updateDriverMe.mutateAsync({ sin: cleaned });
+            // Drop it from component state immediately. The server returns
+            // only sin_last4, so nothing re-seeds this field and the full
+            // number should not linger in memory behind a closed form.
+            setSinInput('');
+            setShowSinForm(false);
+            showToast('success', 'Saved', 'Your SIN is stored securely for your T4A.');
+        } catch (err: any) {
+            setSinInput('');
+            showToast('error', 'Save Failed', getApiErrorMessage(err, 'Could not save your SIN. Please try again.'));
+        }
+    };
+
     const handleRequestPayout = async () => {
         const amount = parseFloat(payoutAmount);
         if (isNaN(amount) || amount <= 0) {
@@ -213,16 +264,23 @@ function PayoutScreen() {
         }
     };
 
+    // Most recent year the driver actually earned in. Preferred over
+    // "last calendar year", which emailed a $0.00 slip for a year they may
+    // not have driven — the section is hidden entirely when this is null.
+    const latestTaxYear = taxYears.length > 0 ? taxYears[0].year : null;
+
     const handleEmailT4A = async () => {
+        if (latestTaxYear == null) return;
         setSendingT4A(true);
         try {
-            // CRA T4A is generated per tax year — default to the most recently
-            // completed year so drivers don't get an in-progress year's partial total.
-            const year = new Date().getFullYear() - 1;
             // Tax documents are delivered by email only (no in-app download); the
             // backend renders the PDF and emails it as an attachment.
-            const res = await api.post<{ message?: string }>(`/drivers/t4a/${year}/email`);
-            showToast('success', 'Check Your Email', res.data?.message || `Your T4A summary for ${year} is on its way.`);
+            const res = await api.post<{ message?: string }>(`/drivers/t4a/${latestTaxYear}/email`);
+            showToast(
+                'success',
+                'Check Your Email',
+                res.data?.message || `Your T4A summary for ${latestTaxYear} is on its way.`,
+            );
         } catch (err: any) {
             showToast('error', 'Send Failed', getApiErrorMessage(err, 'Could not send your T4A. Please try again.'));
         } finally {
@@ -231,9 +289,13 @@ function PayoutScreen() {
     };
 
     const handleEmailCSV = async () => {
+        if (latestTaxYear == null) return;
         setSendingCSV(true);
         try {
-            const year = new Date().getFullYear();
+            // Current year if the driver has earned in it, else their most
+            // recent earning year — never a year with nothing to export.
+            const thisYear = new Date().getFullYear();
+            const year = taxYears.some((y) => y.year === thisYear) ? thisYear : latestTaxYear;
             const res = await api.post<{ message?: string }>(`/drivers/earnings/export/email?year=${year}`);
             showToast('success', 'Check Your Email', res.data?.message || `Your earnings export for ${year} is on its way.`);
         } catch (err: any) {
@@ -265,7 +327,19 @@ function PayoutScreen() {
     // Guided-setup checklist. Every payout prerequisite lives here as a single
     // ordered list so the driver sees exactly what's done vs. what still needs a
     // tap — instead of the same requirement repeated across scattered cards.
+    //
+    // ORDER IS LOAD-BEARING: the SIN step comes FIRST, before Stripe onboarding.
+    // The backend hands our stored SIN to Stripe just before minting the
+    // onboarding link, which takes id_number out of what Stripe's form asks
+    // for. Put Stripe first and there is nothing to hand over yet, so Stripe
+    // asks — and then our form asks again. Being asked twice for a SIN is
+    // exactly what this ordering exists to prevent.
     const allReady = isStripeReady && sinOnFile && gstOnFile;
+    // The backend hard-gates /stripe-onboard (422) until a SIN is on file —
+    // either our encrypted copy or, for legacy drivers, the one Stripe
+    // already holds (stripeIdOnFile). Mirror that gate here so the driver
+    // sees a locked step with a reason instead of an error toast.
+    const sinSatisfiesStripeGate = sinOnFile || stripeIdOnFile;
     const setupSteps: {
         key: string;
         icon: keyof typeof Ionicons.glyphMap;
@@ -276,25 +350,40 @@ function PayoutScreen() {
         onPress: () => void;
     }[] = [
         {
+            key: 'sin',
+            icon: 'shield-checkmark',
+            title: 'Add your SIN for tax slips',
+            // Copy corrected: this used to read "Added securely through Stripe
+            // — we never see or store it". Stripe does collect one for its own
+            // identity checks, but it never returns it, so Spinr could not file
+            // a T4A from it. We now collect and encrypt our own copy, and
+            // saying otherwise to a driver would be untrue.
+            // Says where it goes, because it goes to two places. Telling a
+            // driver it is "only" for our T4A while also sending it to Stripe
+            // would be the same kind of untruth as the line this replaced.
+            subtitle: sinOnFile
+                // Changes are admin-approved only (the server rejects a second
+                // write), so say where to go instead of offering a dead end.
+                ? `On file · ••••${driverMe?.sin_last4} · Contact support to change it`
+                : 'Encrypted for your T4A, and passed to Stripe so you are only asked once',
+            done: sinOnFile,
+            // Not gated on Stripe: this is our own record for tax filing, and a
+            // driver can supply it before or after payouts onboarding.
+            locked: false,
+            onPress: () => setShowSinForm(true),
+        },
+        {
             key: 'stripe',
             icon: 'card',
             title: 'Connect payout account',
             subtitle: isStripeReady
                 ? 'Connected with Stripe'
-                : 'Link your bank and verify your identity with Stripe',
+                : sinSatisfiesStripeGate
+                    ? 'Link your bank and verify your identity with Stripe'
+                    : 'Add your SIN first — it unlocks this step',
             done: isStripeReady,
-            locked: false,
-            onPress: handleStripeOnboarding,
-        },
-        {
-            key: 'sin',
-            icon: 'shield-checkmark',
-            title: 'Verify your SIN',
-            subtitle: sinOnFile
-                ? 'Identity verified'
-                : 'Added securely through Stripe — we never see or store it',
-            done: sinOnFile,
-            locked: !isStripeReady,
+            // Mirrors the backend 422 gate on /stripe-onboard: no SIN, no link.
+            locked: !isStripeReady && !sinSatisfiesStripeGate,
             onPress: handleStripeOnboarding,
         },
         {
@@ -513,6 +602,69 @@ function PayoutScreen() {
                     </View>
                 )}
 
+                {/* SIN form — opened from the setup checklist. Spinr stores its
+                    own encrypted copy because Stripe never returns the one it
+                    holds, and a T4A cannot be filed without the number. */}
+                {showSinForm && (
+                    <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Social Insurance Number</Text>
+                        <View style={styles.gstForm}>
+                            <Text style={styles.inputLabel}>SIN</Text>
+                            <Text style={styles.gstHelpText}>
+                                {/* Once on file the SIN is locked server-side (403 on a second
+                                    write; changes go through support -> admin), and the checklist
+                                    row stops opening this form — so no "replace it" copy here. */}
+                                Enter your 9-digit Social Insurance Number.
+                            </Text>
+                            <TextInput
+                                style={styles.textInput}
+                                placeholder="•••••••••"
+                                placeholderTextColor={colors.textDim}
+                                value={sinInput}
+                                onChangeText={setSinInput}
+                                keyboardType="number-pad"
+                                maxLength={11}
+                                secureTextEntry
+                                autoComplete="off"
+                                textContentType="none"
+                            />
+                            {/* Consent copy must match reality (PIPEDA): the SIN IS
+                                shared with Stripe (the prefill that stops their form
+                                re-asking) and IS accessible to authorized admins via
+                                the audited reveal — "never shown to staff" was untrue. */}
+                            <Text style={styles.gstNote}>
+                                Stored encrypted. Used to prepare your year-end T4A slip and shared
+                                once with Stripe, our payout partner, so you aren't asked for it
+                                again. The app only ever shows the last 4 digits; authorized Spinr
+                                staff can access it solely for tax filing or a correction you
+                                request, and every access is logged.
+                            </Text>
+                            <View style={styles.gstFormButtons}>
+                                <TouchableOpacity
+                                    style={styles.cancelBtn}
+                                    onPress={() => {
+                                        setSinInput('');
+                                        setShowSinForm(false);
+                                    }}
+                                >
+                                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.saveBtn}
+                                    onPress={handleSaveSin}
+                                    disabled={updateDriverMe.isPending}
+                                >
+                                    {updateDriverMe.isPending ? (
+                                        <ActivityIndicator size="small" color="#fff" />
+                                    ) : (
+                                        <Text style={styles.saveBtnText}>Save</Text>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </View>
+                )}
+
                 {/* GST/HST number form — opened from the setup checklist */}
                 {showGstForm && (
                     <View style={styles.section}>
@@ -614,7 +766,10 @@ function PayoutScreen() {
                     )}
                 </View>
 
-                {/* Tax Documents */}
+                {/* Tax Documents — only for drivers who actually have a tax
+                    year on the books. Previously this always rendered and
+                    emailed a $0.00 slip for last calendar year. */}
+                {latestTaxYear != null && (
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Tax Documents</Text>
                     <View style={styles.payoutCard}>
@@ -659,6 +814,7 @@ function PayoutScreen() {
                         </TouchableOpacity>
                     </View>
                 </View>
+                )}
 
                 {/* Info Note */}
                 <View style={styles.infoNote}>

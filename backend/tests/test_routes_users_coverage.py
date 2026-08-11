@@ -44,6 +44,7 @@ from backend.routes.users import (
     UpdatePhoneRequest,
     _compress_profile_image,
     _fmt_money,
+    _fulfill_rider_data_export,
     _ride_phrase,
     _rider_referral_summary,
     add_emergency_contact,
@@ -249,15 +250,49 @@ class TestCreateProfile:
 # ── request_data_export ─────────────────────────────────────────────────
 
 
+def _closing_spawn(captured):
+    """Test double for utils.background.spawn: records the coroutine it was
+    given (so a test can assert *whether* fulfillment was triggered) without
+    ever actually running it — this is a unit test for request_data_export,
+    not an integration test of the real export pipeline, which has its own
+    coverage in test_dsar_export.py. Closes the coroutine to avoid a
+    "coroutine was never awaited" warning.
+    """
+
+    def _spawn(coro):
+        captured["coro"] = coro
+        coro.close()
+        return None
+
+    return _spawn
+
+
 class TestRequestDataExport:
     @pytest.mark.anyio
-    async def test_success(self):
-        patches = _start(_patches())
+    async def test_success_spawns_fulfillment_when_email_on_file(self):
+        captured = {}
+        patches = _start(_patches(**{"backend.routes.users.spawn": _closing_spawn(captured)}))
         try:
             result = await request_data_export(current_user=_CURRENT_USER)
             assert result["success"] is True
             assert "request_id" in result
             assert "response_due_at" in result
+            # N1: the request must actually be fulfilled, not just queued.
+            assert "coro" in captured
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_no_email_on_file_skips_fulfillment_but_still_records_request(self):
+        captured = {}
+        no_email_user = {**_CURRENT_USER, "email": None}
+        patches = _start(_patches(**{"backend.routes.users.spawn": _closing_spawn(captured)}))
+        try:
+            result = await request_data_export(current_user=no_email_user)
+            # The DSAR request itself is never lost even without an email —
+            # it stays queued for an admin to fulfil manually.
+            assert result["success"] is True
+            assert "coro" not in captured
         finally:
             _stop(patches)
 
@@ -272,6 +307,70 @@ class TestRequestDataExport:
             assert exc.value.status_code == 503
         finally:
             _stop(patches)
+
+
+# ── _fulfill_rider_data_export ──────────────────────────────────────────
+
+
+class TestFulfillRiderDataExport:
+    @pytest.mark.anyio
+    async def test_success_marks_request_completed(self):
+        captured = {}
+
+        async def _update(table, filt, fields):
+            captured["table"] = table
+            captured["filt"] = filt
+            captured["fields"] = fields
+
+        with (
+            patch(
+                "backend.routes.drivers.tax_exports._build_and_email_data_export",
+                AsyncMock(return_value=True),
+            ),
+            patch("backend.routes.users.db_supabase.update_one", AsyncMock(side_effect=_update)),
+        ):
+            await _fulfill_rider_data_export("user-1", "sam@example.com", "req-1")
+
+        assert captured["table"] == "data_export_requests"
+        assert captured["filt"] == {"id": "req-1"}
+        assert captured["fields"]["status"] == "completed"
+        assert captured["fields"]["completed_at"] is not None
+
+    @pytest.mark.anyio
+    async def test_failure_leaves_request_pending_not_falsely_completed(self):
+        captured = {}
+
+        async def _update(table, filt, fields):
+            captured["fields"] = fields
+
+        with (
+            patch(
+                "backend.routes.drivers.tax_exports._build_and_email_data_export",
+                AsyncMock(return_value=False),
+            ),
+            patch("backend.routes.users.db_supabase.update_one", AsyncMock(side_effect=_update)),
+        ):
+            await _fulfill_rider_data_export("user-1", "sam@example.com", "req-1")
+
+        assert captured["fields"]["status"] == "pending"
+        assert captured["fields"]["completed_at"] is None
+
+    @pytest.mark.anyio
+    async def test_status_update_failure_does_not_raise(self):
+        # The export already succeeded or failed and was logged by
+        # _build_and_email_data_export itself — a failure updating the queue
+        # row's status must not propagate out of this background task.
+        with (
+            patch(
+                "backend.routes.drivers.tax_exports._build_and_email_data_export",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "backend.routes.users.db_supabase.update_one",
+                AsyncMock(side_effect=RuntimeError("db down")),
+            ),
+        ):
+            await _fulfill_rider_data_export("user-1", "sam@example.com", "req-1")
 
 
 # ── delete_account_pipeda (soft-delete / tombstone) ─────────────────────
@@ -573,7 +672,9 @@ class TestLinkCorporateAccount:
 
         patches = _start(_patches(**{"backend.routes.users.db_supabase.update_one": AsyncMock(side_effect=_update)}))
         try:
-            result = await link_corporate_account(LinkCorporateRequest(corporate_account_id=None), current_user=_CURRENT_USER)
+            result = await link_corporate_account(
+                LinkCorporateRequest(corporate_account_id=None), current_user=_CURRENT_USER
+            )
             assert captured["corporate_account_id"] is None
             assert result.id == "user-1"
         finally:
@@ -584,7 +685,9 @@ class TestLinkCorporateAccount:
         patches = _start(_patches())
         try:
             with pytest.raises(HTTPException) as exc:
-                await link_corporate_account(LinkCorporateRequest(corporate_account_id="acct-1"), current_user=_CURRENT_USER)
+                await link_corporate_account(
+                    LinkCorporateRequest(corporate_account_id="acct-1"), current_user=_CURRENT_USER
+                )
             assert exc.value.status_code == 404
         finally:
             _stop(patches)
@@ -597,7 +700,9 @@ class TestLinkCorporateAccount:
         patches = _start(_patches(**{"backend.routes.users.db_supabase.get_rows": get_rows}))
         try:
             with pytest.raises(HTTPException) as exc:
-                await link_corporate_account(LinkCorporateRequest(corporate_account_id="acct-1"), current_user=_CURRENT_USER)
+                await link_corporate_account(
+                    LinkCorporateRequest(corporate_account_id="acct-1"), current_user=_CURRENT_USER
+                )
             assert exc.value.status_code == 403
         finally:
             _stop(patches)
@@ -621,7 +726,9 @@ class TestLinkCorporateAccount:
             )
         )
         try:
-            result = await link_corporate_account(LinkCorporateRequest(corporate_account_id="acct-1"), current_user=_CURRENT_USER)
+            result = await link_corporate_account(
+                LinkCorporateRequest(corporate_account_id="acct-1"), current_user=_CURRENT_USER
+            )
             assert captured["corporate_account_id"] == "acct-1"
             assert result.id == "user-1"
         finally:
@@ -642,7 +749,9 @@ class TestLinkCorporateAccount:
         )
         try:
             with pytest.raises(HTTPException) as exc:
-                await link_corporate_account(LinkCorporateRequest(corporate_account_id="acct-1"), current_user=_CURRENT_USER)
+                await link_corporate_account(
+                    LinkCorporateRequest(corporate_account_id="acct-1"), current_user=_CURRENT_USER
+                )
             assert exc.value.status_code == 500
         finally:
             _stop(patches)
@@ -859,7 +968,9 @@ class TestRiderReferralSummary:
 class TestGetRiderReferralInfo:
     @pytest.mark.anyio
     async def test_user_not_found_raises_404(self):
-        patches = _start(_referral_patches(**{"backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value=None)}))
+        patches = _start(
+            _referral_patches(**{"backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value=None)})
+        )
         try:
             with pytest.raises(HTTPException) as exc:
                 await get_rider_referral_info(current_user=_CURRENT_USER)
@@ -881,7 +992,9 @@ class TestGetRiderReferralInfo:
 class TestGetRiderReferrals:
     @pytest.mark.anyio
     async def test_user_not_found_raises_404(self):
-        patches = _start(_referral_patches(**{"backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value=None)}))
+        patches = _start(
+            _referral_patches(**{"backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value=None)})
+        )
         try:
             with pytest.raises(HTTPException) as exc:
                 await get_rider_referrals(current_user=_CURRENT_USER)
@@ -906,7 +1019,9 @@ class TestApplyRiderReferral:
         patches = _start(_patches(**{"backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value=user)}))
         try:
             with pytest.raises(HTTPException) as exc:
-                await apply_rider_referral(ApplyRiderReferralRequest(referral_code="RIDEABCDEFGH"), current_user=_CURRENT_USER)
+                await apply_rider_referral(
+                    ApplyRiderReferralRequest(referral_code="RIDEABCDEFGH"), current_user=_CURRENT_USER
+                )
             assert exc.value.status_code == 400
         finally:
             _stop(patches)
@@ -919,13 +1034,17 @@ class TestApplyRiderReferral:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value={**_USER_ROW, "referral_code_used": None}),
+                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(
+                        return_value={**_USER_ROW, "referral_code_used": None}
+                    ),
                     "backend.routes.users.db_supabase.get_rows": get_rows,
                 }
             )
         )
         try:
-            result = await apply_rider_referral(ApplyRiderReferralRequest(referral_code="RIDEABCDEFGH"), current_user=_CURRENT_USER)
+            result = await apply_rider_referral(
+                ApplyRiderReferralRequest(referral_code="RIDEABCDEFGH"), current_user=_CURRENT_USER
+            )
             assert result == {"success": True, "referral_code": "RIDEABCDEFGH"}
         finally:
             _stop(patches)
@@ -938,13 +1057,17 @@ class TestApplyRiderReferral:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value={**_USER_ROW, "referral_code_used": None}),
+                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(
+                        return_value={**_USER_ROW, "referral_code_used": None}
+                    ),
                     "backend.routes.users.db_supabase.get_rows": get_rows,
                 }
             )
         )
         try:
-            result = await apply_rider_referral(ApplyRiderReferralRequest(referral_code="mycustomcode"), current_user=_CURRENT_USER)
+            result = await apply_rider_referral(
+                ApplyRiderReferralRequest(referral_code="mycustomcode"), current_user=_CURRENT_USER
+            )
             assert result == {"success": True, "referral_code": "MYCUSTOMCODE"}
         finally:
             _stop(patches)
@@ -958,13 +1081,17 @@ class TestApplyRiderReferral:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value={**_USER_ROW, "referral_code_used": None}),
+                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(
+                        return_value={**_USER_ROW, "referral_code_used": None}
+                    ),
                     "backend.routes.users.db_supabase.get_rows": get_rows,
                 }
             )
         )
         try:
-            result = await apply_rider_referral(ApplyRiderReferralRequest(referral_code="RIDEABCDEFGH"), current_user=_CURRENT_USER)
+            result = await apply_rider_referral(
+                ApplyRiderReferralRequest(referral_code="RIDEABCDEFGH"), current_user=_CURRENT_USER
+            )
             assert result == {"success": True, "referral_code": "RIDEABCDEFGH"}
         finally:
             _stop(patches)
@@ -974,7 +1101,9 @@ class TestApplyRiderReferral:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value={**_USER_ROW, "referral_code_used": None}),
+                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(
+                        return_value={**_USER_ROW, "referral_code_used": None}
+                    ),
                     "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
                 }
             )
@@ -992,14 +1121,18 @@ class TestApplyRiderReferral:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value={**_USER_ROW, "referral_code_used": None}),
+                    "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(
+                        return_value={**_USER_ROW, "referral_code_used": None}
+                    ),
                     "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[self_row]),
                 }
             )
         )
         try:
             with pytest.raises(HTTPException) as exc:
-                await apply_rider_referral(ApplyRiderReferralRequest(referral_code="SELFCODE"), current_user=_CURRENT_USER)
+                await apply_rider_referral(
+                    ApplyRiderReferralRequest(referral_code="SELFCODE"), current_user=_CURRENT_USER
+                )
             assert exc.value.status_code == 400
         finally:
             _stop(patches)

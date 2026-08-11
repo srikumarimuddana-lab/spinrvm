@@ -31,7 +31,31 @@ async def test_empty_settings_reproduce_the_shipped_constants():
     assert details.identity_line == COMPANY_LINE
     assert details.contact_line == COMPANY_CONTACT_LINE
     assert details.name == "Spinr"
+    assert details.app_name == "Spinr"
     assert details.support_email == "support@spinr.ca"
+
+
+# --- app_name: product/brand name for email BODY copy (N17) ---------------
+# Deliberately separate from `name` (the legal entity, e.g. "Spinr
+# Technologies Inc.") — see the module docstring and ACTION_ITEMS.md N17.
+
+
+async def test_app_name_falls_back_to_spinr_when_unconfigured():
+    details = await _load({})
+    assert details.app_name == "Spinr"
+
+
+async def test_app_name_comes_from_its_own_setting():
+    details = await _load({"company_app_name": "Northern Rides"})
+    assert details.app_name == "Northern Rides"
+
+
+async def test_app_name_is_independent_of_the_legal_entity_name():
+    # Renaming the legal entity must not change the product name in body
+    # copy, and vice versa.
+    details = await _load({"company_name": "Northern Rides Inc.", "company_app_name": "Northern Rides"})
+    assert details.name == "Northern Rides Inc."
+    assert details.app_name == "Northern Rides"
 
 
 async def test_settings_load_failure_falls_back_rather_than_raising():

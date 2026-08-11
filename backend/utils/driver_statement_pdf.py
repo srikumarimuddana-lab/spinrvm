@@ -90,6 +90,31 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
     pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(*muted)
     pdf.cell(half, 11, f"$ {statement.get('payouts_total') or '0.00'}", border=0, ln=True)
+
+    # One era per number: when part of "paid out" predates Spinr, say so
+    # right under the figure — otherwise "$0.00 earned" beside a real
+    # paid-out amount reads as a bookkeeping error rather than history.
+    _prev_app = str(statement.get("payouts_previous_app_total") or "0.00")
+    if _prev_app not in ("0.00", "0", ""):
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(*muted)
+        pdf.cell(half, 4.5, "", border=0)
+        pdf.cell(half, 4.5, f"includes $ {_prev_app} paid by the previous Spinr app", border=0, ln=True)
+        pdf.set_text_color(*ink)
+
+    if statement.get("previous_app_only"):
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "I", 8.5)
+        pdf.set_text_color(*muted)
+        pdf.multi_cell(
+            W,
+            4.5,
+            "All payments in this period are transfers made by the previous Spinr app, shown "
+            "here for your records. They are not Spinr earnings, which is why total earnings "
+            "for the period is $ 0.00.",
+            border=0,
+        )
+        pdf.set_text_color(*ink)
     h_rule()
 
     # ── Earnings breakdown ───────────────────────────────────────────────
@@ -167,6 +192,19 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
         pdf.set_draw_color(*rule)
         pdf.line(15, pdf.get_y(), 15 + W, pdf.get_y())
         pdf.ln(1.5)
+        # Era subtotals whenever both kinds of money appear, so the gross
+        # total reconciles at a glance instead of demanding row-by-row
+        # arithmetic from the driver.
+        _spinr_sub = str(statement.get("payouts_spinr_total") or "0.00")
+        _prev_sub = str(statement.get("payouts_previous_app_total") or "0.00")
+        if _prev_sub not in ("0.00", "0", "") and _spinr_sub not in ("0.00", "0", ""):
+            pdf.set_font("Helvetica", "", 8.5)
+            pdf.set_text_color(*muted)
+            pdf.cell(W - 40, 5.5, "Spinr payouts", border=0)
+            pdf.cell(40, 5.5, f"$ {_spinr_sub}", border=0, align="R", ln=True)
+            pdf.cell(W - 40, 5.5, "Previous app payouts", border=0)
+            pdf.cell(40, 5.5, f"$ {_prev_sub}", border=0, align="R", ln=True)
+            pdf.set_text_color(*ink)
         pdf.set_font("Helvetica", "B", 9.5)
         pdf.cell(W - 40, 6.5, "Total paid out", border=0)
         pdf.cell(40, 6.5, f"$ {statement.get('payouts_total') or '0.00'}", border=0, align="R", ln=True)

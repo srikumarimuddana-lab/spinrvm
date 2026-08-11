@@ -144,7 +144,10 @@ _PAYOUT_TYPE_LABELS = {
     "standard": "Standard payout",
     "instant": "Instant payout",
     "legacy_import": "Settled in previous app",
-    "stripe_sync": "Payout (synced from Stripe history)",
+    # Driver-facing wording: name the era, not our sync mechanism —
+    # "synced from Stripe history" is internal jargon that reads as noise
+    # on a statement.
+    "stripe_sync": "Previous app payout",
 }
 
 
@@ -258,6 +261,13 @@ async def _build(
 
     payouts_out: list[dict] = []
     payouts_total = _ZERO
+    # One era per number: money the previous app paid (stripe_sync mirrors of
+    # real Stripe Transfers) is summed apart from Spinr payouts. Blending them
+    # produced statements reading "$0.00 earned · $30.77 paid out" with
+    # nothing explaining that the $30.77 predates Spinr — which reads as a
+    # bookkeeping error, not as history.
+    payouts_spinr = _ZERO
+    payouts_previous_app = _ZERO
     for p in sorted(payout_rows, key=lambda x: x.get("created_at") or ""):
         status = str(p.get("status") or "").lower()
         amount = _d(p.get("amount"))
@@ -265,6 +275,10 @@ async def _build(
         net = _d(p.get("net_amount")) if p.get("net_amount") is not None else amount - fee
         if status not in ("reversed", "failed"):
             payouts_total += amount
+            if p.get("payout_type") == "stripe_sync":
+                payouts_previous_app += amount
+            else:
+                payouts_spinr += amount
         payouts_out.append(
             {
                 "date": (p.get("created_at") or "")[:10],
@@ -317,5 +331,18 @@ async def _build(
         },
         "payouts": payouts_out,
         "payouts_total": _money(payouts_total),
+        "payouts_spinr_total": _money(payouts_spinr),
+        "payouts_previous_app_total": _money(payouts_previous_app),
+        # True when the ONLY money in the period is previous-app transfers:
+        # the PDF renders an explainer instead of leaving "$0.00 earned"
+        # sitting unexplained beside a real paid-out figure.
+        "previous_app_only": bool(
+            payouts_previous_app > _ZERO
+            and payouts_spinr == _ZERO
+            and not rides
+            and not bonuses
+            and not incentive_claims
+            and cancel_fees == _ZERO
+        ),
         "has_activity": bool(rides or bonuses or incentive_claims or payouts_out or cancel_fees != _ZERO),
     }

@@ -138,6 +138,40 @@ async def trigger_emergency(
             exc_info=True,
         )
 
+    # Confirm receipt to the rider/driver who triggered the alert (ACTION_ITEMS.md
+    # N15/R38). Every other side effect above notifies someone else (admin
+    # dashboard, safety-team email, on-call page, emergency contacts below) --
+    # the triggering user themselves got nothing beyond the synchronous HTTP
+    # response, which SOSButton.tsx already turns into an in-app "Alert Sent"
+    # dialog while the app is foregrounded. This closes the gap for the
+    # backgrounded/killed-app case with a real push. priority="safety" is one
+    # of the three guaranteed-delivery tiers (features.py::send_push_notification
+    # docstring) -- bypasses the push opt-out and falls back to the retry queue
+    # on a transient failure, same as the dispatch-offer and account-status
+    # pushes elsewhere in this package. Copy deliberately does not claim the
+    # alert "will get you help" or replace 911 -- it only confirms the alert
+    # reached our team, mirroring domain-safety.md's required phrasing ("We'll
+    # alert your emergency contacts and our safety team"). Self-swallowing via
+    # spawn(): a failure here must never affect the SOS response or block the
+    # SMS loop below, matching every other side effect in this function.
+    try:
+        _deps.spawn(
+            _deps.send_push_notification(
+                current_user["id"],
+                "SOS Alert Received",
+                "Your emergency alert reached our safety team and emergency contacts. "
+                "If you're in immediate danger, call 911.",
+                data={"type": "sos_confirmation", "ride_id": str(ride_id), "incident_id": incident["id"]},
+                priority="safety",
+                target_app="rider" if is_rider else "driver",
+            )
+        )
+    except Exception:  # pragma: no cover - best effort, never block the SMS path below
+        logger.error(
+            f"SOS confirmation push failed to spawn for ride={ride_id} incident={incident['id']}",
+            exc_info=True,
+        )
+
     # Notify emergency contacts via SMS (Twilio when configured, console log in dev)
     contacts_notified = 0
     try:

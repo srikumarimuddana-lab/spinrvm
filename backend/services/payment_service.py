@@ -435,6 +435,30 @@ async def settle_corporate(
     tip_amount: Decimal,
 ) -> PaymentResult:
     """Corporate allowance + master wallet saga."""
+    # Kill switch (ACTION_ITEMS.md E5): pauses automatic corporate money
+    # movement for an incident. Does NOT gate corporate_wallet_service.py's
+    # low-level apply_topup/apply_adjustment/apply_refund directly -- those
+    # are also how an admin manually corrects/refunds during the very
+    # incident that caused this switch to be flipped off. Fail-open on a
+    # settings-read error, same convention as every other kill switch here.
+    # Lazy dual import: the module-level except-branch import list is
+    # managed by a formatter hook that strips additions -- see
+    # _atomic_settle_enabled's identical pattern above.
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        settings = await get_app_settings()
+        if not settings.get("corporate_billing_enabled", True):
+            return PaymentResult(
+                success=False,
+                error="Corporate billing is temporarily disabled",
+                status_code=503,
+            )
+    except Exception as settings_err:
+        logger.warning("[PAYMENT] app_settings lookup failed ({}), proceeding as enabled", settings_err)
+
     company_id = ride.get("corporate_account_id")
     if not company_id:
         return PaymentResult(

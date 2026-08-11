@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     Search, Users, Loader2, CheckCircle, Clock, AlertTriangle, FileText,
-    Download, Car, Sticker, RefreshCw,
+    Download, Car, Mail, RefreshCw,
 } from "lucide-react";
 import { getDrivers, generateDecalPdf } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,11 @@ import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { exportToCsv } from "@/lib/export-csv";
 
-type DecalFilter = "all" | "needs_decal" | "generated" | "sent";
+type LetterFilter = "all" | "needs_letter" | "generated" | "sent";
 
-const FILTER_TABS: { value: DecalFilter; label: string; icon: any }[] = [
+const FILTER_TABS: { value: LetterFilter; label: string; icon: any }[] = [
     { value: "all", label: "All Drivers", icon: Users },
-    { value: "needs_decal", label: "Needs Decal", icon: AlertTriangle },
+    { value: "needs_letter", label: "Needs Letter", icon: AlertTriangle },
     { value: "generated", label: "Generated", icon: FileText },
     { value: "sent", label: "Sent", icon: CheckCircle },
 ];
@@ -38,14 +38,14 @@ const initials = (first: string, last: string) => {
     return (f + l).toUpperCase() || "?";
 };
 
-export default function DecalsPage() {
+export default function WelcomeLettersPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [search, setSearch] = useState("");
-    const [filter, setFilter] = useState<DecalFilter>("all");
+    const [filter, setFilter] = useState<LetterFilter>("all");
     const [generatingId, setGeneratingId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -68,7 +68,7 @@ export default function DecalsPage() {
     const filtered = useMemo(() => {
         let list = drivers;
 
-        if (filter === "needs_decal") {
+        if (filter === "needs_letter") {
             list = list.filter(d => !d.decal_generated_at && !d.decals_sent);
         } else if (filter === "generated") {
             list = list.filter(d => d.decal_generated_at && !d.decals_sent);
@@ -82,8 +82,8 @@ export default function DecalsPage() {
                 const name = `${d.first_name || ""} ${d.last_name || ""}`.toLowerCase();
                 const plate = (d.license_plate || "").toLowerCase();
                 const code = (d.driver_code || "").toLowerCase();
-                const decalNum = (d.decal_number || "").toLowerCase();
-                return name.includes(q) || plate.includes(q) || code.includes(q) || decalNum.includes(q);
+                const refNum = (d.decal_number || "").toLowerCase();
+                return name.includes(q) || plate.includes(q) || code.includes(q) || refNum.includes(q);
             });
         }
 
@@ -92,7 +92,7 @@ export default function DecalsPage() {
 
     const counts = useMemo(() => ({
         all: drivers.length,
-        needs_decal: drivers.filter(d => !d.decal_generated_at && !d.decals_sent).length,
+        needs_letter: drivers.filter(d => !d.decal_generated_at && !d.decals_sent).length,
         generated: drivers.filter(d => d.decal_generated_at && !d.decals_sent).length,
         sent: drivers.filter(d => d.decals_sent).length,
     }), [drivers]);
@@ -115,18 +115,18 @@ export default function DecalsPage() {
             const now = new Date().toISOString();
             setDrivers(prev => prev.map(d =>
                 d.id === driver.id
-                    ? { ...d, decal_generated_at: now, decal_number: d.decal_number || `SPR-${new Date().getFullYear()}-pending` }
+                    ? { ...d, decal_generated_at: d.decal_generated_at || now, decal_number: d.decal_number || `SPR-${new Date().getFullYear()}-pending` }
                     : d
             ));
-            const filename = `decal_${driver.first_name}_${driver.last_name}.pdf`.replace(/\s+/g, "_");
+            const filename = `welcome_letter_${driver.first_name}_${driver.last_name}.pdf`.replace(/\s+/g, "_");
             downloadBlob(blob, filename);
             toast({
-                title: "Decal PDF downloaded",
-                description: `Decal generated for ${driver.first_name} ${driver.last_name}.`,
+                title: "Welcome letter downloaded",
+                description: `Welcome letter generated for ${driver.first_name} ${driver.last_name}.`,
             });
             await load();
         } catch (e: any) {
-            toast({ title: "Failed to generate decal", description: e?.message, variant: "destructive" });
+            toast({ title: "Failed to generate welcome letter", description: e?.message, variant: "destructive" });
         } finally {
             setGeneratingId(null);
         }
@@ -135,21 +135,21 @@ export default function DecalsPage() {
     const handleBulkGenerate = async () => {
         const targets = filtered.filter(d => selectedIds.has(d.id) && !d.decal_generated_at);
         if (!targets.length) {
-            toast({ title: "No eligible drivers selected", description: "Select drivers that haven't had decals generated yet.", variant: "destructive" });
+            toast({ title: "No eligible drivers selected", description: "Select drivers that haven't had welcome letters generated yet.", variant: "destructive" });
             return;
         }
         setGeneratingId("bulk");
         try {
             const ids = targets.map(d => d.id);
             const blob = await generateDecalPdf(ids);
-            downloadBlob(blob, `decals_${ids.length}_drivers.pdf`);
+            downloadBlob(blob, `welcome_letters_${ids.length}_drivers.pdf`);
             toast({
-                title: "Decal PDFs downloaded",
-                description: `Generated decals for ${ids.length} driver(s).`,
+                title: "Welcome letters downloaded",
+                description: `Generated welcome letters for ${ids.length} driver(s).`,
             });
             await load();
         } catch (e: any) {
-            toast({ title: "Failed to generate decals", description: e?.message, variant: "destructive" });
+            toast({ title: "Failed to generate welcome letters", description: e?.message, variant: "destructive" });
         } finally {
             setGeneratingId(null);
             setSelectedIds(new Set());
@@ -174,7 +174,7 @@ export default function DecalsPage() {
     };
 
     const handleExport = () => {
-        exportToCsv("decal-report", filtered, [
+        exportToCsv("welcome-letter-report", filtered, [
             { key: "driver_code", label: "Driver Code" },
             { key: "first_name", label: "First Name" },
             { key: "last_name", label: "Last Name" },
@@ -184,14 +184,14 @@ export default function DecalsPage() {
             { key: "vehicle_year", label: "Vehicle Year" },
             { key: "vehicle_color", label: "Vehicle Color" },
             { key: "license_plate", label: "License Plate" },
-            { key: "decal_number", label: "Decal Number" },
-            { key: "decal_generated_at", label: "Decal Generated At" },
-            { key: "decals_sent", label: "Decal Sent" },
-            { key: "decals_sent_at", label: "Decal Sent At" },
+            { key: "decal_number", label: "Ref Number" },
+            { key: "decal_generated_at", label: "Generated At" },
+            { key: "decals_sent", label: "Sent" },
+            { key: "decals_sent_at", label: "Sent At" },
         ]);
     };
 
-    const decalStatus = (d: any) => {
+    const letterStatus = (d: any) => {
         if (d.decals_sent) return { label: "Sent", variant: "default" as const, icon: CheckCircle };
         if (d.decal_generated_at) return { label: "Generated", variant: "secondary" as const, icon: FileText };
         return { label: "Pending", variant: "outline" as const, icon: Clock };
@@ -204,11 +204,11 @@ export default function DecalsPage() {
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-                        <Sticker className="h-6 w-6 text-primary" />
-                        Decal Generation
+                        <Mail className="h-6 w-6 text-primary" />
+                        Welcome Letters
                     </h1>
                     <p className="text-sm text-muted-foreground mt-1">
-                        Generate and track vehicle decals for active drivers
+                        Generate and track welcome letters for active drivers
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -253,7 +253,7 @@ export default function DecalsPage() {
             <div className="relative w-full sm:w-80">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                    placeholder="Search by name, plate, driver code, decal #..."
+                    placeholder="Search by name, plate, driver code, ref #..."
                     value={search}
                     onChange={e => setSearch(e.target.value)}
                     className="pl-9 h-9 text-sm"
@@ -276,7 +276,7 @@ export default function DecalsPage() {
                             <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver</span></TableHead>
                             <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle</span></TableHead>
                             <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">License Plate</span></TableHead>
-                            <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Decal #</span></TableHead>
+                            <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Ref #</span></TableHead>
                             <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status</span></TableHead>
                             <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Generated</span></TableHead>
                             <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Sent</span></TableHead>
@@ -299,13 +299,13 @@ export default function DecalsPage() {
                         )) : filtered.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
-                                    <Sticker className="h-10 w-10 mx-auto mb-3 opacity-20" />
+                                    <Mail className="h-10 w-10 mx-auto mb-3 opacity-20" />
                                     <p className="text-base font-medium">No drivers found</p>
                                     <p className="text-sm mt-1">Try adjusting your search or filter</p>
                                 </TableCell>
                             </TableRow>
                         ) : filtered.map(driver => {
-                            const st = decalStatus(driver);
+                            const st = letterStatus(driver);
                             const vehicle = [driver.vehicle_year, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(" ");
                             return (
                                 <TableRow key={driver.id} className="group hover:bg-muted/40 transition-colors">
@@ -368,7 +368,7 @@ export default function DecalsPage() {
                                                 ) : (
                                                     <Download className="h-3 w-3" />
                                                 )}
-                                                Download PDF
+                                                Generate
                                             </Button>
                                         ) : (
                                             <span className="text-xs text-muted-foreground flex items-center gap-1">

@@ -3776,7 +3776,7 @@ async def admin_driver_daily_activity(
     return report
 
 
-# ── Decal PDF generation ────────────────────────────────────────────
+# ── Welcome Letter PDF generation ──────────────────────────────────
 
 
 class DecalGenerateRequest(BaseModel):
@@ -3804,27 +3804,30 @@ async def generate_decal_pdf_endpoint(
 
     now = datetime.now(timezone.utc).isoformat()
     for driver in drivers:
-        updates: Dict[str, Any] = {"decal_generated_at": now}
+        updates: Dict[str, Any] = {}
+        if not driver.get("decal_generated_at"):
+            updates["decal_generated_at"] = now
         if not driver.get("decal_number"):
             seq = str(uuid.uuid4().int % 100000).zfill(5)
             updates["decal_number"] = f"SPR-{datetime.now(timezone.utc).year}-{seq}"
-        await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
-        driver.update(updates)
+        if updates:
+            await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
+            driver.update(updates)
 
     pdf_bytes = generate_decal_pdf(drivers)
 
     await log_admin_action(
         admin,
-        "decal_pdf_generated",
+        "welcome_letter_generated",
         "drivers",
         ",".join(body.driver_ids),
         {"driver_count": len(drivers)},
     )
 
     filename = (
-        f"decal_{drivers[0].get('decal_number', 'unknown')}.pdf"
+        f"welcome_letter_{drivers[0].get('decal_number', 'unknown')}.pdf"
         if len(drivers) == 1
-        else f"decals_{len(drivers)}_drivers.pdf"
+        else f"welcome_letters_{len(drivers)}_drivers.pdf"
     )
     return FastAPIResponse(
         content=pdf_bytes,

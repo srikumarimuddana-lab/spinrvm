@@ -15,6 +15,26 @@ function isErrorLike(e: unknown): e is { message: string } {
   return typeof e === 'object' && e !== null && 'message' in e;
 }
 
+// Format a Date's LOCAL wall-clock fields as a naive ISO-8601 string (no
+// 'Z', no offset) -- e.g. "2026-11-01T01:30:00". Deliberately NOT
+// `date.toISOString()`, which converts to the true UTC instant: the backend's
+// DST-gap/ambiguity guard (backend/schemas.py CreateRideRequest.
+// validate_scheduled_time) can only detect a spring-forward gap or a
+// fall-back repeated hour from the RAW local digits the rider picked, before
+// any timezone math has silently resolved (or fabricated, for a gap time)
+// which real-world instant was meant -- by the time you have a true UTC
+// instant that ambiguity is already gone with no record of the choice. Paired
+// with `scheduled_timezone` below, which tells the backend which zone these
+// digits are in; the backend converts back to a true UTC instant itself
+// once it has confirmed the local time is valid and unambiguous.
+function formatLocalNaiveIso(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+}
+
 // Write currentRide + currentDriver to AsyncStorage. Clears key when ride is
 // terminal so stale data never survives across sessions.
 const _persistRide = (currentRide: Ride | null, currentDriver: Driver | null) => {
@@ -741,7 +761,14 @@ export const useRideStore = create<RideState>((set, get) => ({
 
       if (scheduledTime) {
         rideData.is_scheduled = true;
-        rideData.scheduled_time = scheduledTime.toISOString();
+        // Local wall-clock digits + zone name, NOT scheduledTime.toISOString()
+        // -- see formatLocalNaiveIso's docstring for why. scheduled_timezone
+        // defaults to the device's own IANA zone: correct for the normal
+        // case (rider books a pickup where they currently are), and the only
+        // part of Spinr's service area where this actually matters
+        // (Lloydminster observes DST; the rest of Saskatchewan does not).
+        rideData.scheduled_time = formatLocalNaiveIso(scheduledTime);
+        rideData.scheduled_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       }
 
       const userId = useAuthStore.getState().user?.id ?? 'anon';

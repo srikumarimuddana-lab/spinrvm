@@ -333,3 +333,161 @@ def test_debit_wallet_user_not_found(test_client, admin_override):
 def test_wallet_endpoints_require_admin_auth(test_client):
     resp = test_client.get("/api/admin/wallet/user-1")
     assert resp.status_code in (401, 403)
+
+
+# ---------- N15/R31 (ACTION_ITEMS.md): rider/driver push on admin credit/debit ----------
+
+
+def test_credit_wallet_sends_push_to_rider(test_client, admin_override):
+    patches = _apply(
+        _patches(
+            get_rows=AsyncMock(return_value=[]),
+            wallet_apply_delta=AsyncMock(return_value=_wallet_txn("60.00", "txn-42")),
+        )
+    )
+    push = AsyncMock(return_value=True)
+    with (
+        patch(f"{MOD}.get_or_create_wallet", AsyncMock(return_value=dict(WALLET))),
+        patch(f"{MOD}.send_push_notification", push),
+    ):
+        try:
+            resp = test_client.post(
+                "/api/admin/wallet/credit",
+                json={"user_id": "user-1", "amount": "10.00", "reason": "goodwill credit"},
+            )
+        finally:
+            _stop(patches)
+    assert resp.status_code == 200, resp.text
+
+    push.assert_awaited_once()
+    args, kwargs = push.await_args
+    assert args[0] == "user-1"
+    assert kwargs["data"]["type"] == "wallet_admin_credit"
+    assert kwargs["data"]["amount"] == "10.00"
+    assert kwargs["data"]["transaction_id"] == "txn-42"
+    # USER has no "role" key -> defaults to rider, not driver.
+    assert kwargs["target_app"] == "rider"
+
+
+def test_credit_wallet_sends_push_to_driver_when_role_is_driver(test_client, admin_override):
+    driver_user = {**USER, "role": "driver"}
+    patches = _apply(
+        _patches(
+            get_user_by_id=AsyncMock(return_value=driver_user),
+            get_rows=AsyncMock(return_value=[]),
+            wallet_apply_delta=AsyncMock(return_value=_wallet_txn("60.00")),
+        )
+    )
+    push = AsyncMock(return_value=True)
+    with (
+        patch(f"{MOD}.get_or_create_wallet", AsyncMock(return_value=dict(WALLET))),
+        patch(f"{MOD}.send_push_notification", push),
+    ):
+        try:
+            resp = test_client.post(
+                "/api/admin/wallet/credit",
+                json={"user_id": "user-1", "amount": "10.00", "reason": "goodwill credit"},
+            )
+        finally:
+            _stop(patches)
+    assert resp.status_code == 200, resp.text
+    _, kwargs = push.await_args
+    assert kwargs["target_app"] == "driver"
+
+
+def test_credit_wallet_idempotent_replay_does_not_resend_push(test_client, admin_override):
+    """A retried request that short-circuits on the idempotency key must not
+    re-notify the rider for money that was already credited the first time."""
+    existing = [{"id": "txn-orig", "balance_after": "60.00"}]
+    patches = _apply(_patches(get_rows=AsyncMock(return_value=existing)))
+    push = AsyncMock(return_value=True)
+    with patch(f"{MOD}.send_push_notification", push):
+        try:
+            resp = test_client.post(
+                "/api/admin/wallet/credit",
+                json={
+                    "user_id": "user-1",
+                    "amount": "10.00",
+                    "reason": "goodwill credit",
+                    "idempotency_key": "idem-1",
+                },
+            )
+        finally:
+            _stop(patches)
+    assert resp.status_code == 200, resp.text
+    push.assert_not_awaited()
+
+
+def test_credit_wallet_push_failure_does_not_break_response(test_client, admin_override):
+    """The credit + audit row already committed by the time the push fires —
+    a delivery failure must never surface as a failed credit request."""
+    patches = _apply(
+        _patches(
+            get_rows=AsyncMock(return_value=[]),
+            wallet_apply_delta=AsyncMock(return_value=_wallet_txn("60.00")),
+        )
+    )
+    push = AsyncMock(side_effect=RuntimeError("fcm down"))
+    with (
+        patch(f"{MOD}.get_or_create_wallet", AsyncMock(return_value=dict(WALLET))),
+        patch(f"{MOD}.send_push_notification", push),
+    ):
+        try:
+            resp = test_client.post(
+                "/api/admin/wallet/credit",
+                json={"user_id": "user-1", "amount": "10.00", "reason": "goodwill credit"},
+            )
+        finally:
+            _stop(patches)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["balance"] == "60.00"
+
+
+def test_debit_wallet_sends_push_to_rider(test_client, admin_override):
+    patches = _apply(
+        _patches(
+            get_rows=AsyncMock(return_value=[]),
+            wallet_apply_delta=AsyncMock(return_value=_wallet_txn("40.00", "txn-99")),
+        )
+    )
+    push = AsyncMock(return_value=True)
+    with (
+        patch(f"{MOD}.get_or_create_wallet", AsyncMock(return_value=dict(WALLET))),
+        patch(f"{MOD}.send_push_notification", push),
+    ):
+        try:
+            resp = test_client.post(
+                "/api/admin/wallet/debit",
+                json={"user_id": "user-1", "amount": 10.0, "reason": "fraud clawback"},
+            )
+        finally:
+            _stop(patches)
+    assert resp.status_code == 200, resp.text
+
+    push.assert_awaited_once()
+    args, kwargs = push.await_args
+    assert args[0] == "user-1"
+    assert kwargs["data"]["type"] == "wallet_admin_debit"
+    assert kwargs["data"]["amount"] == "10.00"
+    assert kwargs["data"]["transaction_id"] == "txn-99"
+    assert kwargs["target_app"] == "rider"
+
+
+def test_debit_wallet_insufficient_balance_does_not_send_push(test_client, admin_override):
+    """The advisory pre-check 400s before any money moves — no push should fire."""
+    apply_delta = AsyncMock()
+    patches = _apply(_patches(get_rows=AsyncMock(return_value=[]), wallet_apply_delta=apply_delta))
+    push = AsyncMock(return_value=True)
+    with (
+        patch(f"{MOD}.get_or_create_wallet", AsyncMock(return_value=dict(WALLET))),
+        patch(f"{MOD}.send_push_notification", push),
+    ):
+        try:
+            resp = test_client.post(
+                "/api/admin/wallet/debit",
+                json={"user_id": "user-1", "amount": 500.0, "reason": "overdraw attempt"},
+            )
+        finally:
+            _stop(patches)
+    assert resp.status_code == 400
+    push.assert_not_awaited()

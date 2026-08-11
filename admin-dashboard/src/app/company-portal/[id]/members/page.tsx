@@ -194,8 +194,8 @@ export default function MembersPage() {
                             className={
                                 "flex flex-wrap items-center gap-2 rounded p-2 text-xs " +
                                 (feedback.kind === "ok"
-                                    ? "bg-emerald-50 text-emerald-800"
-                                    : "bg-amber-50 text-amber-800")
+                                    ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300"
+                                    : "bg-amber-50 dark:bg-amber-900/10 text-amber-800 dark:text-amber-300")
                             }
                         >
                             <span>{feedback.text}</span>
@@ -211,7 +211,7 @@ export default function MembersPage() {
                         </div>
                     )}
                     {error && (
-                        <p className="rounded bg-red-50 p-2 text-xs text-red-700">{error}</p>
+                        <p className="rounded bg-destructive/10 p-2 text-xs text-destructive">{error}</p>
                     )}
                 </CardContent>
             </Card>

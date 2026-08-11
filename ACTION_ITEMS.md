@@ -5547,14 +5547,24 @@ Remaining, roughly in order of user impact:
   for real: 455 passed / 0 failed across 54 suites. `yarn tsc --noEmit` clean.
   `yarn build:web` (`expo export --platform web`) production build completed
   successfully — not just a dev-server/`tsc` check. **Residual gap
-  discovered, not fixed here (backend-file change, out of this PR's scope):**
+  discovered, not fixed there (backend-file change, out of that PR's scope):**
   `GET /auth/me`'s response schema (`backend/schemas.py`'s `UserProfile`)
-  still doesn't return `email_verified`, so the Account-screen badge is
-  sourced from a local store merge (the confirm response itself carries
+  didn't return `email_verified`, so the Account-screen badge was sourced
+  from a local store merge (the confirm response itself carries
   `email_verified: true`) rather than a normal profile refresh — a verified
-  rider's badge reverts to "not verified" after a full app restart until a
-  follow-up backend change adds the field to `UserProfile`. See
+  rider's badge reverted to "not verified" after a full app restart. See
   `docs/change-log/2026-08-11-n14-rider-email-verify-ui.md` for full detail.
+  **2026-08-11 follow-up: done.** `UserProfile` now declares
+  `email_verified`/`email_verified_at`; every `UserProfile(**row)`
+  construction site (11, across `routes/auth.py`/`routes/users.py`) already
+  spreads the full DB row, so no other file needed a change — both fields
+  now flow through automatically wherever a profile is returned, including
+  `/auth/me`. New test pins both the verified-True case and a legacy row
+  with the key entirely missing (defaults to `False`/`None`, no error).
+  102 passed in the direct auth/email-verify suite, 168 in a broader
+  schemas/users/auth sweep, 123 across the admin-users-adjacent files — all
+  clean, 0 failed. See
+  `docs/change-log/2026-08-11-n14-auth-me-email-verified-field.md`.
   (b) **whether/how to gate anything on `email_verified` remains an open
   product decision**, not resolved here — nothing was changed to require
   verification before booking, payouts, or any other flow, and CLAUDE.md's

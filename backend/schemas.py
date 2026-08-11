@@ -78,6 +78,19 @@ class UserProfile(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[str] = None
+    # N14 (ACTION_ITEMS.md): the rider-app verify-email flow (routes/users.py)
+    # flips these two columns on the users row, but until now UserProfile
+    # never declared them -- Pydantic silently drops any dict key passed to
+    # UserProfile(**user) that isn't a declared field, so /auth/me (and every
+    # other UserProfile(**row) call site) returned a profile with no
+    # verification status at all. The Account-screen badge worked around
+    # this by merging the confirm response's own email_verified: true into
+    # local state, but that merge doesn't survive a full app restart -- the
+    # next /auth/me refetch silently reverted it to "not verified". This is
+    # the actual fix; no call site needs to change, since they all already
+    # spread the full DB row into UserProfile(**...).
+    email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
     gender: Optional[str] = None
     profile_image: Optional[str] = None  # Base64 encoded image
     profile_image_status: Optional[str] = None  # pending_review | approved | rejected

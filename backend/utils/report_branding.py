@@ -555,7 +555,11 @@ def render_pdf_table(
                 data_row.cell(pdf_safe(str(row.get(name, ""))))
 
 
-def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> None:
+def render_branded_pdf_footer(
+    pdf,
+    province_letterhead: dict | None = None,
+    company_lines: tuple[str, str] | None = None,
+) -> None:
     """Draw a small grey footer at the bottom of the current page: the
     company identity/contact line (always shown — registered address and
     contact info is expected on every generated document, not just
@@ -564,11 +568,21 @@ def render_branded_pdf_footer(pdf, province_letterhead: dict | None = None) -> N
     "default_regulatory_authority": "SGI"}) when the report is
     province-scoped. Pass province_letterhead=None for reports that aren't
     province-scoped (e.g. a company-wide DSAR lookup) — the company line
-    still renders."""
+    still renders.
+
+    ``company_lines`` is an ``(identity_line, contact_line)`` pair resolved
+    from ``app_settings`` by ``utils/company_details.load_company_details``
+    — the SAME source every outgoing email uses. Pass it so an operator who
+    renames the company in Settings sees it on generated documents too;
+    without it these fell back to the shipped constants forever, so emails
+    and PDFs disagreed after any rebrand. Settings loading is async and PDF
+    rendering is sync, hence a parameter rather than a lookup here.
+    """
+    identity, contact = company_lines or (COMPANY_LINE, COMPANY_CONTACT_LINE)
     pdf.set_font(BRAND_FONT, "", 7)
     pdf.set_text_color(*MUTED_RGB)
     pdf.set_y(-18)
-    pdf.cell(0, 4.5, pdf_safe(f"{COMPANY_LINE}  |  {COMPANY_CONTACT_LINE}"), align="C", ln=True)
+    pdf.cell(0, 4.5, pdf_safe(f"{identity}  |  {contact}"), align="C", ln=True)
     if province_letterhead:
         name = province_letterhead.get("name", "")
         authority = province_letterhead.get("default_regulatory_authority", "")

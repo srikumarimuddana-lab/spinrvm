@@ -2069,9 +2069,14 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                 <PayoutMetric
                     label="Lifetime earnings"
                     value={fmtMoney(summary.lifetime_earnings)}
-                    sub={hasBonuses
-                        ? `${fmtMoney(summary.lifetime_ride_earnings ?? 0)} rides + ${fmtMoney(summary.lifetime_bonuses ?? 0)} bonuses · ${fmtMoney(summary.lifetime_tips)} tips`
-                        : `${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`
+                    // Spell out imported rides. Otherwise this reads "0
+                    // completed rides · $0.00" next to a Rides tab showing 15,
+                    // and nothing explains why — which looks like data loss.
+                    sub={(summary.imported_rides_excluded ?? 0) > 0
+                        ? `${summary.rides_count.toLocaleString()} Spinr rides · ${summary.imported_rides_excluded} imported from previous app (not counted)`
+                        : hasBonuses
+                            ? `${fmtMoney(summary.lifetime_ride_earnings ?? 0)} rides + ${fmtMoney(summary.lifetime_bonuses ?? 0)} bonuses · ${fmtMoney(summary.lifetime_tips)} tips`
+                            : `${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`
                     }
                 />
                 <PayoutMetric

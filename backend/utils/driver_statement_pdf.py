@@ -201,5 +201,11 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
     # still armed that jump itself triggers a break and strands the footer on
     # a blank trailing page. Disarm it — the body content is already laid out.
     pdf.set_auto_page_break(auto=False)
-    report_branding.render_branded_pdf_footer(pdf)
+    # Settings-driven company identity when the builder resolved it (same
+    # source as emails); falls back to the shipped constants otherwise.
+    _lines = statement.get("company_lines")
+    report_branding.render_branded_pdf_footer(
+        pdf,
+        company_lines=(tuple(_lines) if isinstance(_lines, (list, tuple)) and len(_lines) == 2 else None),
+    )
     return bytes(pdf.output())

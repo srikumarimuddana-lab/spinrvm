@@ -2642,6 +2642,28 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     lifetime_ride_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
     lifetime_tips = sum((_dec(r.get("tip_amount")) for r in rides), Decimal("0"))
 
+    # How many of this driver's completed rides were EXCLUDED as previous-app
+    # imports. Without this the card reads "0 completed rides · $0.00" while
+    # the Rides tab beside it shows 15, and nothing on screen explains the
+    # contradiction — the operator is left assuming data loss. Counted, not
+    # fetched: a HEAD-style count keeps the payload small.
+    imported_rides_excluded = 0
+    try:
+        imported_rides_excluded = len(
+            await db_supabase.get_rows(
+                "rides",
+                {"driver_id": driver_id, "status": "completed", "legacy_import_metadata": {"$notnull": True}},
+                columns="id",
+                limit=10000,
+            )
+            or []
+        )
+    except Exception:
+        # Presentation-only context. Never fail the whole payouts tab over it,
+        # but do surface it — a silent zero here would itself be misleading.
+        logger.error("payouts-summary: imported-ride count failed for %s", driver_id, exc_info=True)
+        imported_rides_excluded = -1  # -1 = unknown, distinct from a real zero
+
     # ---- Aggregate from driver_bonuses (quest/referral/adjustment) ----
     bonus_rows = await db_supabase.get_rows(
         "driver_bonuses",
@@ -2815,6 +2837,9 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             "pending_balance": float(pending_balance),
             "on_hold": float(on_hold),
             "rides_count": len(rides),
+            # Completed rides imported from the previous app and therefore NOT
+            # counted in lifetime_earnings (-1 = count unavailable).
+            "imported_rides_excluded": imported_rides_excluded,
             "active_days_30d": active_days_30d,
             "last_payout": (
                 {

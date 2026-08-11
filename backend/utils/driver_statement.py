@@ -27,6 +27,7 @@ NOT used here — a statement is a fixed company document, not a live UI.
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
@@ -39,6 +40,8 @@ except ImportError:  # pragma: no cover
     import db_supabase  # type: ignore
 
     from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 STATEMENT_TZ = ZoneInfo("America/Regina")
 
@@ -277,9 +280,25 @@ async def _build(
     distance_km = float(sum((_d(r.get("distance_km")) for r in rides), _ZERO))
     duration_minutes = float(sum((_d(r.get("duration_minutes")) for r in rides), _ZERO))
 
+    # Company identity from app_settings — the SAME source outgoing emails
+    # use (utils/company_details). Resolved here because this builder is
+    # async and PDF rendering is not; without it the PDF footer kept the
+    # shipped constants forever, so a rebrand showed up in emails but never
+    # on the documents drivers download. Never fatal: a settings failure
+    # falls back to the constants rather than blocking a statement.
+    company_lines: tuple[str, str] | None = None
+    try:
+        from .company_details import load_company_details  # local: avoids a cycle at import time
+
+        details = await load_company_details()
+        company_lines = (details.identity_line, details.contact_line)
+    except Exception:
+        logger.warning("statement: company details unavailable; using shipped branding", exc_info=True)
+
     return {
         "driver_id": driver_id,
         "driver_name": driver_name or driver.get("name") or "Driver",
+        "company_lines": company_lines,
         "period_type": period_type,
         "period_start": start_d.isoformat(),
         "period_end": end_d.isoformat(),

@@ -306,6 +306,9 @@ export interface DriverPayoutSummary {
         pending_balance: number;
         on_hold: number;
         rides_count: number;
+        /** Completed rides imported from the previous app, excluded from
+         *  lifetime_earnings. -1 means the count was unavailable. */
+        imported_rides_excluded?: number;
         active_days_30d: number;
         last_payout: {
             id: string;

@@ -5380,6 +5380,29 @@ Remaining, roughly in order of user impact:
   session, so there is no "verify your email" prompt, banner, or settings
   entry anywhere in `rider-app/` yet. The capability exists and is safe to
   call, but nothing in the product surfaces it to a rider today. Follow-up.
+  **2026-08-11 update: done.** `rider-app/app/verify-email.tsx` (new screen,
+  sibling of `app/otp.tsx`'s phone-OTP flow) calls both endpoints and handles
+  every documented response/error case (`already_verified` short-circuit,
+  `PROFILE_EMAIL_MISSING`, `AUTH_OTP_INVALID`, `AUTH_OTP_EXPIRED`, the 3/hour
+  request rate limit, the 5-failures/hour confirm lockout,
+  `SYSTEM_SERVICE_UNAVAILABLE`) with plain-English copy resolved through the
+  existing i18n `message_key` system, not raw backend sentinels. Entry point
+  is a Verify/Verified pill added to the existing Email row on the Account
+  tab's Personal Info card (`app/(tabs)/account.tsx`) — purely additive,
+  discoverable only there, never a forced/blocking flow. 15 new tests
+  (`__tests__/verifyEmailScreen.test.tsx`, 10;
+  `__tests__/accountEmailVerification.test.tsx`, 5), full rider-app suite run
+  for real: 455 passed / 0 failed across 54 suites. `yarn tsc --noEmit` clean.
+  `yarn build:web` (`expo export --platform web`) production build completed
+  successfully — not just a dev-server/`tsc` check. **Residual gap
+  discovered, not fixed here (backend-file change, out of this PR's scope):**
+  `GET /auth/me`'s response schema (`backend/schemas.py`'s `UserProfile`)
+  still doesn't return `email_verified`, so the Account-screen badge is
+  sourced from a local store merge (the confirm response itself carries
+  `email_verified: true`) rather than a normal profile refresh — a verified
+  rider's badge reverts to "not verified" after a full app restart until a
+  follow-up backend change adds the field to `UserProfile`. See
+  `docs/change-log/2026-08-11-n14-rider-email-verify-ui.md` for full detail.
   (b) **whether/how to gate anything on `email_verified` remains an open
   product decision**, not resolved here — nothing was changed to require
   verification before booking, payouts, or any other flow, and CLAUDE.md's

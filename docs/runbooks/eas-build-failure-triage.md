@@ -190,14 +190,53 @@ you expected to be interesting.
    `EAS_SKIP_AUTO_FINGERPRINT=1`). Prefer the tool's own sanctioned bypass
    over patching its internals.
 5. **The bypass is a mitigation, not the fix.** File it in `ACTION_ITEMS.md`
-   with the actual dependency-resolution repair still needed (e.g.
-   `yarn-deduplicate`, a `resolutions` pin — verified against every other
-   consumer of the same package before landing, per this repo's own
-   pre-merge gate) and a note to remove the bypass once that lands.
-6. **This step could not be verified end-to-end without real EAS
+   with the actual dependency-resolution repair still needed and a note to
+   remove the bypass once that lands.
+6. **A bypass is fine to ship first, but don't stop there** — go back and
+   find why the `resolutions` (or lockfile) actually broke. In the
+   2026-08-11 case, `package.json` already had `resolutions` entries meant
+   to fix exactly this, from an earlier same-day PR (B24) — but two of them
+   used a **mid-path `**` wildcard**
+   (`"**/@expo/fingerprint/**/brace-expansion"`) that Yarn Classic's
+   selective-resolutions **silently doesn't support**: the pattern
+   registers with zero effect, no warning, no error. That PR's own
+   verification (tests, typecheck, build, audit) never exercised the one
+   code path it broke, so it shipped invisibly. Confirm what Yarn Classic
+   actually honors empirically, don't assume from the pattern's own
+   plausibility:
+   - `"dependency": "version"` (blanket) — works.
+   - `"**/parent/dependency": "version"` (single `**/` prefix, then real
+     names) — works.
+   - `"**/parent@<semver>/dependency": "version"` (a semver constraint on
+     one path segment) — **works**, and is the right tool when a blanket
+     `"**/parent/dependency"` rule is accidentally too broad (matches every
+     major version of `parent`, not just the one the rule was meant for).
+   - `"parent/dependency"` (real names, no `**/` prefix) — did **not** take
+     effect in testing when `parent` wasn't a direct dependency of the
+     project's own `package.json`.
+   - Any pattern with `**` in the **middle** of the path — did **not** take
+     effect in testing, silently.
+   - Confirm empirically, not from memory or a pattern's plausibility:
+     make the change, delete the affected `yarn.lock` entries (or run
+     `yarn install --force`), reinstall, and re-run the direct-reproduction
+     script from step 2. A byte-identical crash after the "fix" means the
+     pattern didn't apply — don't trust that a resolutions edit worked
+     just because `yarn install` exits 0 and prints "Saved lockfile."
+7. **Watch for the same bug one level deeper.** Fixing `brace-expansion`'s
+   own resolution surfaced an *identical* crash one dependency layer down
+   (`balanced-match`, a dependency of `brace-expansion` itself) before the
+   real fix (correctly scoping the blanket rule, not vendoring) made both
+   resolve correctly together. If a "fixed" crash immediately re-appears
+   with a different module name in the stack trace, it's very likely the
+   same class of bug at the next layer — re-run the same diagnostic
+   sequence rather than assuming a new, unrelated issue.
+8. **This step could not be verified end-to-end without real EAS
    credentials** (`EXPO_TOKEN`) in a sandboxed session — say so explicitly
-   rather than claiming full confidence. The next real `eas update` run
-   against `main` is the actual proof.
+   rather than claiming full confidence, even after a durable fix. Calling
+   the exact library function `eas update` calls, against the real project
+   directory, with a real successful result, is the closest verification
+   reachable without production credentials — but the next real push to
+   `main` touching either app is the actual, final proof.
 
 ---
 
@@ -221,6 +260,18 @@ Before considering the incident closed:
       registry mirror, cache state).
 - [ ] `ACTION_ITEMS.md` has an entry for the durable fix (upstream bump)
       if the applied fix is a workaround, not the real thing.
+- [ ] If the fix touched `yarn.lock`/`resolutions` (not just app code): the
+      full `jest` suite still passes for any app whose lockfile changed —
+      a resolution fix that's correct for the crashing consumer can still
+      quietly change what a *different* consumer gets (§3b's fix corrected
+      a second, previously-silent wrong version for an unrelated `jest`
+      dependency chain as a side effect — good in that case, but confirm,
+      don't assume, for yours). Re-run a suspicious single-test failure in
+      isolation before treating it as a regression — full-suite parallelism
+      flakiness looks identical to a real break at a glance.
+- [ ] `git diff` on the changed `yarn.lock`(s) touches only the
+      package(s) the fix targets — a wide, unexpected diff is a sign the
+      fix is broader (and riskier) than intended.
 
 ---
 

@@ -76,20 +76,6 @@ jobs:
         env:
           CHANNEL: ${{ github.event.inputs.profile || 'preview' }}
           MSG: ${{ github.event.head_commit.message }}
-          # `eas update` computes a project fingerprint before publishing, even
-          # though this app pins a literal runtimeVersion (not the 'fingerprint'
-          # policy — app.config.ts's own comment says EAS CLI rejects that
-          # policy for bare workflow), so the computed fingerprint is unused
-          # dead weight here. It also currently crashes: @expo/fingerprint's
-          # bundled minimatch@10.2.5 needs brace-expansion@^5.0.5, has no
-          # nested copy, and Node resolution walks up to the wrongly-hoisted
-          # top-level brace-expansion@1.1.18 instead — "(0 , brace_expansion_1
-          # .expand) is not a function". That's a yarn.lock resolution bug
-          # (ACTION_ITEMS.md C19), not an eas-cli or app bug; EAS_SKIP_AUTO_
-          # FINGERPRINT=1 is the CLI's own documented bypass for a step this
-          # app's OTA compatibility model doesn't use anyway. Remove once C19's
-          # durable fix (correct the brace-expansion resolution) lands.
-          EAS_SKIP_AUTO_FINGERPRINT: "1"
         run: |
           MESSAGE="${MSG:-manual update}"
           # eas update truncates at 1024 chars; keep just the first line.
@@ -126,9 +112,6 @@ jobs:
         env:
           CHANNEL: ${{ github.event.inputs.profile || 'preview' }}
           MSG: ${{ github.event.head_commit.message }}
-          # See rider job above — same crash, same bundled @expo/fingerprint /
-          # minimatch@10.2.5 / brace-expansion mismatch (ACTION_ITEMS.md C19).
-          EAS_SKIP_AUTO_FINGERPRINT: "1"
         run: |
           MESSAGE="${MSG:-manual update}"
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)

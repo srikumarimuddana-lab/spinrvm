@@ -5295,9 +5295,12 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   grep in this entry's own investigation to get the current list.
 
 ### C19. `eas update` is still 100% broken on `main` today — a second, different bug downstream of the C17/RNGH fix, in `eas update`'s fingerprint-computation step
-- [x] **Status:** mitigated (2026-08-11) — root-caused, unblocked in CI with
-  EAS's own documented bypass; the underlying yarn.lock resolution bug is
-  **not yet fixed**, only routed around.
+- [x] **Status:** DURABLY CLOSED (2026-08-11, same day, follow-up pass) —
+  the actual `yarn.lock` resolution bug is now fixed at the source in both
+  apps; the `EAS_SKIP_AUTO_FINGERPRINT` bypass below has been **removed**,
+  not just documented as removable. Sequence: mitigated first (bypass),
+  then durably fixed once the real root cause in `resolutions` was found —
+  see "Durable fix" below for what actually shipped.
 - **How found:** user asked to check the actual EAS Mobile Update run
   history from `#604` (last green) onward, rather than trust the C17 fix's
   own "already fixed" framing. Every run **including the latest at the time
@@ -5345,15 +5348,42 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   `.github/workflows/eas-build.yml` — the exact bypass `eas update`'s own
   error message names (`⏩ To skip this step, set the environment variable:
   EAS_SKIP_AUTO_FINGERPRINT=1`).
-- **Durable fix still needed (not done here):** repair the `brace-expansion`
-  resolution in `rider-app/yarn.lock` and `driver-app/yarn.lock` so
-  `minimatch@^10.2.2`'s `^5.0.5` requirement resolves to an actual `5.x`
-  install reachable from `@expo/fingerprint/node_modules/minimatch` (e.g.
-  `yarn-deduplicate` on `brace-expansion`, or a `resolutions` pin — verify
-  it doesn't regress the other `brace-expansion` consumers before landing,
-  per this repo's own "verify a newer version actually works before pinning
-  it" gate) — then remove the `EAS_SKIP_AUTO_FINGERPRINT` bypass, since it's
-  routing around a bug, not fixing it.
+- **Durable fix — what actually shipped:** the earlier root-cause writeup
+  said `minimatch@^10.2.2`'s `brace-expansion` requirement resolves wrong
+  because of "a corrupted `yarn.lock` entry." Digging one level further
+  (this repo's own history, `git log -S`) found the actual origin: commit
+  `09cbc59` ("B24 — bump 7 vulnerable transitive JS packages," same day,
+  merged *before* `d4b573c`) added 4 scoped `**/`-glob `resolutions` to
+  `package.json` specifically to avoid forcing one `brace-expansion` major
+  onto every consumer — the right instinct — but two of the four patterns
+  (`**/@expo/fingerprint/**/brace-expansion`, `**/@typescript-eslint/
+  typescript-estree/**/brace-expansion`) use a **mid-path `**` wildcard**
+  that Yarn Classic's selective-resolutions silently doesn't support: the
+  patterns register with zero effect (confirmed empirically — removing them
+  changes nothing; `yarn install --force`, deleting the lockfile entries and
+  reinstalling, and adding a corrected 3-segment exact path
+  `@expo/fingerprint/minimatch/brace-expansion` all produced byte-identical
+  results). That PR's own verification (jest/tsc/build/audit across 3 apps)
+  never exercised `@expo/fingerprint`'s fingerprint computation, so the
+  silent no-op shipped unnoticed. Meanwhile the *other* two patterns'
+  sibling rule, `**/minimatch/brace-expansion: ^1.1.18` (single-level `**/`
+  prefix — the one Yarn Classic *does* support), matches **any** package
+  literally named `minimatch` at any depth, including the `minimatch@10.2.5`
+  instances bundled by `@expo/fingerprint`, `@typescript-eslint/
+  typescript-estree`, and `glob` — forcing all of them down to
+  `brace-expansion@1.1.18` regardless of their own declared `^5.0.5` need.
+  **The actual fix**: scope that one rule to the specific old-minimatch
+  branch it was meant for — `"**/minimatch@^3.0.0/brace-expansion":
+  "^1.1.18"` (adding a semver constraint on the `minimatch` path segment,
+  which Yarn Classic *does* honor) — then delete the two no-op patterns
+  entirely (dead, misleading, no longer needed). One line changed, two
+  deleted, in each app's `package.json`; `yarn.lock` regenerated from that.
+  Result: 3 correctly-separated, semver-valid `brace-expansion` groups
+  (`1.1.18` for the `^3.x` minimatch branch, `2.1.4` for the `^9.x` branch —
+  previously *also* wrongly forced to `1.1.18`, a second latent bug this
+  fix incidentally closes — and `5.0.9` for the `^10.x` branch used by
+  `@expo/fingerprint`, `typescript-estree`, and `glob`). `EAS_SKIP_AUTO_
+  FINGERPRINT` removed from `eas-build.yml` — no longer needed.
 - **Risk & impact:** this bug has blocked **every** `eas update` OTA
   publish on `main` since at least 2026-08-01 (`#605` onward, 15+
   consecutive failed runs across both apps by the time this was found) —
@@ -5365,27 +5395,51 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   only) — but its *absence* means every rider/driver-facing JS fix shipped
   since 2026-08-01 has been silently stuck, undelivered to installed apps,
   until this unblocks it.
-- **Verification performed:** reproduced the exact crash directly via the
-  same `@expo/fingerprint` library call `eas-cli` makes (see Root cause
-  above) — high confidence in the diagnosis. Confirmed both apps pin a
-  literal `runtimeVersion`, not `fingerprint` policy, via their own
-  `app.config.ts`. Confirmed via GitHub Actions job logs (run `#620`) that
-  bundling and upload both fully succeed and the crash is isolated to the
-  post-upload "Computing project fingerprints" step — same signature in
-  both the `rider` and `driver` jobs' logs.
-- **What was NOT verified:** the actual fix (`EAS_SKIP_AUTO_FINGERPRINT=1`)
-  was **not** exercised against the real EAS service in this session — no
-  `EXPO_TOKEN`/Expo auth available here, so `eas update` itself could not be
-  run end-to-end. Confidence in the fix rests on (a) it being `eas update`'s
-  own documented, CLI-printed bypass for exactly this step, and (b)
-  confirming neither app's OTA-compatibility model depends on the skipped
-  computation. The next real push to `main` touching either app is the
-  actual proof — check the `EAS Mobile Update` workflow run for that push.
-  Also not verified: the yarn.lock resolution repair itself (durable fix)
-  — not attempted this session, scoped above for whoever picks it up.
-- **Files:** `.github/workflows/eas-build.yml` (fix applied); durable fix
-  targets `rider-app/yarn.lock` and `driver-app/yarn.lock` (not yet
-  touched).
+- **Verification performed (durable fix, both apps):**
+  - `require('@expo/fingerprint').createFingerprintAsync(cwd)` — the exact
+    library call `eas update` makes — now returns a real hash for both apps
+    (`driver-app`: `7dbbc2f9e0470162...`, `rider-app`: `090313f67818aa4a...`)
+    instead of throwing. Re-ran after the dead-pattern cleanup too, with an
+    identical resulting hash both times — confirms the cleanup was a true
+    no-op on top of the real fix, not a coincidental masking change.
+  - Physical `node_modules` nesting inspected directly (not inferred): 5
+    distinct `brace-expansion` install locations across the 3 correct
+    version branches, each resolving from the right consumer
+    (`minimatch/node_modules/brace-expansion@1.1.18`, top-level
+    `brace-expansion@2.1.4` serving the `^9.x` minimatch branch,
+    `glob/`, `@expo/fingerprint/`, and `@typescript-eslint/
+    typescript-estree/`'s own nested `brace-expansion@5.0.9` copies).
+  - `npx expo export --platform android` — exit 0, real Hermes bundle
+    produced — for **both** apps, confirming the resolution fix doesn't
+    regress ordinary bundling.
+  - Full `jest` suite: **driver-app 364/364 passed (51/51 suites)**;
+    **rider-app 455/455 passed (54/54 suites)** on a clean re-run — one
+    test (`verifyEmailScreen.test.tsx`, a 5s-timeout mount assertion) flaked
+    on a single full-suite run but passed twice in isolation and once more
+    on a full-suite re-run, confirming it's pre-existing parallelism
+    flakiness (worker-teardown timing under full-suite load), not a
+    regression from this change.
+  - `git diff` on both `yarn.lock` files: exactly 3 `brace-expansion` lock
+    entries touched, nothing else — confirms the narrow blast radius
+    predicted (only `minimatch@^10.2.2`'s single requester chain, plus the
+    incidental `^9.x`-branch correction) held in practice.
+  - `EAS_SKIP_AUTO_FINGERPRINT` removed from both jobs in
+    `.github/workflows/eas-build.yml` — the workaround is gone, not just
+    documented as removable.
+- **What was NOT verified:** the actual `eas update` command was still
+  **not** run against the real EAS service in this session — no
+  `EXPO_TOKEN`/Expo auth available here. Confidence rests on calling the
+  identical underlying library function `eas update` calls, against the
+  real project directory, with a real result — about as close to the real
+  path as is reachable without production credentials — but the next real
+  push to `main` touching either app is the actual, final proof. Also not
+  independently re-verified: `eslint`/`tsc` full runs in either app after
+  this change (jest + expo export + the direct fingerprint call were judged
+  sufficient coverage for a dependency-resolution-only change; no source
+  file was touched).
+- **Files:** `.github/workflows/eas-build.yml` (bypass removed);
+  `rider-app/package.json`, `rider-app/yarn.lock`, `driver-app/package.json`,
+  `driver-app/yarn.lock` (durable fix).
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

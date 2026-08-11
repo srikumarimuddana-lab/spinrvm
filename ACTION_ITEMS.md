@@ -5003,8 +5003,41 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   not manually reproduced.
 
 ### C16. `admin-dashboard` test files were never covered by `next build`'s type-check, and where they briefly were (dependabot PR #3483), it broke the build
-- [ ] **Status:** open. Not gating — no user-facing effect (see below); sized
-  S, well under 2 hours for whoever picks it up.
+- [x] **Status:** CLOSED (2026-08-11) — did the "real fix" this entry itself
+  scoped: added `"types": ["vitest/globals", "@testing-library/jest-dom"]`
+  to `tsconfig.json`'s `compilerOptions` and dropped the `src/__tests__`
+  exclusion entirely (all 20 test files are now honestly in the build's
+  type-check scope, not just the 11 that were silently in-scope before).
+  Fixed the 4 error sites that surfaced — 1 more than this entry's own
+  scratch-worktree dry run found, see below:
+  - `src/lib/__tests__/companyApi.test.ts:107` — the flagged one-liner:
+    `as {...}` → `as unknown as {...}` (the mocked `NextResponse.json`
+    return shape doesn't structurally overlap with the real
+    `NextResponse<any>` type; zero functional risk, confirmed by this
+    entry's own investigation).
+  - `src/__tests__/dashboard/pages.smoke.test.tsx:414,449,463` — this
+    entry's dry run had these 3 sites' root cause as "not yet diagnosed";
+    it turned out to be simple: the shared `renderPage()` smoke-test helper
+    expects `ComponentType<{}>`, but 3 page components
+    (`/dashboard/surge`, `/dashboard/notifications`, `/dashboard/documents`
+    — all simple `redirect()`-only stub pages with no explicit `return`)
+    had their return type inferred as `void`, not `ReactNode`, since a
+    function with no `return` statement defaults to `void` regardless of
+    `redirect()`'s own `never` return type. Fixed by adding an explicit
+    `: never` return-type annotation to each of the 3 page functions —
+    `never` satisfies `ReactNode` by TS's covariance rules, and the runtime
+    behavior (call `redirect()`, never actually return) is unchanged. No
+    edit needed to `pages.smoke.test.tsx` itself.
+  - Verification: `npx tsc --noEmit` clean (zero errors), `npx vitest run`
+    — 160/160 passed (all 20 test files, up from the 11 the old build scope
+    covered), and a real `npm run build` — full production build, exit
+    clean, complete route manifest printed (not just `tsc --noEmit` or a
+    dev server per CLAUDE.md's explicit requirement for any admin-dashboard
+    change). `npx eslint` on every touched file — 0 errors, only
+    pre-existing unrelated warnings in `pages.smoke.test.tsx`.
+  - **What was NOT verified**: no visual/browser check of the 3 redirect
+    pages beyond the build succeeding and the existing smoke tests passing
+    — this repo has no visual regression tooling (standing gap, N12).
 - **Why:** `tsconfig.json`'s `exclude` list only excluded `src/__tests__` by
   directory name. 11 of the app's 20 `*.test.ts(x)`/`*.spec.ts(x)` files live
   outside that directory (colocated `_components/*.test.tsx`, `hooks/*.test.tsx`,
@@ -5308,12 +5341,24 @@ Remaining, roughly in order of user impact:
   (deleted by N8) — moot. That empties the batch-1 change-log's
   "clearly rider-directed, ready to fix" list. What's left per that same
   doc: 3 driver-directed sites missing `target_app="driver"` (a related but
-  distinct, not-yet-tracked gap —
-  `routes/rides/matching.py:1071`, `services/cancellation_service.py:206`,
-  `utils/document_expiry.py:216`), plus an "ambiguous/admin" bucket
+  distinct gap), plus an "ambiguous/admin" bucket
   (`routes/notifications.py:108`'s `/test-push`, and the `routes/admin/*.py`
   broadcast endpoints where recipient role varies per admin selection) that
   needs its own per-call-site read rather than a batch sweep.
+  **2026-08-11 update — driver batch done:** of the 3 flagged driver-directed
+  sites, `utils/document_expiry.py:216` (and its sibling push at line 296)
+  already had `target_app="driver"` — moot, already fixed by an earlier
+  pass. Fixed the 2 genuinely open ones: `routes/rides/matching.py`'s
+  auto-offline push (driver missed too many offers in a row) and
+  `services/cancellation_service.py::pay_driver_cancellation_fee`'s payout
+  push. Both confirmed driver-directed (`driver_user_id`, resolved from
+  `get_driver_by_id`). New test file
+  `tests/test_cancellation_service_driver_push.py` (nothing previously
+  exercised `pay_driver_cancellation_fee` directly — every other
+  cancellation test mocks it out entirely) plus a new assertion on the
+  existing `test_offer_timeout_handler_auto_offline_notifies_and_pushes`.
+  Only the "ambiguous/admin" bucket remains — deliberately not swept here,
+  needs its own per-call-site read.
 - [x] ~~**N16. Consolidate the two copies of the company-address assembly**~~
   — done 2026-08-11: `_coalesce`/`_postal_address` were byte-identical logic
   duplicated across `utils/company_details.py` and `utils/marketing_email.py`.

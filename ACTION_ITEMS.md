@@ -5161,6 +5161,286 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   own `tsconfig.json`s — this item is scoped to admin-dashboard only,
   where it was found.
 
+### C17. No CI job ever ran an actual Metro bundle — 8 consecutive EAS Mobile Update jobs failed silently on `main` after the SDK 57 bump before anyone noticed
+- **CORRECTION (2026-08-11, later same day):** the line below ("EAS Mobile
+  Update jobs" now healthy) is **wrong as a production status claim** — it
+  was true only for the specific bundling failure this item and the linked
+  change log describe. Checking the actual `EAS Mobile Update` run history
+  (run #620, `f011ff3`, well after `d4b573c` merged) found bundling now
+  succeeds but `eas update` still fails 100% of the time, at a **different,
+  later step** neither this item's nor the change log's verification ran
+  (`expo export` doesn't reach it; only the real `eas update` command does).
+  See **C19** for the still-open, still-live bug and its fix. Leaving this
+  item's text below as-written (it's accurate about what it actually fixed
+  and verified) rather than editing history — read C19 for current reality.
+- [x] **Status:** CI gate CLOSED (2026-08-11) — the underlying bundle break
+  itself was already fixed same-day by commit `d4b573c` (see
+  `docs/change-log/2026-08-11-metro-rngh-renderer-shim.md`); this item adds
+  the missing preventive control so the *next* dependency-only break of this
+  shape fails a PR check instead of failing 8 production OTA pushes in a row.
+  Added `.github/workflows/mobile-bundle-smoke.yml`: on every PR touching
+  `rider-app/**`, `driver-app/**`, or `shared/**`, runs
+  `npx expo export --platform android` and `--platform ios` for both apps —
+  the same bundling step `eas update`/`eas build` perform, run before merge
+  instead of after. Mirrors `mobile-dep-check.yml`'s job/cache-key shape;
+  intentionally **not** `continue-on-error` — a bundle failure must block
+  merge, not degrade quietly the way `expo install --check` does in that
+  workflow (which needs `EXPO_TOKEN` and degrades on purpose for that
+  reason — this check needs neither and has no legitimate soft-fail case).
+- **Root cause (of the CI gap, not the bundle break — that's in the change
+  log above):** `mobile-dep-check.yml` runs `tsc --noEmit` and
+  `expo install --check`. Neither performs an actual Metro bundle:
+  `tsc` type-checks source, and RNGH's `RNRenderer.ts` typechecks fine (the
+  import path is a valid TS string, the file just doesn't exist in RN 0.86's
+  shipped shims at bundle-resolution time); `expo install --check` only
+  diffs installed package *versions* against Expo's SDK compatibility table,
+  it never resolves a single module. `eas-build.yml` ("EAS Mobile Update")
+  is the only workflow that ever bundles, and it runs **after** merge, on
+  every push to `main` — so the failure mode is: merge lands clean (both
+  existing checks green), then the very next push-triggered OTA job dies at
+  the bundle step, for every push to `main` touching either app, until
+  someone looks at the EAS dashboard. That's the 8-update-in-a-row failure
+  streak (`#605`–`#612`) visible in the EAS activity log the SDK 57 bump
+  (`#605`, the Dependabot expo-stack group bump) kicked off — two follow-up
+  PRs explicitly titled "complete the SDK 57 upgrade... left half-done"
+  (`#607` rider-app, `#609` driver-app) fixed real app-level SDK 57 items but
+  couldn't have caught this one: the break lived inside a third-party
+  dependency's internal import, not in either app's own code, and nothing
+  in the toolchain exercised it before a real EAS job did.
+- **Risk & impact of the new check:** build-time-only CI addition, zero
+  runtime/production code touched. Blast radius: PR merge gate for
+  rider-app/driver-app/shared changes only — does not touch
+  `eas-build.yml`'s OTA publish, `eas-native-build.yml`'s native build
+  trigger, or `mobile-dep-check.yml`'s existing checks (all left as-is,
+  running alongside this one). Failure mode if the new check itself is
+  flaky: a false-red PR block, not a false-green — fails safe.
+- **Effort:** ~1 hour (one workflow file, mirrors existing patterns; no new
+  secrets, no infra). Follow-up not yet done: this check should be added to
+  the repo's required-status-checks branch-protection list for `main` so it
+  actually blocks merge rather than just reporting — that's a GitHub repo
+  settings change outside this diff's scope, needs a repo admin.
+- **Verification performed:** ran the exact commands the new CI job runs,
+  locally, against current `main` (which already has the `d4b573c` shim
+  redirect). `rider-app` — `npx expo export --platform android` exits 0,
+  Hermes bundle produced (already verified same-day in the change-log
+  entry above). `driver-app` — `yarn install --frozen-lockfile` then
+  `npx expo export --platform android`, run fresh in this session (the
+  change log explicitly flagged driver-app as **not** run in its own
+  session — that gap is now closed): exit 0, `_expo/static/js/android/
+  index-*.hbc` (8.2MB) produced, confirming the metro.config.js redirect
+  works for driver-app too, not just rider-app. `--platform ios` not run
+  for either app in this session (no meaningful iOS/Android code-path
+  divergence expected for this specific break — RNGH's `resolveRequest`
+  match is exact-string and platform-agnostic — but the CI job itself does
+  run both platforms going forward, so this gap closes on its first PR run).
+- **What was NOT verified:** whether the new workflow file's YAML is 100%
+  correct GitHub Actions syntax beyond mirroring `mobile-dep-check.yml`
+  structurally — not dry-run through `act` or an actual PR in this session;
+  first real PR touching a mobile app will be the live test. Branch
+  protection was not modified (see Effort above — explicitly out of scope,
+  flagged for a human with repo-admin access).
+- **Files:** `.github/workflows/mobile-bundle-smoke.yml` (new).
+
+### C18. GitHub Actions steps use mutable version tags repo-wide, not pinned commit SHAs — Semgrep/GHAS flags it on every new workflow line
+- [ ] **Status:** open — found 2026-08-11, via GitHub Advanced Security /
+  Semgrep OSS comments on PR #3668 (6 findings, rule
+  `yaml.github-actions.security.github-actions-mutable-action-tag`) on the
+  new `mobile-bundle-smoke.yml` workflow added by that PR. Confirmed real:
+  every `uses: actions/checkout@v7` / `actions/setup-node@v7` /
+  `actions/cache@v6` line resolves a floating major-version tag, which the
+  action owner (or anyone who compromises their account) can silently
+  repoint to different code — the exact supply-chain mechanism behind the
+  real-world `tj-actions/changed-files` and `reviewdog/action-setup`
+  incidents Semgrep's rule description cites.
+- **Why not fixed in this PR:** two reasons, not one.
+  1. **Scope/consistency** — this is not specific to the new file. Repo-wide
+     grep: **154 unpinned `uses:` references across 23 of the 24 files** in
+     `.github/workflows/`. Pinning only the 6 lines Semgrep happened to flag
+     (because they're new, not because they're uniquely risky) would leave
+     the actual exposure — the other 148 references — untouched, while
+     making this one file inconsistent with the rest of the repo's own
+     convention.
+  2. **Verification reliability** — pinning to a SHA means hardcoding a
+     40-character string that, if wrong, breaks the workflow outright (a
+     bad SHA doesn't degrade gracefully, it fails to resolve the action at
+     all). This session has no reliable way to confirm one: this repo's
+     GitHub access is scoped to `srikumarimuddana-lab/spinrvm` only — a
+     direct API check against `api.github.com/repos/actions/checkout/...`
+     is rejected at the proxy ("GitHub access to this repository is not
+     enabled for this session"). The only alternative available here was
+     scraping a rendered release page through a small-model web-fetch tool,
+     which is exactly the kind of source you should *not* trust for a
+     character-exact hash — a transposed digit is invisible until CI runs.
+     Guessing was rejected on purpose, consistent with this repo's own
+     "verify a newer/patched version actually works before pinning it"
+     pre-merge gate (`CLAUDE.md` § Pre-merge release gates, item 8) — that
+     principle applies just as much to *what you pin to* as to *what
+     version you bump to*.
+- **What this needs:** a session/operator with real `gh`/authenticated
+  GitHub API access (or Dependabot's own SHA-pinning update mode, if
+  enabled) to resolve all 154 references to verified commit SHAs in one
+  sweep, plus a comment noting the human-readable version next to each pin
+  (`uses: actions/checkout@<sha> # v7`) so future readers don't have to
+  resolve the SHA back to a version themselves.
+- **Risk if left as-is:** repo-wide supply-chain exposure to a compromised
+  or repointed Action tag — not unique to CI/CD pipelines in general, but
+  worth weighing against this repo's existing Trivy/cosign image-signing
+  investment elsewhere in `ci.yml`, which addresses container supply chain
+  but not this GitHub-Actions-level one.
+- **Effort estimate:** small per-reference (find current SHA, replace,
+  comment) but multiplies across 154 references in 23 files — realistically
+  a half-day sweep plus a follow-up PR review pass, not a quick fix.
+- **Files:** all of `.github/workflows/*.yml` except the one file (if any)
+  that's already fully pinned — not individually enumerated here; run the
+  grep in this entry's own investigation to get the current list.
+
+### C19. `eas update` is still 100% broken on `main` today — a second, different bug downstream of the C17/RNGH fix, in `eas update`'s fingerprint-computation step
+- [x] **Status:** DURABLY CLOSED (2026-08-11, same day, follow-up pass) —
+  the actual `yarn.lock` resolution bug is now fixed at the source in both
+  apps; the `EAS_SKIP_AUTO_FINGERPRINT` bypass below has been **removed**,
+  not just documented as removable. Sequence: mitigated first (bypass),
+  then durably fixed once the real root cause in `resolutions` was found —
+  see "Durable fix" below for what actually shipped.
+- **How found:** user asked to check the actual EAS Mobile Update run
+  history from `#604` (last green) onward, rather than trust the C17 fix's
+  own "already fixed" framing. Every run **including the latest at the time
+  (`#620`, commit `f011ff3`, well after `d4b573c` — the C17/RNGH fix —
+  merged)** is red for both apps. That framing gap is itself worth naming:
+  C17's verification ran `expo export`, which stops at "bundle produced."
+  `eas update` (the actual production command `eas-build.yml` runs) does
+  strictly more after that — it also computes a project fingerprint before
+  publishing — and that's where it now dies. **A green `expo export` does
+  not mean a green `eas update`**; the two aren't the same command.
+- **Root cause, reproduced directly (not inferred from a log alone):** ran
+  `require('@expo/fingerprint').createFingerprintAsync(cwd)` in driver-app's
+  installed `node_modules` (same library `eas update` calls internally) and
+  got the identical crash byte-for-byte:
+  `(0 , brace_expansion_1.expand) is not a function`, at
+  `@expo/fingerprint/node_modules/minimatch/dist/commonjs/index.js:157`.
+  `@expo/fingerprint@0.20.6` bundles its own `minimatch@10.2.5`, whose
+  `package.json` declares `"brace-expansion": "^5.0.5"` — but that nested
+  `minimatch` has **no nested `node_modules/brace-expansion` of its own**,
+  so Node's resolution walks up and finds the top-level, incorrectly-hoisted
+  `brace-expansion@1.1.18` instead (confirmed via
+  `require.resolve('brace-expansion', {paths: [...]})`). `brace-expansion`
+  v1's export is a bare function (`module.exports = expandTop`), not an
+  object with an `.expand` property — hence `.expand is not a function`.
+  The `yarn.lock` entry itself looks corrupted/stale: one block claims
+  ranges `^1.1.18, ^1.1.7, ^2.0.1, ^2.0.2, ^5.0.5` **all** resolve to version
+  `1.1.18` — which is semver-impossible for the `^2.x`/`^5.x` ranges in that
+  same line — while a separate, correct `brace-expansion@^5.0.9: version
+  "5.0.9"` entry exists elsewhere in the file but isn't the copy Node
+  actually reaches from `@expo/fingerprint`'s nested `minimatch`. Blast
+  radius of the conflicting range: grepped both apps' lockfiles —
+  `minimatch@^10.2.2` has exactly **one** requester in each app
+  (`@expo/fingerprint`, itself pulled in only via `expo@~57.0.9`), so this
+  is narrow, not a wide dependency-tree conflict.
+- **Why this step matters not at all for OTA compatibility here, and so is
+  safe to skip:** both apps pin a **literal string** `runtimeVersion`
+  (`rider-app/app.config.ts` `'2.0.0'`, `driver-app/app.config.ts`
+  `'2.5.0'`), not the `'fingerprint'` policy — the apps' own code comments
+  say EAS CLI rejects a `fingerprint`/`appVersion` policy for bare workflow.
+  The fingerprint `eas update` computes here is unused dead weight for this
+  app's actual compatibility mechanism, not a load-bearing check being
+  bypassed.
+- **Fix applied:** `EAS_SKIP_AUTO_FINGERPRINT: "1"` added to the `env:` of
+  both `rider` and `driver` jobs' "Publish OTA update" step in
+  `.github/workflows/eas-build.yml` — the exact bypass `eas update`'s own
+  error message names (`⏩ To skip this step, set the environment variable:
+  EAS_SKIP_AUTO_FINGERPRINT=1`).
+- **Durable fix — what actually shipped:** the earlier root-cause writeup
+  said `minimatch@^10.2.2`'s `brace-expansion` requirement resolves wrong
+  because of "a corrupted `yarn.lock` entry." Digging one level further
+  (this repo's own history, `git log -S`) found the actual origin: commit
+  `09cbc59` ("B24 — bump 7 vulnerable transitive JS packages," same day,
+  merged *before* `d4b573c`) added 4 scoped `**/`-glob `resolutions` to
+  `package.json` specifically to avoid forcing one `brace-expansion` major
+  onto every consumer — the right instinct — but two of the four patterns
+  (`**/@expo/fingerprint/**/brace-expansion`, `**/@typescript-eslint/
+  typescript-estree/**/brace-expansion`) use a **mid-path `**` wildcard**
+  that Yarn Classic's selective-resolutions silently doesn't support: the
+  patterns register with zero effect (confirmed empirically — removing them
+  changes nothing; `yarn install --force`, deleting the lockfile entries and
+  reinstalling, and adding a corrected 3-segment exact path
+  `@expo/fingerprint/minimatch/brace-expansion` all produced byte-identical
+  results). That PR's own verification (jest/tsc/build/audit across 3 apps)
+  never exercised `@expo/fingerprint`'s fingerprint computation, so the
+  silent no-op shipped unnoticed. Meanwhile the *other* two patterns'
+  sibling rule, `**/minimatch/brace-expansion: ^1.1.18` (single-level `**/`
+  prefix — the one Yarn Classic *does* support), matches **any** package
+  literally named `minimatch` at any depth, including the `minimatch@10.2.5`
+  instances bundled by `@expo/fingerprint`, `@typescript-eslint/
+  typescript-estree`, and `glob` — forcing all of them down to
+  `brace-expansion@1.1.18` regardless of their own declared `^5.0.5` need.
+  **The actual fix**: scope that one rule to the specific old-minimatch
+  branch it was meant for — `"**/minimatch@^3.0.0/brace-expansion":
+  "^1.1.18"` (adding a semver constraint on the `minimatch` path segment,
+  which Yarn Classic *does* honor) — then delete the two no-op patterns
+  entirely (dead, misleading, no longer needed). One line changed, two
+  deleted, in each app's `package.json`; `yarn.lock` regenerated from that.
+  Result: 3 correctly-separated, semver-valid `brace-expansion` groups
+  (`1.1.18` for the `^3.x` minimatch branch, `2.1.4` for the `^9.x` branch —
+  previously *also* wrongly forced to `1.1.18`, a second latent bug this
+  fix incidentally closes — and `5.0.9` for the `^10.x` branch used by
+  `@expo/fingerprint`, `typescript-estree`, and `glob`). `EAS_SKIP_AUTO_
+  FINGERPRINT` removed from `eas-build.yml` — no longer needed.
+- **Risk & impact:** this bug has blocked **every** `eas update` OTA
+  publish on `main` since at least 2026-08-01 (`#605` onward, 15+
+  consecutive failed runs across both apps by the time this was found) —
+  meaning no JS-only fix, however small or urgent, has actually reached a
+  phone on the `production` channel in that window without a full native
+  rebuild. That is the actual severity of this repo's mobile-update
+  pipeline right now, not just "8 red dashboard rows."
+- **User-experience effect:** none directly from this fix (build-pipeline
+  only) — but its *absence* means every rider/driver-facing JS fix shipped
+  since 2026-08-01 has been silently stuck, undelivered to installed apps,
+  until this unblocks it.
+- **Verification performed (durable fix, both apps):**
+  - `require('@expo/fingerprint').createFingerprintAsync(cwd)` — the exact
+    library call `eas update` makes — now returns a real hash for both apps
+    (`driver-app`: `7dbbc2f9e0470162...`, `rider-app`: `090313f67818aa4a...`)
+    instead of throwing. Re-ran after the dead-pattern cleanup too, with an
+    identical resulting hash both times — confirms the cleanup was a true
+    no-op on top of the real fix, not a coincidental masking change.
+  - Physical `node_modules` nesting inspected directly (not inferred): 5
+    distinct `brace-expansion` install locations across the 3 correct
+    version branches, each resolving from the right consumer
+    (`minimatch/node_modules/brace-expansion@1.1.18`, top-level
+    `brace-expansion@2.1.4` serving the `^9.x` minimatch branch,
+    `glob/`, `@expo/fingerprint/`, and `@typescript-eslint/
+    typescript-estree/`'s own nested `brace-expansion@5.0.9` copies).
+  - `npx expo export --platform android` — exit 0, real Hermes bundle
+    produced — for **both** apps, confirming the resolution fix doesn't
+    regress ordinary bundling.
+  - Full `jest` suite: **driver-app 364/364 passed (51/51 suites)**;
+    **rider-app 455/455 passed (54/54 suites)** on a clean re-run — one
+    test (`verifyEmailScreen.test.tsx`, a 5s-timeout mount assertion) flaked
+    on a single full-suite run but passed twice in isolation and once more
+    on a full-suite re-run, confirming it's pre-existing parallelism
+    flakiness (worker-teardown timing under full-suite load), not a
+    regression from this change.
+  - `git diff` on both `yarn.lock` files: exactly 3 `brace-expansion` lock
+    entries touched, nothing else — confirms the narrow blast radius
+    predicted (only `minimatch@^10.2.2`'s single requester chain, plus the
+    incidental `^9.x`-branch correction) held in practice.
+  - `EAS_SKIP_AUTO_FINGERPRINT` removed from both jobs in
+    `.github/workflows/eas-build.yml` — the workaround is gone, not just
+    documented as removable.
+- **What was NOT verified:** the actual `eas update` command was still
+  **not** run against the real EAS service in this session — no
+  `EXPO_TOKEN`/Expo auth available here. Confidence rests on calling the
+  identical underlying library function `eas update` calls, against the
+  real project directory, with a real result — about as close to the real
+  path as is reachable without production credentials — but the next real
+  push to `main` touching either app is the actual, final proof. Also not
+  independently re-verified: `eslint`/`tsc` full runs in either app after
+  this change (jest + expo export + the direct fingerprint call were judged
+  sufficient coverage for a dependency-resolution-only change; no source
+  file was touched).
+- **Files:** `.github/workflows/eas-build.yml` (bypass removed);
+  `rider-app/package.json`, `rider-app/yarn.lock`, `driver-app/package.json`,
+  `driver-app/yarn.lock` (durable fix).
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

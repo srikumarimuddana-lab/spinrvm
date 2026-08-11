@@ -169,6 +169,7 @@ async def notify_guest_booking_created(
             f"{company} booked you a ride",
             "Open Spinr to see your trip details and track your driver.",
             data={"type": "corporate_ride_booked", "ride_id": str(ride.get("id"))},
+            target_app="rider",
         )
         return
 

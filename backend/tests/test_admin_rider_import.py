@@ -238,6 +238,66 @@ def test_commit_creates_rows(test_client, super_admin_override):
     assert store["users"][0]["is_rider"] is True
 
 
+def test_validate_skips_pii_update_for_pending_deletion_account(test_client, super_admin_override):
+    """P0-C (docs/audit/2026-08-11-driver-rider-migration-audit.md): a
+    phone-matched account mid-PIPEDA-deletion must not have its falsy
+    (scrubbed) email/PII fields silently repopulated by a bulk import."""
+    store = _fresh_store()
+    store["users"].append(
+        {
+            "id": "existing-pending-del",
+            "phone": "+13065551234",
+            "email": None,  # scrubbed by migration 296's 30-day PIPEDA purge
+            "is_rider": True,
+            "is_driver": False,
+            "stripe_customer_id": None,
+            "status": "pending_deletion",
+        }
+    )
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = _post(test_client, "/api/admin/riders/import/validate", _csv(GOOD_ROW))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["counts"]["to_update"] == 0
+    assert body["counts"]["protected_skips"] == 1
+    assert body["duplicates"][0]["match_type"] == "protected_skip"
+    assert any("pending_deletion" in w["message"] for w in body["warnings"])
+
+
+def test_commit_does_not_modify_pii_for_deleted_account(test_client, super_admin_override):
+    store = _fresh_store()
+    store["users"].append(
+        {
+            "id": "existing-deleted",
+            "phone": "+13065551234",
+            "email": None,
+            "is_rider": False,
+            "is_driver": False,
+            "stripe_customer_id": None,
+            "status": "deleted",
+        }
+    )
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = _post(test_client, "/api/admin/riders/import/commit", _csv(GOOD_ROW))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["committed"] is True
+    assert body["updated_users"] == 0
+    # No field on the existing row was touched — the account's PII stays
+    # exactly as scrubbed.
+    assert store["users"][0] == {
+        "id": "existing-deleted",
+        "phone": "+13065551234",
+        "email": None,
+        "is_rider": False,
+        "is_driver": False,
+        "stripe_customer_id": None,
+        "status": "deleted",
+    }
+
+
 def test_commit_updates_existing_user(test_client, super_admin_override):
     store = _fresh_store()
     store["users"].append(

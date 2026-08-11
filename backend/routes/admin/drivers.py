@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 try:
@@ -23,6 +23,7 @@ try:
         status_message,
         verification_message,
     )
+    from ...utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
     from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
 except ImportError:
@@ -40,6 +41,7 @@ except ImportError:
         status_message,
         verification_message,
     )
+    from utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit  # noqa: F401
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
@@ -3273,7 +3275,8 @@ async def admin_refresh_all_driver_kyc(body: RefreshAllKycRequest, admin: dict =
 
 
 @router.post("/drivers/{driver_id}/reveal-sin")
-async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admin_user)):
+@admin_sin_reveal_limit
+async def admin_reveal_driver_sin(request: Request, driver_id: str, admin: dict = Depends(get_admin_user)):
     """One-shot retrieval of a driver's SIN for T4A filing.
 
     **This is the only place in the codebase that decrypts `drivers.sin`.**
@@ -3360,7 +3363,10 @@ class AdminUpdateSinRequest(BaseModel):
 
 
 @router.post("/drivers/{driver_id}/update-sin")
-async def admin_update_driver_sin(driver_id: str, body: AdminUpdateSinRequest, admin: dict = Depends(get_admin_user)):
+@admin_sin_update_limit
+async def admin_update_driver_sin(
+    request: Request, driver_id: str, body: AdminUpdateSinRequest, admin: dict = Depends(get_admin_user)
+):
     """Admin-approved SIN correction — the only way to change a SIN once set.
 
     Drivers enter their SIN exactly once; `PUT /drivers/me` rejects any

@@ -2140,17 +2140,10 @@ async def admin_get_earnings_rides(
         filters["service_area_id"] = service_area_id
 
     # Over-fetch by `limit + offset` and slice — Supabase helper doesn't
-    # expose OFFSET natively. Bounded by the 10k limit cap so the worst
-    # case is one full-table scan, which is fine for the finance use case
+    # expose OFFSET natively. Bounded by _EXPORT_MAX_ROWS so the worst case
+    # is one full-table scan, which is fine for the finance use case
     # (monthly closeout is the realistic upper bound).
-    fetch_size = limit + offset
-    rides = await db_supabase.get_rows(
-        "rides",
-        filters,
-        order="ride_completed_at",
-        desc=True,
-        limit=fetch_size,
-    )
+    #
     # P0-B (docs/audit/2026-08-11-driver-rider-migration-audit.md): a
     # legacy-imported ride has no real Stripe charge — finance uses this
     # export to reconcile against Stripe/bank ledger, so an unfiltered
@@ -2163,7 +2156,31 @@ async def admin_get_earnings_rides(
     # the same Python-truthy check utils/legacy_rides.py's own
     # is_legacy_ride() defines and is documented as exactly the "post-fetch
     # companion for callers that cannot add a filter to their query."
-    rides = drop_legacy_rides(rides)
+    #
+    # Filtering AFTER a fixed-size fetch can under-fill the page: if legacy
+    # rows sort inside the raw `fetch_size` window, real rows beyond that
+    # window are never even retrieved — dropping legacy rows afterward then
+    # silently loses real ones too, undercounting `total` for the exact
+    # finance-reconciliation use case this endpoint exists for. Loop,
+    # doubling the raw fetch, until enough real rows are collected to fill
+    # `offset + limit` or the window is exhausted (raw fetch came back
+    # smaller than requested) or the _EXPORT_MAX_ROWS cap is hit.
+    target = offset + limit
+    fetch_size = min(target, _EXPORT_MAX_ROWS)
+    rides: list = []
+    while True:
+        raw = await db_supabase.get_rows(
+            "rides",
+            filters,
+            order="ride_completed_at",
+            desc=True,
+            limit=fetch_size,
+        )
+        rides = drop_legacy_rides(raw)
+        exhausted = len(raw) < fetch_size
+        if len(rides) >= target or exhausted or fetch_size >= _EXPORT_MAX_ROWS:
+            break
+        fetch_size = min(fetch_size * 2, _EXPORT_MAX_ROWS)
     page = rides[offset : offset + limit]
 
     # Batch-fetch driver + rider names. The reconciliation flow often

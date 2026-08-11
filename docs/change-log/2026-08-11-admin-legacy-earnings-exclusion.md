@@ -106,8 +106,8 @@ live state a rider/driver is watching.
 |---|---|---|
 | `backend/migrations/302_ride_money_rollup_exclude_legacy.sql` | New — adds legacy-ride exclusion to `admin_ride_money_rollup` | Fix gross revenue/earnings overstatement |
 | `backend/migrations/303_payouts_overview_ytd_exclude_legacy.sql` | New — adds legacy-ride exclusion to the `ytd`/T4A CTE only in `admin_payouts_overview_aggregates` | Fix T4A snapshot disagreeing with actual T4A slips, without disturbing the correctly-paired balance sums |
-| `backend/routes/admin/rides.py` | `/earnings/rides` now calls `drop_legacy_rides()` post-fetch instead of no filter | Exclude legacy rows from the finance reconciliation CSV export, without the broken `EXCLUDE_LEGACY_RIDES` server-filter pattern |
-| `backend/tests/test_admin_rides_read_endpoints_coverage.py` | New test: legacy row present in fetch result is excluded from the response | Regression coverage |
+| `backend/routes/admin/rides.py` | `/earnings/rides` now calls `drop_legacy_rides()` post-fetch, in a loop that widens the raw fetch until `offset + limit` real rows are collected or the source is exhausted (capped by `_EXPORT_MAX_ROWS`) | Exclude legacy rows from the finance reconciliation CSV export without the broken `EXCLUDE_LEGACY_RIDES` server-filter pattern, and without silently under-filling the page/total when legacy rows sort inside a fixed-size fetch window (money-auditor review finding, fixed pre-merge) |
+| `backend/tests/test_admin_rides_read_endpoints_coverage.py` | 2 new tests: legacy row present in fetch result is excluded from the response; legacy rows crowding the initial fetch window no longer silently under-fill `total`/page | Regression coverage |
 | `ACTION_ITEMS.md` | P0-B closed; new A26 (CRITICAL, open) filed for the `EXCLUDE_LEGACY_RIDES` predicate bug | Track the larger finding surfaced while fixing P0-B |
 
 ## 7. Before / after
@@ -152,12 +152,22 @@ page = rides[offset : offset + limit]
 
 ## 9. Verification performed
 
-- [x] `pytest backend/tests/test_admin_rides_read_endpoints_coverage.py backend/tests/test_admin_rides_coverage.py -q --no-cov` → 127 passed
+- [x] `pytest backend/tests/test_admin_rides_read_endpoints_coverage.py backend/tests/test_admin_rides_coverage.py -q --no-cov` → 128 passed
 - [x] Two independent `spinr-migration-reviewer` passes: first caught the
   `IS NULL`-is-unsatisfiable bug before merge (would have zeroed both
   dashboards entirely); second, after the fix, verified the corrected
   `= '{}'::jsonb` predicate against live psql (`SELECT '{}'::jsonb = '{}'::jsonb`
   etc.) — verdict SAFE TO APPLY.
+- [x] `spinr-money-auditor` pass on the full diff: migrations 302/303
+  verified money-correct (including confirming 303's unfiltered
+  earned/outstanding sums are intentional, not an oversight); caught a real
+  bug in the CSV-export fix — a fixed-size over-fetch followed by
+  post-fetch legacy-row dropping could silently under-fill `total`/the page
+  whenever legacy rows sorted inside that fetch window, undercounting the
+  very export finance uses to reconcile against Stripe. Fixed pre-merge:
+  the fetch now loops, widening until enough real rows are collected or the
+  source is exhausted (capped by `_EXPORT_MAX_ROWS`), with a new regression
+  test proving the interleaved-legacy-rows case is handled correctly.
 - [x] Blast-radius grep for all `admin_ride_money_rollup` /
   `admin_payouts_overview_aggregates` call sites (4 + 1, both in
   `routes/admin/rides.py`)

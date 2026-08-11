@@ -531,6 +531,40 @@ class TestAdminEarningsRides:
         assert body["total"] == 1
         assert body["rides"][0]["ride_id"] == "real-1"
 
+    def test_earnings_rides_loops_past_legacy_rows_crowding_the_fetch_window(self, client, as_super_admin):
+        """Money-safety regression: a fixed-size over-fetch followed by a
+        post-fetch legacy-row drop can silently under-fill the page/total
+        when legacy rows sort ahead of real ones within that window — real
+        rows past the raw fetch boundary are never even retrieved. The
+        endpoint must widen its fetch until it collects enough real rows
+        (or the source is exhausted), not just filter whatever the first
+        fixed-size fetch happened to return."""
+        # Ordered desc by ride_completed_at (as the real query would return):
+        # 3 legacy rows sort ahead of the 2 real ones an operator actually
+        # wants. A naive fetch_size == limit (2) would return only the 3
+        # legacy rows' worth of window and, after dropping them, report 0
+        # real rows instead of the 2 that actually exist.
+        all_rides_desc = [
+            {"id": "legacy-3", "status": "completed", "legacy_import_metadata": {"source": "x"}},
+            {"id": "legacy-2", "status": "completed", "legacy_import_metadata": {"source": "x"}},
+            {"id": "legacy-1", "status": "completed", "legacy_import_metadata": {"source": "x"}},
+            {"id": "real-2", "status": "completed"},
+            {"id": "real-1", "status": "completed"},
+        ]
+
+        async def _fake_get_rows(table, filters, order=None, desc=None, limit=None, **kwargs):
+            return all_rides_desc[: limit or len(all_rides_desc)]
+
+        with (
+            patch("db_supabase.get_rows", _fake_get_rows),
+            patch("routes.admin.drivers._batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
+        ):
+            resp = client.get("/api/admin/earnings/rides", params={"limit": 2})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 2
+        assert {r["ride_id"] for r in body["rides"]} == {"real-1", "real-2"}
+
     def test_earnings_rides_empty(self, client, as_super_admin):
         with (
             patch("db_supabase.get_rows", AsyncMock(return_value=[])),

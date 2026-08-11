@@ -745,6 +745,8 @@ export default function DriversPage() {
     // Client-side sort for the subscription-payments table (separate sort
     // state from the main drivers list above, which uses its own sort logic).
     const { sorted: sortedSubPayments, sort: subPaymentsSort, toggle: toggleSubPaymentsSort } = useTableSort(driverSubPayments);
+    const [subPage, setSubPage] = useState(0);
+    const [subPageSize, setSubPageSize] = useState<number>(25);
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
@@ -1703,6 +1705,7 @@ export default function DriversPage() {
                                     ) : driverSubPayments.length === 0 ? (
                                         <div className="py-12 text-center text-sm text-muted-foreground">No subscription payments found for this driver.</div>
                                     ) : (
+                                        <>
                                         <Table>
                                             <TableHeader>
                                                 <TableRow>
@@ -1717,7 +1720,7 @@ export default function DriversPage() {
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
-                                                {sortedSubPayments.map((p) => (
+                                                {sortedSubPayments.slice(subPage * subPageSize, (subPage + 1) * subPageSize).map((p) => (
                                                     <TableRow key={p.id}>
                                                         <TableCell className="text-xs whitespace-nowrap">
                                                             {p.created_at ? new Date(p.created_at).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" }) : "—"}
@@ -1737,6 +1740,32 @@ export default function DriversPage() {
                                                 ))}
                                             </TableBody>
                                         </Table>
+                                        <div className="flex items-center justify-between gap-3 flex-wrap mt-3">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-xs text-muted-foreground">Show</span>
+                                                <Select value={String(subPageSize)} onValueChange={(v) => { setSubPageSize(Number(v)); setSubPage(0); }}>
+                                                    <SelectTrigger className="h-8 text-xs w-[70px]">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {[25, 50, 100].map(n => (
+                                                            <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                                <span className="text-xs text-muted-foreground">per page</span>
+                                            </div>
+                                            {sortedSubPayments.length > subPageSize && (
+                                                <Pagination
+                                                    page={subPage}
+                                                    pageSize={subPageSize}
+                                                    hasNextPage={sortedSubPayments.length > (subPage + 1) * subPageSize}
+                                                    totalCount={sortedSubPayments.length}
+                                                    onPageChange={setSubPage}
+                                                />
+                                            )}
+                                        </div>
+                                        </>
                                     )}
                                 </TabsContent>
                             </div>
@@ -2006,6 +2035,9 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
     // returns so the hook order stays stable; reads payouts off the nullable
     // data and falls back to an empty list when not yet loaded.
     const { sorted: sortedPayouts, sort: payoutsSort, toggle: togglePayoutsSort } = useTableSort(data?.payouts ?? []);
+    const [payoutPage, setPayoutPage] = useState(0);
+    const [payoutPageSize, setPayoutPageSize] = useState<number>(25);
+    useEffect(() => { setPayoutPage(0); }, [payoutsSort]);
 
     if (loading && !data) return (
         <div className="space-y-4 animate-pulse">
@@ -2407,7 +2439,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                     <p className="text-xs mt-1">When {driverName} requests a withdrawal it will appear here.</p>
                                 </TableCell>
                             </TableRow>
-                        ) : sortedPayouts.map((p) => {
+                        ) : sortedPayouts.slice(payoutPage * payoutPageSize, (payoutPage + 1) * payoutPageSize).map((p) => {
                             const style = PAYOUT_STATUS_STYLE[p.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: p.status };
                             const isRetrying = retryingPayoutId === p.id;
                             const typeLabel =
@@ -2482,6 +2514,33 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     </TableBody>
                 </Table>
             </div>
+            {payouts.length > 0 && (
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Show</span>
+                        <Select value={String(payoutPageSize)} onValueChange={(v) => { setPayoutPageSize(Number(v)); setPayoutPage(0); }}>
+                            <SelectTrigger className="h-8 text-xs w-[70px]">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {[25, 50, 100].map(n => (
+                                    <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">per page</span>
+                    </div>
+                    {sortedPayouts.length > payoutPageSize && (
+                        <Pagination
+                            page={payoutPage}
+                            pageSize={payoutPageSize}
+                            hasNextPage={sortedPayouts.length > (payoutPage + 1) * payoutPageSize}
+                            totalCount={sortedPayouts.length}
+                            onPageChange={setPayoutPage}
+                        />
+                    )}
+                </div>
+            )}
         </div>
     );
 }
@@ -2491,6 +2550,9 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
     loading: boolean;
     fmtDate: (d: string) => string;
 }) {
+    const [refPage, setRefPage] = useState(0);
+    const [refPageSize, setRefPageSize] = useState<number>(25);
+
     if (loading) {
         return <div className="text-sm text-muted-foreground py-10 text-center">Loading referrals…</div>;
     }
@@ -2498,6 +2560,7 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
         return <div className="text-sm text-muted-foreground py-10 text-center">No referral data.</div>;
     }
     const referees = data.referees || [];
+    const pagedReferees = referees.slice(refPage * refPageSize, (refPage + 1) * refPageSize);
     return (
         <div className="space-y-5">
             {/* Summary */}
@@ -2532,8 +2595,9 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
             {referees.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-6 text-center">No one has signed up with this driver&apos;s code yet.</p>
             ) : (
+                <>
                 <div className="space-y-2">
-                    {referees.map((r, i) => {
+                    {pagedReferees.map((r, i) => {
                         const pct = Math.min(100, Math.round(((r.completed_rides || 0) / (r.rides_required || 1)) * 100));
                         return (
                             <div key={i} className="rounded-xl border border-border/50 p-3 flex items-center gap-3">
@@ -2564,6 +2628,32 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                         );
                     })}
                 </div>
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Show</span>
+                        <Select value={String(refPageSize)} onValueChange={(v) => { setRefPageSize(Number(v)); setRefPage(0); }}>
+                            <SelectTrigger className="h-8 text-xs w-[70px]">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {[25, 50, 100].map(n => (
+                                    <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">per page</span>
+                    </div>
+                    {referees.length > refPageSize && (
+                        <Pagination
+                            page={refPage}
+                            pageSize={refPageSize}
+                            hasNextPage={referees.length > (refPage + 1) * refPageSize}
+                            totalCount={referees.length}
+                            onPageChange={setRefPage}
+                        />
+                    )}
+                </div>
+                </>
             )}
         </div>
     );

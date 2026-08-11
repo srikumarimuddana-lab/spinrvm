@@ -5071,8 +5071,31 @@ Remaining, roughly in order of user impact:
     Known gap: `services/company_booking_service.py` (corporate guest
     booking) bypasses `create_ride` and does not get this confirmation —
     deliberate scope boundary, not a miss.
-    R38, R43/R44 and R8 remain open; this checkbox stays `[ ]` until all of
-    them are.
+  - [x] **R38 closed** (2026-08-11): `trigger_emergency`
+    (`backend/routes/rides/safety.py`) already notified the admin dashboard
+    (WS), the safety-team email list, on-call paging, and emergency contacts
+    (SMS) — but never told the triggering rider/driver themselves anything
+    beyond the synchronous HTTP 200 (which `SOSButton.tsx` already turns
+    into an "Alert Sent" dialog, foreground-only). Added one additive
+    `_deps.spawn(_deps.send_push_notification(...))` call, self-swallowing
+    (try/except, matches every other side effect in the function),
+    `priority="safety"` (guaranteed-delivery tier per
+    `features.py::send_push_notification`'s docstring — bypasses push
+    opt-out, falls back to the retry queue), `target_app` routed to
+    `"rider"`/`"driver"` by who triggered it. Copy: "SOS Alert Received" /
+    "Your emergency alert reached our safety team and emergency contacts. If
+    you're in immediate danger, call 911." — confirms receipt only, never
+    claims to replace or guarantee 911 response (`CLAUDE.md` → "What Spinr
+    Is NOT"). No existing SOS behavior touched (DB insert, admin broadcast,
+    paging, contact SMS all unchanged) — see
+    `docs/change-log/2026-08-11-n15d-rider-sos-confirmation.md` for full
+    blast-radius check (isolated — `trigger_emergency` has exactly one call
+    site, the route itself) and verification detail. Tests:
+    `backend/tests/test_p2_sos.py::TestTriggerEmergency::test_rider_sos_confirmation_push_sent_to_triggering_rider`
+    and `..._test_driver_sos_confirmation_push_targets_driver_app`, plus the
+    26 pre-existing SOS tests re-run green.
+    R43/R44 and R8 remain open; this checkbox stays `[ ]` until all of them
+    are.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

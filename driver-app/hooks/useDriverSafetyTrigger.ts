@@ -39,7 +39,10 @@ export function useDriverSafetyTrigger() {
           await new Promise<void>((resolve) => setTimeout(resolve, delay));
         }
         try {
-          const res = await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
+          const res = await api.post<{ contacts?: DriverSafetyContactStatus[] }>(
+            `/rides/${rideId}/emergency`,
+            { latitude: lat, longitude: lng },
+          );
           return { contacts: res.data?.contacts || [] };
         } catch (err) {
           lastError = err;

@@ -428,6 +428,12 @@ class AppSettings(BaseModel):
     # a driver's is_online=false (utils/stale_intent_reconciler.py,
     # migration 146). Range 1-48 enforced by the admin API + DB CHECK.
     stale_intent_offline_hours: float = 4.0
+    # Kill switch for the stale in_progress ride alerter
+    # (utils/stale_in_progress_ride_alerter.py, P2 task #16). Alert-only —
+    # never mutates ride state or insurance periods — so this defaults True;
+    # flip off only to silence an alert-noise incident, not as a correctness
+    # control.
+    stale_in_progress_ride_alert_enabled: bool = True
     # ── AI assistant (rider AI mode, backend/ai/) ────────────────────────
     # Master kill switch. Defaults OFF: the feature ships dark and is enabled
     # from the admin dashboard once a provider key is set. Effective within

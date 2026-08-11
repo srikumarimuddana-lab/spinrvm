@@ -163,6 +163,71 @@ _FORCED_UPGRADE_EXEMPT_PREFIXES = (
     "/api/v1/auth/verify-otp",
 )
 
+# ── Active-ride carve-out (ACTION_ITEMS.md task #11) ──────────────────
+# A driver who is already mid-trip (driver_assigned through in_progress, see
+# CLAUDE.md's ride-state table) must never be locked out of the handful of
+# calls that move THEIR OWN, already-accepted ride to completion, or of
+# continuous location reporting / active-ride resync — otherwise a min
+# version bump landing mid-trip strands a passenger. Verified against the
+# driver-app's actual trip flow (driver-app/store/driverStore.ts,
+# driver-app/utils/tripLocationTransport.ts):
+#   POST /api/v1/drivers/rides/{ride_id}/arrive
+#   POST /api/v1/drivers/rides/{ride_id}/verify-otp
+#   POST /api/v1/drivers/rides/{ride_id}/start
+#   POST /api/v1/drivers/rides/{ride_id}/complete
+#   POST /api/v1/drivers/location-batch
+#   GET  /api/v1/drivers/rides/active   (WS-reconnect / app-foreground resync;
+#                                         without it a driver whose app was
+#                                         killed/backgrounded mid-trip can't
+#                                         even see they're still on a ride)
+#
+# Deliberately a path allowlist, NOT a per-request ride-state DB lookup:
+#   - location-batch is an explicit <150ms SLA (CLAUDE.md perf table); a DB
+#     read on every write would be exactly the anti-pattern that table warns
+#     against.
+#   - arrive/verify-otp/start/complete already re-validate the real ride
+#     state themselves via _require_ride_in_state() inside the handler — this
+#     gate only decides whether an old-but-functional client may *reach* the
+#     handler, it grants no additional authority. Ownership + auth (driver
+#     JWT) are unaffected and still enforced downstream.
+#   - GET rides/active is a read of the caller's own state; exempting it from
+#     the version floor carries no privilege escalation.
+# Net effect: an old driver build can always poll/advance its own ride's
+# lifecycle, active ride or not — that's the intended, narrow carve-out.
+#
+# Suffix (not prefix) matching for the per-ride actions is deliberate: the
+# ride_id sits in the middle of the path, and /rides/{id}/accept,
+# /rides/{id}/decline (new-offer intake) and /rides/{id}/cancel /
+# /rides/{id}/rate-rider must stay gated by the version floor — a driver
+# can't have two active rides at once (CLAUDE.md active_statuses invariant),
+# so accept/decline never fire while a trip is genuinely in progress, and
+# cancel is invalid after in_progress starts. A blanket "/api/v1/drivers/
+# rides/" prefix exemption would also exempt those, which is not the intent.
+_FORCED_UPGRADE_RIDE_CARVEOUT_PREFIX = "/api/v1/drivers/rides/"
+_FORCED_UPGRADE_RIDE_CARVEOUT_SUFFIXES = (
+    "/arrive",
+    "/verify-otp",
+    "/start",
+    "/complete",
+)
+_FORCED_UPGRADE_RIDE_CARVEOUT_EXACT = (
+    "/api/v1/drivers/location-batch",
+    "/api/v1/drivers/rides/active",
+)
+
+
+def _is_ride_carveout_path(path: str) -> bool:
+    """True for the completion-critical driver endpoints exempted from the
+    forced-upgrade gate so an already-accepted, in-progress trip is never
+    stranded. See the block comment above for the full rationale."""
+    if path in _FORCED_UPGRADE_RIDE_CARVEOUT_EXACT:
+        return True
+    if path.startswith(_FORCED_UPGRADE_RIDE_CARVEOUT_PREFIX) and any(
+        path.endswith(suffix) for suffix in _FORCED_UPGRADE_RIDE_CARVEOUT_SUFFIXES
+    ):
+        return True
+    return False
+
 
 def _parse_semver(value: str) -> tuple | None:
     parts = value.strip().split(".")
@@ -182,6 +247,8 @@ class ForcedUpgradeMiddleware(BaseHTTPMiddleware):
         if not path.startswith(_FORCED_UPGRADE_PATH_PREFIX):
             return await call_next(request)
         if any(path.startswith(p) for p in _FORCED_UPGRADE_EXEMPT_PREFIXES):
+            return await call_next(request)
+        if _is_ride_carveout_path(path):
             return await call_next(request)
 
         platform = request.headers.get("X-App-Platform")

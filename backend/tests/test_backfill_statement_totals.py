@@ -216,3 +216,60 @@ class TestRecompute:
         assert result.corrected == 0
         assert len(result.skipped) == 1
         assert "no longer exists" in result.skipped[0]
+
+
+class TestStatementBranding:
+    """The statement PDF footer must follow the company name in app_settings,
+    exactly like outgoing email does. It previously used shipped constants, so
+    renaming the company updated emails but never the documents drivers
+    download."""
+
+    def test_footer_uses_supplied_company_lines(self):
+        from backend.utils import report_branding
+
+        drawn = []
+
+        class _PDF:
+            def set_font(self, *a, **k):
+                pass
+
+            def set_text_color(self, *a, **k):
+                pass
+
+            def set_y(self, *a, **k):
+                pass
+
+            def set_x(self, *a, **k):
+                pass
+
+            def cell(self, _w, _h, text, **k):
+                drawn.append(text)
+
+        report_branding.render_branded_pdf_footer(_PDF(), company_lines=("Acme Rides Inc.", "hi@acme.ca"))
+        assert "Acme Rides Inc." in drawn[0]
+        assert "hi@acme.ca" in drawn[0]
+
+    def test_footer_falls_back_to_shipped_constants(self):
+        """A settings outage must not blank the footer on a legal document."""
+        from backend.utils import report_branding
+
+        drawn = []
+
+        class _PDF:
+            def set_font(self, *a, **k):
+                pass
+
+            def set_text_color(self, *a, **k):
+                pass
+
+            def set_y(self, *a, **k):
+                pass
+
+            def set_x(self, *a, **k):
+                pass
+
+            def cell(self, _w, _h, text, **k):
+                drawn.append(text)
+
+        report_branding.render_branded_pdf_footer(_PDF())
+        assert report_branding.COMPANY_LINE.split()[0] in drawn[0]

@@ -521,6 +521,17 @@ admin_ai_suggest_limit = default_limiter.limit("20/minute")
 # (ACTION_ITEMS.md AI12).
 admin_ai_console_limit = default_limiter.limit("20/minute")
 
+# Rider self-serve email verification — request side (N14, ACTION_ITEMS.md).
+# Per-user keyed like the other authenticated self-serve endpoints above: an
+# IP-keyed limit would let a carrier-NAT'd crowd starve each other's requests,
+# and would do nothing to stop one signed-in rider from hammering send. Loose
+# enough for a legitimate retry after a typo'd inbox check, tight enough to
+# bound email-provider spend under `POST /users/verify-email/request`. The
+# per-destination-email send cap (`_enforce_otp_send_cap`, reused from
+# routes/auth.py's corporate email-OTP flow) is the second, tighter layer —
+# this is the outer one.
+rider_email_verify_request_limit = default_limiter.limit("3/hour", key_func=get_user_or_ip_key)
+
 
 # ============================================================================
 # Rate Limit Exceeded Handler

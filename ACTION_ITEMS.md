@@ -4896,10 +4896,18 @@ Remaining, roughly in order of user impact:
 - [ ] **N5. Rider-cancels-assigned-ride reaches the driver by WebSocket only
   (D29)** — `routes/rides/cancellation.py:356`. A driver en route to pickup
   with a backgrounded app is not notified.
-- [ ] **N6. Stripe Connect KYC blocking payouts notifies nobody (D24)** —
-  `routes/webhooks.py:1297` → `services/stripe_kyc_sync.apply_account_update`
-  persists the cache columns and stops. A driver whose payouts Stripe has
-  blocked learns nothing.
+- [x] ~~**N6. Stripe Connect KYC blocking payouts notifies nobody (D24)**~~ —
+  done: `apply_account_update` now detects a genuine
+  `stripe_payouts_enabled` True→False edge (comparing the pre-update
+  `drivers` row already in scope against the freshly computed mirror
+  update) and fires a guaranteed-delivery (`priority="account"`) push with a
+  `/driver/payout` deeplink — never on a redelivery of an already-blocked
+  account, and never on a driver's first-ever sync (pre-update value unset)
+  being misread as a transition. A symmetric False→True "payouts resumed"
+  push (`priority="normal"`) is included too. Notification failure is
+  swallowed (logged, matching the subscription-cancelled push above it in
+  `routes/webhooks.py`) so it can never undo the already-committed mirror
+  write.
 - [x] ~~**N7. Auto-reactivation after `suspended_until` lapses is silent (D21)**~~
   — done: `_reactivate_tick` now sends a push (`"Account reactivated" / "Your
   account is active again. Welcome back!"`) right after the audit-log insert,

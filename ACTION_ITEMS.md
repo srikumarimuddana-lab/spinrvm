@@ -4063,6 +4063,57 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   signal the fix is real (same finding, two gates) — one clearing without the other
   would mean the fix didn't actually reach the built image.
 
+### B24. `G4b · yarn audit` / `G4c · npm audit` (JS deps) red on pre-existing transitive findings — blocks all open dependency-bump PRs identically
+- [ ] **Status:** open. Same shape as B22 (which covers `G4a · pip-audit`
+  only) but for the JS side — no existing item covered this half.
+- **Why:** found while verifying whether the 10 open dependabot PRs
+  (#3473–#3487, admin-dashboard + backend) would break anything. `G4b`
+  and/or `G4c` are red on **9 of the 10**, spanning bumps with nothing in
+  common (`@radix-ui/react-alert-dialog`, `lucide-react`, `motion`, the
+  admin-dashboard `testing` group, `next`, `hpack`, `pillow`, the backend
+  `security-critical` and `testing` groups) — the pattern itself says
+  shared root cause, not nine separate regressions. Confirmed directly
+  rather than left as inference: ran `npm audit --audit-level=high` against
+  a **clean `main` checkout with zero dependabot changes applied**
+  (`admin-dashboard`) and got the identical findings —
+  `brace-expansion` (HIGH, GHSA-rgw5-rvv9-x895), `fast-uri` (HIGH,
+  GHSA-7p8r-x3mc-p8w7), `dompurify` (moderate, GHSA-55q2-fjhq-7xh7), `hono`
+  (moderate, GHSA-8j4g-w8fx-2239) — all transitive, none traceable to a
+  package any of these 10 PRs touch. `G4b`'s `rider-app`/`driver-app`
+  matrix legs were not independently re-run against a clean `main` in this
+  pass (no worktree with `node_modules` installed for those two apps at the
+  time) — inferred from the same repeated-across-unrelated-PRs pattern, not
+  independently confirmed the way admin-dashboard's `npm audit` was.
+- **Not the same as B22:** B22 (`pip-audit`, backend Python:
+  `pypdf`/`cryptography`/`h2`) is fully CLOSED as of 2026-08-11. This is
+  the JS-side sibling gate — different scanner, different lockfiles,
+  different packages, still open.
+- **Fix:** bump each flagged package to its patched range in the relevant
+  `package.json`/lockfile (`admin-dashboard`, `rider-app`, `driver-app`
+  each maintain their own), following B22's per-package pattern — bump,
+  run that surface's real test suite against the new version, confirm the
+  specific gate goes green, don't bundle unrelated bumps into one commit.
+  `brace-expansion`/`fast-uri`/`dompurify`/`hono` are almost certainly
+  transitive (pulled in via a direct dependency, not listed directly in
+  `admin-dashboard/package.json`) — first step for whoever picks this up
+  is `npm ls <package>` per finding to identify the direct dependency to
+  bump, same as B22 did for `h2`→`hpack`.
+- **Severity:** unknown per-advisory until read, same caveat as B22 —
+  document via `[CR]` (`.github/ISSUE_TEMPLATE/ci_change_request.yml`) for
+  any finding judged not exploitable in Spinr's actual usage, rather than
+  leaving the gate silently red.
+- **Acceptance:** each flagged package bumped with its consuming
+  surface's real test suite run against the new version, or a `[CR]` per
+  advisory. `G4b` (all three JS matrix legs) and `G4c` both green is the
+  signal the fix is real, same "two gates, one fix" logic as B22's
+  `cryptography`/`G4a`+`G6` pairing.
+- **What was NOT verified:** `rider-app`/`driver-app` `npm audit` output
+  directly (see above — inferred, not independently pulled); whether any
+  of these findings are already stale (i.e. already fixed on `main` by
+  unrelated work) as of whenever this item is next picked up — re-run the
+  audit fresh rather than trusting this list, the way B22's own dated
+  updates did each time.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

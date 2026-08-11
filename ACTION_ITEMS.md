@@ -5145,13 +5145,51 @@ Remaining, roughly in order of user impact:
   (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
   `utils/rider_emails.py` and go through the policy layer, so the
   `lifecycle_emails_enabled` kill switch covers them.
-- [ ] **N14. Rider email addresses are never verified (R5)** — `email_verified`
-  is written `false` at `routes/users.py` and nothing ever flips it for a
-  rider; the only `verify-email-otp` endpoint (`routes/auth.py:744`) belongs to
-  the corporate business portal. The welcome email is now a *de facto*
-  deliverability signal — a hard bounce lands the address on the suppression
-  list — but that is not a verification flow, and nothing surfaces the
-  difference to the rider or to support.
+- [ ] **N14. Rider email addresses are never verified (R5)** — **partially
+  done.** The verification flow itself now exists and is tested:
+  `POST /users/verify-email/request` + `POST /users/verify-email/confirm`
+  (`routes/users.py`) reuse the corporate portal's exact OTP mechanics
+  (`routes/auth.py:744`'s `_check_otp_lockout`/`_record_otp_failure`/
+  `_clear_otp_failures`/`_enforce_otp_send_cap`, imported directly rather than
+  re-implemented) — SHA-256-hashed code at rest, 5-failures/hour lockout,
+  "1234" dev bypass only when `ENV != production`, refused outright in
+  production with no email provider configured. Codes are stored in a new
+  `rider_email_verification_otp` table (migration `299`, keyed on `user_id`
+  rather than the corporate table's bare `email`, so the two flows' lockout
+  buckets never collide even for the same address) and delivered through a
+  new `send_email_verification_code` in `utils/rider_emails.py`, going through
+  the same policy layer (`send_lifecycle_email`, TRANSACTIONAL class) as every
+  other rider email. The request endpoint carries its own outer rate limit
+  (`rider_email_verify_request_limit`, 3/hour, user-keyed) on top of the
+  reused per-destination send cap. Confirming flips `email_verified` +
+  `email_verified_at` on the caller's own `users` row only, and refuses if the
+  account's email changed between request and confirm (code was minted for
+  the old address). 12 tests in `tests/test_rider_email_verification.py`
+  cover hashing, success, wrong-code, expiry, lockout, the email-changed
+  guard, and both sides of the rate limit.
+  **Two things this pass deliberately did NOT do, both open:**
+  (a) **no rider-app UI calls either endpoint** — this was a backend-only
+  session, so there is no "verify your email" prompt, banner, or settings
+  entry anywhere in `rider-app/` yet. The capability exists and is safe to
+  call, but nothing in the product surfaces it to a rider today. Follow-up.
+  (b) **whether/how to gate anything on `email_verified` remains an open
+  product decision**, not resolved here — nothing was changed to require
+  verification before booking, payouts, or any other flow, and CLAUDE.md's
+  pre-merge gates (feature-flag anything user-visible; no silent behavior
+  change) mean that decision needs explicit product sign-off before any
+  gating ships, not a unilateral backend call.
+  **Discovered existing consumer (not introduced by this change):**
+  `routes/corporate_rider.py`'s `POST /corporate/join-domain` already 403s
+  with `ERR_EMAIL_UNVERIFIED` when `email_verified` is falsy (added in
+  migration 252, before this flow existed). Before this change that gate was
+  permanently unsatisfiable for a rider — there was no way for the flag to
+  ever become true — so join-domain 403'd for every rider, always. This
+  change doesn't add a new gate; it makes the pre-existing one work as
+  originally intended. The practical effect: a rider who runs the new
+  verify-email flow can now successfully call join-domain where before they
+  categorically could not. Flagging this explicitly since it's a real,
+  immediately-live behavior change on a corporate-adjacent endpoint even
+  though no new gating code was written.
 - [ ] **N15. Remaining silent rider surfaces** — grouped rather than split,
   since they share one cause (no notification call of any kind at the site):
   rider-initiated ride completion sends the rider nothing while the

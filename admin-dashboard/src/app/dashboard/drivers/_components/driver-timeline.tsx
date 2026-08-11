@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { getDriverActivity } from "@/lib/api";
+import { exportToCsv } from "@/lib/export-csv";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Pagination } from "@/components/ui/pagination";
 import {
     UserPlus, FileText, CheckCircle, XCircle, ShieldCheck,
     Ban, Pause, Play, AlertTriangle, StickyNote, CreditCard, Car,
     Wifi, WifiOff, Settings, Clock, Loader2, ChevronDown, ChevronUp,
+    Download,
 } from "lucide-react";
+
+const TIMELINE_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 const EVENT_CONFIG: Record<string, { icon: any; color: string; bg: string; pipeColor: string }> = {
     registered:             { icon: UserPlus,     color: "text-blue-600",    bg: "bg-blue-100 dark:bg-blue-900/30",    pipeColor: "border-blue-300" },
@@ -62,6 +69,8 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
     const [activities, setActivities] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+    const [timelinePage, setTimelinePage] = useState(0);
+    const [timelinePageSize, setTimelinePageSize] = useState<number>(25);
 
     useEffect(() => {
         setLoading(true);
@@ -143,8 +152,33 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
         );
     }
 
-    const groups = groupByDate(activities);
+    const pagedActivities = useMemo(() =>
+        activities.slice(timelinePage * timelinePageSize, (timelinePage + 1) * timelinePageSize),
+        [activities, timelinePage, timelinePageSize]
+    );
+    const hasNextTimelinePage = activities.length > (timelinePage + 1) * timelinePageSize;
+
+    const groups = groupByDate(pagedActivities);
     const dates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+
+    const driverName = `${driver?.first_name || ""} ${driver?.last_name || ""}`.trim() || "driver";
+
+    const handleExportTimeline = () => {
+        if (activities.length === 0) return;
+        const cols = [
+            { label: "Date", value: (r: any) => r.created_at ? fmtDateTime(r.created_at) : "" },
+            { label: "Event", value: (r: any) => r.event_type || "" },
+            { key: "title", label: "Title" },
+            { key: "description", label: "Description" },
+            { key: "actor", label: "Actor" },
+            { label: "Status Change", value: (r: any) => {
+                const m = r.metadata || {};
+                return m.old_status && m.new_status && m.old_status !== m.new_status ? `${m.old_status} → ${m.new_status}` : "";
+            }},
+        ];
+        const safeName = driverName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+        exportToCsv(`driver_history_${safeName}`, activities, cols);
+    };
 
     return (
         <div className="space-y-1">
@@ -152,6 +186,12 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
                 <Clock className="h-4 w-4 text-muted-foreground" />
                 <h4 className="text-sm font-semibold">Activity Timeline</h4>
                 <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{activities.length} events</span>
+                <div className="ml-auto">
+                    <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handleExportTimeline} disabled={activities.length === 0}>
+                        <Download className="h-3.5 w-3.5" />
+                        Export CSV
+                    </Button>
+                </div>
             </div>
 
             {dates.map((date, _dateIdx) => {
@@ -230,6 +270,32 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
                     </div>
                 );
             })}
+
+            <div className="flex items-center justify-between gap-3 flex-wrap mt-3">
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Show</span>
+                    <Select value={String(timelinePageSize)} onValueChange={(v) => { setTimelinePageSize(Number(v)); setTimelinePage(0); }}>
+                        <SelectTrigger className="h-8 text-xs w-[70px]">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {TIMELINE_PAGE_SIZE_OPTIONS.map(n => (
+                                <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <span className="text-xs text-muted-foreground">per page</span>
+                </div>
+                {activities.length > timelinePageSize && (
+                    <Pagination
+                        page={timelinePage}
+                        pageSize={timelinePageSize}
+                        hasNextPage={hasNextTimelinePage}
+                        totalCount={activities.length}
+                        onPageChange={setTimelinePage}
+                    />
+                )}
+            </div>
         </div>
     );
 }

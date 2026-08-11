@@ -5257,12 +5257,24 @@ Remaining, roughly in order of user impact:
   (deleted by N8) — moot. That empties the batch-1 change-log's
   "clearly rider-directed, ready to fix" list. What's left per that same
   doc: 3 driver-directed sites missing `target_app="driver"` (a related but
-  distinct, not-yet-tracked gap —
-  `routes/rides/matching.py:1071`, `services/cancellation_service.py:206`,
-  `utils/document_expiry.py:216`), plus an "ambiguous/admin" bucket
+  distinct gap), plus an "ambiguous/admin" bucket
   (`routes/notifications.py:108`'s `/test-push`, and the `routes/admin/*.py`
   broadcast endpoints where recipient role varies per admin selection) that
   needs its own per-call-site read rather than a batch sweep.
+  **2026-08-11 update — driver batch done:** of the 3 flagged driver-directed
+  sites, `utils/document_expiry.py:216` (and its sibling push at line 296)
+  already had `target_app="driver"` — moot, already fixed by an earlier
+  pass. Fixed the 2 genuinely open ones: `routes/rides/matching.py`'s
+  auto-offline push (driver missed too many offers in a row) and
+  `services/cancellation_service.py::pay_driver_cancellation_fee`'s payout
+  push. Both confirmed driver-directed (`driver_user_id`, resolved from
+  `get_driver_by_id`). New test file
+  `tests/test_cancellation_service_driver_push.py` (nothing previously
+  exercised `pay_driver_cancellation_fee` directly — every other
+  cancellation test mocks it out entirely) plus a new assertion on the
+  existing `test_offer_timeout_handler_auto_offline_notifies_and_pushes`.
+  Only the "ambiguous/admin" bucket remains — deliberately not swept here,
+  needs its own per-call-site read.
 - [x] ~~**N16. Consolidate the two copies of the company-address assembly**~~
   — done 2026-08-11: `_coalesce`/`_postal_address` were byte-identical logic
   duplicated across `utils/company_details.py` and `utils/marketing_email.py`.

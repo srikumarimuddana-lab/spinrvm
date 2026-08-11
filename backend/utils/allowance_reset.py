@@ -70,6 +70,23 @@ def _add_one_month(d: date) -> date:
 
 
 async def run_allowance_reset_tick(now: Optional[date] = None) -> int:
+    # Kill switch (ACTION_ITEMS.md E5): pauses automatic corporate money
+    # movement for an incident. Shared with settle_corporate and the other
+    # 3 corporate loops. Fail-open on a settings-read error. Lazy dual
+    # import -- see settle_corporate's identical pattern/comment in
+    # services/payment_service.py for why.
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        settings = await get_app_settings()
+        if not settings.get("corporate_billing_enabled", True):
+            logger.info("allowance_reset: corporate_billing_enabled is False, skipping tick")
+            return 0
+    except Exception as settings_err:
+        logger.warning("allowance_reset: app_settings lookup failed (%s), proceeding as enabled", settings_err)
+
     today = now or date.today()
     rows = await list_allowances_due_for_reset(as_of=today.isoformat())
     processed = 0

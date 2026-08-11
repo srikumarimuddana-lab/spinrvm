@@ -331,6 +331,15 @@ class SettingsUpdateRequest(BaseModel):
     # dark-launched, driver-app only. Not a credential, no masking/
     # super-admin gate needed.
     driver_discreet_sos_enabled: Optional[bool] = None
+    # Kill switches (ACTION_ITEMS.md E5). scheduled_dispatch_enabled already
+    # existed in AppSettings/gated the loop (2026-08-02) but was never added
+    # here — there was previously no way to set it via the admin API at all,
+    # only a direct DB update. All four are plain booleans, no credential
+    # masking/super-admin gate needed.
+    scheduled_dispatch_enabled: Optional[bool] = None
+    surge_engine_enabled: Optional[bool] = None
+    promo_redemption_enabled: Optional[bool] = None
+    corporate_billing_enabled: Optional[bool] = None
     # Dual-approval gate for large PII-bearing exports (migration 268,
     # routes/admin/compliance.py, routes/admin/data_transfer_export.py) —
     # requires a second super_admin to approve before a large driver/rider

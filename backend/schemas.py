@@ -300,6 +300,38 @@ class AppSettings(BaseModel):
     # scheduled rides stay parked in status='scheduled' and dispatch normally
     # once this is flipped back on; nothing is lost or cancelled by disabling it.
     scheduled_dispatch_enabled: bool = True
+    # Kill switch for the surge engine's automatic recompute loop
+    # (utils/surge_engine.py::surge_recalculation_loop, ACTION_ITEMS.md E5).
+    # Defaults to true (current, always-on behavior). Flip to false to stop
+    # the automatic recompute cycle for an incident (e.g. a bug producing
+    # bad multipliers) — this is independent of, and layered on top of, the
+    # existing per-service-area surge_source/surge_enabled controls, which
+    # stay in effect either way. Flipping this off freezes multipliers at
+    # their last computed value; it does NOT reset live pricing back to
+    # 1.0x — pair it with the existing per-area manual override
+    # (surge_source='manual') to actually reset a specific area's price.
+    surge_engine_enabled: bool = True
+    # Kill switch for promo code redemption (ACTION_ITEMS.md E5). Gates the
+    # single shared validation chokepoint both the rider self-service path
+    # (POST /promo/apply) and the admin apply-on-behalf-of-rider path
+    # (apply_promo_for_admin) already funnel through
+    # (routes/promotions.py::_validate_promo_for_user). Defaults to true.
+    # Flip to false to stop all promo redemption during an incident (e.g. a
+    # promo-abuse exploit) — promo *validation* (POST /promo/validate, used
+    # to show available promos before booking) is intentionally NOT gated,
+    # only the state-changing apply path.
+    promo_redemption_enabled: bool = True
+    # Kill switch for automatic corporate-billing money movement
+    # (ACTION_ITEMS.md E5): the ride-settlement saga
+    # (services/payment_service.py::settle_corporate) and the four
+    # corporate background loops (autotopup, low-balance nudge, allowance
+    # reset, KYB re-verification reminder). Defaults to true. Deliberately
+    # does NOT gate services/corporate_wallet_service.py's low-level
+    # apply_topup/apply_adjustment/apply_refund helpers directly — those are
+    # also how an admin manually corrects/refunds something during the very
+    # incident that caused this switch to be flipped off, and blocking that
+    # path would work against the person responding to the incident.
+    corporate_billing_enabled: bool = True
     # New driver-facing behavior (scheduled-rides gap review, Finding #06):
     # a best-effort heads-up push to already-online drivers near an upcoming
     # scheduled pickup, ~60 minutes out. Unlike scheduled_dispatch_enabled

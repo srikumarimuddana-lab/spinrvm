@@ -832,6 +832,80 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Kill Switches (ACTION_ITEMS.md E5) */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Kill Switches</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Pause a risky automatic subsystem in seconds, no deploy required. All default on —
+                                flipping one off stops new work only; it never cancels or reverses anything already
+                                in flight.
+                            </p>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>Scheduled dispatch</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses the loop that promotes scheduled rides to searching at their dispatch
+                                        time. Already-scheduled rides stay parked, not lost — they dispatch normally
+                                        once this is back on.
+                                    </p>
+                                </div>
+                                <Switch
+                                    aria-label="Scheduled dispatch enabled"
+                                    checked={!!settings.scheduled_dispatch_enabled}
+                                    onCheckedChange={(v) => update("scheduled_dispatch_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>Surge engine</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses the automatic surge recompute cycle. Multipliers freeze at their last
+                                        value — this does not reset current pricing. To reset a specific area's
+                                        price immediately, use its per-area manual override instead.
+                                    </p>
+                                </div>
+                                <Switch
+                                    aria-label="Surge engine enabled"
+                                    checked={!!settings.surge_engine_enabled}
+                                    onCheckedChange={(v) => update("surge_engine_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>Promo redemption</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses promo code application (rider self-service and admin apply-on-behalf-of-
+                                        rider). Existing promo codes are unaffected — this only blocks new redemptions.
+                                    </p>
+                                </div>
+                                <Switch
+                                    aria-label="Promo redemption enabled"
+                                    checked={!!settings.promo_redemption_enabled}
+                                    onCheckedChange={(v) => update("promo_redemption_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>Corporate billing</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses automatic corporate money movement: ride settlement, auto-top-up,
+                                        low-balance nudges, allowance reset, and KYB re-verification reminders. Does
+                                        not block manual admin wallet corrections/refunds.
+                                    </p>
+                                </div>
+                                <Switch
+                                    aria-label="Corporate billing enabled"
+                                    checked={!!settings.corporate_billing_enabled}
+                                    onCheckedChange={(v) => update("corporate_billing_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Heat Map Configuration */}
                     <Card className="border-border/50">
                         <CardHeader>

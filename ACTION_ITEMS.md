@@ -6293,11 +6293,55 @@ how much they de-risk a public launch._
   monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and
   fare-estimate every minute from outside, alerting to PagerDuty. Tie alert
   thresholds to the CLAUDE.md SLA table (SLO + error budget).
-- [ ] **E5. Kill switches / feature flags** — `app_settings` covers config, but
-  there are no documented kill switches for the risky subsystems (surge engine,
-  scheduled dispatch, promo redemption, corporate billing). Add boolean flags
-  checked at the top of each loop/path + admin UI toggles, so a misbehaving
-  subsystem can be disabled in seconds without a deploy.
+- [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
+  found while scoping this: the "no documented kill switches" premise was only
+  3/4 true — `scheduled_dispatch_enabled` already existed and gated
+  `utils/scheduled_rides.py`'s loop (shipped 2026-08-02), it just had no admin
+  API field or dashboard toggle. Built the other 3 from scratch, following
+  that flag's own template (schema default `True`, fail-open on a
+  settings-read error, one `app_settings` flag per subsystem — not per loop):
+  - `surge_engine_enabled` — gates `utils/surge_engine.py`'s automatic
+    recompute cycle only, layered on top of (not replacing) the existing
+    per-service-area `surge_source`/`surge_enabled` controls. Off freezes
+    multipliers at their last value — does not reset live pricing; pair with
+    the existing per-area manual override for that.
+  - `promo_redemption_enabled` — gates the single shared validation
+    chokepoint (`routes/promotions.py::_validate_promo_for_user`) both the
+    rider self-service and admin apply-on-behalf-of-rider paths already
+    funnel through — one flag, one check, covers both.
+  - `corporate_billing_enabled` — gates the automatic money-movement paths
+    only: `services/payment_service.py::settle_corporate` and the 4
+    corporate background loops (autotopup, low-balance, allowance reset, KYB
+    reverification — the last of which already had its own specific toggle,
+    now layered under this master one, same relationship as surge). Does
+    **not** gate `services/corporate_wallet_service.py`'s low-level
+    apply_topup/apply_adjustment/apply_refund helpers directly — those are
+    also how an admin manually corrects/refunds something during the very
+    incident that caused this switch to flip off.
+  - Admin API gap fix: `scheduled_dispatch_enabled` was never added to
+    `SettingsUpdateRequest` — there was previously no way to set it via the
+    admin API at all, only a direct DB update. Fixed alongside the 3 new
+    flags.
+  - Admin dashboard: new "Kill Switches" card on the Settings page's
+    Operations tab (all 4 toggles, help text stating what each pauses and
+    the two scope-boundary notes above).
+  - Discovered mid-implementation, worth recording: a formatter hook in this
+    repo strips additions to some files' module-level except-branch import
+    lists (hit this directly in `routes/promotions.py`). Worked around it
+    the same way `services/payment_service.py::_atomic_settle_enabled`
+    already did — a lazy (function-local) dual import of `get_app_settings`
+    — for every subtask after that point.
+  - Tests: ~24 new across 7 backend test files (schema/PUT-handler
+    round-trip, flag-off/missing-key/settings-error-fails-open per gated
+    path). Full regression sweep across every touched subsystem's test
+    files: 100% pass, no regressions. Admin dashboard: no existing test file
+    for the settings page (checked first, not invented); verified with a
+    real `npm run build` (exit 0), not just `tsc`/dev server.
+  - **Not verified**: no live-Supabase/live-Redis integration test, no
+    staging repro, no manual admin-dashboard click-through of the actual
+    toggles (build-verified only), and none of the 4 flags have been
+    flipped off anywhere — this ships as pure additive capability, same
+    dark-launch posture as every other flag in this backlog.
 - [ ] **E6. Pre-launch DAST + third-party pentest** — SAST/Semgrep run in CI, but
   nothing exercises the running app (OWASP ZAP baseline scan against staging on a
   schedule), and a payments+PII platform should have one external penetration

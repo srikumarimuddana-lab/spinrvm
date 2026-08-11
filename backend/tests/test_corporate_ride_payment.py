@@ -801,3 +801,50 @@ async def test_settle_succeeds_even_if_notification_push_raises():
     result, _mocks = await _call_settle(_fake_corporate_ride(), deps)
 
     assert result.success is True
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# E5 kill switch: corporate_billing_enabled
+# ─────────────────────────────────────────────────────────────────────────
+#
+# settle_corporate does a LAZY dual import of get_app_settings (module-level
+# except-branch import lists are stripped by a formatter hook in this file —
+# see the identical pattern _atomic_settle_enabled already uses above), so
+# these tests patch the function at its source (settings_loader) rather than
+# as a payment_service module attribute, which the lazy import re-resolves
+# on every call.
+
+
+@pytest.mark.anyio
+async def test_settle_flag_off_returns_503_before_any_membership_lookup():
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 0}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    deps["backend.settings_loader.get_app_settings"] = AsyncMock(return_value={"corporate_billing_enabled": False})
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
+
+    assert result.success is False
+    assert result.status_code == 503
+    mocks["backend.services.payment_service.db_supabase.list_active_memberships_for_user"].assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_settle_flag_missing_key_defaults_to_enabled():
+    """A settings dict with no corporate_billing_enabled key (legacy row)
+    must still proceed -- the flag defaults to enabled."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 0}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    deps["backend.settings_loader.get_app_settings"] = AsyncMock(return_value={})
+    result, _mocks = await _call_settle(_fake_corporate_ride(), deps)
+
+    assert result.success is True
+
+
+@pytest.mark.anyio
+async def test_settle_fails_open_on_settings_lookup_error():
+    """A settings-read error must never itself block corporate settlement."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 0}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    deps["backend.settings_loader.get_app_settings"] = AsyncMock(side_effect=RuntimeError("settings down"))
+    result, _mocks = await _call_settle(_fake_corporate_ride(), deps)
+
+    assert result.success is True

@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     Search, Users, Loader2, CheckCircle, Clock, AlertTriangle, FileText,
-    Download, Car, Phone, Sticker, RefreshCw,
+    Download, Car, Sticker, RefreshCw,
 } from "lucide-react";
-import { getDrivers, updateDriver } from "@/lib/api";
+import { getDrivers, generateDecalPdf } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -37,12 +37,6 @@ const initials = (first: string, last: string) => {
     const l = (last || "")[0] || "";
     return (f + l).toUpperCase() || "?";
 };
-
-function generateDecalNumber(): string {
-    const year = new Date().getFullYear();
-    const seq = String(Math.floor(Math.random() * 99999) + 1).padStart(5, "0");
-    return `SPR-${year}-${seq}`;
-}
 
 export default function DecalsPage() {
     const { allowed } = useRequireModule("drivers");
@@ -103,24 +97,34 @@ export default function DecalsPage() {
         sent: drivers.filter(d => d.decals_sent).length,
     }), [drivers]);
 
+    const downloadBlob = (blob: Blob, filename: string) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    };
+
     const handleGenerate = async (driver: any) => {
         setGeneratingId(driver.id);
         try {
-            const decalNumber = driver.decal_number || generateDecalNumber();
+            const blob = await generateDecalPdf([driver.id]);
             const now = new Date().toISOString();
-            await updateDriver(driver.id, {
-                decal_generated_at: now,
-                decal_number: decalNumber,
-            });
             setDrivers(prev => prev.map(d =>
                 d.id === driver.id
-                    ? { ...d, decal_generated_at: now, decal_number: decalNumber }
+                    ? { ...d, decal_generated_at: now, decal_number: d.decal_number || `SPR-${new Date().getFullYear()}-pending` }
                     : d
             ));
+            const filename = `decal_${driver.first_name}_${driver.last_name}.pdf`.replace(/\s+/g, "_");
+            downloadBlob(blob, filename);
             toast({
-                title: "Decal generated",
-                description: `Decal ${decalNumber} generated for ${driver.first_name} ${driver.last_name}. Upload your Word template to fill and download.`,
+                title: "Decal PDF downloaded",
+                description: `Decal generated for ${driver.first_name} ${driver.last_name}.`,
             });
+            await load();
         } catch (e: any) {
             toast({ title: "Failed to generate decal", description: e?.message, variant: "destructive" });
         } finally {
@@ -134,10 +138,22 @@ export default function DecalsPage() {
             toast({ title: "No eligible drivers selected", description: "Select drivers that haven't had decals generated yet.", variant: "destructive" });
             return;
         }
-        for (const driver of targets) {
-            await handleGenerate(driver);
+        setGeneratingId("bulk");
+        try {
+            const ids = targets.map(d => d.id);
+            const blob = await generateDecalPdf(ids);
+            downloadBlob(blob, `decals_${ids.length}_drivers.pdf`);
+            toast({
+                title: "Decal PDFs downloaded",
+                description: `Generated decals for ${ids.length} driver(s).`,
+            });
+            await load();
+        } catch (e: any) {
+            toast({ title: "Failed to generate decals", description: e?.message, variant: "destructive" });
+        } finally {
+            setGeneratingId(null);
+            setSelectedIds(new Set());
         }
-        setSelectedIds(new Set());
     };
 
     const toggleSelect = (id: string) => {
@@ -205,8 +221,8 @@ export default function DecalsPage() {
                     </Button>
                     {selectedIds.size > 0 && (
                         <Button size="sm" onClick={handleBulkGenerate} disabled={!!generatingId}>
-                            <FileText className="h-4 w-4" />
-                            Generate ({selectedIds.size})
+                            {generatingId === "bulk" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                            Download PDF ({selectedIds.size})
                         </Button>
                     )}
                 </div>
@@ -344,15 +360,15 @@ export default function DecalsPage() {
                                                 size="sm"
                                                 variant="default"
                                                 className="h-7 text-xs"
-                                                disabled={generatingId === driver.id}
+                                                disabled={!!generatingId}
                                                 onClick={() => handleGenerate(driver)}
                                             >
                                                 {generatingId === driver.id ? (
                                                     <Loader2 className="h-3 w-3 animate-spin" />
                                                 ) : (
-                                                    <FileText className="h-3 w-3" />
+                                                    <Download className="h-3 w-3" />
                                                 )}
-                                                Generate
+                                                Download PDF
                                             </Button>
                                         ) : (
                                             <span className="text-xs text-muted-foreground flex items-center gap-1">

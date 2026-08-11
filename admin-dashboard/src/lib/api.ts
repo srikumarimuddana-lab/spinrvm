@@ -75,6 +75,7 @@ export {
     emailDriverStatement,
     getDriverStats,
     updateDriver,
+    generateDecalPdf,
 } from "./api/drivers";
 export type {
     DriverLiveStats,

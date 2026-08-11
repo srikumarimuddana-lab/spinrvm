@@ -5035,11 +5035,92 @@ Remaining, roughly in order of user impact:
   live `utils/email_receipt.py` module, not the deleted one. Dropped the
   now-stale exemption entry from `test_all_emails_are_branded.py`'s
   `_UNBRANDED_BY_DESIGN` map.
-- [ ] **N9. Five notification preferences are still dead columns (X2)** —
-  `sms_enabled`, `ride_updates`, `promotions`, `safety_alerts`,
-  `earnings_summary` are persisted, surfaced in the app, and read by nothing.
-  `earnings_summary` in particular is ignored by the statement job
-  (`utils/driver_statement_job.py`). Either wire them or remove them from the UI.
+- [x] ~~**N9. Five notification preferences are still dead columns (X2)**~~ —
+  partially closed 2026-08-11: investigated every one of the 5
+  `notification_preferences` columns end-to-end (grepped every read/write
+  site backend-wide) and made a WIRE-or-REMOVE call per column, documented
+  below. 2 wired (backend only); 3 determined genuinely dead after
+  investigation, with frontend toggle removal flagged as follow-up (this
+  session was backend-only, per scope).
+  - **`earnings_summary` — WIRED.** `utils/driver_statement_job.py`'s
+    `_process_driver` now calls a new `_earnings_summary_enabled(user_id)`
+    (reads `notification_preferences.earnings_summary`, defaults True on a
+    missing row or a lookup error — fails open, same posture as
+    `push_enabled` in `features.send_push_notification`) right after the
+    existing activity check and before the PDF render / email send. A
+    driver who opted out gets a `driver_statements` row written with the new
+    terminal status `skipped_opted_out` (so the period still converges and
+    is never rescanned for them — same pattern as the pre-existing
+    `skipped_no_email`/`skipped_inactive`), with `totals` still populated so
+    the admin listing keeps the numbers even though nothing was emailed. No
+    schema change needed — `driver_statements.status` has no CHECK
+    constraint — but migration `299_driver_statements_skipped_opted_out_comment.sql`
+    updates the column COMMENT (the documented status-lifecycle source of
+    truth) to list the new value, per the append-only migration rule (never
+    edit merged migration 272 in place).
+  - **`ride_updates` — WIRED, centrally, in `backend/features.py`.**
+    `send_push_notification` already read `push_enabled` for every
+    non-time-critical push; it now also checks `ride_updates` for a narrow
+    `_RIDE_UPDATE_PUSH_TYPES` set (`driver_accepted`, `driver_arrived`,
+    `ride_started`, `ride_completed`, `ride_cancelled`, `ride_noshow`) —
+    exactly what the rider-app's own copy calls this toggle
+    (`rider-app/app/_layout.tsx`'s `ride-updates` Android channel: "Status
+    updates for your current ride"). Gated in the single choke-point
+    function rather than at each of the ~15 call sites, both to avoid
+    preference-check drift and to avoid touching the same route files N10
+    (in flight this same day) is editing per call site. Deliberately
+    excludes: anything already `priority="dispatch"/"safety"/"account"`
+    (the `time_critical` bypass runs first, so e.g. the driver-directed
+    dispatch-priority `ride_cancelled` push in
+    `routes/rides/cancellation.py` is unaffected — confirmed by a new
+    regression test); `ride_offer_expired`/`auto_offline`/`quota_exhausted`
+    (driver-availability bookkeeping, not "my ride's status"); and every
+    `scheduled_ride_*` type (a different "upcoming booking reminder" UX,
+    left for a follow-up rather than guessed at in this pass).
+  - **`sms_enabled` — determined DEAD, no safe wiring found.** Every
+    `send_sms`/`send_otp_sms` call site was inventoried
+    (`routes/auth.py` OTP login — must never be preference-gated;
+    `routes/rides/safety.py` SOS emergency-contact texts — safety-critical,
+    never gate; `services/guest_notification_service.py` guest-ride SMS —
+    carries the pickup OTP + tracking link, the guest's only channel,
+    transactional; `utils/marketing_sms.py` — already CASL-gated by the
+    *separate* `marketing_preferences.sms_opt_in` consent system, not this
+    column; `routes/admin/messaging.py`'s `_send_sms_one` non-marketing
+    branch — the file's own code comment documents this as deliberately
+    ungated because it may carry "safety, outage" content, and the endpoint
+    has no sub-classification to separate that from routine info, so gating
+    it risks silently suppressing an operational/outage broadcast). No
+    remaining call site is both real and safe to gate. Frontend follow-up:
+    remove the "SMS Notifications" toggle from rider-app/driver-app
+    settings (not verified/edited this session — backend-only scope).
+  - **`safety_alerts` — determined DEAD, no safe wiring found; actively
+    unsafe to wire.** The only `priority="safety"` push in the codebase is
+    the SOS self-confirmation in `routes/rides/safety.py`
+    ("Your emergency alert reached our safety team...") — one of the three
+    guaranteed-delivery tiers in `features.send_push_notification` that
+    *bypasses* the opt-out by design. Letting a `safety_alerts` toggle
+    suppress that would directly contradict CLAUDE.md's safety guardrails.
+    No other "safety advisory"-style informational push exists to gate
+    instead. Frontend follow-up: remove the toggle (not verified/edited
+    this session).
+  - **`promotions` — determined DEAD/redundant, not wired.** Spinr already
+    has a legally-scoped CASL consent system for marketing content
+    (`services/marketing_consent.py`'s `marketing_preferences` table, migration
+    190) that independently governs `utils/marketing_push.py` and
+    `utils/marketing_sms.py`. Wiring `notification_preferences.promotions`
+    as a second, differently-scoped opt-in for the same channel/category
+    would create two sources of truth for "may we send this user
+    promotional content" — a correctness and compliance risk, not a safe
+    win. Frontend follow-up: remove the toggle, or (better, not decided
+    here) point it at the existing `marketing_preferences.push_opt_in` /
+    `sms_opt_in` read path if product wants a single settings-screen
+    control — a product decision, not a backend one.
+  - Tests: `backend/tests/test_notification_preferences.py` (4 new cases —
+    ride_updates suppresses/doesn't-suppress by type, dispatch-priority
+    bypass, opted-in still sends) and
+    `backend/tests/test_driver_statement_job.py` (4 new cases — opted-out
+    skips email but still claims/records totals, opted-in still sends,
+    fail-open on lookup error, defaults-true with no prefs row).
 - [ ] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
   through to the legacy `users.fcm_token` column (`features.py:1664-1670`)
   rather than `fcm_token_rider`. Works today only because registration still

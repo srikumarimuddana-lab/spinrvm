@@ -5043,12 +5043,32 @@ Remaining, roughly in order of user impact:
   (`routes/notifications.py:108`'s `/test-push`, and the `routes/admin/*.py`
   broadcast endpoints where recipient role varies per admin selection) that
   needs its own per-call-site read rather than a batch sweep.
-- [ ] **N16. Consolidate the two copies of the company-address assembly** —
-  `utils/company_details.py` and `utils/marketing_email.py` both carry
-  `_coalesce` / `_postal_address`. Deliberately not merged: marketing's copy
-  sits on a CASL consent-critical path and produces a legally-required footer,
-  so touching it needs its own review rather than being folded into an
-  unrelated change.
+- [x] ~~**N16. Consolidate the two copies of the company-address assembly**~~
+  — done 2026-08-11: `_coalesce`/`_postal_address` were byte-identical logic
+  duplicated across `utils/company_details.py` and `utils/marketing_email.py`.
+  Extracted into a new shared `utils/address_format.py`
+  (`coalesce_setting`/`postal_address`, public names since it's now a real
+  shared module, not a private per-file helper), imported back into both
+  files under their original `_coalesce`/`_postal_address` local names so
+  every call site is unchanged. Zero output-behavior change by design: the
+  marketing CASL footer (`build_footer_html`/`build_footer_text`) and the
+  transactional-email `CompanyDetails` both still receive exactly the same
+  string for the same settings input — proven by running both files'
+  existing test suites unmodified (`test_company_details.py` 22 tests,
+  `test_marketing_email.py` 3 tests, plus `test_marketing_broadcast.py`,
+  `test_all_emails_are_branded.py`, `test_branded_documents.py`,
+  `test_branded_receipt_flag.py`, `test_email_layout.py`,
+  `test_receipt_shell_snapshot.py` — 121 total, all pass unmodified) and by
+  adding 9 new direct unit tests for the shared module in
+  `tests/test_address_format.py`. Blast radius: grepped every other
+  importer of `company_details`/`marketing_email` repo-wide — all import
+  only public functions (`load_company_details`, `to_latin1`,
+  `send_marketing_email`), none import the private `_coalesce`/
+  `_postal_address` names directly, so no other file needed a change. This
+  satisfies the item's own deferral condition — "touching it needs its own
+  review" — by making the marketing copy's only change an import swap with
+  a byte-for-byte-identical function body and proven zero output delta,
+  rather than folding a behavior change into an unrelated commit.
 - [x] ~~**N11. Retrofit the ride receipt and Spinr Pass invoice**~~ — done:
   both now use the shared header/footer, the real logo, `#FF3B30`, and the
   company name and address from the admin Settings page, in the email **and**

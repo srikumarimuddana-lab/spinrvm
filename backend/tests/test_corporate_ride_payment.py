@@ -333,6 +333,7 @@ def _mock_process_payment_deps(*, allowance, membership=None):
         "backend.services.payment_service.corporate_wallet_service.apply_adjustment": AsyncMock(
             return_value={"transaction_id": "t2"}
         ),
+        "backend.services.payment_service.send_push_notification": AsyncMock(),
     }
 
 
@@ -567,6 +568,7 @@ def _settle_patches(*, member_lookup, allowance, memberships=None):
         base + "db_supabase.update_ride": AsyncMock(return_value=None),
         base + "corporate_allowance_service.apply_ride_debit": AsyncMock(return_value={"transaction_id": "t1"}),
         base + "corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
+        base + "send_push_notification": AsyncMock(),
     }
 
 
@@ -697,3 +699,105 @@ async def test_settle_no_wallet_leaves_pending_and_moves_no_money():
         if c.args[1].get("payment_status") == "pending"
     ]
     assert pending_writes, "ride must be left payment_status=pending, never paid"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  D. R44 (ACTION_ITEMS.md N15) — allowance threshold-crossing notifications
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _rider_membership():
+    return {
+        "id": _MEMBER_ID,
+        "company_id": _CORP_COMPANY_ID,
+        "user_id": "rider_1",
+        "status": "active",
+    }
+
+
+@pytest.mark.anyio
+async def test_settle_notifies_exhausted_on_crossing_to_zero():
+    """$10 remaining, $25 fare -> allowance_debit=10, remaining_after=0.
+    remaining_before (10) > 0 and remaining_after <= 0 -> exhausted push."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 90}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is True
+    mocks[base + "send_push_notification"].assert_awaited_once()
+    args, kwargs = mocks[base + "send_push_notification"].await_args
+    assert args[0] == "rider_1"
+    assert kwargs["data"] == {"type": "corporate_allowance_exhausted"}
+    assert kwargs["priority"] == "normal"
+    assert kwargs["target_app"] == "rider"
+
+
+@pytest.mark.anyio
+async def test_settle_notifies_low_on_crossing_below_threshold():
+    """$30 remaining of $100 (30%) before, $25 fare fully covered ->
+    remaining_after=$5 (5%). Crosses the 20% line without hitting zero ->
+    'running low' push, not 'exhausted'."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 70}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is True
+    mocks[base + "send_push_notification"].assert_awaited_once()
+    args, kwargs = mocks[base + "send_push_notification"].await_args
+    assert kwargs["data"] == {"type": "corporate_allowance_low"}
+
+
+@pytest.mark.anyio
+async def test_settle_no_notification_when_comfortably_above_threshold():
+    """$1000 allowance, $25 fare -> remaining stays at 97.5%. No crossing,
+    no push."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 1000, "used": 0}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is True
+    mocks[base + "send_push_notification"].assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_settle_no_notification_when_already_exhausted():
+    """Allowance already at 0 before this ride -> allowance_debit is 0, the
+    allowance-debit branch (and thus apply_ride_debit) never runs, so there
+    is no NEW crossing to notify about — the rider was already told on the
+    ride that exhausted it."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 100}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is True
+    mocks[base + "corporate_allowance_service.apply_ride_debit"].assert_not_called()
+    mocks[base + "send_push_notification"].assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_settle_no_notification_for_unlimited_allowance():
+    """Unlimited allowances have no ceiling to warn about."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "unlimited", "amount": None, "used": 0}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is True
+    mocks[base + "send_push_notification"].assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_settle_succeeds_even_if_notification_push_raises():
+    """A push failure must never turn an already-successful settlement into
+    an error response."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 90}
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
+    base = "backend.services.payment_service."
+    deps[base + "send_push_notification"] = AsyncMock(side_effect=RuntimeError("push down"))
+    result, _mocks = await _call_settle(_fake_corporate_ride(), deps)
+
+    assert result.success is True

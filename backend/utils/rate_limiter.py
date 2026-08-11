@@ -521,6 +521,41 @@ admin_ai_suggest_limit = default_limiter.limit("20/minute")
 # (ACTION_ITEMS.md AI12).
 admin_ai_console_limit = default_limiter.limit("20/minute")
 
+# Admin SIN reveal/update (ACTION_ITEMS.md D8) — both are super_admin-gated and
+# audit-logged before this limiter ever runs, so this is defense-in-depth, not
+# closing an active exploit: a compromised or scripted super_admin session
+# should still not be able to walk every driver's SIN unbounded, or churn a
+# driver's SIN repeatedly without the friction of hitting a wall. 10/hour is
+# D8's own suggested figure — generous for the legitimate case (T4A season
+# support tickets run in the single digits per admin per day) while bounding
+# a runaway/compromised session to a two-digit number of SINs per hour rather
+# than an unbounded loop. Keyed per-admin (get_user_or_ip_key), not per-IP —
+# every other admin_* limiter in this file defaults to IP keying, but SIN
+# reveal/update is scoped to *an admin's* exposure, and IP keying would let
+# multiple super_admins sharing one office/VPN egress IP silently share (and
+# exhaust) one bucket, or would under-count a single admin who rotates IPs.
+# admin JWTs carry a `user_id` claim (routes/admin/auth.py
+# `_mint_admin_access_token`), so the existing get_user_or_ip_key key
+# function keys correctly here with no new key function needed.
+admin_sin_reveal_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
+admin_sin_update_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
+
+# Admin tax-ID bulk import (ACTION_ITEMS.md D8) — SIN-touching bulk operation,
+# same super_admin + audit posture as reveal/update-sin above. /validate is a
+# read-only dry-run (parse + report, no writes); /commit writes up to
+# MAX_ROWS (500) SINs/GST BNs per call, so commit gets the tighter limit —
+# same validate/commit asymmetry as data_transfer_import_*_limit,
+# booking_import_*_limit, and driver_import_commit_limit above. Looser than
+# the single-driver reveal/update limit (10/hour) because one call here is a
+# deliberate one-time bulk migration op covering many drivers at once, not a
+# per-driver action — the per-call MAX_ROWS cap already bounds blast radius
+# per call, so the per-hour call cap only needs to guard against unbounded
+# scripted looping, not single-driver granularity. Keyed per-admin like the
+# SIN limiters above, for the same reason (this endpoint decrypts/writes
+# SINs, not general admin CRUD where IP keying is the existing convention).
+tax_id_import_validate_limit = default_limiter.limit("30/hour", key_func=get_user_or_ip_key)
+tax_id_import_commit_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
+
 
 # ============================================================================
 # Rate Limit Exceeded Handler

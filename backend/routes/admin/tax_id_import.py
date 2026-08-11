@@ -39,7 +39,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 try:
     from ... import db_supabase
@@ -50,6 +50,7 @@ try:
     from ...settings_loader import get_app_settings
     from ...utils.audit_logger import log_admin_action
     from ...utils.background import spawn
+    from ...utils.rate_limiter import tax_id_import_commit_limit, tax_id_import_validate_limit
     from ...utils.sin import sin_last4, validate_sin
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     import db_supabase  # type: ignore
@@ -60,6 +61,7 @@ except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore # noqa: F401
     from utils.background import spawn  # type: ignore
+    from utils.rate_limiter import tax_id_import_commit_limit, tax_id_import_validate_limit  # type: ignore
     from utils.sin import sin_last4, validate_sin  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -246,7 +248,9 @@ async def _push_sins_to_stripe(pushes: list[dict[str, str]], batch: str) -> None
 
 
 @router.post("/tax-ids/import/validate")
+@tax_id_import_validate_limit
 async def validate_tax_id_import(
+    request: Request,
     tax_csv: UploadFile = File(...),
     batch: Optional[str] = Form(None),
     admin: dict = Depends(get_admin_user),
@@ -260,7 +264,9 @@ async def validate_tax_id_import(
 
 
 @router.post("/tax-ids/import/commit")
+@tax_id_import_commit_limit
 async def commit_tax_id_import(
+    request: Request,
     tax_csv: UploadFile = File(...),
     batch: Optional[str] = Form(None),
     admin: dict = Depends(get_admin_user),

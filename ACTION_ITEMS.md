@@ -2618,6 +2618,36 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   from `test_auth.py`/`test_middleware_user_id.py` deliberately using
   short JWT test keys — none are leaks), exit code 0 each — and fail no tests.
 
+### A25. Legacy driver/rider-migration audit (2026-08-11) — 3 P0 findings
+- **Source:** `docs/audit/2026-08-11-driver-rider-migration-audit.md`
+  (merged via #3662, not yet triaged into this file until now).
+- **P0-C — rider CSV importer could silently overwrite PIPEDA-scrubbed PII
+  on `pending_deletion`/`deleted` accounts.**
+  - [x] **Status:** DONE (2026-08-11) — `rider_import_service.py` now reads
+    `users.status` in `_prefetch_existing`/`build_plan` and skips (flags as
+    `protected_skip`, no fields touched) any match whose status is
+    `pending_deletion` or `deleted`, instead of repopulating falsy email/PII
+    fields the way it did for a normal partial profile. Admin dashboard
+    (Bulk Rider Import page) surfaces the new category with a distinct
+    "Skipped — needs review" badge/stat. 2 new backend tests, full change
+    impact log at `docs/change-log/2026-08-11-rider-import-pii-protection.md`.
+    PR #3674.
+- **P0-A — rider importer has no provenance trail.**
+  - [ ] **Status:** open. `rider_import_service.py`'s `batch` param is never
+    persisted to `legacy_import_metadata` (contrast `driver_import_service.py`,
+    which does). Fix: write a `legacy_import_metadata` row per imported/updated
+    rider row, mirroring the driver importer's pattern.
+- **P0-B — 3 admin financial dashboards double-count legacy-imported ride
+  earnings.**
+  - [ ] **Status:** open. Needs `legacy_import_metadata IS NULL` added to
+    `admin_ride_money_rollup` (`backend/migrations/161_ride_money_rollup_fn.sql`)
+    and `admin_payouts_overview_aggregates`
+    (`backend/migrations/159_payouts_overview_aggregates_fn.sql`), plus an
+    `**EXCLUDE_LEGACY_RIDES` filter in the CSV export at
+    `routes/admin/rides.py:2145-2151`.
+- P1/P2 findings from the same audit (3 P1, 4 P2) not yet triaged into this
+  file — see the audit doc directly.
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"

@@ -23,16 +23,29 @@ iterations, matching test_zoho_desk_sync_coverage.py's convention.
 
 Dual-import note: `suspension_reactivation.py` only has ONE try/except
 import block (unlike scheduled_rides.py's three independent ones), and all
-three collaborators (`db`, `redis_set_nx`, `_record_heartbeat`) are bound
-as plain module-level names either way. Since this test always loads the
-module as `backend.utils.suspension_reactivation`, the relative import arm
-wins and `sr.db`, `sr.redis_set_nx`, `sr._record_heartbeat` are the correct
-(and only) patch points — no bare-vs-qualified duplication needed here.
+four collaborators (`db`, `send_push_notification`, `redis_set_nx`,
+`_record_heartbeat`) are bound as plain module-level names either way. Since
+this test always loads the module as `backend.utils.suspension_reactivation`,
+the relative import arm wins and `sr.db`, `sr.send_push_notification`,
+`sr.redis_set_nx`, `sr._record_heartbeat` are the correct (and only) patch
+points — no bare-vs-qualified duplication needed here.
 
 Driver invariant check (CLAUDE.md `is_available ⇒ is_online`): not
-applicable — this module only flips a *rider*-suspension `status` field
-between 'suspended'/'active'; it never touches `is_online`/`is_available`
-at all, so the driver online/available invariant has no bearing here.
+applicable — the `users` table this module reads has no role filter (a
+suspended account can be a rider, a driver, or both via the `is_rider`/
+`is_driver` dual-role flags); it never touches `is_online`/`is_available` at
+all, so the driver online/available invariant has no bearing here.
+
+N7/D21 (notification): `_reactivate_tick` now fires a best-effort
+`send_push_notification(uid, ..., target_app=None)` call after a successful
+reactivation, gated on the SAME "did our conditional update actually stick"
+check as the audit-log insert above it — see `TestReactivationNotification`
+below. `target_app=None` (legacy `fcm_token`) is a deliberate choice, not an
+oversight: `users.role` is reserved for admin RBAC (migration
+256_users_role_reject_admin_values.sql), not rider/driver discrimination, so
+there is no single role signal to resolve a per-app token from — see the
+module docstring for the full reasoning and the sibling admin-triggered code
+path (`routes/admin/users.py`) it mirrors.
 
 Bug found, not fixed (test-only scope): CLAUDE.md's background-loop and
 state-machine sections both say "every state change must emit a WebSocket
@@ -154,13 +167,18 @@ class TestReactivateTick:
         monkeypatch.setattr(sr.db, "update_one", update_one)
         insert_one = AsyncMock()
         monkeypatch.setattr(sr.db, "insert_one", insert_one)
+        push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", push)
 
         with caplog.at_level("ERROR"):
             await sr._reactivate_tick()
 
         assert update_one.await_count == 2
-        # Only the second (successful) candidate reaches the audit insert.
+        # Only the second (successful) candidate reaches the audit insert...
         insert_one.assert_awaited_once()
+        # ...and, same gate, only that candidate gets notified.
+        push.assert_awaited_once()
+        assert push.await_args.args[0] == "user-2"
         assert any("reactivate failed" in r.message for r in caplog.records)
 
     @pytest.mark.anyio
@@ -172,10 +190,14 @@ class TestReactivateTick:
         monkeypatch.setattr(sr.db, "update_one", AsyncMock(return_value=None))
         insert_one = AsyncMock()
         monkeypatch.setattr(sr.db, "insert_one", insert_one)
+        push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", push)
 
         await sr._reactivate_tick()
 
         insert_one.assert_not_awaited()
+        # Race-loss must not notify either — same "did our update stick" gate.
+        push.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_race_lost_empty_list_update_result_skips_audit(self, sr, monkeypatch):
@@ -183,10 +205,13 @@ class TestReactivateTick:
         monkeypatch.setattr(sr.db, "update_one", AsyncMock(return_value=[]))
         insert_one = AsyncMock()
         monkeypatch.setattr(sr.db, "insert_one", insert_one)
+        push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", push)
 
         await sr._reactivate_tick()
 
         insert_one.assert_not_awaited()
+        push.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_successful_update_calls_update_one_with_expected_fields(self, sr, monkeypatch):
@@ -194,6 +219,7 @@ class TestReactivateTick:
         update_one = AsyncMock(return_value=_user(id="user-1"))
         monkeypatch.setattr(sr.db, "update_one", update_one)
         monkeypatch.setattr(sr.db, "insert_one", AsyncMock())
+        monkeypatch.setattr(sr, "send_push_notification", AsyncMock())
 
         await sr._reactivate_tick()
 
@@ -219,6 +245,7 @@ class TestReactivateTick:
         monkeypatch.setattr(sr.db, "update_one", AsyncMock(return_value=_user(id="user-1")))
         insert_one = AsyncMock()
         monkeypatch.setattr(sr.db, "insert_one", insert_one)
+        monkeypatch.setattr(sr, "send_push_notification", AsyncMock())
 
         await sr._reactivate_tick()
 
@@ -246,12 +273,19 @@ class TestReactivateTick:
         monkeypatch.setattr(sr.db, "get_rows", AsyncMock(return_value=[_user(id="user-1")]))
         monkeypatch.setattr(sr.db, "update_one", AsyncMock(return_value=_user(id="user-1")))
         monkeypatch.setattr(sr.db, "insert_one", AsyncMock(side_effect=RuntimeError("audit db down")))
+        push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", push)
 
         with caplog.at_level("WARNING"):
             # Must not raise.
             await sr._reactivate_tick()
 
         assert any("audit insert failed" in r.message for r in caplog.records)
+        # The audit insert failing must not skip the notification that comes
+        # after it — the reactivation itself (gated on `updated`) already
+        # succeeded, independent of whether the audit trail write did.
+        push.assert_awaited_once()
+        assert push.await_args.args[0] == "user-1"
 
     @pytest.mark.anyio
     async def test_multiple_candidates_each_processed_independently(self, sr, monkeypatch):
@@ -270,6 +304,8 @@ class TestReactivateTick:
         monkeypatch.setattr(sr.db, "update_one", update_one)
         insert_one = AsyncMock()
         monkeypatch.setattr(sr.db, "insert_one", insert_one)
+        push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", push)
 
         await sr._reactivate_tick()
 
@@ -277,6 +313,132 @@ class TestReactivateTick:
         assert insert_one.await_count == 2
         audited_ids = {call.args[1]["entity_id"] for call in insert_one.await_args_list}
         assert audited_ids == {"user-1", "user-3"}
+        # Same two winners get notified — the race-loser (user-2) gets neither.
+        assert push.await_count == 2
+        notified_ids = {call.args[0] for call in push.await_args_list}
+        assert notified_ids == {"user-1", "user-3"}
+
+
+# ── notification (N7 / D21) ─────────────────────────────────────────────────
+
+
+class TestReactivationNotification:
+    """`_reactivate_tick` now tells the user their suspension lifted, on top
+    of the audit row it already wrote. Covers ACTION_ITEMS.md N7 (D21):
+    'Auto-reactivation after suspended_until lapses is silent.'
+    """
+
+    @pytest.mark.anyio
+    async def test_successful_reactivation_notifies_exactly_once_with_correct_shape(self, sr, monkeypatch):
+        """(a) A successful reactivation fires exactly one push to the right
+        uid, using send_push_notification's public kwarg contract."""
+        monkeypatch.setattr(sr.db, "get_rows", AsyncMock(return_value=[_user(id="user-1")]))
+        monkeypatch.setattr(sr.db, "update_one", AsyncMock(return_value=_user(id="user-1")))
+        monkeypatch.setattr(sr.db, "insert_one", AsyncMock())
+        push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", push)
+
+        await sr._reactivate_tick()
+
+        push.assert_awaited_once()
+        args, kwargs = push.await_args
+        # First positional arg is the recipient uid (send_push_notification's
+        # own contract: user_id, title, body, ...).
+        assert args[0] == "user-1"
+        assert isinstance(args[1], str) and args[1]  # non-empty title
+        assert isinstance(args[2], str) and args[2]  # non-empty body
+        assert kwargs["data"] == {"type": "suspension_lifted"}
+        assert kwargs["target_app"] is None
+
+    @pytest.mark.anyio
+    async def test_race_loss_never_notifies_even_when_candidate_looks_like_a_driver(self, sr, monkeypatch):
+        """(b) Mirrors the audit-log guard exactly: a replica that loses the
+        conditional update race must not notify, regardless of what the row
+        looks like (here: a candidate that would plausibly be a driver)."""
+        monkeypatch.setattr(
+            sr.db,
+            "get_rows",
+            AsyncMock(return_value=[_user(id="driver-1", role="driver", is_driver=True, is_rider=False)]),
+        )
+        monkeypatch.setattr(sr.db, "update_one", AsyncMock(return_value=None))
+        insert_one = AsyncMock()
+        monkeypatch.setattr(sr.db, "insert_one", insert_one)
+        push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", push)
+
+        await sr._reactivate_tick()
+
+        insert_one.assert_not_awaited()
+        push.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_target_app_always_defaults_to_none_rider_and_driver_shaped_rows_alike(self, sr, monkeypatch):
+        """(c) target_app resolution / fallback, decided explicitly: this
+        module always passes target_app=None (legacy fcm_token) rather than
+        resolving per-role, because `users.role` is admin-RBAC-only (not a
+        rider/driver signal) and an account can be both rider and driver at
+        once (is_rider/is_driver, migration 101). Proven for a row shaped
+        like a driver candidate AND one shaped like a rider candidate — the
+        outcome (None) must not depend on what's on the row."""
+        driver_shaped = _user(id="driver-1", role="driver", is_driver=True, is_rider=False)
+        rider_shaped = _user(id="rider-1", role="rider", is_driver=False, is_rider=True)
+        monkeypatch.setattr(sr.db, "get_rows", AsyncMock(return_value=[driver_shaped, rider_shaped]))
+        monkeypatch.setattr(sr.db, "update_one", AsyncMock(side_effect=[driver_shaped, rider_shaped]))
+        monkeypatch.setattr(sr.db, "insert_one", AsyncMock())
+        push = AsyncMock()
+        monkeypatch.setattr(sr, "send_push_notification", push)
+
+        await sr._reactivate_tick()
+
+        assert push.await_count == 2
+        for call in push.await_args_list:
+            assert call.kwargs["target_app"] is None
+
+    @pytest.mark.anyio
+    async def test_notification_failure_does_not_raise_and_next_candidate_still_processed(self, sr, monkeypatch):
+        """(d) A push failure for one candidate must not stop the loop from
+        reaching the next one, and must not be able to retroactively affect
+        the audit-log write that already happened before it (already-awaited
+        insert_one calls stand regardless of what send_push_notification does
+        afterwards)."""
+        monkeypatch.setattr(
+            sr.db,
+            "get_rows",
+            AsyncMock(return_value=[_user(id="user-1"), _user(id="user-2")]),
+        )
+        monkeypatch.setattr(sr.db, "update_one", AsyncMock(side_effect=[_user(id="user-1"), _user(id="user-2")]))
+        insert_one = AsyncMock()
+        monkeypatch.setattr(sr.db, "insert_one", insert_one)
+        push = AsyncMock(side_effect=[RuntimeError("fcm down"), None])
+        monkeypatch.setattr(sr, "send_push_notification", push)
+
+        # Must not raise, despite the first notification blowing up.
+        await sr._reactivate_tick()
+
+        # Both candidates were fully reactivated + audited, independent of
+        # the first one's notification failure.
+        assert insert_one.await_count == 2
+        audited_ids = {call.args[1]["entity_id"] for call in insert_one.await_args_list}
+        assert audited_ids == {"user-1", "user-2"}
+        # The loop still attempted a notification for the second candidate
+        # after the first one raised.
+        assert push.await_count == 2
+
+    @pytest.mark.anyio
+    async def test_notification_failure_is_logged_as_warning_not_error(self, sr, monkeypatch, caplog):
+        """Best-effort side-effect, not the core operation (mirrors the
+        audit-insert-failure log level in the same function) — a push
+        failure must not be logged at ERROR."""
+        monkeypatch.setattr(sr.db, "get_rows", AsyncMock(return_value=[_user(id="user-1")]))
+        monkeypatch.setattr(sr.db, "update_one", AsyncMock(return_value=_user(id="user-1")))
+        monkeypatch.setattr(sr.db, "insert_one", AsyncMock())
+        monkeypatch.setattr(sr, "send_push_notification", AsyncMock(side_effect=RuntimeError("fcm down")))
+
+        with caplog.at_level("WARNING"):
+            await sr._reactivate_tick()
+
+        assert any("notification failed" in r.message for r in caplog.records)
+        assert not any(r.levelname == "ERROR" for r in caplog.records)
 
 
 # ── suspension_reactivation_loop ────────────────────────────────────────────

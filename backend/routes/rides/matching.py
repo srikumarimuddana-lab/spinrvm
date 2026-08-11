@@ -1074,6 +1074,7 @@ async def _offer_timeout_handler(
                         f"You missed {miss_count} ride offers in a row. "
                         "Tap 'Go Online' when you're ready to drive again.",
                         data={"type": "auto_offline", "reason": "missed_offers"},
+                        target_app="driver",
                     )
                 else:
                     await _deps.manager.send_personal_message(

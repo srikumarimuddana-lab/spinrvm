@@ -651,6 +651,10 @@ async def test_offer_timeout_handler_auto_offline_notifies_and_pushes():
             await _offer_timeout_handler("ride-1", "drv-1", "rider-1", timeout_seconds=1)
 
     mock_deps.send_push_notification.assert_awaited_once()
+    # ACTION_ITEMS.md N10 (driver batch): the auto-offline push is
+    # driver-directed and must pass target_app="driver".
+    push_kwargs = mock_deps.send_push_notification.await_args.kwargs
+    assert push_kwargs["target_app"] == "driver"
     # auto_offline WS message sent to the driver.
     ws_calls = mock_deps.manager.send_personal_message.await_args_list
     assert any(c.args[0].get("type") == "auto_offline" for c in ws_calls)

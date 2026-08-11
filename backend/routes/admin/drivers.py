@@ -1368,6 +1368,8 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         "is_citizen",
         "decals_sent",
         "decals_sent_at",
+        "decal_generated_at",
+        "decal_number",
     }
     allowed = user_fields | driver_fields
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -3331,7 +3333,11 @@ async def admin_refresh_all_driver_stripe_payouts(
             f"Synced {transfers_inserted} new transfer(s) across "
             f"{plan.stats.get('drivers_scanned', 0)} driver(s); {transfers_skipped} already tracked. "
             f"{ledger_result.payouts_upserted} bank payout(s), {ledger_result.ledger_upserted} ledger entries."
-            + (f" {len(plan_errors)} driver(s) could not be read — re-run, it is safe to repeat." if plan_errors else "")
+            + (
+                f" {len(plan_errors)} driver(s) could not be read — re-run, it is safe to repeat."
+                if plan_errors
+                else ""
+            )
         ),
         "drivers_scanned": plan.stats.get("drivers_scanned", 0),
         "transfers_inserted": transfers_inserted,
@@ -3768,3 +3774,63 @@ async def admin_driver_daily_activity(
     report["date"] = d.isoformat()
     report["tz"] = "America/Regina"
     return report
+
+
+# ── Welcome Letter PDF generation ──────────────────────────────────
+
+
+class DecalGenerateRequest(BaseModel):
+    driver_ids: List[str] = Field(..., min_length=1, max_length=200)
+
+
+@router.post("/drivers/decals/generate-pdf")
+async def generate_decal_pdf_endpoint(
+    body: DecalGenerateRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    from fastapi.responses import Response as FastAPIResponse
+
+    try:
+        from ...utils.decal_pdf import generate_decal_pdf
+    except ImportError:
+        from utils.decal_pdf import generate_decal_pdf  # type: ignore[no-redef]
+
+    drivers = []
+    for driver_id in body.driver_ids:
+        row = await db_supabase.get_driver_by_id(driver_id)
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+        drivers.append(row)
+
+    now = datetime.now(timezone.utc).isoformat()
+    for driver in drivers:
+        updates: Dict[str, Any] = {}
+        if not driver.get("decal_generated_at"):
+            updates["decal_generated_at"] = now
+        if not driver.get("decal_number"):
+            seq = str(uuid.uuid4().int % 100000).zfill(5)
+            updates["decal_number"] = f"SPR-{datetime.now(timezone.utc).year}-{seq}"
+        if updates:
+            await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
+            driver.update(updates)
+
+    pdf_bytes = generate_decal_pdf(drivers)
+
+    await log_admin_action(
+        admin,
+        "welcome_letter_generated",
+        "drivers",
+        ",".join(body.driver_ids),
+        {"driver_count": len(drivers)},
+    )
+
+    filename = (
+        f"welcome_letter_{drivers[0].get('decal_number', 'unknown')}.pdf"
+        if len(drivers) == 1
+        else f"welcome_letters_{len(drivers)}_drivers.pdf"
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

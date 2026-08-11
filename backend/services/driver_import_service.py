@@ -152,6 +152,7 @@ def normalize_header(value: str) -> str:
         "pr": "permanent_resident",
         "citizen": "citizen",
         "decals_sent": "decals_sent",
+        "decal_number": "decal_number",
     }
     return aliases.get(value, value)
 

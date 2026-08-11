@@ -2724,6 +2724,8 @@ async def admin_export_drivers(
                 "is_citizen": d.get("is_citizen"),
                 "decals_sent": d.get("decals_sent"),
                 "decals_sent_at": d.get("decals_sent_at"),
+                "decal_generated_at": d.get("decal_generated_at"),
+                "decal_number": d.get("decal_number"),
                 "subscription_status": _sub_status,
                 "subscription_plan": _sub_plan,
                 "subscription_expires_at": _sub_expires,

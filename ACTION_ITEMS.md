@@ -5161,6 +5161,75 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   own `tsconfig.json`s — this item is scoped to admin-dashboard only,
   where it was found.
 
+### C17. No CI job ever ran an actual Metro bundle — 8 consecutive EAS Mobile Update jobs failed silently on `main` after the SDK 57 bump before anyone noticed
+- [x] **Status:** CI gate CLOSED (2026-08-11) — the underlying bundle break
+  itself was already fixed same-day by commit `d4b573c` (see
+  `docs/change-log/2026-08-11-metro-rngh-renderer-shim.md`); this item adds
+  the missing preventive control so the *next* dependency-only break of this
+  shape fails a PR check instead of failing 8 production OTA pushes in a row.
+  Added `.github/workflows/mobile-bundle-smoke.yml`: on every PR touching
+  `rider-app/**`, `driver-app/**`, or `shared/**`, runs
+  `npx expo export --platform android` and `--platform ios` for both apps —
+  the same bundling step `eas update`/`eas build` perform, run before merge
+  instead of after. Mirrors `mobile-dep-check.yml`'s job/cache-key shape;
+  intentionally **not** `continue-on-error` — a bundle failure must block
+  merge, not degrade quietly the way `expo install --check` does in that
+  workflow (which needs `EXPO_TOKEN` and degrades on purpose for that
+  reason — this check needs neither and has no legitimate soft-fail case).
+- **Root cause (of the CI gap, not the bundle break — that's in the change
+  log above):** `mobile-dep-check.yml` runs `tsc --noEmit` and
+  `expo install --check`. Neither performs an actual Metro bundle:
+  `tsc` type-checks source, and RNGH's `RNRenderer.ts` typechecks fine (the
+  import path is a valid TS string, the file just doesn't exist in RN 0.86's
+  shipped shims at bundle-resolution time); `expo install --check` only
+  diffs installed package *versions* against Expo's SDK compatibility table,
+  it never resolves a single module. `eas-build.yml` ("EAS Mobile Update")
+  is the only workflow that ever bundles, and it runs **after** merge, on
+  every push to `main` — so the failure mode is: merge lands clean (both
+  existing checks green), then the very next push-triggered OTA job dies at
+  the bundle step, for every push to `main` touching either app, until
+  someone looks at the EAS dashboard. That's the 8-update-in-a-row failure
+  streak (`#605`–`#612`) visible in the EAS activity log the SDK 57 bump
+  (`#605`, the Dependabot expo-stack group bump) kicked off — two follow-up
+  PRs explicitly titled "complete the SDK 57 upgrade... left half-done"
+  (`#607` rider-app, `#609` driver-app) fixed real app-level SDK 57 items but
+  couldn't have caught this one: the break lived inside a third-party
+  dependency's internal import, not in either app's own code, and nothing
+  in the toolchain exercised it before a real EAS job did.
+- **Risk & impact of the new check:** build-time-only CI addition, zero
+  runtime/production code touched. Blast radius: PR merge gate for
+  rider-app/driver-app/shared changes only — does not touch
+  `eas-build.yml`'s OTA publish, `eas-native-build.yml`'s native build
+  trigger, or `mobile-dep-check.yml`'s existing checks (all left as-is,
+  running alongside this one). Failure mode if the new check itself is
+  flaky: a false-red PR block, not a false-green — fails safe.
+- **Effort:** ~1 hour (one workflow file, mirrors existing patterns; no new
+  secrets, no infra). Follow-up not yet done: this check should be added to
+  the repo's required-status-checks branch-protection list for `main` so it
+  actually blocks merge rather than just reporting — that's a GitHub repo
+  settings change outside this diff's scope, needs a repo admin.
+- **Verification performed:** ran the exact commands the new CI job runs,
+  locally, against current `main` (which already has the `d4b573c` shim
+  redirect). `rider-app` — `npx expo export --platform android` exits 0,
+  Hermes bundle produced (already verified same-day in the change-log
+  entry above). `driver-app` — `yarn install --frozen-lockfile` then
+  `npx expo export --platform android`, run fresh in this session (the
+  change log explicitly flagged driver-app as **not** run in its own
+  session — that gap is now closed): exit 0, `_expo/static/js/android/
+  index-*.hbc` (8.2MB) produced, confirming the metro.config.js redirect
+  works for driver-app too, not just rider-app. `--platform ios` not run
+  for either app in this session (no meaningful iOS/Android code-path
+  divergence expected for this specific break — RNGH's `resolveRequest`
+  match is exact-string and platform-agnostic — but the CI job itself does
+  run both platforms going forward, so this gap closes on its first PR run).
+- **What was NOT verified:** whether the new workflow file's YAML is 100%
+  correct GitHub Actions syntax beyond mirroring `mobile-dep-check.yml`
+  structurally — not dry-run through `act` or an actual PR in this session;
+  first real PR touching a mobile app will be the live test. Branch
+  protection was not modified (see Effort above — explicitly out of scope,
+  flagged for a human with repo-admin access).
+- **Files:** `.github/workflows/mobile-bundle-smoke.yml` (new).
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

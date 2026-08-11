@@ -243,7 +243,17 @@ async def orphaned_hold_reconciler_loop() -> None:
         # `_LOCK_TTL_SECONDS` formula (ACTION_ITEMS B21): 0.05 headroom under
         # the 0.9 floor.
         lock_ttl = int(RECONCILE_INTERVAL_SECONDS * 0.85)
-        if not await redis_set_nx("spinr:orphaned_hold:reconcile:lock", _pod_id(), lock_ttl):
+        try:
+            got_lock = await redis_set_nx("spinr:orphaned_hold:reconcile:lock", _pod_id(), lock_ttl)
+        except Exception as lock_err:
+            # redis_set_nx now raises on a real (Redis-configured-but-
+            # unavailable) error instead of silently falling back per-replica
+            # (2026-08-11 P1 fix). This lock is a throttle only — the atomic
+            # DB claim is the real correctness guard — so proceed with the
+            # tick rather than skip it.
+            logger.error(f"orphaned_hold_reconciler: leader lock unavailable ({lock_err}), proceeding without it")
+            got_lock = True
+        if not got_lock:
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
             continue

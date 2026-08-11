@@ -496,6 +496,30 @@ class TestSuspensionReactivationLoop:
         assert low <= sleep_calls[0] <= high
 
     @pytest.mark.anyio
+    async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick(self, sr, monkeypatch):
+        """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+        instead of silently falling back per-replica. Previously this call
+        sat directly in `while True:` with no surrounding try/except -- an
+        unhandled exception here would have killed the loop task
+        permanently instead of just proceeding without the (throttle-only)
+        lock."""
+        monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down")))
+        tick = AsyncMock()
+        monkeypatch.setattr(sr, "_reactivate_tick", tick)
+        heartbeat = MagicMock()
+        monkeypatch.setattr(sr, "_record_heartbeat", heartbeat)
+
+        async def fake_sleep(secs):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(sr.asyncio, "sleep", fake_sleep)
+
+        with pytest.raises(asyncio.CancelledError):
+            await sr.suspension_reactivation_loop()
+
+        tick.assert_awaited_once()
+
+    @pytest.mark.anyio
     async def test_tick_error_is_logged_but_loop_still_heartbeats_and_sleeps(self, sr, monkeypatch, caplog):
         monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(return_value=True))
         monkeypatch.setattr(sr, "_reactivate_tick", AsyncMock(side_effect=RuntimeError("boom")))
@@ -517,19 +541,6 @@ class TestSuspensionReactivationLoop:
         heartbeat.assert_called_once_with(sr._LOOP_NAME)
         assert sleep_calls  # loop survived the exception and reached sleep
         assert any("Suspension reactivation loop error" in r.message for r in caplog.records)
-
-    @pytest.mark.anyio
-    async def test_redis_lock_error_is_not_swallowed_by_loop_body(self, sr, monkeypatch):
-        """redis_set_nx itself raising is NOT inside the loop's try/except
-        (only `_reactivate_tick()` is guarded) — this documents current
-        behavior rather than asserting it's desirable."""
-        monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down")))
-        monkeypatch.setattr(sr, "_reactivate_tick", AsyncMock())
-        monkeypatch.setattr(sr, "_record_heartbeat", MagicMock())
-        monkeypatch.setattr(sr.asyncio, "sleep", AsyncMock())
-
-        with pytest.raises(ConnectionError):
-            await sr.suspension_reactivation_loop()
 
     @pytest.mark.anyio
     async def test_multiple_ticks_before_cancellation(self, sr, monkeypatch):

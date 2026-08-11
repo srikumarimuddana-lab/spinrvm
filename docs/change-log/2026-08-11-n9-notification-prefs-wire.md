@@ -37,7 +37,7 @@ N9 entry):
 - **`earnings_summary` — WIRED.** `utils/driver_statement_job.py` now skips
   the PDF render + email for an opted-out driver, recording a new terminal
   `driver_statements.status = 'skipped_opted_out'` (documented via
-  migration `299_driver_statements_skipped_opted_out_comment.sql`, comment-only —
+  migration `300_driver_statements_skipped_opted_out_comment.sql`, comment-only —
   no schema change since `status` has no CHECK constraint).
 - **`ride_updates` — WIRED**, centrally in `features.send_push_notification`,
   gating a narrow set of ride-lifecycle push types
@@ -123,7 +123,7 @@ rather than silently left implying "handled."
 |---|---|---|
 | `backend/features.py` | Added `_RIDE_UPDATE_PUSH_TYPES` constant + a second preference check (`ride_updates`) inside `send_push_notification`'s existing non-time-critical branch | Wire `ride_updates` centrally, one file, no per-call-site edits |
 | `backend/utils/driver_statement_job.py` | Added `_earnings_summary_enabled()` + a check in `_process_driver` before the PDF render / email send, new `skipped_opted_out` status | Wire `earnings_summary` per N9's own stated scope |
-| `backend/migrations/299_driver_statements_skipped_opted_out_comment.sql` | New migration, `COMMENT ON COLUMN` only | Document the new status value; append-only rule forbids editing migration 272 |
+| `backend/migrations/300_driver_statements_skipped_opted_out_comment.sql` | New migration, `COMMENT ON COLUMN` only | Document the new status value; append-only rule forbids editing migration 272 |
 | `backend/tests/test_notification_preferences.py` | +4 tests for the `ride_updates` gate (suppress by type, no-suppress for unrelated type, dispatch-priority bypass, opted-in still sends) | Regression coverage for the new gating branch |
 | `backend/tests/test_driver_statement_job.py` | +4 tests for `earnings_summary` gating + updated 3 existing tests to stub `db.get_rows` (now called on every non-inactive path) | Regression coverage; existing tests would otherwise `await` an unconfigured `MagicMock` and raise `TypeError` |
 | `ACTION_ITEMS.md` | N9 marked closed with full per-column WIRE/REMOVE reasoning and file:line evidence | Required by the task; documents the 3 REMOVE decisions and follow-up |

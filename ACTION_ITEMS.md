@@ -5054,7 +5054,7 @@ Remaining, roughly in order of user impact:
     `skipped_no_email`/`skipped_inactive`), with `totals` still populated so
     the admin listing keeps the numbers even though nothing was emailed. No
     schema change needed — `driver_statements.status` has no CHECK
-    constraint — but migration `299_driver_statements_skipped_opted_out_comment.sql`
+    constraint — but migration `300_driver_statements_skipped_opted_out_comment.sql`
     updates the column COMMENT (the documented status-lifecycle source of
     truth) to list the new value, per the append-only migration rule (never
     edit merged migration 272 in place).

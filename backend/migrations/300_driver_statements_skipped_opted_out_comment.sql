@@ -1,4 +1,8 @@
--- Migration 299: document the new driver_statements.status value.
+-- Migration 300: document the new driver_statements.status value.
+-- (Originally authored as 299; renamed to 300 to resolve a same-number
+-- collision with 299_rider_email_verification_otp.sql, which merged to
+-- main first, per backend/migrations/CLAUDE.md's "second one renames"
+-- convention.)
 --
 -- Rollback:
 --   COMMENT ON COLUMN public.driver_statements.status IS

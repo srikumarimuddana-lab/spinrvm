@@ -5034,6 +5034,33 @@ Remaining, roughly in order of user impact:
     (`routes/drivers/ride_complete.py::complete_ride`) already sends,
     alongside the existing `ride_completed` WS message — `target_app="rider"`,
     `priority="normal"` (informational, not dispatch/safety-tier).
+  - [x] **R31/R33/R34 closed** (discovery-first pass, scoped to the rider's
+    *personal* wallet only — corporate wallet/allowance is R43/R44, a
+    separate parallel workstream):
+    - **R31 (wallet)**: `routes/wallet.py`'s `/top-up` was already covered (a
+      push already fires in `routes/webhooks.py`'s `payment_intent.succeeded`
+      handler — verified by reading it, not a gap). The genuinely silent
+      choke point was `routes/admin/wallet.py`'s `admin_credit_wallet` /
+      `admin_debit_wallet` (an admin moving money in/out of a rider or
+      driver's wallet with zero trace to the user) — now sends a best-effort
+      push, `target_app` resolved from the user's role. Deliberately left
+      open: `utils/referral_payout.py`'s rider-referral wallet credit
+      (separate money flow/audience, needs its own file + tests) and
+      driver-side cancellation/no-show fee wallet debits in
+      `routes/rides/cancellation.py` (owned by a parallel session).
+    - **R33 (promos)**: the rider-initiated `POST /promotions/apply` already
+      returns `discount_applied` synchronously — not silent, left alone. The
+      real gap was the admin "apply promo on behalf of a rider" path
+      (`apply_promo_for_admin`, called from
+      `routes/admin/rides.py::admin_create_ride`) — now sends a best-effort
+      push with the promo code + discount amount.
+    - **R34 (loyalty)**: `routes/loyalty.py::earn_points_for_ride` already
+      computed `tier_upgraded` in its response but never notified — now
+      sends a best-effort push when a rider crosses a tier threshold.
+    - All three: best-effort, `priority="normal"`, wrapped in try/except so a
+      push failure can never surface as a failed money/promo/loyalty write
+      that already committed. New tests in `test_admin_wallet_endpoints.py`,
+      `test_admin_rides_coverage.py`, `test_loyalty.py`.
   - [x] **R35/R37 closed**: `routes/rides/booking.py::create_ride` now fires
     a "Scheduled ride confirmed" push (`priority="normal"`, no `target_app`
     override, matching `utils/scheduled_rides.py`'s existing rider-facing
@@ -5044,8 +5071,8 @@ Remaining, roughly in order of user impact:
     Known gap: `services/company_booking_service.py` (corporate guest
     booking) bypasses `create_ride` and does not get this confirmation —
     deliberate scope boundary, not a miss.
-    R31/R33/R34, R38, R43/R44 and R8 remain open; this checkbox stays `[ ]`
-    until all of them are.
+    R38, R43/R44 and R8 remain open; this checkbox stays `[ ]` until all of
+    them are.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 

@@ -1357,6 +1357,23 @@ class TestCheckExpiringSubscriptionsLockAndSweep:
         assert sleep_mock.await_count == 2
         get_rows_mock.assert_not_awaited()
 
+    async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick(self):
+        """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+        instead of silently falling back per-replica. Previously this call
+        sat directly in `while True:` with no surrounding try/except -- an
+        unhandled exception here would have killed the loop task
+        permanently instead of just proceeding without the (redundant-
+        notification-only) throttle lock."""
+        get_rows_mock = AsyncMock(return_value=[])
+        await _run_once(
+            **{
+                "backend.utils.redis_client.redis_set_nx": AsyncMock(side_effect=ConnectionError("redis down")),
+                "backend.db_supabase.get_rows": get_rows_mock,
+            }
+        )
+        # Proceeded with the tick despite the lock error -- get_rows was reached.
+        get_rows_mock.assert_awaited()
+
     async def test_cancel_pending_sweep_success_marks_cancelled(self):
         pending_row = {"id": "pc1", "stripe_subscription_id": "sub_x"}
 

@@ -148,6 +148,28 @@ async def test_loop_lock_acquired_runs_tick():
     tick.assert_awaited_once()
 
 
+async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick():
+    """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+    instead of silently falling back per-replica. Previously this call sat
+    directly in `while True:` with no surrounding try/except -- an
+    unhandled exception here would have killed this durable-backstop loop
+    task permanently, defeating its whole purpose."""
+    tick = AsyncMock()
+
+    async def fake_sleep(secs):
+        raise asyncio.CancelledError()
+
+    with (
+        patch.object(reaper, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down"))),
+        patch.object(reaper, "_reap_tick", tick),
+        patch.object(reaper.asyncio, "sleep", fake_sleep),
+        patch.object(reaper, "_record_heartbeat", lambda name: None),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await reaper.offer_expiry_reaper_loop()
+    tick.assert_awaited_once()
+
+
 async def test_loop_survives_tick_exception():
     async def failing_tick():
         raise RuntimeError("boom")

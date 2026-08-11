@@ -311,7 +311,22 @@ async def process_payment(
             from utils.redis_client import redis_delete as _redis_del  # type: ignore
             from utils.redis_client import redis_set_nx as _redis_nx  # type: ignore
         _wallet_redrive_lock_key = f"spinr:wallet_settle:{ride_id}"
-        if not await _redis_nx(_wallet_redrive_lock_key, "1", 30):
+        try:
+            _wallet_redrive_acquired = await _redis_nx(_wallet_redrive_lock_key, "1", 30)
+        except Exception as _lock_err:
+            # redis_set_nx now raises on a real (Redis-configured-but-
+            # unavailable) error instead of silently falling back per-replica
+            # (2026-08-11 P1 fix). Unlike the background-loop throttle locks,
+            # this one IS the exclusivity guard for a concurrent re-drive of
+            # a stuck 'processing' wallet settlement — fail CLOSED (503, ask
+            # the client to retry) rather than silently proceeding as if
+            # exclusivity didn't matter on a money path.
+            logger.error(f"[PAYMENT] wallet re-drive lock unavailable for ride {ride_id}: {_lock_err}")
+            raise HTTPException(
+                status_code=503,
+                detail="Payment retry temporarily unavailable — please try again in a moment.",
+            ) from _lock_err
+        if not _wallet_redrive_acquired:
             raise HTTPException(
                 status_code=409,
                 detail="Payment retry already in progress. Please try again in a moment.",

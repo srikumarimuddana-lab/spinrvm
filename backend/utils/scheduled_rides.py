@@ -682,76 +682,100 @@ async def check_scheduled_rides() -> Optional[bool]:
         # convention for non-dispatch-critical failures.
         logger.warning(f"scheduled_rides: app_settings lookup failed ({settings_err}), proceeding as enabled")
 
+    # Lock TTL (45s) is deliberately BELOW the loop's ~54-66s jittered
+    # interval (60±6s) and is also released explicitly in the `finally`
+    # below on every exit path. Previously the TTL was 90s with no explicit
+    # release: since 90s > the loop interval, the replica that won the lock
+    # would fail to re-acquire its OWN still-live lock on the very next
+    # tick and skip it, halving the real dispatch cadence to ~120s on every
+    # replica, always — not just under contention. The short TTL is a
+    # crash-safety net (self-heals within well under one cycle if a replica
+    # dies mid-tick before reaching the release); the explicit release is
+    # what makes the common case (tick completes normally) free the lock
+    # immediately instead of waiting out the TTL.
+    _holds_lock = False
     try:
-        if not await redis_set_nx("spinr:scheduled_rides:lock", "1", ttl=90):
+        if not await redis_set_nx("spinr:scheduled_rides:lock", "1", ttl=45):
             return None
+        _holds_lock = True
     except Exception as _lock_err:
         logger.warning(f"scheduled_rides: Redis leader lock unavailable ({_lock_err}), proceeding without lock")
 
-    now = datetime.now(timezone.utc)
-    ten_min_from_now = now + timedelta(minutes=10)
-    nudge_window_end = now + timedelta(minutes=_DRIVER_NUDGE_LEAD_MINUTES)
-
     try:
-        # Get all pending scheduled rides. These sit in status 'scheduled'
-        # (set by create_ride for deferred bookings) until their scheduled_time
-        # arrives — querying 'searching' here meant the loop never saw a
-        # correctly-stored scheduled ride (CR-2).
-        scheduled = await db.get_rows(
-            "rides",
-            {
-                "is_scheduled": True,
-                "status": "scheduled",
-            },
-            limit=_SCHEDULED_RIDES_TICK_LIMIT,
-            order="scheduled_time",
-            columns=(
-                "id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address,"
-                "pickup_lat,pickup_lng,payment_method,corporate_account_id,grand_total,total_fare"
-            ),
-        )
-    except Exception as e:
-        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-        logger.error(f"Failed to fetch scheduled rides: {e} | original={original}", exc_info=True)
-        return False
+        now = datetime.now(timezone.utc)
+        ten_min_from_now = now + timedelta(minutes=10)
+        nudge_window_end = now + timedelta(minutes=_DRIVER_NUDGE_LEAD_MINUTES)
 
-    if len(scheduled) >= _SCHEDULED_RIDES_TICK_LIMIT:
-        # Every row this tick will still dispatch in scheduled_time order, but
-        # anything beyond the cap is deferred to the next tick — worth knowing
-        # about before it turns into a real dispatch-latency regression.
-        logger.warning(
-            f"scheduled_rides: tick hit the {_SCHEDULED_RIDES_TICK_LIMIT}-row candidate cap; "
-            "some due/near-due scheduled rides are deferred to the next tick"
-        )
-        _metric_inc("spinr_dispatch_scheduled_candidates_capped_total")
+        try:
+            # Get all pending scheduled rides. These sit in status 'scheduled'
+            # (set by create_ride for deferred bookings) until their scheduled_time
+            # arrives — querying 'searching' here meant the loop never saw a
+            # correctly-stored scheduled ride (CR-2).
+            scheduled = await db.get_rows(
+                "rides",
+                {
+                    "is_scheduled": True,
+                    "status": "scheduled",
+                },
+                limit=_SCHEDULED_RIDES_TICK_LIMIT,
+                order="scheduled_time",
+                columns=(
+                    "id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address,"
+                    "pickup_lat,pickup_lng,payment_method,corporate_account_id,grand_total,total_fare"
+                ),
+            )
+        except Exception as e:
+            original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+            logger.error(f"Failed to fetch scheduled rides: {e} | original={original}", exc_info=True)
+            return False
 
-    for ride in scheduled:
-        scheduled_time_str = ride.get("scheduled_time")
-        if not scheduled_time_str:
-            continue
+        if len(scheduled) >= _SCHEDULED_RIDES_TICK_LIMIT:
+            # Every row this tick will still dispatch in scheduled_time order, but
+            # anything beyond the cap is deferred to the next tick — worth knowing
+            # about before it turns into a real dispatch-latency regression.
+            logger.warning(
+                f"scheduled_rides: tick hit the {_SCHEDULED_RIDES_TICK_LIMIT}-row candidate cap; "
+                "some due/near-due scheduled rides are deferred to the next tick"
+            )
+            _metric_inc("spinr_dispatch_scheduled_candidates_capped_total")
 
-        scheduled_time = parse_iso_utc(scheduled_time_str)
-        if scheduled_time is None:
-            continue
+        for ride in scheduled:
+            scheduled_time_str = ride.get("scheduled_time")
+            if not scheduled_time_str:
+                continue
 
-        already_dispatched = ride.get("scheduled_dispatched", False)
-        already_reminded = ride.get("reminder_sent", False)
+            scheduled_time = parse_iso_utc(scheduled_time_str)
+            if scheduled_time is None:
+                continue
 
-        # Send reminder 10 minutes before (if not already sent)
-        if not already_reminded and now <= scheduled_time and scheduled_time <= ten_min_from_now:
-            await _send_reminder(ride)
+            already_dispatched = ride.get("scheduled_dispatched", False)
+            already_reminded = ride.get("reminder_sent", False)
 
-        # Heads-up nudge to nearby online drivers ~60 minutes before pickup.
-        # Best-effort and self-deduped (Redis NX inside the function) — safe
-        # to call every tick within the window.
-        if now <= scheduled_time and scheduled_time <= nudge_window_end:
-            await _maybe_nudge_nearby_drivers(ride)
+            # Send reminder 10 minutes before (if not already sent)
+            if not already_reminded and now <= scheduled_time and scheduled_time <= ten_min_from_now:
+                await _send_reminder(ride)
 
-        # Dispatch when it's time (or past time)
-        if not already_dispatched and now >= scheduled_time:
-            await _dispatch_scheduled_ride(ride)
+            # Heads-up nudge to nearby online drivers ~60 minutes before pickup.
+            # Best-effort and self-deduped (Redis NX inside the function) — safe
+            # to call every tick within the window.
+            if now <= scheduled_time and scheduled_time <= nudge_window_end:
+                await _maybe_nudge_nearby_drivers(ride)
 
-    return True
+            # Dispatch when it's time (or past time)
+            if not already_dispatched and now >= scheduled_time:
+                await _dispatch_scheduled_ride(ride)
+
+        return True
+    finally:
+        if _holds_lock:
+            try:
+                await redis_delete("spinr:scheduled_rides:lock")
+            except Exception as _release_err:
+                # Not fatal — the short TTL above self-heals this within
+                # well under one loop cycle either way.
+                logger.warning(
+                    f"scheduled_rides: failed to release leader lock ({_release_err}), will self-heal via TTL"
+                )
 
 
 # Consecutive check_scheduled_rides() fetch failures (per replica, in-process

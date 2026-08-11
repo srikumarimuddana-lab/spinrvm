@@ -185,7 +185,17 @@ async def suspension_reactivation_loop() -> None:
         # (0.05 headroom under the 0.9 floor at the default 0.1 jitter
         # fraction below).
         lock_ttl = int(REACTIVATION_INTERVAL_SECONDS * 0.85)
-        if not await redis_set_nx("spinr:users:suspension_reactivation:lock", _pod_id(), lock_ttl):
+        try:
+            got_lock = await redis_set_nx("spinr:users:suspension_reactivation:lock", _pod_id(), lock_ttl)
+        except Exception as lock_err:
+            # redis_set_nx now raises on a real (Redis-configured-but-
+            # unavailable) error instead of silently falling back per-replica
+            # (2026-08-11 P1 fix). Proceed with the tick rather than skip it
+            # — a suspended-past-expiry user staying suspended is worse than
+            # every replica doing redundant idempotent reactivation work.
+            logger.error(f"suspension_reactivation: leader lock unavailable ({lock_err}), proceeding without it")
+            got_lock = True
+        if not got_lock:
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(REACTIVATION_INTERVAL_SECONDS)
             continue

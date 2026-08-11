@@ -183,6 +183,40 @@ describe('rideStore — ride lifecycle', () => {
     expect(result).toEqual(createdRide);
   });
 
+  test('createRide sends a naive local scheduled_time + scheduled_timezone for a scheduled ride', async () => {
+    // 2026-08-11 P1 fix: previously sent scheduledTime.toISOString() (a
+    // true-UTC-converted instant), which made the backend's DST-gap/
+    // ambiguity guard unreachable -- it needs the RAW local wall-clock
+    // digits (before any conversion has silently resolved an ambiguous or
+    // non-existent local time) plus the zone name, not a pre-converted
+    // instant. See backend/schemas.py CreateRideRequest.validate_scheduled_time.
+    const vehicle = { id: 'vt-1', name: 'Spinr X', description: 'Standard', icon: 'car', capacity: 4 };
+    const pickupTime = new Date(2026, 10, 1, 14, 30, 0); // local: Nov 1 2026, 14:30:00
+    useRideStore.setState({
+      pickup: makeLocation('100 Queen St'),
+      dropoff: makeLocation('200 King St', 43.6450, -79.3800),
+      selectedVehicle: vehicle,
+      scheduledTime: pickupTime,
+    });
+
+    const createdRide = makeRide('scheduled', { is_scheduled: true });
+    mockApi.post.mockResolvedValueOnce({ data: createdRide, status: 201 } as any);
+
+    await act(async () => {
+      await useRideStore.getState().createRide('card');
+    });
+
+    const [, payload] = mockApi.post.mock.calls[mockApi.post.mock.calls.length - 1] as [string, any];
+    expect(payload.is_scheduled).toBe(true);
+    // Naive local digits: no 'Z', no UTC offset -- matches the local
+    // getFullYear/getMonth/.../getSeconds fields, NOT toISOString()'s
+    // true-UTC-converted value.
+    expect(payload.scheduled_time).toBe('2026-11-01T14:30:00');
+    expect(payload.scheduled_time).not.toMatch(/[Z+-]\d{2}:?\d{2}$|Z$/);
+    expect(typeof payload.scheduled_timezone).toBe('string');
+    expect(payload.scheduled_timezone.length).toBeGreaterThan(0);
+  });
+
   test('fetchActiveRide returns null when no active ride', async () => {
     mockApi.get.mockResolvedValueOnce({ data: { active: false }, status: 200 } as any);
 

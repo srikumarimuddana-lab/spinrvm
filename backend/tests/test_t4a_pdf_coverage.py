@@ -109,6 +109,14 @@ class TestGenerateT4aPdf:
         result = generate_t4a_pdf(summary)
         assert result.startswith(b"%PDF")
 
+    def test_sin_last4_present_renders_masked_sin_line(self):
+        """sin_last4 supplied takes the masked 'Ending in NNNN' branch
+        instead of the 'Not on file' fallback."""
+        from backend.utils.t4a_pdf import generate_t4a_pdf
+
+        result = generate_t4a_pdf(_base_summary(sin_last4="1234"))
+        assert result.startswith(b"%PDF")
+
     def test_large_earnings_and_long_driver_name(self):
         """A large dollar figure and a long name must not overflow the
         fixed-width cell layout in a way that raises (fpdf2 raises on

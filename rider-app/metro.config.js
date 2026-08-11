@@ -87,6 +87,22 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     return { type: 'empty' };
   }
 
+  // react-native-gesture-handler ≤2.31 (src/RNRenderer.ts) imports the
+  // old-architecture renderer shim, which react-native 0.86 no longer ships
+  // (verified against the published 0.86.2 tarball: shims/ contains only the
+  // Fabric variants). Without this redirect every native bundle of this app
+  // fails to resolve — `expo export`, `eas build`, and `eas update` alike.
+  // This app runs the New Architecture (runtimeVersion 2.0.0), where
+  // ReactFabric is the live renderer and exposes the same
+  // findHostInstance_DEPRECATED surface RNGH reads off RNRenderer.
+  if (moduleName === 'react-native/Libraries/Renderer/shims/ReactNative') {
+    return context.resolveRequest(
+      context,
+      'react-native/Libraries/Renderer/shims/ReactFabric',
+      platform
+    );
+  }
+
   if (platform === 'web') {
     // Stub file-based native-only packages (react-native-maps, etc.)
     if (WEB_STUBS[moduleName]) {

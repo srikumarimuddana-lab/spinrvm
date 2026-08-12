@@ -50,7 +50,7 @@ export default function EmergencyContactsScreen() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const fetchContacts = useCallback(async () => {

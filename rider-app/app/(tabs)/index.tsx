@@ -10,12 +10,12 @@ import {
   Linking,
   AppState,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router/react-navigation';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import Constants from 'expo-constants';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useAuthStore } from '@shared/store/authStore';
 import { useExitOnBackPress } from '@shared/hooks/useExitOnBackPress';
@@ -24,7 +24,7 @@ import { useRideStore } from '../../store/rideStore';
 import { useBottomSheetGuard } from '../../hooks/useBottomSheetGuard';
 import { useAiChatStore } from '../../store/aiChatStore';
 import AppMap from '@shared/components/AppMap';
-import CarMarker, { resolveMarkerVariant } from '@shared/components/CarMarker';
+import { CarMarker, resolveMarkerVariant } from '@shared/components/CarMarker';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import { showToast } from '../../store/toastStore';
 import { SOSButton } from '@shared/components/SOSButton';
@@ -65,7 +65,7 @@ const PROMO_ROTATE_MS = 6000;
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, fetchActiveRide } = useRideStore();
+  const { fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, fetchActiveRide } = useRideStore();
   const { t } = useTranslation();
 
   // Home is a navigation root: the Android back button must background the app,
@@ -127,14 +127,12 @@ export default function HomeScreen() {
 
   const saveLastLocation = async (lat: number, lng: number) => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       await AsyncStorage.setItem('spinr_last_location', JSON.stringify({ lat, lng }));
     } catch {}
   };
 
   const loadLastLocation = async () => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const saved = await AsyncStorage.getItem('spinr_last_location');
       if (saved) return JSON.parse(saved);
     } catch {}

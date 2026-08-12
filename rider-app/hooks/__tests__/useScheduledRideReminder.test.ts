@@ -18,6 +18,12 @@
  * manually via docs/MOBILE_SMOKE.md §E (see P3-19 xfail in test_p3_push_notifications.py).
  */
 
+import {
+  useScheduledRideReminder,
+  handleScheduledRideReminderFCM,
+} from '../useScheduledRideReminder';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
   useCallback: (fn: any) => fn,
@@ -47,13 +53,7 @@ jest.mock('../../../config', () => ({
   API_URL: 'http://localhost:8000',
 }), { virtual: true });
 
-import {
-  useScheduledRideReminder,
-  handleScheduledRideReminderFCM,
-} from '../useScheduledRideReminder';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+ 
 const ExpoNotifications = require('expo-notifications') as Record<string, jest.Mock>;
 const mockScheduleNotification = ExpoNotifications.scheduleNotificationAsync;
 const mockCancelNotification = ExpoNotifications.cancelScheduledNotificationAsync;

@@ -20,6 +20,10 @@ let notifee: any = null;
 let AndroidImportance: any = {};
 let AndroidVisibility: any = {};
 try {
+    // Guarded native-module require — per the file header, must stay
+    // runtime require() (not a static import) so iOS/Expo Go/web import
+    // this module harmlessly instead of crashing on a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('@notifee/react-native');
     notifee = mod.default ?? mod;
     AndroidImportance = mod.AndroidImportance ?? {};

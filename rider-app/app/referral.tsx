@@ -110,7 +110,7 @@ export default function RiderReferralScreen() {
             ) : error ? (
                 <View style={styles.errorState}>
                     <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
-                    <Text style={styles.errorTitle}>Couldn't load your referrals</Text>
+                    <Text style={styles.errorTitle}>Couldn&apos;t load your referrals</Text>
                     <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
                     <TouchableOpacity style={styles.retryBtn} onPress={load} accessibilityLabel="Retry loading referrals">
                         <Ionicons name="refresh" size={18} color="#fff" />

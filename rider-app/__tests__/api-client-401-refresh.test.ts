@@ -13,6 +13,9 @@
  * Code under test: shared/api/client.ts::handleApiError (401 branches + G2)
  */
 
+import * as SecureStore from 'expo-secure-store';
+import api, { setRefreshCallback } from '@shared/api/client';
+
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
   default: { backendUrl: 'http://localhost:8000' },
@@ -30,9 +33,6 @@ jest.mock('@shared/store/authStore', () => ({
     getState: jest.fn(() => ({ token: null, logout: mockLogout })),
   },
 }));
-
-import * as SecureStore from 'expo-secure-store';
-import api, { setRefreshCallback } from '@shared/api/client';
 
 const make401Response = () => ({
   ok: false,

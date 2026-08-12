@@ -15,7 +15,6 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRideStore } from '../store/rideStore';
-import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { showToast } from '../store/toastStore';
@@ -26,7 +25,6 @@ import type { PlacePrediction } from '@shared/api/places';
 export default function SearchDestinationScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ mapPickField?: string; mapPickLat?: string; mapPickLng?: string; mapPickAddress?: string }>();
-  const { user } = useAuthStore();
   const {
     pickup, dropoff, stops,
     setPickup, setDropoff, addStop, removeStop, updateStop,
@@ -36,7 +34,7 @@ export default function SearchDestinationScreen() {
     clearEstimates,
   } = useRideStore();
 
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [activeField, setActiveField] = useState<'pickup' | 'dropoff' | number>('dropoff');

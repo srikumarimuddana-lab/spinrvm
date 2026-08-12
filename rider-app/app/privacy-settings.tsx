@@ -25,7 +25,7 @@ import {
 
 export default function PrivacySettingsScreen() {
   const router = useRouter();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { logout } = useAuthStore();
   const { t } = useTranslation();
@@ -97,7 +97,7 @@ export default function PrivacySettingsScreen() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   // R-P1-6: PIPEDA — wire Download My Data to real backend endpoint

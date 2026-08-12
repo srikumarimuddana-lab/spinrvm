@@ -11,6 +11,8 @@
  * Code under test: shared/api/client.ts::handleApiError (503 branch)
  */
 
+import api from '@shared/api/client';
+
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
   default: { backendUrl: 'http://localhost:8000' },
@@ -27,8 +29,6 @@ jest.mock('@shared/store/authStore', () => ({
     getState: jest.fn(() => ({ token: null, logout: jest.fn() })),
   },
 }));
-
-import api from '@shared/api/client';
 
 const make503Response = () => ({
   ok: false,

@@ -18,7 +18,7 @@ export default function LegalScreen() {
     const router = useRouter();
     const params = useLocalSearchParams();
     const type = params.type as 'tos' | 'privacy';
-    const { colors, isDark } = useTheme();
+    const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
     const [content, setContent] = useState<string>('');

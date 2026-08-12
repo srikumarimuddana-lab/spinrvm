@@ -1,18 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef, useContext } from 'react';
-
-// Straight-line ETA at urban speed — used during trip so we don't re-call
-// the Directions API on every GPS ping (that would be ~60 calls / 15-min ride).
-function _haversineEtaMin(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dlat = toRad(lat2 - lat1);
-  const dlng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dlat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dlng / 2) ** 2;
-  const km = R * 2 * Math.asin(Math.sqrt(a));
-  return Math.max(1, Math.round((km / 30) * 60)); // 30 km/h urban average
-}
+import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -23,7 +9,6 @@ import {
   ScrollView,
   useWindowDimensions,
   Share,
-  Linking,
   Platform,
   ActivityIndicator,
   BackHandler,
@@ -52,12 +37,26 @@ import { TrackBaseUrlContext } from './_layout';
 import { getRideMapCoords } from '../utils/rideMapCoords';
 import { useTranslation } from '../i18n';
 
+// Straight-line ETA at urban speed — used during trip so we don't re-call
+// the Directions API on every GPS ping (that would be ~60 calls / 15-min ride).
+function _haversineEtaMin(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dlat = toRad(lat2 - lat1);
+  const dlng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dlat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dlng / 2) ** 2;
+  const km = R * 2 * Math.asin(Math.sqrt(a));
+  return Math.max(1, Math.round((km / 30) * 60)); // 30 km/h urban average
+}
+
 function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
-    currentRide, currentDriver, fetchRide, cancelRide, clearRide,
+    currentRide, currentDriver, fetchRide,
     triggerEmergency, isLoading, error, wsConnected,
     activeRideRouteCoords, lastEtaMin,
     setActiveRideRouteCoords, setLastEtaMin,
@@ -97,7 +96,7 @@ function RideInProgressScreenContent() {
     title: string;
     message?: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<any>(null);
@@ -291,28 +290,6 @@ function RideInProgressScreenContent() {
     });
     return () => sub.remove();
   }, [currentRide?.status]);
-
-  const handleSafety = () => {
-    setConfirmSheet({
-      visible: true,
-      title: 'Emergency',
-      message: 'Are you sure you want to contact emergency services?',
-      variant: 'danger',
-      buttons: [
-        {
-          text: 'Call 911',
-          style: 'destructive',
-          onPress: () => {
-            if (rideId) void triggerEmergency(rideId as string).catch(() => {
-              showToast('Alert Not Sent', "We couldn't reach Spinr's emergency service. Please call 911 directly.", 'danger');
-            });
-            Linking.openURL('tel:911');
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    });
-  };
 
   const handleShareTrip = async () => {
     // Public tracking URL base is served by GET /settings → app_settings.track_base_url

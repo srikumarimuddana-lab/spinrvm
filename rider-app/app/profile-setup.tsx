@@ -30,7 +30,7 @@ export default function ProfileSetupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, createProfile, logout, updateProfileImage, isLoading: authLoading } = useAuthStore();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const isEditing = !!(user?.profile_complete || user?.first_name);
@@ -315,7 +315,7 @@ export default function ProfileSetupScreen() {
             {tosAccepted && <Ionicons name="checkmark" size={16} color="#FFF" />}
           </View>
           <Text style={styles.tosText}>
-            I agree to Spinr's{' '}
+            I agree to Spinr&apos;s{' '}
             <Text style={styles.link} onPress={() => Linking.openURL('https://spinr.ca/terms')}>Terms</Text>
             {' '}and{' '}
             <Text style={styles.link} onPress={() => Linking.openURL('https://spinr.ca/privacy')}>Privacy Policy</Text>

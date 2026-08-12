@@ -17,12 +17,13 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { onRideRated } from '@shared/utils/appRating';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -30,8 +31,6 @@ import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } 
 // | undefined` cleanly without spreading parseFloat noise across the file.
 const toNum = (v: string | number | null | undefined): number =>
   typeof v === 'number' ? v : v ? parseFloat(v) || 0 : 0;
-const fmt = (v: string | number | null | undefined): string =>
-  toNum(v).toFixed(2);
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
@@ -72,14 +71,13 @@ function RideCompletedScreenContent() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<'idle' | 'rating' | 'confirming'>('idle');
   const [alreadyPaid, setAlreadyPaid] = useState(false);
-  const [paymentProcessed, setPaymentProcessed] = useState(false);
 
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
   const mapRef = React.useRef<MapView>(null);
   const [routeMapReady, setRouteMapReady] = useState(false);
@@ -330,7 +328,6 @@ function RideCompletedScreenContent() {
 
       // 3. Trigger app store rating prompt after good rides
       try {
-        const { onRideRated } = require('@shared/utils/appRating');
         await onRideRated(rating);
       } catch { /* non-critical */ }
 
@@ -343,7 +340,9 @@ function RideCompletedScreenContent() {
       setSubmitPhase('idle');
     }
   };
-  handleSubmitRef.current = handleSubmit;
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit;
+  });
 
   // Returned from the "Change Card" escape with a card chosen for this trip —
   // auto-retry the charge on it once. The ref guard stops a re-run on every
@@ -395,7 +394,7 @@ function RideCompletedScreenContent() {
               <Ionicons name="checkmark" size={32} color="#FFF" />
             </View>
           </View>
-          <Text style={styles.title}>You've arrived!</Text>
+          <Text style={styles.title}>You&apos;ve arrived!</Text>
           <Text style={styles.subtitle} numberOfLines={1}>
             {currentRide?.dropoff_address || 'Destination'}
           </Text>
@@ -690,7 +689,7 @@ function RideCompletedScreenContent() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionBtnTitle}>Report Lost Item</Text>
-              <Text style={styles.actionBtnDesc}>Left something in the car? We'll help</Text>
+              <Text style={styles.actionBtnDesc}>Left something in the car? We&apos;ll help</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.border} />
           </TouchableOpacity>

@@ -18,6 +18,11 @@ const hasFirebaseNative = !!NativeModules.RNFBAppModule;
 let crashlyticsApi: typeof import('@react-native-firebase/crashlytics') | null = null;
 if (hasFirebaseNative) {
   try {
+    // Guarded native-module require — must stay runtime require(), not a
+    // static import, so it only executes once NativeModules.RNFBAppModule
+    // is confirmed present (see file header: a static import's module-scope
+    // side effects would crash before this check ever runs in Expo Go).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     crashlyticsApi = require('@react-native-firebase/crashlytics');
   } catch (e) {
     console.log('[Crashlytics] module load error:', e);

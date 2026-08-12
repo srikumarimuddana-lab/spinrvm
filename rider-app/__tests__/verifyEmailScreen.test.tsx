@@ -20,6 +20,9 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+import VerifyEmailScreen from '../app/verify-email';
+import { useAuthStore } from '@shared/store/authStore';
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 
 const mockBack = jest.fn();
@@ -94,9 +97,6 @@ jest.mock('@shared/store/authStore', () => {
   const useAuthStore = createStore(() => ({ user: mockDefaultUser }));
   return { useAuthStore };
 });
-
-import VerifyEmailScreen from '../app/verify-email';
-import { useAuthStore } from '@shared/store/authStore';
 
 // SpinrApiError-shaped rejection, matching what @shared/api/client actually
 // throws (message = backend's raw `error.message`, messageKey = the i18n key).

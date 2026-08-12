@@ -208,7 +208,7 @@ export default function LoyaltyScreen() {
                   ) : (
                     <View style={styles.progressSection}>
                       <Text style={[styles.progressHint, { color: tierColor, fontWeight: '600' }]}>
-                        You've reached the highest tier!
+                        You&apos;ve reached the highest tier!
                       </Text>
                     </View>
                   )}

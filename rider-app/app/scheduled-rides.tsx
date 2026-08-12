@@ -17,7 +17,7 @@ import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 export default function ScheduledRidesScreen() {
   const router = useRouter();
   const { scheduledRides, fetchScheduledRides, cancelScheduledRide } = useRideStore();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { cancelReminder } = useScheduledRideReminder();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
@@ -25,7 +25,7 @@ export default function ScheduledRidesScreen() {
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {

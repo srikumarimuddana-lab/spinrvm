@@ -18,7 +18,7 @@ import type { ThemeColors } from '@shared/theme/index';
 
 export default function ReportSafetyScreen() {
     const router = useRouter();
-    const { colors, isDark } = useTheme();
+    const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [issue, setIssue] = useState('');
     const [submitting, setSubmitting] = useState(false);

@@ -35,7 +35,6 @@ export default function WorkAllowanceRequestScreen() {
   }, [activeCompanyId]);
 
   const pendingRequest = requests.find(r => r.status === 'pending');
-  const lastApproved = requests.find(r => r.status === 'approved' || r.status === 'auto_approved');
 
   const parsedAmount = parseFloat(amount);
   const isValid = !isNaN(parsedAmount) && parsedAmount > 0 && reason.trim().length >= 5;

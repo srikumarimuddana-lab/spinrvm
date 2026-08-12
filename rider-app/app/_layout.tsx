@@ -1,30 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-
-export const StripeKeyContext = React.createContext<string | null>(null);
-// Public base URL for the "Share Trip" tracking page, served from
-// app_settings.track_base_url via GET /settings. Null while loading or
-// until the admin configures it. Consumers should disable the share
-// action when null/empty rather than fall back to a hardcoded URL.
-export const TrackBaseUrlContext = React.createContext<string | null>(null);
 import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AppState, View, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
-
-// Minimum time the branded splash (logo + tagline) stays on screen, even when
-// auth/location init finishes sooner — otherwise the tagline animation (which
-// only starts ~400ms in) is cut off and the rider barely sees the branding.
-// The full intro (logo + tagline + footer loader) settles by ~1.1s, so 1.8s
-// shows the branding with a brief beat without the logo sitting idle on a
-// white screen long enough to feel stuck.
-const SPLASH_MIN_DISPLAY_MS = 1800;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
-import api from '@shared/api/client';
+import api, { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
@@ -41,6 +27,39 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
+import { Analytics } from '@shared/analytics';
+import { initMetaSdk } from '@shared/analytics/meta';
+import {
+  initFirebaseServices,
+  requestNotificationPermission,
+  requestPushPermissionAndGetToken,
+  onForegroundMessage,
+  setBackgroundMessageHandler,
+  onTokenRefresh,
+  getAppCheckToken,
+} from '@shared/services/firebase';
+import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
+
+import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
+import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
+import ConfirmSheet from '../components/ConfirmSheet';
+import type { ConfirmSheetButton } from '../components/ConfirmSheet';
+import Toast from '../components/Toast';
+
+export const StripeKeyContext = React.createContext<string | null>(null);
+// Public base URL for the "Share Trip" tracking page, served from
+// app_settings.track_base_url via GET /settings. Null while loading or
+// until the admin configures it. Consumers should disable the share
+// action when null/empty rather than fall back to a hardcoded URL.
+export const TrackBaseUrlContext = React.createContext<string | null>(null);
+
+// Minimum time the branded splash (logo + tagline) stays on screen, even when
+// auth/location init finishes sooner — otherwise the tagline animation (which
+// only starts ~400ms in) is cut off and the rider barely sees the branding.
+// The full intro (logo + tagline + footer loader) settles by ~1.1s, so 1.8s
+// shows the branding with a brief beat without the logo sitting idle on a
+// white screen long enough to feel stuck.
+const SPLASH_MIN_DISPLAY_MS = 1800;
 
 // EAS Observe. Native module — present only in binaries built with it, so the
 // guarded require keeps older installed builds and Expo Go booting with
@@ -61,25 +80,6 @@ try {
   ObserveMetricsRoot = null;
   ObserveMetrics = null;
 }
-import Analytics from '@shared/analytics';
-import { initMetaSdk } from '@shared/analytics/meta';
-import {
-  initFirebaseServices,
-  requestNotificationPermission,
-  requestPushPermissionAndGetToken,
-  onForegroundMessage,
-  setBackgroundMessageHandler,
-  onTokenRefresh,
-  getAppCheckToken,
-} from '@shared/services/firebase';
-import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
-import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
-
-import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
-import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
-import ConfirmSheet from '../components/ConfirmSheet';
-import type { ConfirmSheetButton } from '../components/ConfirmSheet';
-import Toast from '../components/Toast';
 
 // Register App Check token retrieval at module load so early startup requests
 // (public settings, active-ride hydration, and login OTP) wait for Firebase
@@ -164,6 +164,10 @@ const canUseNotifications = !isExpoGo && Platform.OS !== 'web';
 let Notifications: any = null;
 if (canUseNotifications) {
   try {
+    // Guarded native-module require — must stay runtime require(), not a
+    // static import, so it only executes when notifications are usable
+    // (not Expo Go/web) and the catch can absorb a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     Notifications = require('expo-notifications');
   } catch (e) {
     console.log('[Push] expo-notifications unavailable:', e);
@@ -186,6 +190,11 @@ const LOGROCKET_ENABLED =
 let LogRocket: any = null;
 if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
   try {
+    // Guarded native-module require (same pattern as expo-observe above):
+    // must stay a runtime require(), not a static import, so it never
+    // executes when disabled/unavailable (Expo Go, web, or the kill flag)
+    // and so the catch below can absorb a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
   } catch (e) {
     console.log('[LogRocket] unavailable:', e);
@@ -279,7 +288,9 @@ function RootLayout() {
   // closure when deciding whether a resume navigation is redundant.
   const pathname = usePathname();
   const pathnameRef = useRef(pathname);
-  pathnameRef.current = pathname;
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -317,7 +328,6 @@ function RootLayout() {
     const init = async () => {
       try {
         try {
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
           const saved = await AsyncStorage.getItem('spinr_last_location');
           if (saved) {
             const { lat, lng } = JSON.parse(saved);
@@ -325,7 +335,7 @@ function RootLayout() {
               useRideStore.getState().setUserLocation({ latitude: lat, longitude: lng });
             }
           }
-        } catch (e) { /* non-fatal */ }
+        } catch { /* non-fatal */ }
 
         await Promise.all([
           initializeAuth(),
@@ -735,8 +745,6 @@ function RootLayout() {
   // shrinking exposure to transient refresh failures around the boundary.
   useEffect(() => {
     if (!isAuthInitialized || !authToken) return;
-
-    const { ensureFreshToken } = require('@shared/api/client');
 
     const sub = AppState.addEventListener('change', (nextState: string) => {
       if (nextState === 'active') {

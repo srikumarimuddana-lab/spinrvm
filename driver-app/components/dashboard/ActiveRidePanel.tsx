@@ -359,7 +359,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   const showConfirm = (
     title: string, message: string,
-    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>,
+    buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[],
   ) => {
     showAlert(title, message, buttons);
   };

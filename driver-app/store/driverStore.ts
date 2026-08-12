@@ -147,7 +147,7 @@ export interface ActiveRide {
     // incentive_type is always present — both backend endpoints default it to
     // "per_ride" (routes/rides.py, routes/drivers.py), matching IncomingRide
     // and RideOfferPanel's IncentiveItem.
-    incentives?: Array<{ name: string; bonus_amount: number; incentive_type: string }>;
+    incentives?: { name: string; bonus_amount: number; incentive_type: string }[];
     total_bonus?: number;
     // Matches the backend payload (routes/rides.py / routes/drivers.py) and what
     // RideOfferPanel reads. The previous {progress, reward} shape was stale and
@@ -349,7 +349,7 @@ interface IncomingRide {
     countdown_seconds?: number;
     offer_expires_at?: string;
     surge_multiplier?: number;
-    incentives?: Array<{ name: string; bonus_amount: number; incentive_type: string }>;
+    incentives?: { name: string; bonus_amount: number; incentive_type: string }[];
     total_bonus?: number;
     quest_hint?: {
         title: string;
@@ -359,8 +359,8 @@ interface IncomingRide {
         reward_amount: number;
     } | null;
     payment_method?: string;
-    planned_route_polyline?: Array<[number, number]> | null;
-    service_area_polygon?: Array<{ lat: number; lng: number }> | null;
+    planned_route_polyline?: [number, number][] | null;
+    service_area_polygon?: { lat: number; lng: number }[] | null;
 }
 
 interface DriverState {

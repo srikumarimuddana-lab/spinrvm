@@ -63,7 +63,7 @@ export default function StripeOnboardingScreen() {
     // (visible via Metro / `npx react-native log-android|log-ios`) and drives
     // the on-screen debug strip, so the exact stall point is observable.
     const log = (s: string) => {
-        // eslint-disable-next-line no-console
+         
         console.log(`[StripeOnboarding] stage=${s} url=${EMBEDDED_URL}`);
         setStageState(s);
     };

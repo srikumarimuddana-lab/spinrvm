@@ -172,10 +172,10 @@ function DriverDashboard() {
     let cancelled = false;
     const fetchSurge = async () => {
       try {
-        const res = await api.get<Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }>>('/service-areas');
+        const res = await api.get<{ id: string; surge_multiplier?: number; surge_active?: boolean }[]>('/service-areas');
         if (cancelled) return;
         const areaId = driverData?.service_area_id;
-        const areas: Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }> = res.data || [];
+        const areas: { id: string; surge_multiplier?: number; surge_active?: boolean }[] = res.data || [];
         const myArea = areaId ? areas.find((a) => a.id === areaId) : areas[0];
         if (myArea?.surge_active && typeof myArea.surge_multiplier === 'number') {
           setSurgeMultiplier(myArea.surge_multiplier);
@@ -481,7 +481,7 @@ function DriverDashboard() {
       cancelled = true;
       clearInterval(id);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [activeRide?.ride?.id, rideState]);
 
   // When the app comes back to the foreground, arm a one-shot re-center
@@ -862,7 +862,7 @@ function DriverDashboard() {
 
         {/* Service area boundary polygon */}
         {(() => {
-          const rawPoly: Array<{ lat: number; lng: number }> | null | undefined =
+          const rawPoly: { lat: number; lng: number }[] | null | undefined =
             rideState === 'ride_offered'
               ? (incomingRide as any)?.service_area_polygon
               : (activeRide as any)?.service_area_polygon;

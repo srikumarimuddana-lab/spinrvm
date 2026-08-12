@@ -80,8 +80,8 @@ function ProfileScreenInner() {
   }, [referralCode]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
-  const [docRequirements, setDocRequirements] = useState<Array<{id: string; name: string; description?: string}>>([]);
-  const [driverDocs, setDriverDocs] = useState<Array<any>>([]);
+  const [docRequirements, setDocRequirements] = useState<{id: string; name: string; description?: string}[]>([]);
+  const [driverDocs, setDriverDocs] = useState<any[]>([]);
   // Company contact info from the admin Settings → Company Info card.
   // Fetched once on mount via the public /company-info endpoint.
   const [companyInfo, setCompanyInfo] = useState<{
@@ -135,7 +135,7 @@ function ProfileScreenInner() {
           refetchDriverMe();
 
           try {
-            const reqRes = await api.get<Array<{id: string; name: string; description?: string}>>('/drivers/requirements');
+            const reqRes = await api.get<{id: string; name: string; description?: string}[]>('/drivers/requirements');
             if (!cancelled && reqRes.data) setDocRequirements(reqRes.data);
           } catch (reqErr) {}
 

@@ -1,32 +1,15 @@
 import '../utils/backgroundLocation';
 import { registerDriverSessionTeardown } from '../utils/sessionTeardown';
-
-// Arm the sign-out location teardown at module scope, before any screen mounts:
-// the API client's 401 interceptor can trigger a logout before the dashboard
-// ever renders, and a hook-based registration would miss it.
-registerDriverSessionTeardown();
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, Platform, LogBox, AppState } from 'react-native';
-
-// LogBox's notification container uses a codegen native component that's
-// broken under Bridgeless mode (RN 0.85.2). Disable it in dev to prevent
-// the "_LogBoxNotificationContainer" crash. Errors still appear in Metro.
-if (__DEV__) {
-  LogBox.ignoreAllLogs(true);
-}
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { AlertDialog } from '../components/AlertDialog';
 import { toastConfig } from '../components/toastConfig';
-
-// Minimum time the branded splash (logo + tagline) stays on screen, even when
-// auth/location init finishes sooner — otherwise the tagline animation (which
-// only starts ~400ms in) is cut off and the driver barely sees the branding.
-const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { initMetaSdk } from '@shared/analytics/meta';
 import { useAuthStore } from '@shared/store/authStore';
@@ -42,6 +25,32 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
+import {
+  initFirebaseServices,
+  requestNotificationPermission,
+  requestPushPermissionAndGetToken,
+  onTokenRefresh,
+  getAppCheckToken,
+} from '@shared/services/firebase';
+import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
+import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
+
+// Arm the sign-out location teardown at module scope, before any screen mounts:
+// the API client's 401 interceptor can trigger a logout before the dashboard
+// ever renders, and a hook-based registration would miss it.
+registerDriverSessionTeardown();
+
+// LogBox's notification container uses a codegen native component that's
+// broken under Bridgeless mode (RN 0.85.2). Disable it in dev to prevent
+// the "_LogBoxNotificationContainer" crash. Errors still appear in Metro.
+if (__DEV__) {
+  LogBox.ignoreAllLogs(true);
+}
+
+// Minimum time the branded splash (logo + tagline) stays on screen, even when
+// auth/location init finishes sooner — otherwise the tagline animation (which
+// only starts ~400ms in) is cut off and the driver barely sees the branding.
+const SPLASH_MIN_DISPLAY_MS = 3000;
 
 // EAS Observe. Native module — present only in binaries built with it, so the
 // guarded require keeps older installed builds and Expo Go booting with
@@ -62,15 +71,6 @@ try {
   ObserveMetricsRoot = null;
   ObserveMetrics = null;
 }
-import {
-  initFirebaseServices,
-  requestNotificationPermission,
-  requestPushPermissionAndGetToken,
-  onTokenRefresh,
-  getAppCheckToken,
-} from '@shared/services/firebase';
-import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
-import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 
 // Register App Check token retrieval at module load so early startup requests
 // (driver active-ride hydration and login OTP) wait for Firebase App Check

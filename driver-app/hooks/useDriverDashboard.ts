@@ -1,12 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Animated } from 'react-native';
+import { Animated , Platform, Vibration, Linking, AppState , Dimensions } from 'react-native';
 import { showAlert } from '../components/AlertDialog';
 import * as Location from 'expo-location';
-import { Platform, Vibration, Linking, AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { showToast } from './useToast';
-
-export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
@@ -19,7 +16,6 @@ import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
 import SpinrConfig from '@shared/config/spinr.config';
 import { onForegroundMessage } from '@shared/services/firebase';
-import { Dimensions } from 'react-native';
 import {
   startBackgroundLocation,
   stopBackgroundLocation,
@@ -40,6 +36,8 @@ import {
   type TripLocationBatchRequest,
 } from '../utils/tripLocationRecorder';
 import { captureException } from '@shared/services/errorReporting';
+
+export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 
 const { height } = Dimensions.get('window');
 // Each tier doubles; last-tier jitter must be large enough to disperse a

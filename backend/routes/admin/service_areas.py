@@ -281,6 +281,12 @@ class AreaTaxRequest(BaseModel):
     pst_rate: Optional[float] = None
     hst_enabled: Optional[bool] = None
     hst_rate: Optional[float] = None
+    # A29 (ACTION_ITEMS.md): a tax-rate change carries real regulatory/financial
+    # weight (every rider's charge, CRA/SK remittance obligations). Required
+    # (not Optional) so a missing field 422s before the handler runs, mirroring
+    # the written-justification + audit_logs requirement admin_update_service_area
+    # already enforces for above-cap surge overrides (surge_justification, below).
+    justification: str
 
 
 # ---------- Service areas (table: service_areas) ----------
@@ -839,12 +845,22 @@ async def admin_get_area_tax(area_id: str):
 
 
 @router.put("/areas/{area_id}/tax")
-async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest):
-    """Update tax configuration for a service area."""
-    updates = tax.model_dump(exclude_none=True)
-    if updates:
-        await db_supabase.update_one("service_areas", {"id": area_id}, updates)
-    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest, admin: dict = Depends(get_admin_user)):
+    """Update tax configuration for a service area.
+
+    A29 (ACTION_ITEMS.md): mirrors the surge-cap override audit pattern above
+    (admin_update_service_area's surge_multiplier > SURGE_CAP branch) — a
+    written justification is required and every change is written to
+    audit_logs via the shared log_admin_action helper, capturing old + new
+    rates.
+    """
+    justification = (tax.justification or "").strip()
+    if not justification:
+        raise HTTPException(
+            status_code=400,
+            detail="Tax rate changes require a written justification (regulatory + audit requirement).",
+        )
+
     _TAX_FIELDS = [
         "gst_enabled",
         "gst_rate",
@@ -853,7 +869,36 @@ async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest):
         "hst_enabled",
         "hst_rate",
     ]
-    return {k: area.get(k) for k in _TAX_FIELDS}
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+    if not existing:
+        # Previously an unguarded area.get(...) on a None row after the
+        # update (area not found) raised an unhandled AttributeError (500)
+        # instead of a clean error. Fetching `existing` up front to capture
+        # the pre-change values makes this check essentially free, and a
+        # clean 404 here matches the guard the sibling pricing_router tax
+        # endpoint (backend/features.py) already has.
+        raise HTTPException(status_code=404, detail="Service area not found")
+    old_values = {k: existing.get(k) for k in _TAX_FIELDS}
+
+    # justification is request-only metadata, not a service_areas column —
+    # exclude it from the DB update payload.
+    updates = tax.model_dump(exclude_none=True, exclude={"justification"})
+    if updates:
+        await db_supabase.update_one("service_areas", {"id": area_id}, updates)
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+    if not area:
+        raise HTTPException(status_code=404, detail="Service area not found")
+    new_values = {k: area.get(k) for k in _TAX_FIELDS}
+
+    await log_admin_action(
+        admin,
+        "tax_rate_changed",
+        "service_areas",
+        area_id,
+        {"old": old_values, "new": new_values, "justification": justification},
+    )
+
+    return new_values
 
 
 @router.get("/areas/{area_id}/vehicle-pricing")

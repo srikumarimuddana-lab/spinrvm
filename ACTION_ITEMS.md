@@ -2960,9 +2960,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `audit_logs` rows (see A27/P1-B), but the underlying endpoints still
   have no audit requirement for the *next* tax-rate change made through
   the normal admin UI.
-  - [ ] **Status:** open. Fix direction: add an `audit_logs` write (with a
-    required justification field, mirroring the surge-cap pattern) to both
-    tax endpoints before the next tax-rate change ships.
+  - [x] **Status:** done (2026-08-12, branch `claude/a29-tax-audit-trail`).
+    Both endpoints now require a non-blank `justification` string (missing
+    field → 422 via Pydantic; blank → 400) and write a `tax_rate_changed`
+    row to `audit_logs` via the existing `log_admin_action` helper on every
+    change, capturing old + new rate/enabled values and the justification —
+    same helper and shape as `surge_override_above_cap`. See
+    `docs/change-log/2026-08-12-a29-tax-endpoint-audit-trail.md` for the
+    full blast-radius grep and verification notes (unit-tested against
+    mocked `db_supabase`/`log_admin_action`; **not** verified against a real
+    Supabase `audit_logs` write). Grepped and confirmed no current
+    admin-dashboard UI calls either endpoint, so the new required field
+    breaks no live in-app flow — whoever wires up a tax-editing screen next
+    will need to add a justification input.
 - **`corporate_statement_pdf.py` GST/PST fallback risk.** Falls back to a
   single combined "Tax (GST/PST)" line (lines 93-98) whenever
   `tax_by_type` is empty — e.g. a statement period mixing pre-/post-PST-

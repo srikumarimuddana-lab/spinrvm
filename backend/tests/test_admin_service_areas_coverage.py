@@ -555,6 +555,14 @@ class TestAreaTax:
     @pytest.mark.anyio
     async def test_update_area_tax_writes_and_returns_new_values(self):
         update_one = AsyncMock()
+        old_row = {
+            "gst_enabled": True,
+            "gst_rate": 5.0,
+            "pst_enabled": False,
+            "pst_rate": 0,
+            "hst_enabled": False,
+            "hst_rate": 0,
+        }
         updated_row = {
             "gst_enabled": True,
             "gst_rate": 5.0,
@@ -563,17 +571,38 @@ class TestAreaTax:
             "hst_enabled": False,
             "hst_rate": 0,
         }
-        with patch.multiple(
-            "backend.routes.admin.service_areas.db_supabase",
-            update_one=update_one,
-            get_rows=AsyncMock(return_value=[updated_row]),
+        log_admin_action = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                get_rows=AsyncMock(side_effect=[[old_row], [updated_row]]),
+            ),
+            patch("backend.routes.admin.service_areas.log_admin_action", log_admin_action),
         ):
-            req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0)
-            result = await admin_update_area_tax("area-1", req)
+            req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0, justification="Enabling PST per SK tax notice")
+            result = await admin_update_area_tax("area-1", req, admin=_ADMIN)
 
         update_one.assert_awaited_once()
+        # justification must never be written as a service_areas column.
+        written_updates = update_one.await_args.args[2]
+        assert "justification" not in written_updates
         assert result["pst_enabled"] is True
         assert result["pst_rate"] == 6.0
+
+        # A29: audit_logs row via the shared helper, mirroring the surge-cap
+        # override pattern — old + new rates + justification captured.
+        log_admin_action.assert_awaited_once()
+        call_args = log_admin_action.await_args.args
+        assert call_args[0] == _ADMIN
+        assert call_args[1] == "tax_rate_changed"
+        assert call_args[2] == "service_areas"
+        assert call_args[3] == "area-1"
+        details = call_args[4]
+        assert details["old"]["pst_enabled"] is False
+        assert details["new"]["pst_enabled"] is True
+        assert details["new"]["pst_rate"] == 6.0
+        assert details["justification"] == "Enabling PST per SK tax notice"
 
     @pytest.mark.anyio
     async def test_update_area_tax_empty_payload_skips_write_still_returns_row(self):
@@ -586,16 +615,68 @@ class TestAreaTax:
             "hst_enabled": False,
             "hst_rate": 0,
         }
-        with patch.multiple(
-            "backend.routes.admin.service_areas.db_supabase",
-            update_one=update_one,
-            get_rows=AsyncMock(return_value=[row]),
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                get_rows=AsyncMock(return_value=[row]),
+            ),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
         ):
-            req = AreaTaxRequest()
-            result = await admin_update_area_tax("area-1", req)
+            req = AreaTaxRequest(justification="No-op confirmation, no fields changed")
+            result = await admin_update_area_tax("area-1", req, admin=_ADMIN)
 
         update_one.assert_not_awaited()
         assert result["gst_rate"] == 5.0
+
+    @pytest.mark.anyio
+    async def test_update_area_tax_missing_justification_field_is_422(self):
+        # justification has no default, so omitting it entirely fails Pydantic
+        # validation before the handler ever runs (FastAPI turns this into a
+        # 422 at the request layer).
+        with pytest.raises(pydantic.ValidationError):
+            AreaTaxRequest(pst_rate=6.0)
+
+    @pytest.mark.anyio
+    async def test_update_area_tax_blank_justification_is_400(self):
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                get_rows=AsyncMock(return_value=[{}]),
+            ),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()) as log_admin_action,
+        ):
+            req = AreaTaxRequest(pst_rate=6.0, justification="   ")
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_update_area_tax("area-1", req, admin=_ADMIN)
+
+        assert exc_info.value.status_code == 400
+        update_one.assert_not_awaited()
+        log_admin_action.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_update_area_tax_area_not_found_is_404_without_audit(self):
+        # Previously area.get(...) on a None row (area not found, post-update)
+        # raised an unhandled AttributeError (500) instead of a clean error.
+        # Fetching the pre-change row up front (needed to capture old_values
+        # for the audit log) now surfaces this as a proper 404 before any
+        # write is attempted.
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                get_rows=AsyncMock(return_value=[]),
+            ),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()) as log_admin_action,
+        ):
+            req = AreaTaxRequest(pst_rate=6.0, justification="Valid justification")
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_update_area_tax("missing-area", req, admin=_ADMIN)
+
+        assert exc_info.value.status_code == 404
+        log_admin_action.assert_not_awaited()
 
 
 # ── vehicle pricing ─────────────────────────────────────────────────────

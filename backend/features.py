@@ -39,6 +39,7 @@ try:
     from .services.fare_service import DEFAULT_FARE, calculate_fare
     from .services.fare_service import _d as _fare_d
     from .services.fare_service import _f as _fare_f
+    from .utils.audit_logger import log_admin_action
     from .utils.pii import geohash as _geohash
     from .utils.surge_engine import SURGE_CAP
 except ImportError:
@@ -49,6 +50,7 @@ except ImportError:
     from services.fare_service import DEFAULT_FARE, calculate_fare
     from services.fare_service import _d as _fare_d
     from services.fare_service import _f as _fare_f
+    from utils.audit_logger import log_admin_action
     from utils.pii import geohash as _geohash
     from utils.surge_engine import SURGE_CAP
 
@@ -657,6 +659,13 @@ class UpdateTaxConfigRequest(BaseModel):
     pst_rate: Optional[float] = None
     hst_enabled: Optional[bool] = None
     hst_rate: Optional[float] = None
+    # A29 (ACTION_ITEMS.md): a tax-rate change carries real regulatory/financial
+    # weight (every rider's charge, CRA/SK remittance obligations). Required
+    # (not Optional) so a missing field 422s before the handler runs, mirroring
+    # the written-justification + audit_logs requirement that
+    # admin_update_service_area already enforces for above-cap surge overrides
+    # (routes/admin/service_areas.py).
+    justification: str
 
 
 @pricing_router.get("/areas/{area_id}/fees")
@@ -719,11 +728,32 @@ async def delete_area_fee(area_id: str, fee_id: str):
     return {"deleted": True}
 
 
+_TAX_FIELDS = ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]
+
+
 @pricing_router.put("/areas/{area_id}/tax")
-async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
-    """Update tax configuration for a service area."""
+async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest, admin: dict = Depends(get_admin_user)):
+    """Update tax configuration for a service area.
+
+    A29 (ACTION_ITEMS.md): mirrors the surge-cap override audit pattern in
+    admin_update_service_area (routes/admin/service_areas.py) — a written
+    justification is required and every change is written to audit_logs via
+    the shared log_admin_action helper, capturing old + new rates.
+    """
+    justification = (req.justification or "").strip()
+    if not justification:
+        raise HTTPException(
+            status_code=400,
+            detail="Tax rate changes require a written justification (regulatory + audit requirement).",
+        )
+
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Service area not found")
+    old_values = {f: existing.get(f) for f in _TAX_FIELDS}
+
     update_data: Dict[str, Any] = {}
-    for field in ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]:
+    for field in _TAX_FIELDS:
         val = getattr(req, field)
         if val is not None:
             update_data[field] = val
@@ -734,6 +764,16 @@ async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
     area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
+    new_values = {f: area.get(f) for f in _TAX_FIELDS}
+
+    await log_admin_action(
+        admin,
+        "tax_rate_changed",
+        "service_areas",
+        area_id,
+        {"old": old_values, "new": new_values, "justification": justification},
+    )
+
     return {
         "gst_enabled": area.get("gst_enabled", True),
         "gst_rate": area.get("gst_rate", 5.0),

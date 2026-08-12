@@ -89,6 +89,14 @@ function DriverDashboard() {
     isLoading,
   } = useDriverStore();
 
+  // Declared here (before first use in the `useEffect` below) rather than
+  // further down with the other derived ride fields — react-hooks/immutability
+  // (React Compiler) flags referencing a value before its declaration in
+  // source order. `activeRide`/`incomingRide` are already available above,
+  // so this is a pure source-order reshuffle: same expression, same effect
+  // timing, no behavior change.
+  const ride = activeRide?.ride || incomingRide;
+
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
   const [completionConfirmationVisible, setCompletionConfirmationVisible] = useState(false);
   const [completionConfirmationRideId, setCompletionConfirmationRideId] = useState<string | null>(null);
@@ -527,7 +535,6 @@ function DriverDashboard() {
   // elements (new `coordinate` object refs each render forced
   // react-native-maps to re-animate the markers, producing visible
   // flicker on the map).
-  const ride = activeRide?.ride || incomingRide;
   const pickupLat = ride?.pickup_lat;
   const pickupLng = ride?.pickup_lng;
   const dropoffLat = ride?.dropoff_lat;

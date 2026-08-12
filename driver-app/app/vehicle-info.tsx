@@ -61,21 +61,9 @@ export default function VehicleInfoScreen() {
     const [vehicleTypesStatus, setVehicleTypesStatus] = useState<'loading' | 'error' | 'loaded'>('loading');
     const [showVehicleTypePicker, setShowVehicleTypePicker] = useState(false);
 
-    useEffect(() => {
-        if (driver) {
-            setForm({
-                vehicle_type_id: driver.vehicle_type_id || '',
-                vehicle_make: driver.vehicle_make || '',
-                vehicle_model: driver.vehicle_model || '',
-                vehicle_year: driver.vehicle_year?.toString() || '',
-                vehicle_color: driver.vehicle_color || '',
-                vehicle_vin: driver.vehicle_vin || '',
-                license_plate: driver.license_plate || '',
-            });
-        }
-        fetchVehicleTypes();
-    }, [driver]);
-
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
     const fetchVehicleTypes = async () => {
         setVehicleTypesStatus('loading');
         try {
@@ -102,6 +90,21 @@ export default function VehicleInfoScreen() {
             showToast('error', 'Error', getApiErrorMessage(error, 'Could not load vehicle types. Check your connection.'));
         }
     };
+
+    useEffect(() => {
+        if (driver) {
+            setForm({
+                vehicle_type_id: driver.vehicle_type_id || '',
+                vehicle_make: driver.vehicle_make || '',
+                vehicle_model: driver.vehicle_model || '',
+                vehicle_year: driver.vehicle_year?.toString() || '',
+                vehicle_color: driver.vehicle_color || '',
+                vehicle_vin: driver.vehicle_vin || '',
+                license_plate: driver.license_plate || '',
+            });
+        }
+        fetchVehicleTypes();
+    }, [driver]);
 
     const handleVehicleTypeSelect = (vehicleType: VehicleType) => {
         setForm(prev => ({ ...prev, vehicle_type_id: vehicleType.id }));

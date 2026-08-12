@@ -6235,15 +6235,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - [ ] **expo-speech-recognition 57.x watch** (rider): no 57-line release
   exists (npm latest = 56.0.1, verified 2026-08-11). Works on 57 today;
   re-check each SDK cycle and bump when the community package catches up.
-- [ ] **Mobile lint debt under the SDK 57 ruleset** (2026-08-12 pass, branches
-  `claude/c20-mobile-lint-rider-app` / `claude/c20-mobile-lint-driver-app`):
-  **partially closed, not fully** — the counts in this bullet had drifted
-  from actual `yarn lint` output (rider was 504 problems / 187 errors on a
-  fresh run, not 379/176; driver was 423 / 181, not 240/105), so treat any
-  future count here as stale until re-measured, same as this one now is.
-  - **Fixed**: rider 504 → 262 problems (48% down, 337 errors → 167), driver
-    423 → 153 problems (64% down, 181 errors → 104). Categories closed to
-    zero: `no-unused-vars`/`@typescript-eslint/no-unused-vars`,
+- [ ] **Mobile lint debt under the SDK 57 ruleset** (round 1: 2026-08-12,
+  branches `claude/c20-mobile-lint-rider-app` / `claude/c20-mobile-lint-driver-app`,
+  PRs #3777/#3778, merged; round 2 driver-app: 2026-08-12, branch
+  `claude/c20-lint-tier2-driver-app` — see
+  `docs/change-log/2026-08-12-c20-lint-tier2-driver-app.md`):
+  **driver-app now fully closed on 3 of its 4 remaining react-hooks
+  categories; rider-app round 2 status tracked separately by that session.**
+  - **Round 1 fixed**: rider 504 → 262 problems (48% down, 337 errors →
+    167), driver 423 → 153 problems (64% down, 181 errors → 104). Categories
+    closed to zero: `no-unused-vars`/`@typescript-eslint/no-unused-vars`,
     `import/first`, `import/no-duplicates`, `no-undef` (missing jest/node
     globals for plain-`.js` mock/setup files — config fix in both
     `eslint.config.js`), `react/no-unescaped-entities`,
@@ -6255,33 +6256,119 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     static import or given a documented suppression for genuinely-guarded
     native-module requires), and the 4 total `react-hooks/refs` "Cannot
     update ref during render" (write) findings — the higher-risk half of
-    that rule explicitly called out below.
-  - **Found and fixed one real bug from a self-inflicted regression, not a
-    pre-existing one**: converting `SpinrConfig`'s default import to a named
-    import (mechanically matching the safe `Analytics`/`CarMarker` fix)
-    broke `rider-app/utils/__tests__/aiChat.test.ts`, because several test
-    files across both apps `jest.mock('@shared/config/spinr.config', () =>
-    ({ default: {...} }))` without a matching named export. Reverted in both
-    apps; the ~9 other `SpinrConfig` default-import sites were left alone
-    with a documented `eslint-disable` instead of "fixed" the same wrong
-    way. Also removed one ~130-line dead `renderRideOfferPanel` function in
-    driver-app's dashboard (superseded by the extracted `<RideOfferPanel>`
-    component) found via `no-unused-vars` investigation.
-  - **Deliberately deferred, not fixed** (documented reasons, not silent):
-    - `react-hooks/refs` **read**-during-render pattern (98 rider / 59
-      driver remaining) — lower risk than the write pattern already fixed
-      (mostly `useState(() => ({ ...ref.current }))`-style initializers,
-      which only run once on mount) but still needs a real look, not a bulk
-      fix; not attempted this pass given the volume.
-    - `react-hooks/exhaustive-deps` (72 rider / 38 driver),
-      `react-hooks/set-state-in-effect` (32 / 20), `react-hooks/immutability`
-      (11 / 16), `react-hooks/purity` (9 / 6),
-      `react-hooks/preserve-manual-memoization` (2 / 1) — none touched.
-      These are exactly the findings CLAUDE.md/this bullet's own prior
-      wording warns can be real bugs, not style noise; blindly adding a
-      missing dep or reordering a `set`-during-render call can change
-      re-render timing or introduce a loop. Needs per-finding review with
-      real behavioral tracing, not a bulk pass.
+    that rule.
+  - Round 1 **found and fixed one real bug from a self-inflicted regression,
+    not a pre-existing one**: converting `SpinrConfig`'s default import to a
+    named import (mechanically matching the safe `Analytics`/`CarMarker`
+    fix) broke `rider-app/utils/__tests__/aiChat.test.ts`, because several
+    test files across both apps `jest.mock('@shared/config/spinr.config',
+    () => ({ default: {...} }))` without a matching named export. Reverted
+    in both apps; the ~9 other `SpinrConfig` default-import sites were left
+    alone with a documented `eslint-disable` instead of "fixed" the same
+    wrong way. Also removed one ~130-line dead `renderRideOfferPanel`
+    function in driver-app's dashboard (superseded by the extracted
+    `<RideOfferPanel>` component) found via `no-unused-vars` investigation.
+  - **Round 2 fixed (driver-app only, this pass)**: driver 153 → 63 problems
+    (59% down further, 104 errors → 31). Real (non-scoped) `yarn lint`
+    measured fresh at the start of this round: 127 problems (95 errors, 32
+    warnings) — the 153/104 figure above had already drifted stale by the
+    time this round started. Three categories closed to zero:
+    - `react-hooks/immutability` (15 → 0) — all 15 were the same
+      "`X` is accessed before it is declared" pattern: a `fetch*`/`load*`
+      function referenced inside an earlier `useEffect` but declared later
+      in source order. Fixed by moving each function's declaration above
+      its first use — pure reorder, zero behavior change (an effect body
+      always runs after the full render commits, once every const is
+      initialized). One file (`driver/payout.tsx`) needed 3 more functions
+      reordered too (`loadBonuses`/`loadTaxYears`/`loadStripeStatus`,
+      called from within `loadData`) once the compiler's analysis could
+      reach past the first fixed violation — not a new bug, a
+      previously-masked instance of the same pattern.
+    - `react-hooks/purity` (5 → 0) — all 5 were `Date.now()` called
+      somewhere reachable from render. 2 were inside an async `pickImage`
+      handler (invoked from an `Alert.alert` button, already deferred/
+      post-await) but still flagged; fixed by extracting a module-level
+      `genFallbackFileName()` helper (the compiler's check doesn't cross
+      into a separately-declared module-level function). 1 was a genuine
+      render-body call inside a `.map()` (driver profile's document-expiry
+      badges) — hoisted to a `getNowMs()` module-level helper called once
+      per render, so every row agrees on the same "now" instead of
+      microsecond drift, but still fresh per render like the original. 1
+      (`notifications.tsx`'s `formatTime`) took no component state, so it
+      was moved out of the component entirely. 1
+      (`CarMarker.tsx`'s `lastFixTsRef` init) needed the same module-level-
+      helper trick — notably, React's own documented "lazy ref init" guard
+      pattern (`if (ref.current === null) ref.current = Date.now()`) was
+      tried first and is **still flagged** by this rule version; noting
+      that in case it resurfaces.
+    - `react-hooks/preserve-manual-memoization` (1 → 0) — a `useMemo` in
+      `ride-detail.tsx` read the same property twice, once via `ride?.X` and
+      once via `ride.X`; the compiler's dependency inference couldn't prove
+      both accesses were the same narrow property and widened its inferred
+      dependency to all of `ride`, which didn't match the manually specified
+      `[ride?.X]` dep array, so it skipped optimizing the component. Fixed
+      by reading the property into a local const once. Same memoized value,
+      same deps, zero behavior change.
+    - `react-hooks/refs` **read**-during-render: 55 → 2 (53 closed). All 53
+      were the verified-safe "stable animation/gesture driver" pattern this
+      round's task explicitly called out as suppression-eligible:
+      `useRef(new Animated.Value(x)).current` / `useRef(new
+      AnimatedRegion({...})).current` / `useRef(PanResponder.create({...})).current`
+      across `BrandSplash.tsx` (21), `RideOfferPanel.tsx` (9),
+      `ActiveRidePanel.tsx` (8, including the exact `panResponder.panHandlers`
+      case named in the task), `otp.tsx` (6), `DriverIdlePanel.tsx` (5),
+      `DriverTopBar.tsx` (3), `CarMarker.tsx` (1). Every one was verified
+      before suppressing — grepped each file for `.current =` and confirmed
+      zero reassignment after creation — before adding a narrow
+      `eslint-disable-next-line react-hooks/refs` at each read site (not a
+      blanket file/rule-level disable). **2 remaining, deliberately NOT
+      fixed**: `app/driver/(tabs)/index.tsx:696` (a `lastDirectionsFetchRef.current
+      = {...}` **write**) and `:701` (a `mapRef.current` read), both inside
+      the same `<MapViewDirections onReady={...}>` callback, itself nested
+      in an IIFE embedded directly in JSX
+      (`{cond && (() => { ... return <React.Fragment>...</React.Fragment>; })()}`).
+      This is a write-shaped finding under the same `react-hooks/refs` rule
+      this round was told not to touch ("do NOT touch any write-during-render
+      findings, those were already fixed in #3778 — if you see any, that's a
+      discrepancy, flag it") — round 1's #3778 fixed exactly 2 write findings,
+      both in `ActiveRidePanel.tsx`; this is a third, different write finding
+      in a different file that round 1 never touched and this round was
+      scoped not to touch either. Flagging for a future round: the write
+      likely isn't a real render-time mutation (it's inside an async
+      `onReady` completion callback, not the synchronous render pass) but
+      that needs the same kind of verification the other 53 got, not an
+      assumption.
+  - **Deliberately deferred, not fixed** (documented reasons, not silent;
+    numbers below are post-round-2 for both apps — `react-hooks/refs`
+    read-during-render, `purity`, `immutability`, and
+    `preserve-manual-memoization` are now closed for both apps, see the two
+    Round 2 bullets below, and are no longer listed here):
+    - `react-hooks/exhaustive-deps` (72 rider / 32 driver, unchanged by
+      either round-2 pass — confirms no regression from the reordering work
+      done for `immutability`).
+    - `react-hooks/set-state-in-effect` (**32 → 40 rider**, **17 → 27
+      driver**) — rose in both apps, in both cases **not from a new bug**:
+      fixing the `react-hooks/immutability` findings (functions referenced
+      before declaration) let the compiler's analysis reach *past* that
+      violation into the same effect body for the first time, surfacing
+      pre-existing (already-there, not introduced) `setState` calls that
+      had been masked behind the co-located immutability bailout. No code
+      behavior changed in either app — this is previously-hidden debt
+      becoming visible, the same phenomenon driver's `payout.tsx` showed
+      mid-fix (see that round's change-log). Still out of scope to fix;
+      flagged so the next round starts from the real number, not a stale
+      one. `react-hooks/exhaustive-deps`/`react-hooks/set-state-in-effect`
+      are exactly the findings CLAUDE.md/this bullet's own prior wording
+      warns can be real bugs, not style noise; blindly adding a missing dep
+      or reordering a `set`-during-render call can change re-render timing
+      or introduce a loop. Needs per-finding review with real behavioral
+      tracing, not a bulk pass.
+    - `no-restricted-syntax` (14 rider / 2 driver, unchanged by either
+      round) — the project's own raw-`error.message`-surfacing rule. Fixing
+      these routes user-visible text through `getApiErrorMessage(err,
+      fallback)`, which changes what text a rider/driver actually sees on
+      an error — a real UX change, not a style fix, and out of scope for a
+      lint-cleanup PR.
   - **Round 2 (2026-08-12, rider-app only, branch
     `claude/c20-lint-tier2-rider-app`)**: closed 4 of the deferred rider-app
     categories above to zero — `react-hooks/preserve-manual-memoization`
@@ -6332,12 +6419,40 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       scope this round); flagging so the 40 isn't mistaken for new debt.
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier2-rider-app.md`.
-    - `no-restricted-syntax` (14 rider / 2 driver) — the project's own
-      raw-`error.message`-surfacing rule. Fixing these routes user-visible
-      text through `getApiErrorMessage(err, fallback)`, which changes what
-      text a rider/driver actually sees on an error — a real UX change, not
-      a style fix, and out of scope for a lint-cleanup PR per this task's
-      instructions to keep scope to lint/code-quality only.
+  - **Round 2 (2026-08-12, driver-app only, branch
+    `claude/c20-lint-tier2-driver-app`)**: closed 3 of the 4 deferred
+    driver-app categories above to (near-)zero — `react-hooks/immutability`
+    (15→0, same "function accessed before declared" reorder pattern as
+    rider's), `react-hooks/purity` (5→0, `Date.now()` reachable from render
+    hoisted to module-level helpers), `react-hooks/preserve-manual-memoization`
+    (1→0, same double-access-path `useMemo` dependency-widening issue as
+    rider's), and `react-hooks/refs` **read**-during-render (55→2 — see
+    below for the 2 deliberately unfixed). `react-hooks/exhaustive-deps`,
+    `react-hooks/set-state-in-effect`, and `no-restricted-syntax` were
+    explicitly out of scope for this round per the task and remain
+    untouched for driver-app.
+    - `refs`: all 53 closed were the verified-safe "stable animation/gesture
+      driver" pattern (`useRef(new Animated.Value(x)).current` / `useRef(new
+      AnimatedRegion({...})).current` / `useRef(PanResponder.create({...})).current`,
+      including the `panResponder.panHandlers` case in `ActiveRidePanel.tsx`)
+      — each verified via grep for `.current =` reassignment before
+      suppressing, narrow per-site `eslint-disable-next-line`, not a blanket
+      disable. **2 remaining, deliberately NOT fixed**:
+      `app/driver/(tabs)/index.tsx:696` (a ref **write**,
+      `lastDirectionsFetchRef.current = {...}`) and `:701` (a ref **read**,
+      `mapRef.current`), both inside a `<MapViewDirections onReady={...}>`
+      callback nested in an IIFE embedded in JSX — this round was scoped to
+      reads only, and this write is a *third*, different write finding from
+      the 2 round 1 (#3778) already closed in `ActiveRidePanel.tsx`; flagged
+      per this round's task instructions rather than silently re-fixed.
+      Needs the same kind of verification the other 53 got before closing.
+    - **Side effect worth flagging** (same phenomenon as rider's round 2):
+      fixing 10 of the 15 immutability findings surfaced 10 previously
+      linter-invisible `react-hooks/set-state-in-effect` findings in the
+      same files (driver count 17→27) — same pre-existing setState calls,
+      not new behavior. Left untouched (out of scope this round).
+    - Full Change Impact Log:
+      `docs/change-log/2026-08-12-c20-lint-tier2-driver-app.md`.
     - `@typescript-eslint/no-require-imports` remaining (23 rider / 11
       driver) — all in `__tests__/`/`e2e/` files, where a dynamic
       `require()` mid-test-body is the idiomatic way to grab a

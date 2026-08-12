@@ -72,10 +72,9 @@ export default function AddressesScreen() {
     const [showAddModal, setShowAddModal] = useState(false);
     const [newAddress, setNewAddress] = useState({ name: '', address: '' });
 
-    useEffect(() => {
-        fetchAddresses();
-    }, []);
-
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
     const fetchAddresses = async () => {
         setLoading(true);
         try {
@@ -90,6 +89,10 @@ export default function AddressesScreen() {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        fetchAddresses();
+    }, []);
 
     const handleDelete = (id: string) => {
         Alert.alert('Delete Address', 'Are you sure you want to delete this address?', [

@@ -37,6 +37,13 @@ function getMimeFromUri(uri: string, fileName?: string | null): string {
     return EXT_TO_MIME[ext] || 'image/jpeg';
 }
 
+// Module-level (not component-scope) so react-hooks/purity doesn't treat this
+// as an impure call "during render" — it's only ever invoked from the
+// pickImage event handler, well after mount, never during render itself.
+function genFallbackFileName(): string {
+    return `photo_${Date.now()}.jpg`;
+}
+
 interface Requirement {
     id: string;
     name: string;
@@ -225,7 +232,7 @@ export default function DocumentsScreen() {
 
             if (!result.canceled && result.assets && result.assets.length > 0) {
                 const asset = result.assets[0];
-                const name = asset.fileName || `photo_${Date.now()}.jpg`;
+                const name = asset.fileName || genFallbackFileName();
                 // asset.type from expo-image-picker is 'image'|'video', not a MIME type.
                 // Derive the real MIME from the file extension so the backend magic-byte
                 // check doesn't reject a PNG declared as image/jpeg.

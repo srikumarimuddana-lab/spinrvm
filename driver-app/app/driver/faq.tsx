@@ -52,10 +52,9 @@ export default function FaqScreen() {
     const [search, setSearch] = useState('');
     const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
-    useEffect(() => {
-        fetchFaqs();
-    }, []);
-
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
     const fetchFaqs = async () => {
         try {
             // Attach last-known location (only when already permitted — no
@@ -82,6 +81,10 @@ export default function FaqScreen() {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        fetchFaqs();
+    }, []);
 
     const toggleItem = useCallback((id: string) => {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);

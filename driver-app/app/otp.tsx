@@ -41,6 +41,14 @@ export default function OtpScreen() {
   const inputRef = useRef<TextInput>(null);
 
   // Animations
+  // react-hooks/refs ("Cannot access refs during render"): standard
+  // Animated.Value driver idiom — both are mutated only via
+  // Animated.spring()/.timing() inside effects/event handlers below, read
+  // only in JSX interpolate()/transform bindings. Verified safe — grepped
+  // this file for `.current =`: zero matches, neither ref is ever
+  // reassigned after creation, so a discarded/replayed render always reads
+  // the same instance(s).
+  // eslint-disable-next-line react-hooks/refs
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const dotAnims = useRef(
     Array.from({ length: codeLength }, () => new Animated.Value(0))
@@ -248,6 +256,7 @@ export default function OtpScreen() {
             activeOpacity={1}
             onPress={() => inputRef.current?.focus()}
           >
+            {/* eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver array, see note above declaration */}
             {Array.from({ length: codeLength }).map((_, i) => {
               const isFilled = i < code.length;
               const isActive = i === code.length;

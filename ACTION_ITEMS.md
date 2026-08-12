@@ -4789,7 +4789,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - [ ] **Status:** open — **NOT fixed, still needs confirmation before touching**.
   Discovered 2026-08-12 as a side effect of the B8 "Regina Airpot" rename
   blast-radius check (unrelated task; querying `service_areas` to confirm
-  it was safe to rename surfaced this by coincidence).
+  it was safe to rename surfaced this by coincidence). **2026-08-13:** wrote up
+  a standalone escalation brief for whoever picks this up with real
+  research/legal access — timeline, the exact ask, who should answer it, and
+  what to do once resolved, so this doesn't need to be re-explained from
+  scratch a third time:
+  `docs/compliance/2026-08-13-sk-pst-rideshare-determination-needed.md`.
+  Still blocked; no data or code changed by this pass.
 - **Research attempted 2026-08-12, inconclusive — asked the user directly
   whether `Regina.pst_enabled=false` is a bug or intentional; the user's
   answer was "PST is not applicable for Saskatchewan we might want to

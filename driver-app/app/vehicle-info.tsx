@@ -228,7 +228,7 @@ export default function VehicleInfoScreen() {
                     <View style={styles.warningBox}>
                         <Ionicons name="information-circle" size={18} color={colors.primary} />
                         <Text style={styles.warningText}>
-                            Updating these details triggers re-verification. You won't be able to go online until approved.
+                            Updating these details triggers re-verification. You won&apos;t be able to go online until approved.
                         </Text>
                     </View>
 

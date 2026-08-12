@@ -21,6 +21,11 @@
  * Code under test: shared/store/authStore.ts::refreshTokens
  */
 
+import apiClient, {
+  setSuppressRefreshSignOut,
+} from '../../../shared/api/client';
+import { useAuthStore } from '../../../shared/store/authStore';
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
 }));
@@ -76,11 +81,6 @@ jest.mock('../../../shared/api/client', () => ({
   setSuppressRefreshSignOut: jest.fn(),
   getAuthHeader: jest.fn(() => Promise.resolve(null)),
 }));
-
-import apiClient, {
-  setSuppressRefreshSignOut,
-} from '../../../shared/api/client';
-import { useAuthStore } from '../../../shared/store/authStore';
 
 const mockPost = apiClient.post as jest.Mock;
 const mockSetSuppress = setSuppressRefreshSignOut as jest.Mock;

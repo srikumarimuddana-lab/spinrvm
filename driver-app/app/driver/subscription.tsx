@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, Platform, Alert,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -21,16 +21,6 @@ interface Plan {
   rides_per_day: number;
   description: string;
   features: string[];
-}
-
-interface Subscription {
-  id: string;
-  plan_name: string;
-  price: number;
-  rides_per_day: number;
-  status: string;
-  started_at: string;
-  expires_at: string;
 }
 
 interface Payment {
@@ -437,7 +427,7 @@ export default function SubscriptionScreen() {
         {plans.length === 0 && freeMode && (
           <View style={styles.freeCard}>
             <Text style={styles.freeEmoji}>🎉</Text>
-            <Text style={styles.freeTitle}>It's Free Right Now!</Text>
+            <Text style={styles.freeTitle}>It&apos;s Free Right Now!</Text>
             <Text style={styles.freeMessage}>{freeMessage}</Text>
             <View style={styles.freeBadge}>
               <Ionicons name="checkmark-circle" size={16} color="#10B981" />

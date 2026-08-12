@@ -11,7 +11,12 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+// Guarded native-module require — must stay runtime require(), not a
+// static import, so it only executes when notifications are usable (not
+// Expo Go/web); a static import would throw at module load in those
+// environments where the native module isn't linked.
 const Notifications: typeof import('expo-notifications') | null =
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   (!isExpoGo && Platform.OS !== 'web') ? require('expo-notifications') : null;
 
 interface IdlePanelProps {

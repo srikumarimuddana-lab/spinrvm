@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Image, Modal, Platform, StatusBar, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Image, Modal, StatusBar, Alert } from 'react-native';
 import { showToast } from '../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from "expo-router/react-navigation";
@@ -8,6 +8,11 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import api, { getAuthHeader, getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -53,7 +58,7 @@ interface DriverDocument {
 
 export default function DocumentsScreen() {
     const insets = useSafeAreaInsets();
-    const { driver, fetchDriverProfile } = useAuthStore();
+    const { fetchDriverProfile } = useAuthStore();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [loading, setLoading] = useState(true);
@@ -228,7 +233,7 @@ export default function DocumentsScreen() {
 
                 await processUpload(asset.uri, name, mimeType, reqId, side);
             }
-        } catch (e) {
+        } catch {
             showToast('error', 'Error', 'Failed to pick image');
         }
     };
@@ -245,7 +250,7 @@ export default function DocumentsScreen() {
             const asset = result.assets[0];
             await processUpload(asset.uri, asset.name, asset.mimeType || getMimeFromUri(asset.uri, asset.name), reqId, side);
 
-        } catch (err: any) {
+        } catch {
             // processUpload surfaces its own API errors and doesn't rethrow, so
             // this only sees DocumentPicker failures — a raw native err.message
             // is meaningless to the driver; match pickImage's clean generic.

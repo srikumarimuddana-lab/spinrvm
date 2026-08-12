@@ -6,14 +6,14 @@
  * Code under test: driver-app/hooks/useDriverDiscreetSosFlag.ts
  */
 
+import { renderHook, waitFor } from '@testing-library/react-native';
+import apiClient from '@shared/api/client';
+import { useDriverDiscreetSosFlag } from '../useDriverDiscreetSosFlag';
+
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { get: jest.fn() },
 }));
-
-import { renderHook, waitFor } from '@testing-library/react-native';
-import apiClient from '@shared/api/client';
-import { useDriverDiscreetSosFlag } from '../useDriverDiscreetSosFlag';
 
 const mockGet = apiClient.get as jest.Mock;
 

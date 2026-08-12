@@ -5,6 +5,12 @@
  * Coverage target: P3-4 step 2 (raise driver-app coverage to next threshold).
  */
 
+// @shared/api/client resolves to the shared stub via moduleNameMapper, which
+// also mirrors getApiErrorMessage (backend detail wins, else the fallback).
+
+import { useQuestStore } from '../questStore';
+import api from '@shared/api/client';
+
 jest.mock('react-native', () => ({
     Platform: { OS: 'ios' },
     Alert: { alert: jest.fn() },
@@ -16,12 +22,6 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     setItem: jest.fn(() => Promise.resolve()),
     removeItem: jest.fn(() => Promise.resolve()),
 }));
-
-// @shared/api/client resolves to the shared stub via moduleNameMapper, which
-// also mirrors getApiErrorMessage (backend detail wins, else the fallback).
-
-import { useQuestStore } from '../questStore';
-import api from '@shared/api/client';
 
 const mockGet = api.get as jest.Mock;
 const mockPost = api.post as jest.Mock;

@@ -147,7 +147,7 @@ export default function DriverLostAndFoundScreen() {
           <Text style={styles.emptyTitle}>No cases yet</Text>
           <Text style={styles.emptyHint}>
             If you find something in your vehicle, open the ride from your Rides tab and tap
-            "Found an item on this ride?"
+            &quot;Found an item on this ride?&quot;
           </Text>
         </View>
       ) : (

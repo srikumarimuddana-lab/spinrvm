@@ -412,8 +412,6 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     );
 };
 
-const { width: SCREEN_W } = Dimensions.get('window');
-
 function createStyles(colors: ThemeColors, isDark: boolean) {
     const bg = isDark ? '#1C1C1E' : '#FFFFFF';
     const surfaceBg = isDark ? '#2C2C2E' : '#F5F5F7';

@@ -6,91 +6,103 @@ const source = fs.readFileSync(
   'utf8',
 );
 
-// Live-testing bug (2026-08-11): the payment-method sheet's footer Done
-// button was dead on iOS. First diagnosis (nested Touchable wrappers, fixed
-// in 5f18a92) proved insufficient: on TestFlight 2.0.0 (16), with the flat
-// structure embedded, the button still never received touches. The operative
-// cause is the stacked-sheet layout — this RN Modal slides over the
-// ride-options bottom sheet, and on the New Architecture the modal region
-// below the ScrollView is a touch dead zone. The footer button was removed
-// entirely: rows now commit their selection and dismiss in one press
-// (matching the promo sheet, which closes on apply by design).
+// Live-testing bug, round 4 (2026-08-12): the payment selector was an RN
+// <Modal> sliding over the ride-options @gorhom bottom sheet. On iOS New
+// Architecture (TestFlight 2.0.0 (16)) that stacked Modal was touch-dead:
+// first the footer Done button (round 3 removed it in favor of
+// select-to-dismiss rows), then the rider confirmed the rows themselves never
+// received presses either — the sheet could not be dismissed by tapping a
+// payment method. The jest-verified handlers were correct, so the presses
+// were dying in the native layer: the Modal-over-sheet stack itself.
+// The fix replaces the Modal with a third @gorhom/bottom-sheet instance —
+// the same library as the vehicle and promo sheets, the one overlay pattern
+// proven to receive touches on this screen on-device.
 // This contract pins that shape against reintroduction of either failure:
-// a Touchable ancestor above the rows, or any footer control that would sit
-// in the dead zone as the sheet's only exit.
-// Full log: docs/change-log/2026-08-11-rider-payment-sheet-done-button.md
+// an RN Modal stacked for payment selection, or any footer control that
+// would again be the sheet's only exit.
+// Full log: docs/change-log/2026-08-12-rider-payment-sheet-bottomsheet.md
 describe('payment-method sheet touch-delivery contract', () => {
-  // Everything between the modal's opening tag and the promo sheet that
-  // follows it — scoping the assertions so unrelated screens/sheets in this
-  // large file can't satisfy (or trip) them by accident.
-  const modalSource = source.slice(
-    source.indexOf('Payment method modal'),
+  // Everything between the payment sheet's banner comment and the promo
+  // sheet that follows it — scoping the assertions so unrelated sheets in
+  // this large file can't satisfy (or trip) them by accident.
+  const sheetSource = source.slice(
+    source.indexOf('Payment method sheet'),
     source.indexOf('Promo selection sheet'),
   );
 
-  it('locates the payment modal region in ride-options.tsx', () => {
-    expect(modalSource.length).toBeGreaterThan(0);
-    expect(modalSource).toContain('visible={showPaymentSheet}');
+  it('locates the payment sheet region in ride-options.tsx', () => {
+    expect(sheetSource.length).toBeGreaterThan(0);
+    expect(sheetSource).toContain('ref={paymentSheetRef}');
   });
 
-  it('keeps the backdrop a sibling Pressable, never a Touchable parent of the sheet', () => {
-    expect(modalSource).toContain(
-      '<Pressable style={StyleSheet.absoluteFill} onPress={() => setShowPaymentSheet(false)} />',
-    );
-    // The original backdrop bug: a TouchableOpacity styled as the overlay
-    // that *wrapped* the sheet. Any Touchable carrying the overlay style
-    // means the parent-wrapper pattern is back.
-    expect(modalSource).not.toMatch(
-      /<(TouchableOpacity|TouchableWithoutFeedback|Pressable)[\s\S]{0,200}?style=\{styles\.modalOverlay\}/,
-    );
-  });
-
-  it('keeps the sheet container a plain View with no Touchable ancestors above the rows', () => {
-    expect(modalSource).toContain('<View style={styles.paymentModal}>');
-    expect(modalSource).not.toMatch(
-      /<(TouchableOpacity|TouchableWithoutFeedback)[\s\S]{0,200}?style=\{styles\.paymentModal\}/,
-    );
-  });
-
-  it('has no footer button — the dead zone below the ScrollView must hold no control', () => {
-    // On iOS (New Arch) the modal region below the ScrollView never receives
-    // touches when this Modal is stacked over the ride-options bottom sheet;
-    // TestFlight 2.0.0 (16) proved a footer button there renders but is
-    // un-tappable. Nothing interactive may live between </ScrollView> and
-    // the sheet's closing </View>.
-    expect(modalSource).not.toContain('paymentDoneBtn');
-    const afterScroll = modalSource.slice(modalSource.indexOf('</ScrollView>'));
-    expect(afterScroll).not.toMatch(/<(TouchableOpacity|Pressable|Button)\b/);
+  it('is a @gorhom bottom sheet, never an RN Modal stacked over the vehicle sheet', () => {
+    // The operative iOS New-Arch failure: an RN <Modal> rendered over the
+    // @gorhom vehicle sheet draws but does not receive touches. The selector
+    // must be a sibling BottomSheet from the same library instead.
+    expect(sheetSource).toMatch(/^\s*<BottomSheet\b/m);
+    expect(sheetSource).toContain('<BottomSheetScrollView');
+    expect(sheetSource).not.toMatch(/^\s*<Modal\b/m);
+    // The Modal import must be gone from this screen entirely (SchedulePicker
+    // and ConfirmSheet are separate components with their own files) — a
+    // re-added import is the first sign of the stacked-Modal pattern coming
+    // back.
+    expect(source).not.toMatch(/^\s*Modal,$/m);
+    expect(source).not.toContain('showPaymentSheet');
   });
 
   it('dismisses the sheet in the same press that selects a payment method', () => {
     // Every selectable row must both commit its selection and close the
-    // sheet — with no Done button, a row that only selects would strand the
-    // rider (backdrop tap aside). Match each row's onPress body.
+    // sheet — there is no Done button, so a row that only selects would
+    // strand the rider (backdrop tap aside). Match each row's onPress body.
     const rowPresses = [
       // saved card
-      /setSelectedPayment\('card'\); setSelectedCardId\(card\.id\); setUseCorporate\(false\); setShowPaymentSheet\(false\);/,
+      /setSelectedPayment\('card'\); setSelectedCardId\(card\.id\); setUseCorporate\(false\); closePaymentSheet\(\);/,
       // wallet
-      /setSelectedPayment\('wallet'\); setUseCorporate\(false\); setShowPaymentSheet\(false\);/,
+      /setSelectedPayment\('wallet'\); setUseCorporate\(false\); closePaymentSheet\(\);/,
       // corporate account
-      /setUseCorporate\(true\); setSelectedCorporateId\(acct\.id\); setShowPaymentSheet\(false\);/,
+      /setUseCorporate\(true\); setSelectedCorporateId\(acct\.id\); closePaymentSheet\(\);/,
     ];
     for (const press of rowPresses) {
-      expect(modalSource).toMatch(press);
+      expect(sheetSource).toMatch(press);
     }
   });
 
   it('keeps the add-payment escape hatches that close the sheet before navigating', () => {
     // "Add payment method" row (always) and the empty-state card row must
     // close the sheet and route to manage-cards.
-    const navPresses = modalSource.match(
-      /setShowPaymentSheet\(false\); router\.push\('\/manage-cards' as any\);/g,
+    const navPresses = sheetSource.match(
+      /closePaymentSheet\(\); router\.push\('\/manage-cards' as any\);/g,
     );
     expect(navPresses?.length).toBe(2);
-    expect(modalSource).toContain('Add payment method');
+    expect(sheetSource).toContain('Add payment method');
   });
 
-  it('keeps tap-outside-to-close and the Android back handler', () => {
-    expect(modalSource).toContain('onRequestClose={() => setShowPaymentSheet(false)}');
+  it('holds no control below the scroll view — rows are the exits, not a footer', () => {
+    // Round 3's lesson: a footer control below the scrolling list was
+    // un-tappable on-device and became a trap as the sheet's primary exit.
+    // Nothing interactive may live between </BottomSheetScrollView> and the
+    // sheet's close.
+    expect(sheetSource).not.toContain('paymentDoneBtn');
+    const afterScroll = sheetSource.slice(sheetSource.indexOf('</BottomSheetScrollView>'));
+    expect(afterScroll).not.toMatch(/<(TouchableOpacity|Pressable|Button)\b/);
+  });
+
+  it('keeps tap-outside-to-close via the sheet backdrop', () => {
+    // renderPaymentBackdrop lives with the sheet's plumbing above the JSX
+    // region, so assert against the whole file.
+    const backdrop = source.slice(
+      source.indexOf('const renderPaymentBackdrop'),
+      source.indexOf('), []);', source.indexOf('const renderPaymentBackdrop')),
+    );
+    expect(backdrop).toContain('pressBehavior="close"');
+  });
+
+  it('keeps the Android hardware-back exit the old Modal provided via onRequestClose', () => {
+    const backHandler = source.slice(
+      source.indexOf("BackHandler.addEventListener('hardwareBackPress'"),
+      source.indexOf('paymentSheetOpen]'),
+    );
+    expect(backHandler).toContain('paymentSheetRef.current?.close()');
+    expect(backHandler).toContain('return true');
   });
 });

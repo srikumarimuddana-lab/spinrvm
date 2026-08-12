@@ -24,7 +24,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
+    runtimeVersion: '2.1.0', // bump from 2.0.0 (SDK 57 dependency alignment, 2026-08-11): react-native-gesture-handler 2.31→2.32, react-native-safe-area-context 5.6→5.7, netinfo 11→12 are all NATIVE-module changes, and @react-native-community/datetimepicker + react-native-modal-datetime-picker were removed from autolinking — JS built against these must never OTA onto pre-alignment binaries. Prior: 2.0.0 fenced the New Architecture switch (old-arch installs must not pull that OTA).
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',
@@ -32,8 +32,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     ios: {
         supportsTablet: true,
-        // @ts-expect-error minimumOsVersion is valid Expo config but not yet in SDK 54 type defs
-        minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54
+        // @ts-expect-error minimumOsVersion is not in the SDK 57 ExpoConfig ios type, and a
+        // grep of the installed @expo/* + expo-build-properties tooling finds NO consumer of
+        // it (verified 2026-08-12) — the ENFORCED iOS floor is expo-build-properties'
+        // ios.deploymentTarget: '16.4' below, not this key. Kept only in case store-side/EAS
+        // tooling reads it from the uploaded config; do not edit it expecting to change the
+        // supported-OS floor.
+        minimumOsVersion: '16.4', // matches deploymentTarget — the actual floor (history: 13.0 → 16.0 at SDK 55, 16.4 since Voltra Live Activities)
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         // No ios.config.googleMapsApiKey on purpose: iOS uses Apple Maps. Every
@@ -168,8 +173,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Notifee renders the ongoing "live ride" notification (Android). Declares
         // POST_NOTIFICATIONS for Android 13+; see plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
-        // SDK 55 / RN 0.85.2 androidx.* deps require compileSdk 36 (build tools
-        // 36.0.0 provisioned by EAS). LogRocket requires minSdkVersion 25.
+        // SDK 57 / RN 0.86.2 androidx.* deps require compileSdk 36 (build tools
+        // 36.0.0 provisioned by EAS; requirement dates from SDK 55 and still holds).
+        // LogRocket requires minSdkVersion 25.
         // Kotlin pinned to 2.2.21 — Option C strategy. See docs/android-build-strategy.md
         // for full context. Summary: Stripe SDK 23.3+ is built with Kotlin 2.2.21 metadata,
         // so we bump our compiler to match rather than pin Stripe back. ksp must match
@@ -185,14 +191,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             ios: {
                 deploymentTarget: '16.4',
                 // Compile React Native from source instead of the prebuilt
-                // ReactNativeCore.xcframework. On SDK 55 the prebuilt 0.85.2 core
-                // exposes a 4-arg RCTDevMenuConfiguration(...,bundleConfiguration:)
-                // while expo-dev-launcher 55.0.36 still calls the 3-arg form that
-                // matches the npm RN *source* headers — so against the prebuilt
-                // binary the dev-launcher Swift fails to compile ("missing argument
-                // for parameter 'bundleConfiguration'"). Building from source aligns
-                // every RN header with what expo-dev-launcher expects. The 4-arg
-                // API only lands in SDK 56; until we migrate, source build is the fix.
+                // ReactNativeCore.xcframework. Added on SDK 55: the prebuilt 0.85.2
+                // core exposed a 4-arg RCTDevMenuConfiguration while expo-dev-launcher
+                // 55.0.36 called the 3-arg form, so dev-launcher Swift failed to
+                // compile against the prebuilt binary. That header mismatch was fixed
+                // upstream in SDK 56, so on SDK 57 this flag is LIKELY removable —
+                // but flipping it is only verifiable via an EAS iOS build (none run
+                // in the SDK 57 alignment pass, 2026-08-11), so it deliberately stays
+                // on. Removal (a large iOS build-time win) is tracked in
+                // ACTION_ITEMS.md alongside withFirebaseNonModularHeaders, which
+                // exists to support this source-build + static-frameworks combo.
                 buildReactNativeFromSource: true,
                 // @react-native-firebase Swift pods (AppCheckCore,
                 // FirebaseCoreInternal, FirebaseCrashlytics, FirebaseSessions)

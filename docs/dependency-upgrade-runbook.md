@@ -11,8 +11,9 @@ wasted EAS build credits. This runbook is the required process for any dependenc
 
 | Expo SDK | React Native | Min iOS | Min Android API | Notes |
 |----------|-------------|---------|-----------------|-------|
-| 55 (current) | 0.85 | **16.0** | 24 | New Architecture stable |
-| 54 | 0.74 | 13.0 | 23 | Previous version |
+| 57 (current) | 0.86 | **16.4** (expo-build-properties 57.x hard-validates deploymentTarget ≥ 16.4) | 24 (apps pin minSdk 25 for LogRocket) | React 19.2; New Architecture only for our stack (reanimated 4 / worklets) |
+| 55 | 0.85 | 16.0 | 24 | New Architecture stable |
+| 54 | 0.74 | 13.0 | 23 | |
 | 53 | 0.73 | 13.0 | 23 | |
 | 52 | 0.72 | 13.0 | 23 | |
 
@@ -211,5 +212,6 @@ The `os-target-check` CI job enforces the no-`package-lock.json` rule automatica
 
 | Date | SDK | iOS min | Android min | PR |
 |------|-----|---------|-------------|----|
+| 2026-08 | 57 | 16.4 | 24 (app pins 25) | #605 (Dependabot expo-stack bump) + #607/#609 (app-level completion) + SDK 57 dependency-alignment branch, 2026-08-11 (see `docs/change-log/2026-08-11-sdk57-dependency-alignment.md`) |
 | 2026-05-03 | 55 | 16.0 | 24 | #406 |
 | (initial) | 54 | 13.0 | 23 | — |

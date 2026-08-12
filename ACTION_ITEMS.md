@@ -5786,84 +5786,59 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `rider-app/package.json`, `rider-app/yarn.lock`, `driver-app/package.json`,
   `driver-app/yarn.lock` (durable fix).
 
-### C20. `tsc --noEmit` false-positives across all three frontend surfaces — CLOSED, real root cause was stale `node_modules`, not a config bug
-- [x] **Status:** closed 2026-08-12, same day picked up. Originally filed as
-  C13 (2026-08-03, while verifying PR #3382); renumbered to C20 here because
-  a different C13 ("Required `pull_request`-triggered workflows silently
-  never fire on some PRs") was filed by a concurrent session in the meantime
-  and merged first — per this file's own numbering convention (highest used
-  + 1, never reuse), this entry moves to the next free slot rather than
-  leaving two C13s in the document.
-- **Original (wrong) diagnosis:** the filing session assumed a real
-  repo-config bug — missing `expo-router/react-navigation` type
-  declarations in `rider-app`/`driver-app`'s `tsconfig.json`s, and missing
-  Vitest/jest-dom ambient types in `admin-dashboard`'s `tsconfig.json`.
-- **Actual root cause, found on pickup:** none of that was true.
-  `admin-dashboard/tsconfig.json` already declared
-  `"types": ["vitest/globals", "@testing-library/jest-dom"]` — the config
-  was already correct. The real problem was that **this environment's
-  pre-baked `node_modules` in all three apps were stale relative to their
-  own lockfiles**: `rider-app`/`driver-app`'s installed `expo-router` was
-  `55.0.16` while `yarn.lock`/`package.json` both pinned `~57.0.9`/`~57.0.8`
-  (the `react-navigation` subpath simply doesn't exist in 55.x — confirmed
-  via `find node_modules/expo-router -iname '*react-navigation*'` before vs.
-  after reinstall); `admin-dashboard`'s installed `@testing-library/jest-dom`
-  was `6.9.1` against a `^7.0.0` `package.json` pin. **Why this went
-  unnoticed:** this repo's `.claude/settings.json` `SessionStart` hook only
-  checked `test -d node_modules` (directory *exists*) before declaring
-  dependencies "ok" — it never verified the installed versions matched the
-  lockfile, so a stale pre-baked install silently passed every session
-  indefinitely.
-- **Fix:**
-  1. Reinstalled all three apps' dependencies from their lockfiles
-     (`yarn install --check-files` for `rider-app`/`driver-app`; `npm ci`
-     for `admin-dashboard` — after first almost creating a stray `yarn.lock`
-     in `admin-dashboard` by running `yarn install` there out of habit,
-     caught via `git status` showing an untracked `yarn.lock` next to the
-     project's real `package-lock.json`, deleted before it could confuse the
-     project's actual package manager). No `tsconfig.json` or application
-     code needed to change in any of the three apps — the configs filed
-     against in the original diagnosis were already correct.
-  2. Hardened `.claude/settings.json`'s `SessionStart` hooks so this can't
-     silently recur: `rider-app`/`driver-app` now run `yarn check
-     --integrity` (only skipping a full `yarn install --check-files` when
-     that passes) instead of a bare directory-existence check;
-     `admin-dashboard` now runs `npm ci` unconditionally every session
-     start instead of skipping when `node_modules` merely exists.
-- **Verification performed:**
-  - `npx tsc --noEmit`: **0 errors** in all three surfaces (was 7 rider-app
-    + 4 driver-app + 26 admin-dashboard).
-  - `yarn jest --ci`: rider-app **466/466 passed, 56/56 suites** (the
-    previously-failing-to-load `useBottomSheetGuard.test.tsx` now loads and
-    passes); driver-app **379/379 passed, 53/53 suites** with
-    `--runInBand` (the previously-failing-to-load `ActivityView.test.tsx`
-    now loads and passes). Both apps' parallel `--ci` runs each showed one
-    unrelated test timeout under worker contention
-    (`verifyEmailScreen.test.tsx` rider-app,
-    `SafetyOverlay.test.tsx`/`ActivityView.test.tsx` driver-app) — all
-    confirmed pre-existing full-suite-parallelism flakiness by re-running in
-    isolation (all pass) and, for driver-app, a full `--runInBand` pass
-    (0 flakes serialized) — not caused by this fix, matching the exact flake
-    already documented against `verifyEmailScreen.test.tsx` under the C19
-    entry above.
-  - `vitest run` (admin-dashboard): **160/160 passed, 20/20 files**.
-  - `git status` across all three app directories: **zero tracked files
-    changed** by the reinstall itself — confirms this was purely a
-    local-environment `node_modules`/lockfile desync, not a repo bug that
-    needed a source commit.
-- **What was NOT verified:** whether other CI/dev environments (Fly/Railway
-  build containers, other contributors' machines, other Claude Code
-  sessions' pre-baked images) carry the same stale `node_modules` — this was
-  only confirmed and fixed for the container this session ran in. The
-  hardened `SessionStart` hook (fix 2 above) is the durable guard against
-  recurrence, but hasn't itself been exercised against a genuinely-stale
-  future container in this session (it fixed a `test -d`-passing/actually-stale
-  state retroactively, which is the scenario it's designed for, but the
-  hook edit itself was not separately re-tested end-to-end by starting a
-  fresh session).
-- **Files:** `.claude/settings.json` (hardened `SessionStart` hooks — the
-  actual durable fix). No `tsconfig.json` or application code changed in
-  `rider-app`, `driver-app`, or `admin-dashboard`.
+### C20. SDK 57 alignment follow-ups that are EAS-build-gated (from the 2026-08-11 dependency-alignment pass — see `docs/change-log/2026-08-11-sdk57-dependency-alignment.md`)
+- [ ] **Status:** OPEN — the alignment branch (`claude/sdk-55-57-upgrade-jrz0iv`)
+  brought both apps to SDK 57's expected dependency versions and verified with
+  tsc + jest + production `expo export` in both apps, but this environment
+  cannot run EAS/native builds. Each sub-item below needs one EAS build (or a
+  release-build device test) to close; none should be batched blind with the
+  others — one variable per build, per `docs/dependency-upgrade-runbook.md`.
+- [ ] **First EAS Android + iOS build off the alignment branch** — proves the
+  native side of RNGH 2.32 / safe-area 5.7 / netinfo 12 / datetimepicker 9 /
+  rider picker removals (a green `expo export` is NOT a green `eas build` —
+  C17/C19 lesson). Then a device smoke: gestures (bottom sheets, map pan,
+  hold-to-confirm SOS), safe-area insets, offline banner, driver onboarding
+  date picker, and confirm EAS Observe app-start metrics resume (the
+  `ObserveRoot` fix in BOTH apps' `app/_layout.tsx` — rider's duplicated
+  instance was caught in the 2026-08-12 pre-merge review).
+- [ ] **Try removing `ios.buildReactNativeFromSource: true`** (both
+  app.config.ts): the expo-dev-launcher header mismatch it worked around was
+  fixed upstream in SDK 56. One EAS iOS build with it off; if green, also
+  retire `plugins/withFirebaseNonModularHeaders.js` in the same test (it
+  exists to support the source-build + static-frameworks combo). Large iOS
+  build-time win.
+- [ ] **Try removing `plugins/withForceCompileSdk.js` and
+  `plugins/withKspVersion.js`** — their documented removal criteria ("Expo SDK
+  ≥56 ships compileSdk 36 default"; "expo-updates ksp mapping fixed") are now
+  testable on 57. One EAS Android build with them disabled. See the
+  removal-criteria table in `docs/android-build-strategy.md`.
+- [ ] **@stripe/stripe-react-native 0.63.0 → 0.64.0** (rider; SDK 57 expects
+  0.64.0) — HELD on 2026-08-11 by explicit user decision (payments surface
+  mid-live-testing + Option C Kotlin-toolchain entanglement). Bump criteria:
+  check 0.64.0's Kotlin/Stripe-Android versions against Option C first, EAS
+  Android + iOS builds, `spinr-money-auditor` review, manual payment smoke
+  (add card, PaymentSheet, ride payment, tip, Google Pay). Until then
+  `expo install --check` will keep flagging it — that residue is intentional.
+- [ ] **Try re-enabling Metro `unstable_enablePackageExports`** (both
+  metro.config.js): @sentry/react-native now resolves ≥7.11 which may fix the
+  frozen-ESM-namespace crash — but that crash was RELEASE-BUILD-ONLY under
+  Hermes, so this needs a release-build device test + the bundle-diff check
+  documented in the metro comment. Not flippable on tsc/jest evidence.
+- [ ] **expo-speech-recognition 57.x watch** (rider): no 57-line release
+  exists (npm latest = 56.0.1, verified 2026-08-11). Works on 57 today;
+  re-check each SDK cycle and bump when the community package catches up.
+- [ ] **Mobile lint debt under the SDK 57 ruleset**: rider 379 problems (176
+  errors) after eslint-config-expo ~57.0.1; driver 240 problems (105 errors)
+  on the config it already had. Mobile lint is not a CI gate (ci.yml lints
+  only frontend/ + admin-dashboard/), so this is cleanup debt, not a red
+  pipeline — but the new react-hooks 7 "refs during render" errors are the
+  kind that become real bugs; burn down by surface, don't bulk-disable rules.
+- [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
+  ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
+  SDK across the fleet, both still gated OFF on Android (hidden-API hang, see
+  `docs/android-build-strategy.md` runtime section). Converge on one major
+  (likely 3.x) next time either app cuts a binary, and re-test the Android 16
+  hang before any re-enable.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

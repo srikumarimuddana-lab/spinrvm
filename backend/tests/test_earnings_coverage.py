@@ -327,6 +327,37 @@ class TestGetDriverDailyEarnings:
                 await get_driver_daily_earnings(days=7, current_user={"id": USER_ID})
         assert exc.value.status_code == 503
 
+    async def test_earnings_accumulate_via_decimal_not_float(self):
+        """A26-adjacent P2 finding (docs/audit/2026-08-11-driver-rider-migration-audit.md):
+        raw float() accumulation over many rides drifts off the exact cent
+        value. 10 rides at $0.10+$0.10+$0.10+$0.10 each sum to exactly $4.00
+        with Decimal; the old raw-float accumulation gave 3.9999999999999996."""
+        from backend.routes.drivers import get_driver_daily_earnings
+
+        rides = [
+            _ride(
+                base_fare=0.1,
+                distance_fare=0.1,
+                time_fare=0.1,
+                tip_amount=0.1,
+                ride_completed_at="2026-08-01T12:00:00+00:00",
+            )
+            for _ in range(10)
+        ]
+
+        def get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return rides
+            return []
+
+        with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows)):
+            result = await get_driver_daily_earnings(days=7, current_user={"id": USER_ID})
+
+        assert len(result) == 1
+        assert result[0]["earnings"] == 4.0
+
 
 # ============================================================
 # get_driver_trip_earnings (previously entirely untested)
@@ -476,6 +507,38 @@ class TestGetDriverWeeklyEarnings:
         assert len(result) == 1
         assert result[0]["earnings"] == pytest.approx(20.0)
 
+    async def test_rides_fallback_earnings_accumulate_via_decimal(self):
+        """See TestGetDriverDailyEarnings.test_earnings_accumulate_via_decimal_not_float —
+        same fix, same drift-prone inputs, in the rides-table fallback path."""
+        from backend.routes.drivers import get_driver_weekly_earnings
+
+        rides = [
+            _ride(
+                base_fare=0.1,
+                distance_fare=0.1,
+                time_fare=0.1,
+                tip_amount=0.1,
+                ride_completed_at="2026-08-01T12:00:00+00:00",
+            )
+            for _ in range(10)
+        ]
+
+        def get_rows(table, filters=None, **kw):
+            if table == "driver_daily_stats":
+                return []
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows)),
+        ):
+            result = await get_driver_weekly_earnings(weeks=4, current_user={"id": USER_ID})
+
+        assert len(result) == 1
+        assert result[0]["earnings"] == 4.0
+
     async def test_rides_fallback_db_error_raises_503(self):
         from backend.routes.drivers import get_driver_weekly_earnings
 
@@ -550,6 +613,38 @@ class TestGetDriverMonthlyEarnings:
         assert len(result) == 1
         assert result[0]["rides"] == 1
 
+    async def test_rides_fallback_earnings_accumulate_via_decimal(self):
+        """See TestGetDriverDailyEarnings.test_earnings_accumulate_via_decimal_not_float —
+        same fix, same drift-prone inputs, in the rides-table fallback path."""
+        from backend.routes.drivers import get_driver_monthly_earnings
+
+        rides = [
+            _ride(
+                base_fare=0.1,
+                distance_fare=0.1,
+                time_fare=0.1,
+                tip_amount=0.1,
+                ride_completed_at="2026-08-01T12:00:00+00:00",
+            )
+            for _ in range(10)
+        ]
+
+        def get_rows(table, filters=None, **kw):
+            if table == "driver_daily_stats":
+                return []
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows)),
+        ):
+            result = await get_driver_monthly_earnings(months=6, current_user={"id": USER_ID})
+
+        assert len(result) == 1
+        assert result[0]["earnings"] == 4.0
+
     async def test_rides_fallback_db_error_raises_503(self):
         from backend.routes.drivers import get_driver_monthly_earnings
 
@@ -580,6 +675,30 @@ class TestGetDriverEarningsComparison:
             with pytest.raises(HTTPException) as exc:
                 await get_driver_earnings_comparison(period="week", current_user={"id": "ghost"})
         assert exc.value.status_code == 404
+
+    async def test_earnings_accumulate_via_decimal_not_float(self):
+        """See TestGetDriverDailyEarnings.test_earnings_accumulate_via_decimal_not_float —
+        same fix, same drift-prone inputs, applied to summarize()'s current-period sum."""
+        from backend.routes.drivers import get_driver_earnings_comparison
+
+        rides = [
+            _ride(
+                base_fare=0.1,
+                distance_fare=0.1,
+                time_fare=0.1,
+                tip_amount=0.1,
+                ride_completed_at="2026-08-01T00:00:00+00:00",
+            )
+            for _ in range(10)
+        ]
+
+        with (
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=rides)),
+        ):
+            result = await get_driver_earnings_comparison(period="week", current_user={"id": USER_ID})
+
+        assert result["current"]["earnings"] == 4.0
 
     async def test_week_period_computes_pct_change(self):
         from backend.routes.drivers import get_driver_earnings_comparison

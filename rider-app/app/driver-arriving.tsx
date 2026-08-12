@@ -122,6 +122,18 @@ function DriverArrivingScreenContent() {
 
   const rideCoords = useMemo(() => getRideMapCoords(currentRide), [currentRide]);
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
+  // Stable onExpire for <FreeCancelTimer> below (was an inline arrow
+  // function, recreated every render of this frequently-re-rendering
+  // screen — driver GPS polling/WS updates — which would have made
+  // FreeCancelTimer's internal countdown effect see a "new" onExpire and
+  // tear down/recreate its setInterval on almost every render).
+  const handleFreeCancelExpire = useCallback(() => {
+    showToast(
+      'Free cancel window closed',
+      `A $${cancellationFee.toFixed(2)} fee now applies if you cancel.`,
+      'warning',
+    );
+  }, [cancellationFee]);
   // Hoisted out of handleCancel so it can be a plain primitive in that
   // callback's useCallback deps below, instead of re-deriving from
   // `(currentRide as any)?.grand_total` inline (which the linter flags as
@@ -645,11 +657,7 @@ function DriverArrivingScreenContent() {
                   rideStatus={currentRide?.status}
                   freeCancelWindowSeconds={freeCancelWindowSeconds}
                   cancellationFee={cancellationFee}
-                  onExpire={() => showToast(
-                    'Free cancel window closed',
-                    `A $${cancellationFee.toFixed(2)} fee now applies if you cancel.`,
-                    'warning',
-                  )}
+                  onExpire={handleFreeCancelExpire}
                 />
               )}
 

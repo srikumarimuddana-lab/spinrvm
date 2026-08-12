@@ -12,8 +12,9 @@ name: Deploy Driver App → Play Console Testing
 #
 # ─── Prerequisites ─────────────────────────────────────────────────────────
 #   • Repo secret EXPO_TOKEN
-#   • driver-app/play-service-account.json (or the secret that generates it)
-#     must be available to EAS for the submit step
+#   • Repo secret PLAY_SERVICE_ACCOUNT_JSON (base64-encoded Google Cloud
+#     service account key JSON — decoded at runtime into
+#     driver-app/play-service-account.json for EAS submit)
 #   • The "Auto" closed testing track must exist in Google Play Console
 #   • Testers must be added to the track and have accepted the opt-in link
 
@@ -64,6 +65,9 @@ jobs:
 
       - run: yarn install --frozen-lockfile
 
+      - name: Decode Play service account key
+        run: echo "${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}" | base64 -d > play-service-account.json
+
       - name: Build and submit driver app to Play Console
         if: ${{ github.event.inputs.skip_build != 'true' }}
         run: |
@@ -87,6 +91,10 @@ jobs:
             --profile android-auto \
             --latest \
             --non-interactive
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f play-service-account.json
 
       - name: Summary
         run: |

@@ -2,9 +2,11 @@
 
 Route the current diff to the specialist subagent(s) that actually cover it,
 run a lightweight generic code-quality pass yourself, and present one
-consolidated report. This command does not reinvent domain rules — the 8
+consolidated report. This command does not reinvent domain rules — the 16
 `spinr-*` subagents already encode them in more depth than any inline
 checklist here could; this command's job is dispatch, not duplication.
+
+For the "dispatch every agent regardless of path" mode, see `/full-audit`.
 
 ## Usage
 
@@ -42,6 +44,13 @@ different failure mode over the same lines.
 | `backend/routes/safety.py`, `routes/sos.py`, `services/insurance_*.py`, `utils/emergency_*.py` (`area:safety`) | `spinr-security-auditor` **and** `spinr-regulatory-compliance-checker` |
 | Anything touching driver eligibility, trip/GPS retention, receipt tax line items, accessibility (WAV/service animal), logging/analytics/Sentry payloads, or data-deletion flows | `spinr-regulatory-compliance-checker` |
 | `backend/ai/**`, `backend/routes/ai.py`, `backend/routes/admin/ai_console.py`, `rider-app/app/ai-assistant.tsx` (`area:ai`) | `spinr-ai-guardrail-reviewer` |
+| Referrals (rider/driver), promo codes, quests/incentives/loyalty, signup flow, or driver location-ping ingestion | `spinr-fraud-auditor` |
+| `backend/socket_manager.py`, `backend/utils/ws_pubsub.py`, WebSocket route handlers, or any of the 18 loops in `backend/core/lifespan.py` | `spinr-realtime-reliability-reviewer` |
+| `routes/safety.py`, `routes/sos.py`, emergency-contact handling (product/UX surface, not insurance classification) | `spinr-safety-sos-reviewer` **and** `spinr-security-auditor` |
+| A path with a stated P95 SLA (dispatch offer→accept, fare estimate/settlement, WS fan-out, driver location write, auth refresh, Stripe webhook) or any new admin/dashboard list endpoint | `spinr-performance-sla-reviewer` |
+| New/changed Sentry captures, metric emission, log statements, or background loops | `spinr-observability-reviewer` |
+| `rider-app/`, `driver-app/`, `admin-dashboard/` UI-surface files | `spinr-accessibility-reviewer` |
+| A diff adding a ride-state transition, fare-calc branch, auth/RLS policy, or Stripe webhook type; or touching a module with a stated coverage minimum | `spinr-test-coverage-reviewer` |
 
 `spinr-regulatory-compliance-checker` explicitly isn't path-scoped in its own
 definition ("compliance issues can appear anywhere") — if the diff touches
@@ -55,8 +64,8 @@ force an irrelevant subagent to run just to have output.
 
 ## 3 · Generic code-quality pass (inline, not delegated)
 
-None of the 8 subagents cover this — it's intentionally generic, not
-Spinr-specific, so keep it here rather than inventing a 9th subagent for it:
+None of the 16 subagents cover this — it's intentionally generic, not
+Spinr-specific, so keep it here rather than inventing another subagent for it:
 
 - Python: type hints present, no bare `except:` clauses
 - TypeScript: no `any` types, errors handled on async functions

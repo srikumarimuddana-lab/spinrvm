@@ -32,7 +32,7 @@ import {
   onTokenRefresh,
   getAppCheckToken,
 } from '@shared/services/firebase';
-import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
+import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 
 // Arm the sign-out location teardown at module scope, before any screen mounts:
@@ -96,7 +96,14 @@ let dismissRideOfferNotification: any = null;
 let ensureNotifeeReady: any = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
+    // Guarded native-module requires — must stay runtime require(), not a
+    // static import: notifeeService.ts itself statically imports notifee at
+    // its own module scope, so requiring it eagerly here would defeat the
+    // whole guard (import both unconditionally instead of only on
+    // android/ios with a working native module).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     notifee = require('@notifee/react-native').default;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const svc = require('../services/notifeeService');
     parseRideOfferEvent = svc.parseRideOfferEvent;
     dismissRideOfferNotification = svc.dismissRideOfferNotification;
@@ -130,6 +137,10 @@ const canUseNotifications = !isExpoGo && Platform.OS !== 'web';
 let Notifications: any = null;
 if (canUseNotifications) {
   try {
+    // Guarded native-module require — must stay runtime require(), not a
+    // static import, so it only executes when notifications are usable
+    // (not Expo Go/web) and the catch can absorb a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     Notifications = require('expo-notifications');
   } catch (e) {
     console.log('[Push] expo-notifications unavailable:', e);
@@ -156,6 +167,11 @@ const LOGROCKET_ENABLED =
 let LogRocket: any = null;
 if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
   try {
+    // Guarded native-module require (same pattern as expo-observe above):
+    // must stay a runtime require(), not a static import, so it never
+    // executes when disabled/unavailable (Expo Go, web, or the kill flag)
+    // and so the catch below can absorb a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
   } catch (e) {
     console.log('[LogRocket] unavailable:', e);
@@ -512,8 +528,6 @@ function RootLayout() {
   // 1-2s refresh-then-retry delay.
   useEffect(() => {
     if (!isAuthInitialized || !authToken) return;
-
-    const { ensureFreshToken } = require('@shared/api/client');
 
     const sub = AppState.addEventListener('change', (nextState: string) => {
       if (nextState === 'active') {

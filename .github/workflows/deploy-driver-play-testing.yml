@@ -1,0 +1,139 @@
+name: Deploy Driver App → Play Console Testing
+
+# ─── What this does ────────────────────────────────────────────────────────
+# Builds the driver app as a store AAB (not a sideload APK) and submits it
+# to the Google Play "Auto" closed testing track via EAS. This is required
+# for Android Auto — sideloaded APKs are invisible to Android Auto's Car
+# App Library discovery; only Play Store installs are recognised.
+#
+# Triggers:
+#   • Manual (workflow_dispatch) — pick platform and whether to auto-submit
+#   • Push to main with [play-test] in the commit message
+#
+# ─── Prerequisites ─────────────────────────────────────────────────────────
+#   • Repo secret EXPO_TOKEN
+#   • Repo secret PLAY_SERVICE_ACCOUNT_JSON (base64-encoded Google Cloud
+#     service account key JSON — decoded at runtime into
+#     driver-app/play-service-account.json for EAS submit)
+#   • The "Auto" closed testing track must exist in Google Play Console
+#   • Testers must be added to the track and have accepted the opt-in link
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "driver-app/**"
+      - "shared/**"
+  workflow_dispatch:
+    inputs:
+      auto_submit:
+        description: "Auto-submit to Play Console after build"
+        required: false
+        default: true
+        type: boolean
+      skip_build:
+        description: "Skip build and submit the latest existing android-auto build"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-driver-play-testing
+  cancel-in-progress: false
+
+jobs:
+  build-and-submit:
+    runs-on: ubuntu-latest
+    # On push: only run when commit message contains [play-test]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[play-test]'))
+    defaults:
+      run:
+        working-directory: driver-app
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - run: yarn install --frozen-lockfile
+
+      - name: Decode Play service account key
+        # Passed via env, never interpolated into the script body: a raw-JSON
+        # value (the obvious mistake for a secret named *_JSON) carries double
+        # quotes and would break shell quoting, letting $(...) in the key
+        # material execute on the runner. Same pattern as eas-build.yml.
+        env:
+          PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_KEY_B64" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON secret is empty or unset."
+            echo "Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          printf '%s' "$PLAY_KEY_B64" | base64 -d > play-service-account.json
+
+          # An empty/garbage decode otherwise stays green here and fails deep
+          # inside EAS, where it is far harder to attribute.
+          if ! jq -e '.client_email and .private_key' play-service-account.json > /dev/null 2>&1; then
+            echo "::error::Decoded key is not valid service-account JSON (missing client_email/private_key)."
+            echo "The secret must hold the BASE64-encoded key file, not raw JSON."
+            exit 1
+          fi
+          echo "Service account key decoded and validated."
+
+      - name: Build and submit driver app to Play Console
+        if: ${{ github.event.inputs.skip_build != 'true' }}
+        # No --no-wait: this is a single Android build, not the 20-40 min iOS
+        # build that motivates the flag in eas-native-build.yml. Waiting is what
+        # makes a gradle failure, an unknown Play track (404), or an expired
+        # service account turn this check red instead of passing silently.
+        timeout-minutes: 60
+        run: |
+          SUBMIT_FLAG=""
+          if [ "${{ github.event.inputs.auto_submit }}" != "false" ]; then
+            SUBMIT_FLAG="--auto-submit-with-profile android-auto"
+          fi
+
+          eas build \
+            --platform android \
+            --profile android-auto \
+            --non-interactive \
+            $SUBMIT_FLAG
+
+      - name: Submit latest build (skip-build mode)
+        if: ${{ github.event.inputs.skip_build == 'true' }}
+        run: |
+          eas submit \
+            --platform android \
+            --profile android-auto \
+            --latest \
+            --non-interactive
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f play-service-account.json
+
+      # Only runs when the build/submit step above succeeded — a failed step
+      # halts the job, so this summary never claims a ship that did not happen.
+      - name: Summary
+        if: success()
+        run: |
+          echo "## Driver App → Play Console Testing" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Profile:** android-auto (store AAB)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Track:** Auto (closed testing)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Auto-submit:** ${{ github.event.inputs.auto_submit || 'true' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Testers install/update **Spinr Driver from Google Play**" >> $GITHUB_STEP_SUMMARY
+          echo "   (a sideloaded APK is invisible to Android Auto)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Connect phone to car → Spinr Driver appears in Android Auto" >> $GITHUB_STEP_SUMMARY

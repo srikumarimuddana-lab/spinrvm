@@ -7,7 +7,25 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-12 — C18 CLOSED: all 176 `uses:` references across 23
+_Last updated: 2026-08-12 — A28 CLOSED: audit's 4 P2 findings + P2-B
+triaged. P2-C already closed (same finding as P0-A/#3678). Float-on-money
+in `routes/drivers/earnings.py` (4 sites) fixed — Decimal accumulation
+instead of raw `float()`, with regression tests independently verified to
+fail on the pre-fix file with the predicted drift value. Remaining items
+(driver-import VIN/email/phone validation, `/balance` vs `/earnings`
+composition, rider total-rides definition, missing import change-logs)
+filed as backlog — most need a product decision, not a blind code change.
+Prior same-day: A27 CLOSED: audit's 2 P1 findings. P1-A (dead
+`drivers.total_earnings` fleet-wide stat) fixed with a live, legacy-excluded,
+batched earnings computation; also fixed a related gap on the per-driver
+"Earnings" header (missing legacy exclusion vs. its own "Payouts" tab). P1-B
+investigation (was PST hidden in legacy receipts?) surfaced a bigger live
+issue: the current fare engine had PST disabled for Saskatchewan with a
+comment claiming it doesn't apply — contradicting regulatory-sk.md. User
+confirmed PST does apply; enabled it in production for the 4 real SK service
+areas (effective for new quotes only, no backdating), fixed the stale
+comment, added the first direct tax-calculation unit tests. Prior same-day
+(2026-08-12): C18 CLOSED: all 176 `uses:` references across 23
 `.github/workflows/*.yml` files pinned from mutable version tags (`@v7`) to
 verified commit SHAs (`@<sha> # v7`), resolved via anonymous public-repo git
 reads (not the release-page scrape the original investigation correctly
@@ -2752,6 +2770,46 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   (not just legacy-touched ones) — that's the smoking-gun symptom if this
   analysis is correct.
   </details>
+
+### A27. Audit's 2 P1 findings (`docs/audit/2026-08-11-driver-rider-migration-audit.md`) — both CLOSED 2026-08-11
+- **P1-A — `drivers.total_earnings` is dead code (fleet-wide admin stat
+  always $0).**
+  - [x] **Status:** DONE. `admin_get_driver_stats` and per-area breakdown
+    now compute earnings live from completed, legacy-excluded rides (one
+    batched query, not N+1). Also fixed a related gap found in the same
+    pass: `admin_get_driver_live_stats` (per-driver "Earnings" header)
+    lacked the legacy-ride exclusion its own "Payouts" tab already had —
+    same driver, same screen, two different numbers (Phase 3 cross-surface
+    finding #2 in the audit). Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-p1a-driver-earnings-dead-column.md`.
+- **P1-B — legacy PST possibly folded silently into the fare line on
+  imported historical receipts.**
+  - [x] **Status:** CLOSED, but the investigation surfaced something bigger
+    than the audit anticipated. Traced the *current* fare engine
+    (`features.calculate_all_fees`) and found it carried a comment
+    asserting "PST does NOT apply to rideshare" in Saskatchewan, with the
+    live `service_areas` config for Saskatoon/Regina set `pst_enabled:
+    false` — directly contradicting `.claude/context/regulatory-sk.md`'s
+    documented rule ("PST (6%, SK) on fare where applicable — ride-share
+    currently PST-applicable in SK"). **User confirmed PST does apply and
+    the code was wrong** — Saskatoon/Regina were under-collecting PST on
+    every live ride, not just legacy-imported ones. Per explicit user
+    direction, enabled PST now in production (`pst_enabled=true,
+    pst_rate=6` on the 4 real Saskatchewan `service_areas` rows only — not
+    the unrelated `riyadh`/`riyadh airport` test rows), effective
+    immediately for new fare quotes, no backdating of already-completed
+    rides. Fixed the stale code comment; added the first direct unit tests
+    for `calculate_all_fees`'s GST/PST/HST branches (none existed before).
+    The original legacy-import question (was PST hidden in the imported
+    receipts' fare line) is likely moot given PST wasn't being charged at
+    all until this fix — no separate legacy-receipt remediation needed.
+    Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-sk-pst-enable.md`.
+  - **Not verified / left open**: whether historical remediation (crediting
+    riders or drivers for the pre-fix under-collection period) is needed —
+    explicitly out of scope per "no backdating" instruction; flag to
+    Finance/Legal if that determination is still pending.
+- P2 findings from the same audit: see A28 below, triaged 2026-08-12.
 
 ### A28. Audit's 4 P2 findings + P2-B (`docs/audit/2026-08-11-driver-rider-migration-audit.md`) — triaged 2026-08-12
 - **P2-C — rider importer never writes `legacy_import_metadata`.**

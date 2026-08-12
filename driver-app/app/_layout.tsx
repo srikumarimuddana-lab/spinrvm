@@ -444,7 +444,11 @@ function RootLayout() {
       script.async = true;
       document.body.appendChild(script);
     }
-  }, []);
+    // initializeAuth/initializeLocation are stable Zustand store actions
+    // (defined once inside create(), identity never changes) — including
+    // them satisfies the lint rule without changing this mount-only effect's
+    // firing behavior.
+  }, [initializeAuth, initializeLocation]);
 
   // ── FCM token registration, gated on auth ──
   // `POST /notifications/register-token` requires an authenticated user,

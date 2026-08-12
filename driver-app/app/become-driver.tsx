@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -95,6 +95,12 @@ export default function BecomeDriverScreen() {
         ]);
       }
     })();
+    // serviceAreaId is intentionally excluded: this effect only READS it as a
+    // "don't clobber an already-picked area" guard on first mount. Adding it
+    // as a dep would re-fire this fetch every time the driver picks a
+    // different service area in the form below, causing a redundant
+    // GET /vehicle-types + GET /service-areas round trip on every selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Vehicle Info
@@ -160,7 +166,13 @@ export default function BecomeDriverScreen() {
     }
   };
 
-  const saveDraft = async () => {
+  // useCallback so its identity only changes when one of the fields it
+  // actually reads changes — the same set already listed in the save-draft
+  // effect's dep array below. Without this, a plain function re-created
+  // every render would make that effect fire on every render if we also
+  // added it as a listed dependency there (the exhaustive-deps fix this
+  // wrapping exists for).
+  const saveDraft = useCallback(async () => {
     try {
       const draftData = {
         step: currentStep,
@@ -172,9 +184,13 @@ export default function BecomeDriverScreen() {
     } catch (e) {
       console.log('Failed to save draft:', e);
     }
-  };
+  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs]);
 
-  const fetchVehicleTypes = async (areaId?: string) => {
+  // useCallback keyed on serviceAreaId (its fallback-arg closure value) so
+  // its identity only changes on the same trigger the effect below already
+  // re-fires on — adding it to that effect's deps therefore doesn't cause
+  // any extra re-runs.
+  const fetchVehicleTypes = useCallback(async (areaId?: string) => {
     const area = areaId || serviceAreaId;
     if (!area) {
       setVehicleTypes([]);
@@ -201,7 +217,7 @@ export default function BecomeDriverScreen() {
     } finally {
       setLoadingTypes(false);
     }
-  };
+  }, [serviceAreaId]);
 
   const fetchRequirements = async () => {
     try {
@@ -235,7 +251,7 @@ export default function BecomeDriverScreen() {
     } else {
       setVehicleTypes([]);
     }
-  }, [serviceAreaId]);
+  }, [serviceAreaId, fetchVehicleTypes]);
 
   const onDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(Platform.OS === 'ios'); // Keep open on iOS, close on Android
@@ -278,7 +294,7 @@ export default function BecomeDriverScreen() {
   // Save draft whenever relevant state changes
   useEffect(() => {
     saveDraft();
-  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs]);
+  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs, saveDraft]);
 
   const processUpload = async (uri: string, name: string, mimeType: string, reqId: string, side: 'front' | 'back') => {
     try {

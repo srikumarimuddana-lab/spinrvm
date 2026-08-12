@@ -471,7 +471,7 @@ function PayoutScreen() {
                     {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (
                         <Text style={styles.previousAppNote}>
                             Payments from the previous Spinr app ({formatCurrency(driverBalance!.previous_app_paid_total!)})
-                            stay in your payment history, but aren't part of your Spinr earnings above.
+                            stay in your payment history, but aren&apos;t part of your Spinr earnings above.
                         </Text>
                     )}
                 </View>
@@ -604,7 +604,7 @@ function PayoutScreen() {
                         <View style={styles.readyCard}>
                             <Ionicons name="checkmark-circle" size={22} color={colors.success} />
                             <Text style={styles.readyText}>
-                                You're all set — your balance is ready to cash out.
+                                You&apos;re all set — your balance is ready to cash out.
                             </Text>
                         </View>
                     </View>
@@ -642,7 +642,7 @@ function PayoutScreen() {
                                 the audited reveal — "never shown to staff" was untrue. */}
                             <Text style={styles.gstNote}>
                                 Stored encrypted. Used to prepare your year-end T4A slip and shared
-                                once with Stripe, our payout partner, so you aren't asked for it
+                                once with Stripe, our payout partner, so you aren&apos;t asked for it
                                 again. The app only ever shows the last 4 digits; authorized Spinr
                                 staff can access it solely for tax filing or a correction you
                                 request, and every access is logged.

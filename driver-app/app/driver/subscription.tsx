@@ -427,7 +427,7 @@ export default function SubscriptionScreen() {
         {plans.length === 0 && freeMode && (
           <View style={styles.freeCard}>
             <Text style={styles.freeEmoji}>🎉</Text>
-            <Text style={styles.freeTitle}>It's Free Right Now!</Text>
+            <Text style={styles.freeTitle}>It&apos;s Free Right Now!</Text>
             <Text style={styles.freeMessage}>{freeMessage}</Text>
             <View style={styles.freeBadge}>
               <Ionicons name="checkmark-circle" size={16} color="#10B981" />

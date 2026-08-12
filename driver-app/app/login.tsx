@@ -161,7 +161,7 @@ export default function LoginScreen() {
           <Text style={styles.greeting}>Welcome back 👋</Text>
           <Text style={styles.title}>Enter your phone number</Text>
           <Text style={styles.subtitle}>
-            We'll send you a verification code to confirm your identity
+            We&apos;ll send you a verification code to confirm your identity
           </Text>
         </View>
 

@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-11 — A27 CLOSED: audit's 2 P1 findings. P1-A (dead
+_Last updated: 2026-08-12 — A27 CLOSED: audit's 2 P1 findings. P1-A (dead
 `drivers.total_earnings` fleet-wide stat) fixed with a live, legacy-excluded,
 batched earnings computation; also fixed a related gap on the per-driver
 "Earnings" header (missing legacy exclusion vs. its own "Payouts" tab). P1-B
@@ -16,8 +16,22 @@ issue: the current fare engine had PST disabled for Saskatchewan with a
 comment claiming it doesn't apply — contradicting regulatory-sk.md. User
 confirmed PST does apply; enabled it in production for the 4 real SK service
 areas (effective for new quotes only, no backdating), fixed the stale
-comment, added the first direct tax-calculation unit tests. Prior same-day:
-A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
+comment, added the first direct tax-calculation unit tests. Prior same-day
+(2026-08-12): C18 CLOSED: all 176 `uses:` references across 23
+`.github/workflows/*.yml` files pinned from mutable version tags (`@v7`) to
+verified commit SHAs (`@<sha> # v7`), resolved via anonymous public-repo git
+reads (not the release-page scrape the original investigation correctly
+rejected) — see `docs/change-log/2026-08-12-c18-pin-github-actions-shas.md`.
+One reference (`8398a7/action-slack@v3`) turned out to resolve to a mutable
+**branch**, not even a tag. Prior same-day (2026-08-12): A1c/Sub-tier C:
+`utils/kyb_reverification.py` CLOSED, 67% → 92% (75 stmts) — a gap in the
+prior "fully CLOSED" sweeps (2026-08-03, 2026-08-10/11), found via a live
+`pytest --cov` re-check before starting a planned 28-file batch; the other
+27 files in that batch were already closed by concurrent sessions (in most
+cases under the exact same test-file name this session independently
+chose) and were discarded without being committed — see
+`docs/change-log/2026-08-12-a1c-kyb-reverification-coverage.md` for the
+full collision list. Prior (2026-08-11): A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
 an unsatisfiable `legacy_import_metadata IS NULL` SQL predicate against a
 `NOT NULL DEFAULT '{}'::jsonb` column, matching zero rows always at 9+
 driver-facing earnings/statement/T4A call sites — confirmed live against
@@ -5480,7 +5494,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `.github/workflows/mobile-bundle-smoke.yml` (new).
 
 ### C18. GitHub Actions steps use mutable version tags repo-wide, not pinned commit SHAs — Semgrep/GHAS flags it on every new workflow line
-- [ ] **Status:** open — found 2026-08-11, via GitHub Advanced Security /
+- [x] **Status:** CLOSED (2026-08-12) — all 176 `uses:` references across 23
+  `.github/workflows/*.yml` files pinned to verified commit SHAs, with the
+  human-readable version kept as a trailing comment
+  (`uses: actions/checkout@<sha> # v7`). Full Change Impact Log:
+  `docs/change-log/2026-08-12-c18-pin-github-actions-shas.md`.
+  **How the "Verification reliability" blocker below was resolved:** this
+  session's git proxy serves anonymous, read-only `git clone`/`git
+  ls-remote` access to any public GitHub repo even when it isn't in this
+  session's attached repository scope (confirmed via `add_repo`, which
+  reports read access already available without needing attachment). Used
+  that channel to clone all 19 distinct action repos referenced (18
+  originally enumerated below + `github/codeql-action`, a subpath-style
+  reference the original grep pattern missed — see the change log's §4) and
+  resolve each `@vN` tag to its exact commit SHA via `git ls-remote --tags`
+  against the real upstream repo, then cross-checked every SHA as a live ref
+  tip on `origin` before use. This is a direct read of the actual git ref
+  database — the same information `gh`/the GitHub API would return — not
+  the release-page scrape the original investigation correctly rejected as
+  unreliable for a character-exact hash.
+  One finding worth flagging on its own: `8398a7/action-slack@v3` had no
+  `v3` **tag** at all — it resolved to a **branch**, which is even more
+  mutable than an unpinned major-version tag normally is. That reference is
+  now pinned like everything else.
+- **(historical) Status:** open — found 2026-08-11, via GitHub Advanced Security /
   Semgrep OSS comments on PR #3668 (6 findings, rule
   `yaml.github-actions.security.github-actions-mutable-action-tag`) on the
   new `mobile-bundle-smoke.yml` workflow added by that PR. Confirmed real:
@@ -5678,6 +5715,73 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `.github/workflows/eas-build.yml` (bypass removed);
   `rider-app/package.json`, `rider-app/yarn.lock`, `driver-app/package.json`,
   `driver-app/yarn.lock` (durable fix).
+
+### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR)
+- [ ] **Status:** open — found 2026-08-03 while verifying PR #3382 (full-suite
+  pass at that time: backend pytest 8742 passed/0 failed, rider-app jest
+  434/434, driver-app jest 337/337, admin-dashboard vitest 157/157 — all
+  green). Running a bare `npx tsc --noEmit` per surface afterward surfaced
+  errors in all three, none in any file that PR (or any recent PR) touched —
+  confirmed by diffing each error's file path against the PR's
+  changed-files list.
+- **What's wrong, two distinct causes:**
+  1. **rider-app (7 errors) + driver-app (4 errors):** every error is
+     `Cannot find module 'expo-router/react-navigation' or its corresponding
+     type declarations'`, e.g. `app/(tabs)/account.tsx`,
+     `hooks/useBottomSheetGuard.ts` (rider-app),
+     `components/activity/ActivityView.tsx` (driver-app). The same subpath
+     also fails to resolve under Jest (`Cannot find module
+     'expo-router/react-navigation'`) in exactly one test suite per app —
+     `hooks/__tests__/useBottomSheetGuard.test.tsx` (rider-app),
+     `__tests__/components/ActivityView.test.tsx` (driver-app) — both
+     already-known pre-existing failures, not new. The module exists and is
+     imported successfully at runtime (Expo's Metro bundler resolves it
+     fine); it's specifically `tsc`'s and Jest's module resolution that
+     can't find its type declarations/CommonJS shape in this environment.
+  2. **admin-dashboard (26 errors), all confined to `*.test.ts(x)` files:**
+     missing `@testing-library/jest-dom` matcher types (`toBeInTheDocument`,
+     `toBeDisabled` — `driver-statements-panel.test.tsx`) and missing Vitest
+     global types (`describe`/`it`/`expect` — `route-segments.test.ts`).
+     `admin-dashboard`'s `tsconfig.json` doesn't register Vitest's ambient
+     types for a standalone `tsc` run; `vitest run` itself passed 157/157
+     clean because Vitest's own transform/type-layer already has these
+     globals, so this is a `tsc`-only artifact, not a real build or runtime
+     issue.
+- **Why it matters:** neither of these fails today's actual gates (`yarn
+  jest --ci`, `vitest run`, and whatever CI runs are what's authoritative),
+  but a bare `tsc --noEmit` is a normal thing to run when verifying a PR
+  (as this session was asked to do) or to add as a CI check later — right
+  now it produces guaranteed false-positive noise on every run regardless of
+  what changed, which trains reviewers to ignore `tsc` output entirely and
+  would mask a real new type error introduced in the same file.
+- **Fix, per cause:**
+  1. Track down why `expo-router/react-navigation`'s type declarations
+     aren't resolving — likely a missing/stale `@types` entry, an
+     `expo-router` version whose subpath exports changed, or a
+     `moduleResolution`/`paths` config gap in `rider-app/tsconfig.json` and
+     `driver-app/tsconfig.json`. Fix should make both `tsc --noEmit` and the
+     one Jest suite per app (`useBottomSheetGuard.test.tsx`,
+     `ActivityView.test.tsx`) pass.
+  2. Add `vitest/globals` (or explicit `import { describe, it, expect } from
+     'vitest'`) and `@testing-library/jest-dom`'s type augmentation to
+     `admin-dashboard/tsconfig.json`'s `types` array (or an included
+     `vitest-setup.d.ts`), matching whatever the project's `vitest.config.ts`
+     `setupFiles` already registers at runtime.
+- **Risk if left undone:** low today (doesn't block any real gate), but
+  compounds — every new file that imports `expo-router/react-navigation` or
+  every new admin-dashboard test file adds more permanent noise, and it's a
+  standing trap for anyone who later wires `tsc --noEmit` into CI as an
+  actual gate (it would be red from day one for reasons unrelated to their
+  diff).
+- **Risk of implementing:** low — type-declaration/tsconfig-only fix, no
+  runtime behavior change in any of the three apps.
+- **Verification once implemented:** `npx tsc --noEmit` clean (0 errors) in
+  all three surfaces; `yarn jest --ci` (rider-app, driver-app) and `vitest
+  run` (admin-dashboard) still fully green, including the two previously-
+  failing-to-load Jest suites now loading successfully.
+- **Files:** `rider-app/tsconfig.json`, `driver-app/tsconfig.json`,
+  `admin-dashboard/tsconfig.json` (+ possibly a new `vitest-setup.d.ts` in
+  admin-dashboard); no application code.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

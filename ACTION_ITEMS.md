@@ -4733,10 +4733,43 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   provisioned yet at console.mobile.dev.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
-- [ ] **Status:** open — **NOT fixed, needs user confirmation before touching**.
+- [ ] **Status:** open — **NOT fixed, still needs confirmation before touching**.
   Discovered 2026-08-12 as a side effect of the B8 "Regina Airpot" rename
   blast-radius check (unrelated task; querying `service_areas` to confirm
   it was safe to rename surfaced this by coincidence).
+- **Research attempted 2026-08-12, inconclusive — asked the user directly
+  whether `Regina.pst_enabled=false` is a bug or intentional; the user's
+  answer was "PST is not applicable for Saskatchewan we might want to
+  verify by researching" — directly contradicting the 2026-08-11 change
+  log's claim that the user had confirmed PST *does* apply. Attempted to
+  verify against the actual Government of Saskatchewan PST bulletin
+  (PST-46 "Service Enterprises", the most relevant one for whether
+  passenger-transportation/ride-sharing is an enumerated taxable service)
+  and could not — `WebFetch` returned `EGRESS_BLOCKED` for every domain
+  tried in this session's environment (`sets.saskatchewan.ca`,
+  `www.saskatchewan.ca`, `canada.ca`, and third-party tax-law summary
+  sites), so no primary source could be read directly. `WebSearch`'s own
+  AI-summarized snippets leaned toward **GST-only for ride-sharing, PST
+  not applicable** (one summary: *"for ride-sharing services specifically,
+  the federal GST applies, not the provincial PST"*; another noted PST
+  marketplace-facilitator rules cited for Uber in Saskatchewan apply to
+  Uber Eats, not ride-sharing) — but these are second-hand AI summaries of
+  search snippets, not verified primary-source text, and not trustworthy
+  enough to act on for a live regulatory/tax determination. **Do not treat
+  this research as resolving the question either way** — it only shows the
+  2026-08-11 "PST applies" determination is now in genuine doubt, from two
+  independent angles (the user's own current recollection, and an
+  unverified-but-suggestive web search), not that "PST does not apply" is
+  confirmed.
+- **Also relevant, discovered as of this same date**: A29
+  (`docs/change-log/2026-08-12-a29-tax-config-audit-justification.md`,
+  merged same day, unrelated session) added a written-justification +
+  dedicated audit-log requirement (`tax_config_updated`) to the *admin API*
+  path for any GST/PST/HST field edit (`admin_update_service_area`). Any
+  eventual fix to this item should go through that path (or at minimum
+  record an equivalent justification + Change Impact Log) rather than a
+  bare direct-SQL `UPDATE`, now that the org has explicitly recognized tax
+  config changes as needing that discipline.
 - **Root cause:** unconfirmed, and that's the point of this item — live data
   directly contradicts a prior session's own Change Impact Log.
   `docs/change-log/2026-08-11-sk-pst-enable.md` (2026-08-11, same day as the
@@ -4766,21 +4799,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   session has no record of (e.g. someone found a problem with Regina PST
   specifically and turned it off on purpose without logging it, per this
   same doc's own rollback-plan mechanism).
-- **Action (blocked on user confirmation, not on more investigation):**
-  1. Ask the user directly: is `Regina.pst_enabled=false` intentional
-     (and if so, `pst_enabled=true` on Regina Airport/Saskatoon/Saskatoon
-     Airport needs the same question asked in reverse), or is it a bug
-     that should be corrected back to `true` immediately?
-  2. If confirmed a bug: `UPDATE service_areas SET pst_enabled = true
-     WHERE name = 'Regina'` (single-column, matches the B8 fix's
-     established safe pattern) — plus, per the 2026-08-11 log's own
-     "no backdating" precedent, explicitly decide whether any
-     already-completed Regina rides during the gap window need PST
-     remediation (refund/credit) or are left as-is like the original
-     under-collection was.
-  3. Either way, write a Change Impact Log — this is exactly the kind of
+- **Action (blocked on an authoritative determination, not on more
+  low-confidence research)**:
+  1. Get a real answer to "does Saskatchewan PST apply to ride-sharing/
+     passenger-transportation-for-hire fares" from a source that can
+     actually be trusted for a live tax-compliance decision — an
+     accountant/tax professional, direct contact with the SK Ministry of
+     Finance Revenue Division, or a session with working web access to
+     read the actual PST-46 bulletin text (this session's `WebFetch` was
+     blocked to every domain tried, so it could not do this itself).
+  2. Once resolved either way, this decides **both** `Regina`'s current
+     `false` value *and* whether `Regina Airport`/`Saskatoon`/`Saskatoon
+     Airport`'s current `true` values are themselves correct — this item
+     is not "fix Regina to match the other three," it's "determine the
+     actual policy and make all four rows match it," since the other
+     three's `true` values now carry the same doubt as Regina's `false`.
+  3. Whichever way it resolves: `UPDATE service_areas SET pst_enabled =
+     <value> WHERE name IN (...)` per the A29 justification path above,
+     plus explicitly decide whether any rides quoted during the
+     inconsistency window need remediation (refund/credit if PST was
+     charged and shouldn't have been, or vice versa) — not just a toggle
+     flip, per the 2026-08-11 log's "no backdating" precedent.
+  4. Write a Change Impact Log either way — this is exactly the kind of
      "silent behavior change to a live-tested flow" CLAUDE.md's pre-merge
-     gates require documentation for, whichever direction it resolves.
+     gates require documentation for.
 - **Files:** none yet (data-only, pending decision) — reference:
   `docs/change-log/2026-08-11-sk-pst-enable.md`,
   `backend/features.py::calculate_all_fees`

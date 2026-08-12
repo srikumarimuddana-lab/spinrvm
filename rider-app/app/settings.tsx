@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, Modal, FlatList,
+  View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, Modal,
 } from 'react-native';
 import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,7 +11,7 @@ import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import i18n, { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
+import { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
 import {
   useNotificationPreferences,
   useUpdateNotificationPreferences,
@@ -25,7 +25,7 @@ import {
 export default function SettingsScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { colors, isDark, colorScheme, setTheme } = useTheme();
+  const { colors, isDark, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { language, setLanguage } = useLanguageStore();
   const { t } = useTranslation();

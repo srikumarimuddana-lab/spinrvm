@@ -51,7 +51,8 @@ export default function Index() {
       }
       router.replace('/(tabs)');
     })();
-  }, [isInitialized, token, user]);
+    // router is expo-router's stable singleton.
+  }, [isInitialized, token, user, router]);
 
   // Transparent pass-through — BrandSplash (in _layout.tsx) is the only
   // branded loading screen. This screen just routes; it has no visual chrome.

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -26,7 +26,10 @@ export default function LegalScreen() {
 
     const title = type === 'tos' ? 'Terms of Service' : 'Privacy Policy';
 
-    const fetchLegalText = async () => {
+    // Wrapped in useCallback (deps: [type]) so the effect below can safely
+    // depend on it — as a plain function it would have been recreated every
+    // render, which would have made the effect refetch every render too.
+    const fetchLegalText = useCallback(async () => {
         try {
             const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
             const data = await response.json();
@@ -41,14 +44,16 @@ export default function LegalScreen() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [type]);
 
     useEffect(() => {
-        // Re-fetches only when the `type` route param changes; the
-        // loading/text state this sets isn't in the dep array.
+        // Re-fetches only when the `type` route param changes (fetchLegalText
+        // is itself keyed on [type], so this is equivalent to depending on
+        // [type] directly); the loading/text state this sets isn't in the
+        // dep array.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchLegalText();
-    }, [type]);
+    }, [fetchLegalText]);
 
     return (
         <SafeAreaView style={styles.safeArea}>

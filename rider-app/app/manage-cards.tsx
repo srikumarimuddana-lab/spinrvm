@@ -128,6 +128,9 @@ export default function ManageCardsScreen() {
   };
 
   useEffect(() => {
+    // Mount-only load; deps are empty so the loading/cards state
+    // fetchCards sets can't retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchCards();
   }, []);
 
@@ -135,6 +138,9 @@ export default function ManageCardsScreen() {
   // exists, otherwise open the default card (or the first one).
   useEffect(() => {
     if (cards.length === 0) {
+      // Deps are [cards]; selectedId isn't a dep, so setting it here
+      // can't retrigger this effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedId(null);
       return;
     }

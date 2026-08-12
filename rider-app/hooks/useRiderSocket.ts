@@ -311,6 +311,18 @@ export function useRiderSocket() {
         console.log(`[WS] Rider reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttemptRef.current + 1})`);
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectAttemptRef.current++;
+          // Genuine self-reference (exponential-backoff reconnect calling
+          // the same useCallback it's defined inside), not a reorderable
+          // "used before declared" case like the other react-hooks/
+          // immutability findings fixed alongside this one — `connect`
+          // cannot be declared before itself. Safe because this callback
+          // only runs from the setTimeout above, well after `connect` has
+          // been assigned; the "stale closure" risk the rule flags (this
+          // recursive call could resolve to an old `connect` if
+          // `handleMessage`'s deps changed between opens) is bounded by
+          // `myGen`/`connectGenRef` inside connect() itself, which already
+          // guards against a superseded connect() attempt doing anything.
+          // eslint-disable-next-line react-hooks/immutability
           connect();
         }, delay);
       } else {

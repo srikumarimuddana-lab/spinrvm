@@ -122,6 +122,10 @@ export default function ChatDriverScreen() {
     setSending(true);
     setMessage('');
 
+    // Not a render-time call: sendMessage only runs from the send-button's
+    // onPress, never during render, so Date.now()/Math.random() here can't
+    // produce the re-render inconsistency react-hooks/purity guards against.
+    // eslint-disable-next-line react-hooks/purity
     const optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     addChatMessage({
       id: optimisticId,

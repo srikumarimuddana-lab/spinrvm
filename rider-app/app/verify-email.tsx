@@ -19,6 +19,7 @@ import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { tKey } from '../i18n';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
 const CODE_LENGTH_MIN = 4;
 const CODE_LENGTH_MAX = 6;
@@ -72,7 +73,7 @@ export default function VerifyEmailScreen() {
   const inputRef = useRef<TextInput>(null);
   const requestInFlight = useRef(false);
 
-  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const shakeAnim = useAnimatedValue(0);
 
   const email = user?.email || '';
 

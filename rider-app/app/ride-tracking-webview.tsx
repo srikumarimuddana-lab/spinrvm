@@ -56,12 +56,6 @@ export default function RideTrackingWebviewScreen() {
     trackingUrl && !sanitizedInitialUrl ? 'Invalid tracking link.' : null,
   );
 
-  useEffect(() => {
-    if (!trackingUrl && rideId) {
-      fetchTrackingUrl(rideId);
-    }
-  }, [rideId, trackingUrl, trackBaseUrl]);
-
   const fetchTrackingUrl = async (id: string) => {
     // Public tracking URL base is served by GET /settings → app_settings.track_base_url
     // so ops can rotate the domain without a mobile rebuild. Fail loud if it
@@ -83,6 +77,12 @@ export default function RideTrackingWebviewScreen() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!trackingUrl && rideId) {
+      fetchTrackingUrl(rideId);
+    }
+  }, [rideId, trackingUrl, trackBaseUrl]);
 
   const handleShare = async () => {
     if (!resolvedUrl) return;

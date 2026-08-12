@@ -39,6 +39,7 @@ import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomShee
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useTranslation } from '../i18n';
 import { getRideMapCoords } from '../utils/rideMapCoords';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
 function DriverArrivingScreenContent() {
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
@@ -101,7 +102,7 @@ function DriverArrivingScreenContent() {
   const [reasonVisible, setReasonVisible] = useState(false);
 
   // Searching animation
-  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useAnimatedValue(0);
   useEffect(() => {
     if (!currentRide || currentRide.status === RideStatus.SEARCHING || currentRide.status === RideStatus.DRIVER_ASSIGNED) {
       Animated.loop(

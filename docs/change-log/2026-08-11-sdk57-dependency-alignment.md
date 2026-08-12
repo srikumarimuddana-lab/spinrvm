@@ -40,7 +40,7 @@ Per-package result vs the authoritative SDK 57 manifest:
 | @react-native-community/netinfo | 11.5.2 (deps + resolutions) | **12.0.1** (both apps, both places) | SDK 57's version; consumers use only stable `addEventListener`/`fetch` |
 | @react-native-community/datetimepicker | 8.6.0 | **9.1.0** (driver) / **removed** (rider) | Rider had ZERO imports (verified repo-wide grep) — removed together with equally-unused react-native-modal-datetime-picker ^18.0.0 |
 | eslint-config-expo | ~10.0.0 (rider) | **~57.0.1** | Driver already ~57.0.0; also removed from rider's expo.install.exclude |
-| expo-observe API in driver `_layout.tsx` | `_observe.AppMetricsRoot` (null on 57) | **`ObserveRoot ?? AppMetricsRoot`** | Behavior fix: restores app-start metrics; fail-soft unchanged |
+| expo-observe API in **both** apps' `_layout.tsx` | `_observe.AppMetricsRoot` (null on 57) | **`ObserveRoot ?? AppMetricsRoot`** | Behavior fix: restores app-start metrics; fail-soft unchanged. Driver fixed in the main pass; the **identical duplicated bug in rider** was caught by the 2026-08-12 pre-merge review of this branch — the initial pass had wrongly scoped the consumer grep to driver |
 | @stripe/stripe-react-native | 0.63.0 | **HELD at 0.63.0** | User decision 2026-08-11: payments surface mid-live-testing + Kotlin-toolchain entanglement (Option C); bump criteria: EAS Android+iOS build + spinr-money-auditor review + payment smoke. SDK 57 expects 0.64.0 |
 | react-native-worklets | ^0.11.3 | **unchanged (ahead)** | Deliberately ahead of bundled 0.10.1 (reanimated 4.5.3 pairing); in expo.install.exclude |
 | expo-speech-recognition | ^56.0.1 | **unchanged** | No 57.x exists on npm (verified: latest is 56.0.1). Community package; re-check each SDK cycle |
@@ -79,7 +79,9 @@ before this branch; the literal-string runtimeVersion is this repo's documented 
     connectivity gating, `driver-app/hooks/useDriverDashboard.ts` (driver online flow —
     dispatch-adjacent).
   - datetimepicker: driver `become-driver.tsx` only (onboarding document expiry).
-  - expo-observe: metrics-only; fail-soft guard unchanged.
+  - expo-observe: metrics-only; fail-soft guard unchanged. Consumers: BOTH apps'
+    `app/_layout.tsx` (rider `wrapApp(...)` root wrap + `markInteractive` on nav-ready;
+    driver root wrap + `markInteractive` on interactive).
 - Metro redirect removal: build-time module resolution only; verified by production
   exports of both apps (the exact failure mode it was added for).
 - Lockfile side effects: rider's eslint upgrade tripped yarn 1's duplicate-eslint link
@@ -109,7 +111,9 @@ before this branch; the literal-string runtimeVersion is this repo's documented 
 | rider-app/tsconfig.json | 4 duplicate path keys deduped | Behavior-neutral hygiene |
 | rider-app/app.config.ts | Stale SDK 55 comments rewritten (values untouched) | Accuracy |
 | driver-app/app.config.ts | `@ts-expect-error` on newArchEnabled removed; ios `as any` narrowed to targeted suppression; stale comments rewritten | SDK 57 types allow real checking |
-| driver-app/app/_layout.tsx | ObserveRoot fallback in guarded expo-observe require | Restore metrics under renamed 57 API |
+| driver-app/app/_layout.tsx, rider-app/app/_layout.tsx | ObserveRoot fallback in guarded expo-observe require | Restore metrics under renamed 57 API (rider instance found in pre-merge review) |
+| rider-app+driver-app package.json (review follow-up) | react-native-gesture-handler removed from expo.install.exclude; driver eslint-config-expo ~57.0.1 + un-excluded | Un-mute the drift checker for now-aligned packages — the mute is this incident's root cause |
+| rider-app+driver-app app.config.ts (review follow-up) | minimumOsVersion comments corrected (key has NO consumer in SDK 57 tooling; enforced floor is deploymentTarget 16.4); rider value 16.0 → 16.4 to match the real floor | The freshly-written comments had asserted a 16.0 floor that contradicts the enforced 16.4 |
 | rider-app+driver-app app.config.ts | runtimeVersion 2.0.0→2.1.0 / 2.5.0→2.6.0 | OTA fence for the native bumps |
 | docs/android-build-strategy.md, docs/dependency-upgrade-runbook.md | Retitled/retabled to SDK 57 reality | Docs cited ghost patches and "55 (current)" |
 | ACTION_ITEMS.md | EAS-gated follow-ups + mobile-lint-debt item added | Standing gaps tracked, not silently dropped |

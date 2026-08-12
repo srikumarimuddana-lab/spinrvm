@@ -241,7 +241,11 @@ class TestGetDriverBalance:
             if table == "drivers":
                 return [_driver()]
             if table == "rides":
-                return rides
+                # Discriminate by status so the new cancelled-rides fetch
+                # (for cancellation-fee income) doesn't alias onto the same
+                # completed-rides list.
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
             if table == "payouts":
                 return payouts
             return []
@@ -271,7 +275,8 @@ class TestGetDriverBalance:
             if table == "drivers":
                 return [_driver()]
             if table == "rides":
-                return rides
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
             if table == "payouts":
                 return payouts
             return []
@@ -283,6 +288,128 @@ class TestGetDriverBalance:
         assert result["payable_balance"] == "55.00"
         assert result["pending_payouts"] == "5.00"
         assert result["total_paid_out"] == "40.00"  # 30 + 10 sent (not pending)
+
+    def test_balance_includes_incentives_cancel_fees_and_tax(self):
+        """ACTION_ITEMS.md A28, '/balance vs /earnings composition can
+        diverge' — decided 2026-08-12: payable_balance must include the
+        same components /earnings and driver statements already do:
+        per-ride incentive claims, cancellation fees earned, and
+        pass-through tax — not just fare components + bonuses."""
+        from backend.routes import drivers as drv
+
+        rides = [{"id": "ride-1", "base_fare": 10.0, "tax_amount": 0.6}]
+        cancelled = [{"cancellation_fee_driver": 5.0}]
+        payouts = []
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                if status == "completed":
+                    return rides
+                if status == "cancelled":
+                    return cancelled
+                return []
+            if table == "payouts":
+                return payouts
+            return []
+
+        class _FakeIncentiveQuery:
+            def select(self, *_a, **_k):
+                return self
+
+            def in_(self, *_a, **_k):
+                return self
+
+            def execute(self):
+                class _R:
+                    data = [{"bonus_amount": 3.0}]
+
+                return _R()
+
+        class _FakeSupabase:
+            def table(self, name):
+                assert name == "ride_incentive_claims"
+                return _FakeIncentiveQuery()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)),
+            patch("backend.routes.drivers._deps.db_supabase.supabase", _FakeSupabase()),
+        ):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # 10.00 (base_fare) + 0.60 (tax) + 3.00 (incentive) + 5.00 (cancel fee) = 18.60
+        assert result["total_earnings"] == "18.60"
+        assert result["total_incentives"] == "3.00"
+        assert result["total_cancel_fees"] == "5.00"
+        assert result["total_tax"] == "0.60"
+        assert result["payable_balance"] == "18.60"
+
+    def test_balance_uses_driver_earnings_column_not_raw_fare_recompute(self):
+        """Axis-1 half of the A28 fix: /balance must trust the canonical
+        driver_earnings column (via _ride_income), matching /earnings and
+        driver statements, instead of always recomputing from fare
+        components — so a manual correction to driver_earnings isn't
+        silently ignored on the balance screen."""
+        from backend.routes import drivers as drv
+
+        # driver_earnings (12.00) deliberately disagrees with the raw fare
+        # components (base_fare 10.00 + tip 1.00 = 11.00) to prove the
+        # column wins.
+        rides = [{"id": "ride-1", "base_fare": 10.0, "tip_amount": 1.0, "driver_earnings": 12.0}]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
+            if table == "payouts":
+                return []
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        assert result["total_earnings"] == "12.00"
+
+    def test_balance_reconciliation_identity_holds_with_new_components(self):
+        """The driver-app payout screen displays total_earnings alongside a
+        breakdown of payable_balance + pending_payouts + total_paid_out and
+        relies on them summing back to total_earnings exactly. Must still
+        hold once incentives/cancel-fees/tax are folded in."""
+        from backend.routes import drivers as drv
+
+        rides = [{"id": "ride-1", "base_fare": 20.0, "tax_amount": 1.0}]
+        cancelled = [{"cancellation_fee_driver": 2.0}]
+        payouts = [
+            {"amount": 5.0, "status": "completed"},
+            {"amount": 3.0, "status": "pending"},
+        ]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                if status == "completed":
+                    return rides
+                if status == "cancelled":
+                    return cancelled
+                return []
+            if table == "payouts":
+                return payouts
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        total = Decimal(result["total_earnings"])
+        available = Decimal(result["payable_balance"])
+        pending = Decimal(result["pending_payouts"])
+        paid_out = Decimal(result["total_paid_out"])
+        assert available + pending + paid_out == total
 
     def test_balance_excludes_stripe_synced_legacy_payouts(self):
         """payout_type='stripe_sync' rows are legacy-app payout history synced
@@ -302,7 +429,8 @@ class TestGetDriverBalance:
             if table == "drivers":
                 return [_driver()]
             if table == "rides":
-                return rides
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
             if table == "payouts":
                 return payouts
             return []
@@ -332,6 +460,8 @@ class TestGetDriverBalance:
             if table == "drivers":
                 return [_driver()]
             if table == "rides":
+                if (filters or {}).get("status") == "cancelled":
+                    return []
                 # Honour the server-side exclusion the route now sends, so this
                 # asserts the real filter is applied rather than assuming it.
                 # A26 (docs/audit/2026-08-11-driver-rider-migration-audit.md):
@@ -378,6 +508,47 @@ class TestGetDriverBalance:
             return []
 
         with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+        assert exc.value.status_code == 503
+
+    def test_incentive_claims_lookup_failure_raises_503_not_zeroed_balance(self):
+        """spinr-money-auditor finding: total_incentives now feeds
+        payable_balance (bounds the Stripe payout Transfer) — a swallowed
+        ride_incentive_claims failure must surface as 503, not silently
+        under-report what a driver can withdraw as $0 incentives."""
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        rides = [{"id": "ride-1", "base_fare": 10.0}]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
+            return []
+
+        class _FailingIncentiveQuery:
+            def select(self, *_a, **_k):
+                return self
+
+            def in_(self, *_a, **_k):
+                return self
+
+            def execute(self):
+                raise RuntimeError("ride_incentive_claims lookup down")
+
+        class _FakeSupabase:
+            def table(self, name):
+                return _FailingIncentiveQuery()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)),
+            patch("backend.routes.drivers._deps.db_supabase.supabase", _FakeSupabase()),
+        ):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
         assert exc.value.status_code == 503

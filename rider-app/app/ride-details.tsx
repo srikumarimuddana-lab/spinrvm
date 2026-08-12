@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform,
 } from 'react-native';
@@ -160,20 +160,25 @@ export default function RideDetailsScreen() {
     }
   };
 
-  const fetchRide = async () => {
+  // Wrapped in useCallback([rideId]) so it's stable both for this file's
+  // own effect below and for useCompletedRouteRefresh (which stores it in a
+  // ref, so this wasn't required there — but keeping one definition stable
+  // avoids two different staleness stories for the same function).
+  const fetchRide = useCallback(async () => {
     try {
       const res = await api.get(`/rides/${rideId}`);
       setRide(res.data);
     } catch { }
     finally { setLoading(false); }
-  };
+  }, [rideId]);
 
   useEffect(() => {
-    // Refetches only when rideId changes; the state fetchRide sets isn't
-    // in this effect's own deps.
+    // Refetches only when rideId changes (fetchRide is itself keyed on
+    // [rideId], so depending on it is equivalent); the state fetchRide sets
+    // isn't in this effect's own deps.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (rideId) fetchRide();
-  }, [rideId]);
+  }, [rideId, fetchRide]);
 
   useCompletedRouteRefresh(ride, fetchRide);
 

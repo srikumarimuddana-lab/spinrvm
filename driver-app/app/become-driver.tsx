@@ -69,13 +69,13 @@ export default function BecomeDriverScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get('/vehicle-types');  // just to verify API works
+        await api.get('/vehicle-types');  // just to verify API works
         // Public endpoint — returns only active areas, no admin auth required.
         const areasRes = await api.get<any[]>('/service-areas');
         const active = areasRes.data || [];
         setServiceAreas(active);
         if (active.length > 0 && !serviceAreaId) setServiceAreaId(active[0].id);
-      } catch (e) {
+      } catch {
         // Fallback — hardcode areas if API fails
         setServiceAreas([
           { id: 'saskatoon', name: 'Saskatoon, SK' },
@@ -310,7 +310,7 @@ export default function BecomeDriverScreen() {
 
         await processUpload(asset.uri, name, mimeType, reqId, side);
       }
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Failed to pick image');
     }
   };
@@ -326,7 +326,7 @@ export default function BecomeDriverScreen() {
 
       const asset = result.assets[0];
       await processUpload(asset.uri, asset.name, asset.mimeType || 'image/jpeg', reqId, side);
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Failed to pick file');
     }
   };

@@ -3,7 +3,7 @@ import { registerDriverSessionTeardown } from '../utils/sessionTeardown';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, Text, Platform, LogBox, AppState } from 'react-native';
+import { Platform, LogBox, AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -101,7 +101,7 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
     parseRideOfferEvent = svc.parseRideOfferEvent;
     dismissRideOfferNotification = svc.dismissRideOfferNotification;
     ensureNotifeeReady = svc.ensureNotifeeReady;
-  } catch (e) {
+  } catch {
     console.log('[Notifee] native module not available — falling back to expo-notifications only');
   }
 }

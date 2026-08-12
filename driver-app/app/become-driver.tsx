@@ -33,6 +33,13 @@ import type { ThemeColors } from '@shared/theme/index';
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
 
+// Module-level (not component-scope) so react-hooks/purity doesn't treat this
+// as an impure call "during render" — it's only ever invoked from the
+// pickImage event handler, well after mount, never during render itself.
+function genFallbackFileName(): string {
+  return `photo_${Date.now()}.jpg`;
+}
+
 interface Requirement {
   id: string;
   name: string;
@@ -112,63 +119,12 @@ export default function BecomeDriverScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [datePickerTarget, setDatePickerTarget] = useState<string | null>(null); // reqId
 
-  useEffect(() => {
-    fetchRequirements();
-    loadDraft();
-  }, []);
-
-  useEffect(() => {
-    if (serviceAreaId) {
-      fetchVehicleTypes(serviceAreaId);
-      setVehicleType('');
-    } else {
-      setVehicleTypes([]);
-    }
-  }, [serviceAreaId]);
-
-  const onDateChange = (event: any, selectedDate?: Date) => {
-    setShowDatePicker(Platform.OS === 'ios'); // Keep open on iOS, close on Android
-    if (event.type === 'dismissed') {
-      setShowDatePicker(false);
-      setDatePickerTarget(null);
-      return;
-    }
-
-    if (selectedDate && datePickerTarget) {
-      // Enforce future date
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      if (selectedDate < today) {
-        Alert.alert('Invalid Date', 'Expiry date must be in the future.');
-        return; // Do not set
-      }
-
-      // Format YYYY-MM-DD
-      const dateString = selectedDate.toISOString().split('T')[0];
-
-      setDocs(prev => ({
-        ...prev,
-        [datePickerTarget]: { ...prev[datePickerTarget], expiry: dateString }
-      }));
-
-      if (Platform.OS === 'android') {
-        setShowDatePicker(false);
-        setDatePickerTarget(null);
-      }
-    }
-  };
-
-  const openDatePicker = (reqId: string) => {
-    setDatePickerTarget(reqId);
-    setShowDatePicker(true);
-  };
-
-  // Save draft whenever relevant state changes
-  useEffect(() => {
-    saveDraft();
-  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs]);
-
+  // Declared here (before first use below) rather than further down with the
+  // other handlers — react-hooks/immutability (React Compiler) flags
+  // referencing a function value before its declaration in source order.
+  // Runtime behavior is unchanged: a useEffect body always runs after the
+  // full render commits, once every const in the component is initialized,
+  // so this is a pure source-order reshuffle, not a behavior change.
   const loadDraft = async () => {
     try {
       const savedDraft = await AsyncStorage.getItem('driver_application_draft');
@@ -259,6 +215,63 @@ export default function BecomeDriverScreen() {
     }
   };
 
+  useEffect(() => {
+    fetchRequirements();
+    loadDraft();
+  }, []);
+
+  useEffect(() => {
+    if (serviceAreaId) {
+      fetchVehicleTypes(serviceAreaId);
+      setVehicleType('');
+    } else {
+      setVehicleTypes([]);
+    }
+  }, [serviceAreaId]);
+
+  const onDateChange = (event: any, selectedDate?: Date) => {
+    setShowDatePicker(Platform.OS === 'ios'); // Keep open on iOS, close on Android
+    if (event.type === 'dismissed') {
+      setShowDatePicker(false);
+      setDatePickerTarget(null);
+      return;
+    }
+
+    if (selectedDate && datePickerTarget) {
+      // Enforce future date
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      if (selectedDate < today) {
+        Alert.alert('Invalid Date', 'Expiry date must be in the future.');
+        return; // Do not set
+      }
+
+      // Format YYYY-MM-DD
+      const dateString = selectedDate.toISOString().split('T')[0];
+
+      setDocs(prev => ({
+        ...prev,
+        [datePickerTarget]: { ...prev[datePickerTarget], expiry: dateString }
+      }));
+
+      if (Platform.OS === 'android') {
+        setShowDatePicker(false);
+        setDatePickerTarget(null);
+      }
+    }
+  };
+
+  const openDatePicker = (reqId: string) => {
+    setDatePickerTarget(reqId);
+    setShowDatePicker(true);
+  };
+
+  // Save draft whenever relevant state changes
+  useEffect(() => {
+    saveDraft();
+  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs]);
+
   const processUpload = async (uri: string, name: string, mimeType: string, reqId: string, side: 'front' | 'back') => {
     try {
       setUploadingDoc(`${reqId}_${side}`);
@@ -310,7 +323,7 @@ export default function BecomeDriverScreen() {
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
         // Generate a name if missing (common with camera)
-        const name = asset.fileName || `photo_${Date.now()}.jpg`;
+        const name = asset.fileName || genFallbackFileName();
         const mimeType = asset.type === 'image' || !asset.type ? 'image/jpeg' : asset.type;
 
         await processUpload(asset.uri, name, mimeType, reqId, side);

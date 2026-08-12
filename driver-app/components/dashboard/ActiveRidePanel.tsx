@@ -121,6 +121,13 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   // PIN entry feedback state — spinner while verifying, shake + error on a
   // wrong code. Reset whenever the ride phase or ride id changes.
+  // react-hooks/refs ("Cannot access refs during render"): standard
+  // Animated.Value driver idiom (Animated mutates it imperatively outside
+  // the render cycle via .timing() below and in the OTP shake sequence).
+  // Verified safe — grepped this file for `.current =`: no reassignment of
+  // shakeAnim anywhere, so a discarded/replayed render always reads the
+  // same instance.
+  // eslint-disable-next-line react-hooks/refs
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const [verifying, setVerifying] = useState(false);
   const [pinError, setPinError] = useState(false);
@@ -131,6 +138,10 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // fully-open (0) down to the collapsed peek, where only the grab area
   // stays visible above the home indicator. Composed with the parent's
   // slideUpAnim entry animation via Animated.add (both native-driven).
+  // react-hooks/refs: same verified-safe Animated.Value driver idiom as
+  // shakeAnim above — mutated only via Animated.spring()/.setValue() in the
+  // PanResponder gesture handlers below, never reassigned via `.current =`.
+  // eslint-disable-next-line react-hooks/refs
   const dragY = useRef(new Animated.Value(0)).current;
   const dragOffsetRef = useRef(0);
   const sheetHeightRef = useRef(0);
@@ -160,7 +171,13 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     snapToRef.current = snapTo;
   });
 
+  // react-hooks/refs: PanResponder.create(...) is created once (useRef's
+  // initializer only runs on first render) and its `.panHandlers` are read
+  // in JSX below — the textbook "stable gesture handler ref" case. Verified
+  // safe — grepped this file for `.current =`: panResponder is never
+  // reassigned after creation.
   const panResponder = useRef(
+    // eslint-disable-next-line react-hooks/refs
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_e, g) =>
@@ -426,6 +443,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {/* ── Grab area: drag handle + status header. Stays visible as the
             collapsed peek; owns the pan gesture. ─────────────── */}
         <View
+          // eslint-disable-next-line react-hooks/refs -- stable PanResponder gesture handler ref, see note above declaration
           {...panResponder.panHandlers}
           onLayout={e => { grabHeightRef.current = e.nativeEvent.layout.height; }}
           accessibilityRole="button"

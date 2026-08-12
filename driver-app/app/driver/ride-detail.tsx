@@ -33,10 +33,9 @@ export default function RideDetailScreen() {
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
-    useEffect(() => {
-        if (id) void loadRide(true);
-    }, [id]);
-
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
     const loadRide = async (showLoading = false) => {
         if (showLoading) setLoading(true);
         try {
@@ -47,6 +46,10 @@ export default function RideDetailScreen() {
         }
         if (showLoading) setLoading(false);
     };
+
+    useEffect(() => {
+        if (id) void loadRide(true);
+    }, [id]);
 
     useCompletedRouteRefresh(ride, loadRide);
 
@@ -85,10 +88,19 @@ export default function RideDetailScreen() {
         () => toReactNativeRouteSections(ride?.actual_route_segments),
         [ride?.actual_route_segments],
     );
-    const plannedSegments = useMemo(
-        () => toReactNativeSegments(ride?.planned_route_polyline ? [ride.planned_route_polyline] : []),
-        [ride?.planned_route_polyline],
-    );
+    const plannedSegments = useMemo(() => {
+        // Read the property once (rather than once via `ride?.X` in the
+        // condition and again via `ride.X` in the branch) — the React
+        // Compiler's dependency inference couldn't prove the two accesses
+        // were the same narrow property and widened its inferred dependency
+        // to all of `ride`, which didn't match the manually specified
+        // `[ride?.planned_route_polyline]` and made it skip optimizing this
+        // component (react-hooks/preserve-manual-memoization). Same value,
+        // same dependency, same memoization behavior — just one less
+        // ambiguous access pattern for the compiler to reason about.
+        const polyline = ride?.planned_route_polyline;
+        return toReactNativeSegments(polyline ? [polyline] : []);
+    }, [ride?.planned_route_polyline]);
     const isV2Route = Number(ride?.route_schema_version || 0) >= 2;
     const hasActualRoute = actualSections.length > 0;
     const mapCoordinates = useMemo(

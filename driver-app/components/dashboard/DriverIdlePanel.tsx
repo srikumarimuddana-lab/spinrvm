@@ -48,6 +48,13 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     ? [driver.vehicle_color, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(' ')
     : '';
 
+  // react-hooks/refs ("Cannot access refs during render"): standard
+  // Animated.Value driver idiom — mutated only via Animated.timing()/
+  // .stopAnimation()/.setValue() inside the effect below, read only in the
+  // JSX transform binding further down. Verified safe — grepped this file
+  // for `.current =`: zero matches, goAnim is never reassigned after
+  // creation.
+  // eslint-disable-next-line react-hooks/refs
   const goAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {

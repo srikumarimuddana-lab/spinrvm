@@ -2960,9 +2960,32 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `audit_logs` rows (see A27/P1-B), but the underlying endpoints still
   have no audit requirement for the *next* tax-rate change made through
   the normal admin UI.
-  - [ ] **Status:** open. Fix direction: add an `audit_logs` write (with a
-    required justification field, mirroring the surge-cap pattern) to both
-    tax endpoints before the next tax-rate change ships.
+  - [x] **Status:** DONE (2026-08-12). Correction to this finding's own
+    framing: neither dedicated `/areas/{id}/tax` endpoint is actually
+    reachable from any frontend — grepped every `.tsx` file across
+    `admin-dashboard`/`rider-app`/`driver-app`/`shared`, zero callers of
+    either path. The admin-dashboard's real tax editor is the
+    service-areas page's inline field editor, which goes through
+    `PUT /api/admin/service-areas/{area_id}` (`admin_update_service_area`)
+    — that endpoint already wrote a generic `service_area_updated` audit
+    entry when tax fields changed, so the live path was not actually
+    silent, just not held to the surge-cap's written-justification
+    discipline. Fixed: `admin_update_service_area` now requires a
+    `tax_justification` when any GST/PST/HST field is present (400 if
+    missing) and writes a dedicated `tax_config_updated` audit entry,
+    mirroring `surge_override_above_cap` exactly. The admin-dashboard's
+    `handleFieldUpdate` now prompts for the justification (same
+    `window.prompt` convention as the existing corporate-wallet-adjustment
+    reason prompt) before sending a tax-field edit. Both dead-but-named
+    endpoints (`features.py::update_area_tax`,
+    `routes/admin/service_areas.py::admin_update_area_tax`) were hardened
+    identically for consistency/future-proofing, not because they carry
+    live traffic. 8 new tests (4 in `test_admin_service_areas_coverage.py`,
+    3 in `test_features.py`'s new `TestAreaTaxJustification`); full suite
+    for the affected files re-run clean (69/69). Real `npm run build` in
+    `admin-dashboard` passed (not just `tsc`/dev server) per CLAUDE.md's
+    requirement. Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-12-a29-tax-config-audit-justification.md`.
 - **`corporate_statement_pdf.py` GST/PST fallback risk.** Falls back to a
   single combined "Tax (GST/PST)" line (lines 93-98) whenever
   `tax_by_type` is empty — e.g. a statement period mixing pre-/post-PST-

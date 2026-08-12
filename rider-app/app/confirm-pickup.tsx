@@ -105,7 +105,10 @@ export default function ConfirmPickupScreen() {
     setDistanceM(d);
     if (geocodeTimeout.current) clearTimeout(geocodeTimeout.current);
     geocodeTimeout.current = setTimeout(() => reverseGeocode(r.latitude, r.longitude), 400);
-  }, [reverseGeocode]);
+    // originalLat/originalLng are lazy-initialized useState values with no
+    // setter in scope — they never change after mount, so listing them is
+    // a no-op for when this callback's identity is recreated.
+  }, [reverseGeocode, originalLat, originalLng]);
 
   const proceed = (lat: number, lng: number, addr: string, noteValue: string) => {
     setPickup({ address: addr, lat, lng });

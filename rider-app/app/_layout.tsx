@@ -401,7 +401,11 @@ function RootLayout() {
         document.body.appendChild(script);
       }
     }
-  }, []);
+    // initializeAuth/initializeLocation/hydrateWorkProfile are zustand store
+    // actions (stable references for the life of the store, per Zustand's
+    // create()), so listing them here doesn't change when this mount-only
+    // effect fires — it only makes the dep array honest.
+  }, [initializeAuth, initializeLocation, hydrateWorkProfile]);
 
   // Re-arm token registration on sign-out. fcmRegisteredRef is a ref, so it
   // survives logout for the life of the app process — without this reset, a

@@ -3,13 +3,14 @@ import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AppState, View, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
-import api, { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
+import api, { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
@@ -163,6 +164,10 @@ const canUseNotifications = !isExpoGo && Platform.OS !== 'web';
 let Notifications: any = null;
 if (canUseNotifications) {
   try {
+    // Guarded native-module require — must stay runtime require(), not a
+    // static import, so it only executes when notifications are usable
+    // (not Expo Go/web) and the catch can absorb a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     Notifications = require('expo-notifications');
   } catch (e) {
     console.log('[Push] expo-notifications unavailable:', e);
@@ -185,6 +190,11 @@ const LOGROCKET_ENABLED =
 let LogRocket: any = null;
 if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
   try {
+    // Guarded native-module require (same pattern as expo-observe above):
+    // must stay a runtime require(), not a static import, so it never
+    // executes when disabled/unavailable (Expo Go, web, or the kill flag)
+    // and so the catch below can absorb a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
   } catch (e) {
     console.log('[LogRocket] unavailable:', e);
@@ -316,7 +326,6 @@ function RootLayout() {
     const init = async () => {
       try {
         try {
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
           const saved = await AsyncStorage.getItem('spinr_last_location');
           if (saved) {
             const { lat, lng } = JSON.parse(saved);
@@ -734,8 +743,6 @@ function RootLayout() {
   // shrinking exposure to transient refresh failures around the boundary.
   useEffect(() => {
     if (!isAuthInitialized || !authToken) return;
-
-    const { ensureFreshToken } = require('@shared/api/client');
 
     const sub = AppState.addEventListener('change', (nextState: string) => {
       if (nextState === 'active') {

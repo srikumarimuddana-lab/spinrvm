@@ -20,6 +20,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import { CheckCircle2, XCircle, Plug } from "lucide-react";
 
@@ -48,6 +49,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
     const [orgId, setOrgId] = useState("");
     const [departmentId, setDepartmentId] = useState("");
     const [fromEmail, setFromEmail] = useState("");
+    const [signature, setSignature] = useState("");
     const [clientId, setClientId] = useState("");
     const [clientSecret, setClientSecret] = useState("");
     const [refreshToken, setRefreshToken] = useState("");
@@ -62,6 +64,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
             setOrgId(s.org_id || "");
             setDepartmentId(s.default_department_id || "");
             setFromEmail(s.default_from_email || "");
+            setSignature(s.helpdesk_email_signature || "");
         } catch {
             toast({ title: "Failed to load Zoho config", variant: "destructive" });
         } finally {
@@ -84,6 +87,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                 org_id: orgId,
                 default_department_id: departmentId,
                 default_from_email: fromEmail,
+                helpdesk_email_signature: signature,
             };
             // Only send secrets the admin actually typed.
             if (clientId.trim()) body.client_id = clientId.trim();
@@ -188,6 +192,20 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                             Must be a verified support address in your Zoho Desk portal. Required to send email replies.
                         </p>
                     </div>
+                </div>
+
+                <div className="space-y-1">
+                    <Label htmlFor="zoho-signature">Email signature</Label>
+                    <Textarea
+                        id="zoho-signature"
+                        rows={4}
+                        value={signature}
+                        onChange={(e) => setSignature(e.target.value)}
+                        placeholder={"Thanks,\nThe Spinr Support Team\nsupport@spinr.ca | spinr.ca"}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                        Appended to every outbound email reply. Supports HTML. Leave blank for no signature.
+                    </p>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">

@@ -108,14 +108,20 @@ export default function SettingsScreen() {
     const updateDriverMe = useUpdateDriverMe();
     const [isWav, setIsWav] = useState(false);
     useEffect(() => {
+        // Sync local WAV toggle from the cached/refetched driver row. Local
+        // edits aren't fed back into driverMe, so this can't loop.
         const driverMeData = driverMe as { is_wav?: boolean | null } | null;
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (driverMeData?.is_wav != null) setIsWav(Boolean(driverMeData.is_wav));
     }, [(driverMe as any)?.is_wav]);
     useEffect(() => {
         // Server can return null when the row hasn't been created yet;
-        // keep the defaults set above in that case.
+        // keep the defaults set above in that case. Sync local notification
+        // toggles from the cached/refetched prefs response — local edits
+        // aren't fed back into prefsResponse, so this can't loop.
         const prefs: any = prefsResponse;
         if (prefs == null) return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (prefs.push_enabled != null) setPushNotifications(Boolean(prefs.push_enabled));
         if (prefs.ride_updates != null) setRideAlerts(Boolean(prefs.ride_updates));
         if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));

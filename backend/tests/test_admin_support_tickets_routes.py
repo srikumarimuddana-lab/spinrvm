@@ -359,6 +359,80 @@ def test_reply_zoho_error(client, _set_admin, monkeypatch):
     assert resp.status_code == 502
 
 
+def test_reply_appends_signature_when_configured(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "default_from_email": "support@spinr.ca",
+                "helpdesk_email_signature": "<b>Spinr Support</b><br>support@spinr.ca",
+            }
+        ),
+    )
+    send_reply = AsyncMock(return_value={"id": "r1"})
+    monkeypatch.setattr(m.zoho, "send_reply", send_reply)
+    resp = client.post(
+        "/api/admin/support-tickets/tickets/T1/reply",
+        json={"content": "<p>Thanks!</p>", "channel": "EMAIL"},
+    )
+    assert resp.status_code == 200
+    sent_content = send_reply.call_args.kwargs["content"]
+    assert "<p>Thanks!</p>" in sent_content
+    assert "<b>Spinr Support</b>" in sent_content
+    assert "border-top" in sent_content
+
+
+def test_reply_no_signature_when_blank(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(return_value={"default_from_email": "support@spinr.ca"}),
+    )
+    send_reply = AsyncMock(return_value={"id": "r1"})
+    monkeypatch.setattr(m.zoho, "send_reply", send_reply)
+    resp = client.post(
+        "/api/admin/support-tickets/tickets/T1/reply",
+        json={"content": "<p>Thanks!</p>", "channel": "EMAIL"},
+    )
+    assert resp.status_code == 200
+    sent_content = send_reply.call_args.kwargs["content"]
+    assert sent_content == "<p>Thanks!</p>"
+
+
+def test_reply_no_signature_for_non_email_channel(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "default_from_email": "support@spinr.ca",
+                "helpdesk_email_signature": "<b>Sig</b>",
+            }
+        ),
+    )
+    send_reply = AsyncMock(return_value={"id": "r1"})
+    monkeypatch.setattr(m.zoho, "send_reply", send_reply)
+    resp = client.post(
+        "/api/admin/support-tickets/tickets/T1/reply",
+        json={"content": "hi", "channel": "CHAT"},
+    )
+    assert resp.status_code == 200
+    sent_content = send_reply.call_args.kwargs["content"]
+    assert sent_content == "hi"
+
+
+def test_config_returns_signature(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(return_value={"helpdesk_email_signature": "<b>Team Spinr</b>"}),
+    )
+    resp = client.get("/api/admin/support-tickets/config")
+    assert resp.status_code == 200
+    assert resp.json()["helpdesk_email_signature"] == "<b>Team Spinr</b>"
+
+
 def test_comment_ticket(client, _set_admin, monkeypatch):
     monkeypatch.setattr(m.zoho, "add_comment", AsyncMock(return_value={"id": "c1"}))
     resp = client.post("/api/admin/support-tickets/tickets/T1/comment", json={"content": "note"})

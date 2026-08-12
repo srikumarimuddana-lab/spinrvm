@@ -6773,6 +6773,167 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       (8/8, twice, same reason).
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier4-driver-app.md`.
+  - **Round 4 (2026-08-12, rider-app only, branch
+    `claude/c20-lint-tier4-rider-app`)**: closed `react-hooks/exhaustive-deps`
+    — the category flagged from round 1 onward as the highest-risk of all
+    C20 categories, saved for last, one finding at a time, no bulk fixes.
+    Fresh `npx eslint . --format json` measured at the start of this round
+    against the actual starting commit: **73 findings**, matching the task
+    brief exactly (no drift this time). End of round: **1 remaining**
+    (deliberately left, see below) — **73 → 1**. driver-app was not
+    touched (sibling session's territory, separate worktree).
+    - Every finding was read in full context (effect/callback body + the
+      referenced value's own definition) and traced for stability before
+      any fix — no bulk/batch guessing, per this round's task. Categorized
+      a/b/c/d:
+      - **(a) safe to add directly — 33 of 73**: the missing value was
+        already stable as-is (a zustand store action/selector, `router`
+        from `useRouter()` — confirmed by reading
+        `node_modules/expo-router/build/hooks/useRouter.js`: it returns a
+        module-level singleton, not a fresh object per call — a `useRef`
+        value, a `useAnimatedValue`-created `Animated.Value`, or a
+        primitive that's a pure derivation of an already-tracked dep) —
+        added with no wrapping and no behavior-preserving reasoning
+        required beyond confirming the stability itself.
+      - **(b) real stale-closure bug or genuine gap, fixed safely — 37 of
+        73**: the largest bucket. Sub-patterns, each verified individually:
+        - Wrapped a plain (non-memoized) function in `useCallback` with its
+          own correct deps before adding it — `handleFetchEstimates`
+          (ride-options.tsx), `fetchLegalText` (legal.tsx), `loadData`/
+          `loadRides` (saved-places.tsx/scheduled-rides.tsx), `fetchRide`
+          (ride-details.tsx), `fetchTrackingUrl` (ride-tracking-webview.tsx),
+          `hide` (Toast.tsx), `handleCancelPress`/`performCancel`/
+          `handleCancel` (driver-arrived.tsx/driver-arriving.tsx/
+          ride-status.tsx).
+        - Rewrote a whole-object truthy check (`if (!currentRide)`,
+          `const driver = currentRide` alias, `(currentRide as
+          any)?.field` accessed non-optionally) into a narrowed
+          optional-chained read of just the field(s) actually used, so the
+          effect's deps could stay specific instead of needing the whole
+          object — which updates on every ride poll/WS field change and
+          would have re-fired the effect far more often than intended
+          (map re-fits, animation restarts, notification re-posts).
+          Applied in driver-arrived.tsx, driver-arriving.tsx (×3),
+          ride-in-progress.tsx, ride-status.tsx (×2), useRideStatusNotification.ts
+          (required changing `buildContent()`'s signature from whole
+          ride/driver objects to flat scalar params — this hook drives the
+          Android live-ride notification, so re-posting it on every poll
+          would have been visible icon churn, not just a wasted render).
+        - Closed real, if narrow, staleness gaps by adding a genuinely
+          reactive value that a guard already made safe to add: `riderBill`/
+          `cancellationFee`/`fare` into the back-button cancel-dialog
+          effects (driver-arrived.tsx, driver-arriving.tsx,
+          ride-in-progress.tsx, ride-status.tsx) — the dialog's fee/fare
+          text now stays current if it updates without a status change
+          also happening, which it previously wouldn't have; `selectedIndex`
+          into ride-options.tsx's promo-fetch effect — promo eligibility
+          now recomputes when the rider switches vehicle type, not only
+          when a new estimates array arrives; `stops`/`mapBottomInset` into
+          ride-options.tsx's map-fit effect — adding/removing a stop now
+          refits the map instead of waiting for an unrelated dep to change;
+          `activeCompanyId` into payment-confirm.tsx's and
+          ride-options.tsx's corporate-toggle-sync effects.
+        - Used a **latest-value ref** (read `.current` inside the effect
+          instead of depending on the reactive value directly) where the
+          value genuinely must NOT be a re-trigger, verified against a
+          concrete regression each time: `ride-completed.tsx`'s
+          `handleSubmitRef` (pre-existing pattern, extended to a second
+          call site — avoids putting a payment-charging function with ~10
+          reactive closures into a dep array) and **two new refs added in
+          search-destination.tsx** (`pickupValueRef`/`dropoffValueRef`) —
+          traced `handleTextChange` in that file and confirmed
+          `pickup`/`dropoff` get set to `null` in the store the instant the
+          rider types text diverging from the stored address; a plain dep
+          on either would have made the corresponding effect fire
+          mid-keystroke and silently overwrite what the rider just typed
+          (GPS-sets-pickup effect for `pickup`; map-pick-return effect for
+          `dropoff`) — a real regression, not a hypothetical, caught by
+          reading the same file's own text-input handler before fixing.
+        - `driver-arriving.tsx`'s `driverOriginSnapshot`: traced the
+          existing null-guard and confirmed adding it as a dep causes at
+          most one extra no-op invocation (guard fails on the re-run), not
+          a loop — added rather than suppressed.
+        - `search-destination.tsx`'s GPS-catch-up mount effect: added
+          `userLocation` after confirming (grep across the store) that
+          nothing in this codebase ever resets it back to `null` once set,
+          so it re-fires at most once in practice; documented the
+          understood cost (one extra idempotent `fetchSavedAddresses`/
+          `loadRecentSearches` call) rather than treating that as risk-free.
+      - **(c) intentional exclusion, narrow suppression — 2 of 73** (plus
+        one hybrid finding that named two deps, one added as (b) and one
+        suppressed as (c) — `FreeCancelTimer.tsx`'s `secondsLeft`, see
+        below): `pick-on-map.tsx`'s mount effect (re-adding
+        `hasApprox`/`approxLat`/`approxLng` would re-request the device
+        location permission — a user-visible OS prompt — and re-fetch
+        GPS/re-geocode on every spurious re-render); `search-destination.tsx`'s
+        stops-sync effect (the whole `stops` array changes reference on
+        every keystroke-triggered `updateStop()` call in the same file's
+        `handleTextChange`, confirmed by reading it — depending on the
+        whole array, not just `.length`, would overwrite a stop's
+        in-progress edit); `FreeCancelTimer.tsx`'s `secondsLeft` (this
+        effect intentionally owns ONE persistent `setInterval` that ticks
+        `secondsLeft` down every second — adding it as a dep would tear
+        down and recreate that interval on every tick).
+      - **(d) suspicious / needs a human decision — 1 of 73, left
+        UNFIXED (not suppressed — still shows in `yarn lint`)**:
+        `rider-app/app/work-profile.tsx:90` (`loadAll` missing from the
+        mount-only `useEffect(() => { loadAll(); }, [])`). `loadAll` is a
+        `useCallback` keyed on `[activeCompanyId, fetchProfiles,
+        fetchBalance]`, so adding it would make this "mount-only" effect
+        ALSO re-run on every company switch — stacking a third fetch of
+        `/rider/work-profile/:id/rides` on top of the two that round 3
+        already found racing on the same endpoint in the effect right
+        below this one (a TODO(C20) at lines ~79-91, left unfixed then for
+        the same reason: an unresolved design question about whether these
+        two effects should even both exist independently). Deciding this
+        finding means guessing at that same unresolved intent — added a
+        second `TODO(C20)` explaining this specifically rather than
+        guessing either direction.
+    - **A real regression was caught and fixed by this round's own
+      verification step, not shipped**: adding `router` to
+      `useRiderSocket.ts`'s `handleMessage` (a (a)-category fix — `router`
+      is stable in the real app) broke
+      `hooks/__tests__/useRiderSocket.reconnect.test.ts` (3 WebSocket
+      instances opened where 1 was expected) because both of that hook's
+      test files mocked `expo-router`'s `useRouter()` to return a **fresh**
+      `{ push: jest.fn(), replace: jest.fn() }` object on every call —
+      unlike the real module (confirmed via its source), which returns a
+      stable singleton. The unstable mock made `handleMessage` → `connect`
+      → the connect/disconnect lifecycle effect all recreate every render,
+      opening extra sockets. Fixed by correcting both mocks to construct
+      the router object once inside the factory closure (matching real
+      `expo-router` behavior) — not by reverting the production fix. Full
+      before/after: 18/19 → 19/19 passing on this hook's test files.
+    - Extra scrutiny per the round's task, on top of the standard
+      per-finding review: `useRiderSocket.ts` (WebSocket connect/reconnect
+      — round 3 already reviewed a different rule, `set-state-in-effect`,
+      on this same file), `ride-status.tsx`/`ride-tracking-webview.tsx`/
+      `ride-options.tsx`/`driver-arriving.tsx` (ride-state-adjacent),
+      `payment-confirm.tsx`/`ride-completed.tsx` (payment-adjacent, plus
+      `driver-arrived.tsx`/`driver-arriving.tsx`/`ride-in-progress.tsx`/
+      `ride-status.tsx`'s cancellation-fee dialogs), and every
+      `setInterval`/`setTimeout`-containing effect touched (all traced for
+      loop risk individually, none found).
+    - Verification: `npx eslint . --format json` fresh at both start and
+      end (start matched the task brief's 73 exactly). `npx tsc --noEmit`
+      clean before and after. Full `npx jest --ci`: **468/468 passing,
+      56/56 suites** (matches the stated baseline exactly — the previously
+      tracked `androidAutoDistribution.test.ts` flake did not appear,
+      confirming C20's own round-3 rider-app note that this flake is
+      driver-app-specific). One unrelated, pre-existing, untouched test
+      (`__tests__/privacySettingsToggles.test.tsx`) prints a benign
+      post-teardown `ReferenceError: ... Jest environment has been torn
+      down` after its own suite already reported passing — a leaked
+      timer/async handle in that file, not a reported failure and not
+      touched by this round (flagging since it's unusual output, not
+      because it affected the pass count). Every `useCallback`/`useMemo`
+      wrap added was grepped for other call sites in its file before
+      committing to confirm no other effect/memo depends on that
+      function's prior (non-memoized) identity.
+    - 17 commits, each ≤3 files (smaller than prior rounds' batches per
+      this round's explicit instruction, given the risk profile).
+    - Full Change Impact Log:
+      `docs/change-log/2026-08-12-c20-lint-tier4-rider-app.md`.
 - [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
   ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
   SDK across the fleet, both still gated OFF on Android (hidden-API hang, see

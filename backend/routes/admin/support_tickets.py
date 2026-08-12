@@ -91,6 +91,7 @@ class ZohoConfigUpdate(BaseModel):
     org_id: Optional[str] = None
     default_department_id: Optional[str] = None
     default_from_email: Optional[str] = None
+    helpdesk_email_signature: Optional[str] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     refresh_token: Optional[str] = None
@@ -109,6 +110,7 @@ def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "org_id": cfg.get("org_id") or "",
         "default_department_id": cfg.get("default_department_id") or "",
         "default_from_email": cfg.get("default_from_email") or "",
+        "helpdesk_email_signature": cfg.get("helpdesk_email_signature") or "",
         "has_client_id": _has("client_id"),
         "has_client_secret": _has("client_secret"),
         "has_refresh_token": _has("refresh_token"),
@@ -551,10 +553,14 @@ async def reply_ticket(
             status_code=400,
             detail="No reply-from email configured. Set a default reply-from address in Help Desk settings.",
         )
+    content = payload.content
+    signature = (cfg.get("helpdesk_email_signature") or "").strip()
+    if signature and payload.channel.upper() == "EMAIL":
+        content = f'{content}<br><br><div style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:12px;">{signature}</div>'
     try:
         result = await zoho.send_reply(
             ticket_id,
-            content=payload.content,
+            content=content,
             to=payload.to,
             from_email=from_email,
             channel=payload.channel,

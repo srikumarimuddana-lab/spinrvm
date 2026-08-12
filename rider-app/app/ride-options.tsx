@@ -5,14 +5,12 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Pressable,
-  ScrollView,
   ActivityIndicator,
   useWindowDimensions,
   Platform,
-  Modal,
   Animated,
   Keyboard,
+  BackHandler,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop, BottomSheetTextInput } from '@gorhom/bottom-sheet';
@@ -89,7 +87,44 @@ function RideOptionsScreenContent() {
   const [selectedPayment, setSelectedPayment] = useState('card');
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [showPaymentSheet, setShowPaymentSheet] = useState(false);
+  // Payment selector is a real @gorhom/bottom-sheet instance (same library as
+  // the vehicle sheet and the promo sheet below), NOT an RN <Modal>. The Modal
+  // stacked over the vehicle sheet rendered fine but was touch-dead on iOS New
+  // Arch (TestFlight 2.0.0 (16)) — rows and the old footer button drew but
+  // presses never arrived, so tapping a payment method couldn't dismiss it.
+  // Sibling sheets from this library are the one overlay pattern proven to
+  // receive touches on this screen.
+  const paymentSheetRef = useRef<BottomSheet>(null);
+  const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
+  const paymentMaxSheetHeight = SCREEN_HEIGHT * 0.8;
+  const openPaymentSheet = useCallback(() => {
+    paymentSheetRef.current?.expand();
+  }, []);
+  const closePaymentSheet = useCallback(() => {
+    paymentSheetRef.current?.close();
+  }, []);
+  const handlePaymentSheetChange = useCallback((index: number) => {
+    setPaymentSheetOpen(index >= 0);
+  }, []);
+  // The Modal used to intercept Android hardware back via onRequestClose;
+  // keep that exit — back closes the sheet instead of popping the screen.
+  useEffect(() => {
+    if (!paymentSheetOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      paymentSheetRef.current?.close();
+      return true;
+    });
+    return () => sub.remove();
+  }, [paymentSheetOpen]);
+  const renderPaymentBackdrop = useCallback((props: any) => (
+    <BottomSheetBackdrop
+      {...props}
+      appearsOnIndex={0}
+      disappearsOnIndex={-1}
+      pressBehavior="close"
+      opacity={0.4}
+    />
+  ), []);
   const [isBooking, setIsBooking] = useState(false);
 
   // ── Work / corporate state ──
@@ -395,7 +430,7 @@ function RideOptionsScreenContent() {
           : 'Please select a card to pay for this ride.',
         variant: 'warning',
         buttons: [
-          { text: 'Add / select card', onPress: () => setShowPaymentSheet(true) },
+          { text: 'Add / select card', onPress: () => openPaymentSheet() },
           { text: 'Cancel', style: 'cancel' },
         ],
       });
@@ -896,7 +931,7 @@ function RideOptionsScreenContent() {
           {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
             <View style={[styles.fixedFooter, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
               {/* Payment method row */}
-              <TouchableOpacity style={styles.actionRow} onPress={() => setShowPaymentSheet(true)} activeOpacity={0.7}>
+              <TouchableOpacity style={styles.actionRow} onPress={() => openPaymentSheet()} activeOpacity={0.7}>
                 <View style={styles.actionRowIcon}>
                   <Ionicons name={paymentIcon} size={18} color={colors.primary} />
                 </View>
@@ -965,117 +1000,122 @@ function RideOptionsScreenContent() {
         </BottomSheetScrollView>
       </BottomSheet>
 
-      {/* ═══ Payment method modal ═══ */}
-      <Modal visible={showPaymentSheet} animationType="slide" transparent onRequestClose={() => setShowPaymentSheet(false)}>
-        {/* Backdrop is an absolute-fill SIBLING under the sheet, not a parent
-            Touchable, and there is deliberately NO footer button: this Modal
-            stacks over the ride-options bottom sheet, and on iOS (New Arch,
-            observed on TestFlight 2.0.0 (16)) the region below the ScrollView
-            never receives touches — a footer Done button rendered but was
-            un-tappable, leaving riders stuck. Rows commit their selection and
-            dismiss in the same press instead; backdrop tap and the hardware
-            back button (onRequestClose) stay as the other exits. */}
-        <View style={styles.modalOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowPaymentSheet(false)} />
-          <View style={styles.paymentModal}>
-            <View style={styles.paymentModalHandle} />
-            <Text style={styles.paymentModalTitle}>Payment method</Text>
+      {/* ═══ Payment method sheet ═══ */}
+      {/* A @gorhom/bottom-sheet sibling like the promo sheet below — replaces
+          the RN <Modal> that stacked over the vehicle sheet and was touch-dead
+          on iOS New Arch (TestFlight 2.0.0 (16)): rows rendered but presses
+          never arrived, so tapping a payment method couldn't dismiss it. Rows
+          commit their selection and dismiss in the same press; backdrop tap,
+          swipe-down, and Android hardware back are the other exits. */}
+      <BottomSheet
+        ref={paymentSheetRef}
+        index={-1}
+        enableDynamicSizing
+        maxDynamicContentSize={paymentMaxSheetHeight}
+        enablePanDownToClose
+        backdropComponent={renderPaymentBackdrop}
+        backgroundStyle={styles.sheetBackground}
+        handleIndicatorStyle={styles.sheetIndicator}
+        onChange={handlePaymentSheetChange}
+      >
+        <BottomSheetScrollView
+          contentContainerStyle={styles.paymentSheetContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.paymentModalTitle}>Payment method</Text>
 
-            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 400 }}>
-              {/* Saved cards */}
-              {savedCards.map((card) => {
-                const isSelected = selectedPayment === 'card' && selectedCardId === card.id && !useCorporate;
+          {/* Saved cards */}
+          {savedCards.map((card) => {
+            const isSelected = selectedPayment === 'card' && selectedCardId === card.id && !useCorporate;
+            return (
+              <TouchableOpacity key={card.id}
+                style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
+                onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); setUseCorporate(false); closePaymentSheet(); }}>
+                <View style={styles.paymentOptionIcon}>
+                  <Ionicons name="card" size={22} color={isSelected ? colors.primary : colors.textDim} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.paymentOptionName}>{card.brand.charAt(0).toUpperCase() + card.brand.slice(1)}</Text>
+                  <Text style={styles.paymentOptionDetail}>•••• {card.last4}  {card.exp_month}/{String(card.exp_year).slice(-2)}</Text>
+                </View>
+                {isSelected && (
+                  <View style={styles.paymentCheck}>
+                    <Ionicons name="checkmark" size={16} color="#FFF" />
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+
+          {savedCards.length === 0 && (
+            <TouchableOpacity
+              style={styles.paymentOption}
+              onPress={() => { setSelectedPayment('card'); setUseCorporate(false); closePaymentSheet(); router.push('/manage-cards' as any); }}>
+              <View style={styles.paymentOptionIcon}>
+                <Ionicons name="card" size={22} color={colors.textDim} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.paymentOptionName}>Credit Card</Text>
+                <Text style={styles.paymentOptionDetail}>Tap to add a card</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+            </TouchableOpacity>
+          )}
+
+          {/* Wallet */}
+          <TouchableOpacity
+            style={[styles.paymentOption, selectedPayment === 'wallet' && !useCorporate && styles.paymentOptionSelected]}
+            onPress={() => { setSelectedPayment('wallet'); setUseCorporate(false); closePaymentSheet(); }}>
+            <View style={styles.paymentOptionIcon}>
+              <Ionicons name="wallet" size={22} color={selectedPayment === 'wallet' && !useCorporate ? colors.primary : colors.textDim} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.paymentOptionName}>Spinr Wallet</Text>
+              <Text style={styles.paymentOptionDetail}>Balance: ${parseFloat(wallet?.balance ?? '0').toFixed(2)}</Text>
+            </View>
+            {selectedPayment === 'wallet' && !useCorporate && (
+              <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
+            )}
+          </TouchableOpacity>
+
+          {/* Corporate billing */}
+          {corporateAccounts.length > 0 && (
+            <>
+              <View style={styles.paymentDivider}>
+                <View style={styles.paymentDividerLine} />
+                <Text style={styles.paymentDividerText}>Corporate</Text>
+                <View style={styles.paymentDividerLine} />
+              </View>
+              {corporateAccounts.map((acct) => {
+                const isSelected = useCorporate && selectedCorporateId === acct.id;
                 return (
-                  <TouchableOpacity key={card.id}
+                  <TouchableOpacity key={acct.id}
                     style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
-                    onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); setUseCorporate(false); setShowPaymentSheet(false); }}>
+                    onPress={() => { setUseCorporate(true); setSelectedCorporateId(acct.id); closePaymentSheet(); }}>
                     <View style={styles.paymentOptionIcon}>
-                      <Ionicons name="card" size={22} color={isSelected ? colors.primary : colors.textDim} />
+                      <Ionicons name="business" size={22} color={isSelected ? colors.primary : colors.textDim} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.paymentOptionName}>{card.brand.charAt(0).toUpperCase() + card.brand.slice(1)}</Text>
-                      <Text style={styles.paymentOptionDetail}>•••• {card.last4}  {card.exp_month}/{String(card.exp_year).slice(-2)}</Text>
+                      <Text style={styles.paymentOptionName}>{acct.company_name}</Text>
+                      <Text style={styles.paymentOptionDetail}>Company account</Text>
                     </View>
                     {isSelected && (
-                      <View style={styles.paymentCheck}>
-                        <Ionicons name="checkmark" size={16} color="#FFF" />
-                      </View>
+                      <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
                     )}
                   </TouchableOpacity>
                 );
               })}
+            </>
+          )}
 
-              {savedCards.length === 0 && (
-                <TouchableOpacity
-                  style={styles.paymentOption}
-                  onPress={() => { setSelectedPayment('card'); setUseCorporate(false); setShowPaymentSheet(false); router.push('/manage-cards' as any); }}>
-                  <View style={styles.paymentOptionIcon}>
-                    <Ionicons name="card" size={22} color={colors.textDim} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.paymentOptionName}>Credit Card</Text>
-                    <Text style={styles.paymentOptionDetail}>Tap to add a card</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-                </TouchableOpacity>
-              )}
-
-              {/* Wallet */}
-              <TouchableOpacity
-                style={[styles.paymentOption, selectedPayment === 'wallet' && !useCorporate && styles.paymentOptionSelected]}
-                onPress={() => { setSelectedPayment('wallet'); setUseCorporate(false); setShowPaymentSheet(false); }}>
-                <View style={styles.paymentOptionIcon}>
-                  <Ionicons name="wallet" size={22} color={selectedPayment === 'wallet' && !useCorporate ? colors.primary : colors.textDim} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.paymentOptionName}>Spinr Wallet</Text>
-                  <Text style={styles.paymentOptionDetail}>Balance: ${parseFloat(wallet?.balance ?? '0').toFixed(2)}</Text>
-                </View>
-                {selectedPayment === 'wallet' && !useCorporate && (
-                  <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
-                )}
-              </TouchableOpacity>
-
-              {/* Corporate billing */}
-              {corporateAccounts.length > 0 && (
-                <>
-                  <View style={styles.paymentDivider}>
-                    <View style={styles.paymentDividerLine} />
-                    <Text style={styles.paymentDividerText}>Corporate</Text>
-                    <View style={styles.paymentDividerLine} />
-                  </View>
-                  {corporateAccounts.map((acct) => {
-                    const isSelected = useCorporate && selectedCorporateId === acct.id;
-                    return (
-                      <TouchableOpacity key={acct.id}
-                        style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
-                        onPress={() => { setUseCorporate(true); setSelectedCorporateId(acct.id); setShowPaymentSheet(false); }}>
-                        <View style={styles.paymentOptionIcon}>
-                          <Ionicons name="business" size={22} color={isSelected ? colors.primary : colors.textDim} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.paymentOptionName}>{acct.company_name}</Text>
-                          <Text style={styles.paymentOptionDetail}>Company account</Text>
-                        </View>
-                        {isSelected && (
-                          <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </>
-              )}
-
-              {/* Add payment */}
-              <TouchableOpacity style={styles.addPaymentRow}
-                onPress={() => { setShowPaymentSheet(false); router.push('/manage-cards' as any); }}>
-                <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
-                <Text style={styles.addPaymentText}>Add payment method</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+          {/* Add payment */}
+          <TouchableOpacity style={styles.addPaymentRow}
+            onPress={() => { closePaymentSheet(); router.push('/manage-cards' as any); }}>
+            <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
+            <Text style={styles.addPaymentText}>Add payment method</Text>
+          </TouchableOpacity>
+        </BottomSheetScrollView>
+      </BottomSheet>
 
       {/* ═══ Promo selection sheet ═══ */}
       <BottomSheet
@@ -1886,27 +1926,11 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       color: '#FFFFFF',
     },
 
-    // ── Payment modal ──
-    modalOverlay: {
-      flex: 1,
-      justifyContent: 'flex-end',
-      backgroundColor: 'rgba(0,0,0,0.4)',
-    },
-    paymentModal: {
-      backgroundColor: colors.surface,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
+    // ── Payment sheet ──
+    paymentSheetContent: {
       paddingHorizontal: 20,
       paddingBottom: Math.max(insets.bottom, 16) + 8,
-      paddingTop: 12,
-    },
-    paymentModalHandle: {
-      width: 40,
-      height: 4,
-      borderRadius: 2,
-      backgroundColor: colors.border,
-      alignSelf: 'center',
-      marginBottom: 16,
+      paddingTop: 4,
     },
     paymentModalTitle: {
       fontSize: sf(18),

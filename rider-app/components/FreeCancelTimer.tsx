@@ -45,6 +45,10 @@ export function FreeCancelTimer({
 
   useEffect(() => {
     if (driverArrived) {
+      // secondsLeft isn't a dep of this effect (driverAcceptedAt/
+      // freeCancelWindowSeconds/driverArrived are), so snapping it to 0
+      // when the free-cancel window ends can't retrigger this effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSecondsLeft(0);
       return;
     }

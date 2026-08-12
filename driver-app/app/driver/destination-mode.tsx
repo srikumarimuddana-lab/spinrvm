@@ -77,10 +77,9 @@ export default function DestinationModeScreen() {
     });
     const [addressInput, setAddressInput] = useState('');
 
-    useEffect(() => {
-        fetchDestination();
-    }, []);
-
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
     const fetchDestination = async () => {
         setLoading(true);
         try {
@@ -96,6 +95,10 @@ export default function DestinationModeScreen() {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        fetchDestination();
+    }, []);
 
     const handleSave = async () => {
         const trimmed = addressInput.trim();

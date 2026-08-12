@@ -10,6 +10,7 @@ import {
   Linking,
   AppState,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router/react-navigation';
@@ -126,14 +127,12 @@ export default function HomeScreen() {
 
   const saveLastLocation = async (lat: number, lng: number) => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       await AsyncStorage.setItem('spinr_last_location', JSON.stringify({ lat, lng }));
     } catch {}
   };
 
   const loadLastLocation = async () => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const saved = await AsyncStorage.getItem('spinr_last_location');
       if (saved) return JSON.parse(saved);
     } catch {}

@@ -23,6 +23,7 @@ import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePaym
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { onRideRated } from '@shared/utils/appRating';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -327,7 +328,6 @@ function RideCompletedScreenContent() {
 
       // 3. Trigger app store rating prompt after good rides
       try {
-        const { onRideRated } = require('@shared/utils/appRating');
         await onRideRated(rating);
       } catch { /* non-critical */ }
 

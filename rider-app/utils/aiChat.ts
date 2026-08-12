@@ -69,7 +69,12 @@ export interface StreamChatOptions {
 
 async function defaultFetch(url: string, init: any): Promise<any> {
   // expo/fetch supports streaming response bodies on iOS and Android
-  // (RN's built-in fetch does not).
+  // (RN's built-in fetch does not). Lazy require (not a static import) is
+  // deliberate: per the file header, fetchImpl is an injectable test seam —
+  // tests that supply their own fetchImpl never call this function, so they
+  // never pay for loading expo/fetch. A static import would load it eagerly
+  // for every importer of this module, mocked or not.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { fetch: expoFetch } = require('expo/fetch');
   return expoFetch(url, init);
 }

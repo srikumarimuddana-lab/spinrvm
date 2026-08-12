@@ -8,7 +8,12 @@
  * Fallback plan if a device misbehaves: swap the transport for
  * react-native-sse — the parser and event contract stay identical.
  */
-import { SpinrConfig } from '@shared/config/spinr.config';
+// eslint-disable-next-line import/no-named-as-default -- keep the default
+// import: __tests__/aiChat.test.ts (and other test files across the repo)
+// jest.mock('@shared/config/spinr.config', () => ({ default: {...} }))
+// without a matching named 'SpinrConfig' export, so a named import resolves
+// to undefined under that mock and breaks SpinrConfig.backendUrl below.
+import SpinrConfig from '@shared/config/spinr.config';
 import { ensureFreshToken, getAuthHeader } from '@shared/api/client';
 import type { AiSseEvent } from '@shared/types/ai';
 

@@ -48,6 +48,9 @@ export default function RideDetailScreen() {
     };
 
     useEffect(() => {
+        // Refetch when the route's ride id changes; loadRide sets state after
+        // its own await, not synchronously at the top of the effect.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (id) void loadRide(true);
     }, [id]);
 

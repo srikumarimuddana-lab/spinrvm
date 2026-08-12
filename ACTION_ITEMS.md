@@ -5786,72 +5786,84 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `rider-app/package.json`, `rider-app/yarn.lock`, `driver-app/package.json`,
   `driver-app/yarn.lock` (durable fix).
 
-### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR)
-- [ ] **Status:** open — found 2026-08-03 while verifying PR #3382 (full-suite
-  pass at that time: backend pytest 8742 passed/0 failed, rider-app jest
-  434/434, driver-app jest 337/337, admin-dashboard vitest 157/157 — all
-  green). Running a bare `npx tsc --noEmit` per surface afterward surfaced
-  errors in all three, none in any file that PR (or any recent PR) touched —
-  confirmed by diffing each error's file path against the PR's
-  changed-files list.
-- **What's wrong, two distinct causes:**
-  1. **rider-app (7 errors) + driver-app (4 errors):** every error is
-     `Cannot find module 'expo-router/react-navigation' or its corresponding
-     type declarations'`, e.g. `app/(tabs)/account.tsx`,
-     `hooks/useBottomSheetGuard.ts` (rider-app),
-     `components/activity/ActivityView.tsx` (driver-app). The same subpath
-     also fails to resolve under Jest (`Cannot find module
-     'expo-router/react-navigation'`) in exactly one test suite per app —
-     `hooks/__tests__/useBottomSheetGuard.test.tsx` (rider-app),
-     `__tests__/components/ActivityView.test.tsx` (driver-app) — both
-     already-known pre-existing failures, not new. The module exists and is
-     imported successfully at runtime (Expo's Metro bundler resolves it
-     fine); it's specifically `tsc`'s and Jest's module resolution that
-     can't find its type declarations/CommonJS shape in this environment.
-  2. **admin-dashboard (26 errors), all confined to `*.test.ts(x)` files:**
-     missing `@testing-library/jest-dom` matcher types (`toBeInTheDocument`,
-     `toBeDisabled` — `driver-statements-panel.test.tsx`) and missing Vitest
-     global types (`describe`/`it`/`expect` — `route-segments.test.ts`).
-     `admin-dashboard`'s `tsconfig.json` doesn't register Vitest's ambient
-     types for a standalone `tsc` run; `vitest run` itself passed 157/157
-     clean because Vitest's own transform/type-layer already has these
-     globals, so this is a `tsc`-only artifact, not a real build or runtime
-     issue.
-- **Why it matters:** neither of these fails today's actual gates (`yarn
-  jest --ci`, `vitest run`, and whatever CI runs are what's authoritative),
-  but a bare `tsc --noEmit` is a normal thing to run when verifying a PR
-  (as this session was asked to do) or to add as a CI check later — right
-  now it produces guaranteed false-positive noise on every run regardless of
-  what changed, which trains reviewers to ignore `tsc` output entirely and
-  would mask a real new type error introduced in the same file.
-- **Fix, per cause:**
-  1. Track down why `expo-router/react-navigation`'s type declarations
-     aren't resolving — likely a missing/stale `@types` entry, an
-     `expo-router` version whose subpath exports changed, or a
-     `moduleResolution`/`paths` config gap in `rider-app/tsconfig.json` and
-     `driver-app/tsconfig.json`. Fix should make both `tsc --noEmit` and the
-     one Jest suite per app (`useBottomSheetGuard.test.tsx`,
-     `ActivityView.test.tsx`) pass.
-  2. Add `vitest/globals` (or explicit `import { describe, it, expect } from
-     'vitest'`) and `@testing-library/jest-dom`'s type augmentation to
-     `admin-dashboard/tsconfig.json`'s `types` array (or an included
-     `vitest-setup.d.ts`), matching whatever the project's `vitest.config.ts`
-     `setupFiles` already registers at runtime.
-- **Risk if left undone:** low today (doesn't block any real gate), but
-  compounds — every new file that imports `expo-router/react-navigation` or
-  every new admin-dashboard test file adds more permanent noise, and it's a
-  standing trap for anyone who later wires `tsc --noEmit` into CI as an
-  actual gate (it would be red from day one for reasons unrelated to their
-  diff).
-- **Risk of implementing:** low — type-declaration/tsconfig-only fix, no
-  runtime behavior change in any of the three apps.
-- **Verification once implemented:** `npx tsc --noEmit` clean (0 errors) in
-  all three surfaces; `yarn jest --ci` (rider-app, driver-app) and `vitest
-  run` (admin-dashboard) still fully green, including the two previously-
-  failing-to-load Jest suites now loading successfully.
-- **Files:** `rider-app/tsconfig.json`, `driver-app/tsconfig.json`,
-  `admin-dashboard/tsconfig.json` (+ possibly a new `vitest-setup.d.ts` in
-  admin-dashboard); no application code.
+### C20. `tsc --noEmit` false-positives across all three frontend surfaces — CLOSED, real root cause was stale `node_modules`, not a config bug
+- [x] **Status:** closed 2026-08-12, same day picked up. Originally filed as
+  C13 (2026-08-03, while verifying PR #3382); renumbered to C20 here because
+  a different C13 ("Required `pull_request`-triggered workflows silently
+  never fire on some PRs") was filed by a concurrent session in the meantime
+  and merged first — per this file's own numbering convention (highest used
+  + 1, never reuse), this entry moves to the next free slot rather than
+  leaving two C13s in the document.
+- **Original (wrong) diagnosis:** the filing session assumed a real
+  repo-config bug — missing `expo-router/react-navigation` type
+  declarations in `rider-app`/`driver-app`'s `tsconfig.json`s, and missing
+  Vitest/jest-dom ambient types in `admin-dashboard`'s `tsconfig.json`.
+- **Actual root cause, found on pickup:** none of that was true.
+  `admin-dashboard/tsconfig.json` already declared
+  `"types": ["vitest/globals", "@testing-library/jest-dom"]` — the config
+  was already correct. The real problem was that **this environment's
+  pre-baked `node_modules` in all three apps were stale relative to their
+  own lockfiles**: `rider-app`/`driver-app`'s installed `expo-router` was
+  `55.0.16` while `yarn.lock`/`package.json` both pinned `~57.0.9`/`~57.0.8`
+  (the `react-navigation` subpath simply doesn't exist in 55.x — confirmed
+  via `find node_modules/expo-router -iname '*react-navigation*'` before vs.
+  after reinstall); `admin-dashboard`'s installed `@testing-library/jest-dom`
+  was `6.9.1` against a `^7.0.0` `package.json` pin. **Why this went
+  unnoticed:** this repo's `.claude/settings.json` `SessionStart` hook only
+  checked `test -d node_modules` (directory *exists*) before declaring
+  dependencies "ok" — it never verified the installed versions matched the
+  lockfile, so a stale pre-baked install silently passed every session
+  indefinitely.
+- **Fix:**
+  1. Reinstalled all three apps' dependencies from their lockfiles
+     (`yarn install --check-files` for `rider-app`/`driver-app`; `npm ci`
+     for `admin-dashboard` — after first almost creating a stray `yarn.lock`
+     in `admin-dashboard` by running `yarn install` there out of habit,
+     caught via `git status` showing an untracked `yarn.lock` next to the
+     project's real `package-lock.json`, deleted before it could confuse the
+     project's actual package manager). No `tsconfig.json` or application
+     code needed to change in any of the three apps — the configs filed
+     against in the original diagnosis were already correct.
+  2. Hardened `.claude/settings.json`'s `SessionStart` hooks so this can't
+     silently recur: `rider-app`/`driver-app` now run `yarn check
+     --integrity` (only skipping a full `yarn install --check-files` when
+     that passes) instead of a bare directory-existence check;
+     `admin-dashboard` now runs `npm ci` unconditionally every session
+     start instead of skipping when `node_modules` merely exists.
+- **Verification performed:**
+  - `npx tsc --noEmit`: **0 errors** in all three surfaces (was 7 rider-app
+    + 4 driver-app + 26 admin-dashboard).
+  - `yarn jest --ci`: rider-app **466/466 passed, 56/56 suites** (the
+    previously-failing-to-load `useBottomSheetGuard.test.tsx` now loads and
+    passes); driver-app **379/379 passed, 53/53 suites** with
+    `--runInBand` (the previously-failing-to-load `ActivityView.test.tsx`
+    now loads and passes). Both apps' parallel `--ci` runs each showed one
+    unrelated test timeout under worker contention
+    (`verifyEmailScreen.test.tsx` rider-app,
+    `SafetyOverlay.test.tsx`/`ActivityView.test.tsx` driver-app) — all
+    confirmed pre-existing full-suite-parallelism flakiness by re-running in
+    isolation (all pass) and, for driver-app, a full `--runInBand` pass
+    (0 flakes serialized) — not caused by this fix, matching the exact flake
+    already documented against `verifyEmailScreen.test.tsx` under the C19
+    entry above.
+  - `vitest run` (admin-dashboard): **160/160 passed, 20/20 files**.
+  - `git status` across all three app directories: **zero tracked files
+    changed** by the reinstall itself — confirms this was purely a
+    local-environment `node_modules`/lockfile desync, not a repo bug that
+    needed a source commit.
+- **What was NOT verified:** whether other CI/dev environments (Fly/Railway
+  build containers, other contributors' machines, other Claude Code
+  sessions' pre-baked images) carry the same stale `node_modules` — this was
+  only confirmed and fixed for the container this session ran in. The
+  hardened `SessionStart` hook (fix 2 above) is the durable guard against
+  recurrence, but hasn't itself been exercised against a genuinely-stale
+  future container in this session (it fixed a `test -d`-passing/actually-stale
+  state retroactively, which is the scenario it's designed for, but the
+  hook edit itself was not separately re-tested end-to-end by starting a
+  fresh session).
+- **Files:** `.claude/settings.json` (hardened `SessionStart` hooks — the
+  actual durable fix). No `tsconfig.json` or application code changed in
+  `rider-app`, `driver-app`, or `admin-dashboard`.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

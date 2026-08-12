@@ -289,6 +289,78 @@ class TestNotificationPreferences:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /notifications/preferences also surfaces read-only global throttling
+# info (subtask 5/5) — NOT per-user columns, since quiet-hours/cap are global
+# admin settings (migration 304), not on the notification_preferences row.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestPreferencesThrottleInfo:
+    async def test_defaults_row_includes_throttle_info(self):
+        from backend.routes.notifications import get_preferences
+
+        settings = {
+            "notification_throttling_enabled": False,
+            "notification_quiet_hours_start": "22:00",
+            "notification_quiet_hours_end": "07:00",
+            "notification_daily_cap": 6,
+        }
+        with (
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        ):
+            result = await get_preferences(current_user={"id": USER_ID})
+
+        assert result["notification_throttling_enabled"] is False
+        assert result["notification_quiet_hours_start"] == "22:00"
+        assert result["notification_quiet_hours_end"] == "07:00"
+        assert result["notification_daily_cap"] == 6
+        # Existing per-user default fields are still present alongside it.
+        assert result["push_enabled"] is True
+
+    async def test_existing_row_also_gets_throttle_info(self):
+        from backend.routes.notifications import get_preferences
+
+        row = {"id": "pref-001", "user_id": USER_ID, "push_enabled": False}
+        settings = {
+            "notification_throttling_enabled": True,
+            "notification_quiet_hours_start": "23:00",
+            "notification_quiet_hours_end": "06:30",
+            "notification_daily_cap": 3,
+        }
+        with (
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(return_value=[row])),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        ):
+            result = await get_preferences(current_user={"id": USER_ID})
+
+        # Per-user row fields pass through unchanged...
+        assert result["push_enabled"] is False
+        assert result["user_id"] == USER_ID
+        # ...merged with the global throttle info.
+        assert result["notification_throttling_enabled"] is True
+        assert result["notification_quiet_hours_start"] == "23:00"
+        assert result["notification_daily_cap"] == 3
+
+    async def test_missing_settings_keys_fall_back_to_documented_defaults(self):
+        """get_app_settings can return a bare dict missing these keys (e.g.
+        a stale cache from before migration 304) — must not KeyError."""
+        from backend.routes.notifications import get_preferences
+
+        with (
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
+        ):
+            result = await get_preferences(current_user={"id": USER_ID})
+
+        assert result["notification_throttling_enabled"] is False
+        assert result["notification_quiet_hours_start"] == "22:00"
+        assert result["notification_quiet_hours_end"] == "07:00"
+        assert result["notification_daily_cap"] == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # create_notification() helper — deeplink injection
 # ─────────────────────────────────────────────────────────────────────────────
 

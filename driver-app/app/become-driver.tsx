@@ -33,6 +33,13 @@ import type { ThemeColors } from '@shared/theme/index';
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
 
+// Module-level (not component-scope) so react-hooks/purity doesn't treat this
+// as an impure call "during render" — it's only ever invoked from the
+// pickImage event handler, well after mount, never during render itself.
+function genFallbackFileName(): string {
+  return `photo_${Date.now()}.jpg`;
+}
+
 interface Requirement {
   id: string;
   name: string;
@@ -316,7 +323,7 @@ export default function BecomeDriverScreen() {
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
         // Generate a name if missing (common with camera)
-        const name = asset.fileName || `photo_${Date.now()}.jpg`;
+        const name = asset.fileName || genFallbackFileName();
         const mimeType = asset.type === 'image' || !asset.type ? 'image/jpeg' : asset.type;
 
         await processUpload(asset.uri, name, mimeType, reqId, side);

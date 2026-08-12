@@ -26,7 +26,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { initMetaSdk } from '@shared/analytics/meta';
 import {
   initFirebaseServices,

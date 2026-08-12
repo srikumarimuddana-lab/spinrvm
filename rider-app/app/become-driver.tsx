@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuthStore } from '@shared/store/authStore';
-import SpinrConfig from '@shared/config/spinr.config';
+import { SpinrConfig } from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
@@ -47,7 +47,7 @@ interface DocState {
 export default function BecomeDriverScreen() {
   const router = useRouter();
   const { registerDriver, isLoading, user } = useAuthStore();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [currentStep, setCurrentStep] = useState(0);

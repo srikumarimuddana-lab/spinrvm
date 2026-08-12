@@ -8,7 +8,7 @@
  * Fallback plan if a device misbehaves: swap the transport for
  * react-native-sse — the parser and event contract stay identical.
  */
-import SpinrConfig from '@shared/config/spinr.config';
+import { SpinrConfig } from '@shared/config/spinr.config';
 import { ensureFreshToken, getAuthHeader } from '@shared/api/client';
 import type { AiSseEvent } from '@shared/types/ai';
 

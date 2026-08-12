@@ -37,7 +37,7 @@ import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
 import api, { getApiErrorMessage } from '@shared/api/client';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
 import { selectDefaultCardId } from '../utils/selectDefaultCard';

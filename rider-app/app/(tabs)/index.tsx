@@ -23,7 +23,7 @@ import { useRideStore } from '../../store/rideStore';
 import { useBottomSheetGuard } from '../../hooks/useBottomSheetGuard';
 import { useAiChatStore } from '../../store/aiChatStore';
 import AppMap from '@shared/components/AppMap';
-import CarMarker, { resolveMarkerVariant } from '@shared/components/CarMarker';
+import { CarMarker, resolveMarkerVariant } from '@shared/components/CarMarker';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import { showToast } from '../../store/toastStore';
 import { SOSButton } from '@shared/components/SOSButton';

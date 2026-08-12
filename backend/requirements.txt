@@ -94,7 +94,7 @@ et-xmlfile==2.0.0
     # via openpyxl
 fastapi==0.136.1
     # via -r requirements.in
-firebase-admin==7.4.0
+firebase-admin==7.5.0
     # via -r requirements.in
 fonttools==4.62.1
     # via fpdf2

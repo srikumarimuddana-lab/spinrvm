@@ -19,7 +19,6 @@ import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
-import { useAuthStore } from '@shared/store/authStore';
 import { useTranslation } from '../../i18n';
 import type { FareBreakdownLine } from '../../store/walletStore';
 
@@ -59,7 +58,6 @@ const PAGE_LIMIT = 20;
 
 export default function ActivityScreen() {
   const router = useRouter();
-  const { token } = useAuthStore();
   const { scheduledRides, fetchScheduledRides } = useRideStore();
   const [rides, setRides] = useState<RideHistory[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
@@ -123,7 +121,7 @@ export default function ActivityScreen() {
         typesMap[t.id] = t.name;
       });
       setVehicleTypes(typesMap);
-    } catch (error) {
+    } catch {
       setFetchError('Could not load rides. Pull to refresh.');
     } finally {
       setLoading(false);

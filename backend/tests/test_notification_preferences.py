@@ -44,8 +44,17 @@ async def test_get_defaults_include_every_toggleable_field():
         "promotions",
         "safety_alerts",
         "earnings_summary",
+        # Read-only global throttling info (migration 304) — not a per-user
+        # toggle, merged in by _global_throttle_info(). See
+        # test_p3_push_notifications.py::TestPreferencesThrottleInfo for
+        # dedicated coverage of this merge.
+        "notification_throttling_enabled",
+        "notification_quiet_hours_start",
+        "notification_quiet_hours_end",
+        "notification_daily_cap",
     }
     assert prefs["earnings_summary"] is True
+    assert prefs["notification_throttling_enabled"] is False
 
 
 async def test_put_persists_earnings_summary_on_existing_row():

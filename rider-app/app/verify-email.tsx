@@ -164,6 +164,11 @@ export default function VerifyEmailScreen() {
 
   useEffect(() => {
     if (email && !alreadyVerified) {
+      // Fires once per email value (deps are [email]); none of the state
+      // requestCode sets (sending/codeSent/countdown/alreadyVerified) is a
+      // dep of this effect, so it can't retrigger itself even though
+      // alreadyVerified is deliberately excluded from the array above.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       requestCode(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

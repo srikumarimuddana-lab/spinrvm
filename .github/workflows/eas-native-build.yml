@@ -62,13 +62,13 @@ jobs:
       run:
         working-directory: ${{ github.event.inputs.app }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 20
 
-      - uses: expo/expo-github-action@v8
+      - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}

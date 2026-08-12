@@ -16,7 +16,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
-import { useAuthStore } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import * as WebBrowser from 'expo-web-browser';
 import { useDriverMe, useUpdateDriverMe } from '@shared/hooks/queries';
@@ -32,7 +31,6 @@ function PayoutScreen() {
     const {
         driverBalance,
         hasBankAccount,
-        bankAccount,
         fetchDriverBalance,
         fetchBankAccount,
         requestPayout,
@@ -91,7 +89,7 @@ function PayoutScreen() {
                 loadTaxYears(),
                 // GST is sourced from useDriverMe — no manual fetch needed.
             ]);
-        } catch (err) {
+        } catch {
             // Errors are handled individually in each function
         } finally {
             setInitialLoading(false);
@@ -473,7 +471,7 @@ function PayoutScreen() {
                     {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (
                         <Text style={styles.previousAppNote}>
                             Payments from the previous Spinr app ({formatCurrency(driverBalance!.previous_app_paid_total!)})
-                            stay in your payment history, but aren't part of your Spinr earnings above.
+                            stay in your payment history, but aren&apos;t part of your Spinr earnings above.
                         </Text>
                     )}
                 </View>
@@ -606,7 +604,7 @@ function PayoutScreen() {
                         <View style={styles.readyCard}>
                             <Ionicons name="checkmark-circle" size={22} color={colors.success} />
                             <Text style={styles.readyText}>
-                                You're all set — your balance is ready to cash out.
+                                You&apos;re all set — your balance is ready to cash out.
                             </Text>
                         </View>
                     </View>
@@ -644,7 +642,7 @@ function PayoutScreen() {
                                 the audited reveal — "never shown to staff" was untrue. */}
                             <Text style={styles.gstNote}>
                                 Stored encrypted. Used to prepare your year-end T4A slip and shared
-                                once with Stripe, our payout partner, so you aren't asked for it
+                                once with Stripe, our payout partner, so you aren&apos;t asked for it
                                 again. The app only ever shows the last 4 digits; authorized Spinr
                                 staff can access it solely for tax filing or a correction you
                                 request, and every access is logged.

@@ -8,14 +8,14 @@
  * Code under test: driver-app/hooks/useDriverSafetyTrigger.ts
  */
 
+import { renderHook } from '@testing-library/react-native';
+import apiClient from '@shared/api/client';
+import { useDriverSafetyTrigger } from '../useDriverSafetyTrigger';
+
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { post: jest.fn() },
 }));
-
-import { renderHook } from '@testing-library/react-native';
-import apiClient from '@shared/api/client';
-import { useDriverSafetyTrigger } from '../useDriverSafetyTrigger';
 
 const mockPost = apiClient.post as jest.Mock;
 

@@ -31,10 +31,17 @@ function _isRenderable(c: unknown): boolean {
 
 let useNative = true;
 try {
+  // Guarded, platform-conditional requires of internal RN native-component
+  // paths — must stay runtime require(), not a static import, so only the
+  // platform actually running loads its own native component module (a
+  // static import of both would defeat the try/catch below and load the
+  // wrong platform's codegen path unconditionally).
+  /* eslint-disable @typescript-eslint/no-require-imports */
   const native =
     Platform.OS === 'android'
       ? require('react-native/Libraries/Components/RefreshControl/AndroidSwipeRefreshLayoutNativeComponent')?.default
       : require('react-native/Libraries/Components/RefreshControl/PullToRefreshViewNativeComponent')?.default;
+  /* eslint-enable @typescript-eslint/no-require-imports */
   if (!_isRenderable(native)) {
     useNative = false;
   }

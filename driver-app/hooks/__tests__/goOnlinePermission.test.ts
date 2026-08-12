@@ -15,6 +15,8 @@
  * This test covers the code path (function is called) without a simulator.
  */
 
+import * as Location from 'expo-location';
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios', select: (o: any) => o.ios },
   Vibration: { vibrate: jest.fn() },
@@ -53,8 +55,6 @@ jest.mock('@shared/services/firebase', () => ({
   auth: { currentUser: null },
   isFirebaseConfigured: false,
 }));
-
-import * as Location from 'expo-location';
 
 /**
  * Standalone replica of the go-online permission logic from toggleOnline().

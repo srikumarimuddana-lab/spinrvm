@@ -5,6 +5,10 @@
  * Coverage target: P3-4 step 2 (raise driver-app coverage to next threshold).
  */
 
+import { useDocumentStore } from '../documentStore';
+import api from '@shared/api/client';
+import { appCache } from '@shared/cache';
+
 jest.mock('react-native', () => ({
     Platform: { OS: 'ios' },
     Alert: { alert: jest.fn() },
@@ -44,10 +48,6 @@ jest.mock('@shared/cache', () => ({
         DRIVER_DOCUMENTS_TTL: 3600,
     },
 }));
-
-import { useDocumentStore } from '../documentStore';
-import api from '@shared/api/client';
-import { appCache } from '@shared/cache';
 
 const mockGet = api.get as jest.Mock;
 const mockPost = api.post as jest.Mock;

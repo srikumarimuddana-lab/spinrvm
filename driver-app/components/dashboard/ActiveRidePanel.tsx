@@ -136,7 +136,9 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   const sheetHeightRef = useRef(0);
   const grabHeightRef = useRef(0);
   const insetsBottomRef = useRef(insets.bottom);
-  insetsBottomRef.current = insets.bottom;
+  useEffect(() => {
+    insetsBottomRef.current = insets.bottom;
+  }, [insets.bottom]);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const collapsedOffsetRef = useRef(() =>
@@ -154,7 +156,9 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     }).start();
   };
   const snapToRef = useRef(snapTo);
-  snapToRef.current = snapTo;
+  useEffect(() => {
+    snapToRef.current = snapTo;
+  });
 
   const panResponder = useRef(
     PanResponder.create({
@@ -359,7 +363,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   const showConfirm = (
     title: string, message: string,
-    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>,
+    buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[],
   ) => {
     showAlert(title, message, buttons);
   };

@@ -114,9 +114,7 @@ test.describe('driver-app: pickup OTP verification', () => {
     await seedAuthedDriverSession(page, { driver: { is_online: true } });
     await mockDriverBackend(page, { activeRide: ARRIVED_RIDE, onlineStatus: true });
 
-    let verifyOtpRouted = false;
     await page.route('**/api/v1/drivers/rides/*/verify-otp', async (route) => {
-      verifyOtpRouted = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',

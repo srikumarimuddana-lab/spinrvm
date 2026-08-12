@@ -16,10 +16,8 @@ import {
 import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import api, { getApiErrorMessage } from '@shared/api/client';
-import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { newPlacesSessionToken } from '@shared/utils/placesSession';
@@ -67,7 +65,6 @@ interface SavedAddress {
 export default function AddressesScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { t } = useLanguageStore();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [addresses, setAddresses] = useState<SavedAddress[]>([]);

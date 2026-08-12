@@ -99,7 +99,7 @@ export default function LegalScreen() {
             const data = await response.json();
             setPrivacyText(data.privacy_policy_text || STATIC_PRIVACY_POLICY);
             setTosText(data.terms_of_service_text || STATIC_TERMS_OF_SERVICE);
-        } catch (e) {
+        } catch {
             setPrivacyText(STATIC_PRIVACY_POLICY);
             setTosText(STATIC_TERMS_OF_SERVICE);
         } finally {

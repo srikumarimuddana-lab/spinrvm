@@ -20,6 +20,11 @@ import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuthStore } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -69,13 +74,13 @@ export default function BecomeDriverScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get('/vehicle-types');  // just to verify API works
+        await api.get('/vehicle-types');  // just to verify API works
         // Public endpoint — returns only active areas, no admin auth required.
         const areasRes = await api.get<any[]>('/service-areas');
         const active = areasRes.data || [];
         setServiceAreas(active);
         if (active.length > 0 && !serviceAreaId) setServiceAreaId(active[0].id);
-      } catch (e) {
+      } catch {
         // Fallback — hardcode areas if API fails
         setServiceAreas([
           { id: 'saskatoon', name: 'Saskatoon, SK' },
@@ -310,7 +315,7 @@ export default function BecomeDriverScreen() {
 
         await processUpload(asset.uri, name, mimeType, reqId, side);
       }
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Failed to pick image');
     }
   };
@@ -326,7 +331,7 @@ export default function BecomeDriverScreen() {
 
       const asset = result.assets[0];
       await processUpload(asset.uri, asset.name, asset.mimeType || 'image/jpeg', reqId, side);
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Failed to pick file');
     }
   };

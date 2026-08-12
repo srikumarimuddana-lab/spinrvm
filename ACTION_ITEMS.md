@@ -7,7 +7,39 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-11 — A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
+_Last updated: 2026-08-12 — A28 CLOSED: audit's 4 P2 findings + P2-B
+triaged. P2-C already closed (same finding as P0-A/#3678). Float-on-money
+in `routes/drivers/earnings.py` (4 sites) fixed — Decimal accumulation
+instead of raw `float()`, with regression tests independently verified to
+fail on the pre-fix file with the predicted drift value. Remaining items
+(driver-import VIN/email/phone validation, `/balance` vs `/earnings`
+composition, rider total-rides definition, missing import change-logs)
+filed as backlog — most need a product decision, not a blind code change.
+Prior same-day: A27 CLOSED: audit's 2 P1 findings. P1-A (dead
+`drivers.total_earnings` fleet-wide stat) fixed with a live, legacy-excluded,
+batched earnings computation; also fixed a related gap on the per-driver
+"Earnings" header (missing legacy exclusion vs. its own "Payouts" tab). P1-B
+investigation (was PST hidden in legacy receipts?) surfaced a bigger live
+issue: the current fare engine had PST disabled for Saskatchewan with a
+comment claiming it doesn't apply — contradicting regulatory-sk.md. User
+confirmed PST does apply; enabled it in production for the 4 real SK service
+areas (effective for new quotes only, no backdating), fixed the stale
+comment, added the first direct tax-calculation unit tests. Prior same-day
+(2026-08-12): C18 CLOSED: all 176 `uses:` references across 23
+`.github/workflows/*.yml` files pinned from mutable version tags (`@v7`) to
+verified commit SHAs (`@<sha> # v7`), resolved via anonymous public-repo git
+reads (not the release-page scrape the original investigation correctly
+rejected) — see `docs/change-log/2026-08-12-c18-pin-github-actions-shas.md`.
+One reference (`8398a7/action-slack@v3`) turned out to resolve to a mutable
+**branch**, not even a tag. Prior same-day (2026-08-12): A1c/Sub-tier C:
+`utils/kyb_reverification.py` CLOSED, 67% → 92% (75 stmts) — a gap in the
+prior "fully CLOSED" sweeps (2026-08-03, 2026-08-10/11), found via a live
+`pytest --cov` re-check before starting a planned 28-file batch; the other
+27 files in that batch were already closed by concurrent sessions (in most
+cases under the exact same test-file name this session independently
+chose) and were discarded without being committed — see
+`docs/change-log/2026-08-12-a1c-kyb-reverification-coverage.md` for the
+full collision list. Prior (2026-08-11): A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
 an unsatisfiable `legacy_import_metadata IS NULL` SQL predicate against a
 `NOT NULL DEFAULT '{}'::jsonb` column, matching zero rows always at 9+
 driver-facing earnings/statement/T4A call sites — confirmed live against
@@ -2739,6 +2771,111 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   analysis is correct.
   </details>
 
+### A27. Audit's 2 P1 findings (`docs/audit/2026-08-11-driver-rider-migration-audit.md`) — both CLOSED 2026-08-11
+- **P1-A — `drivers.total_earnings` is dead code (fleet-wide admin stat
+  always $0).**
+  - [x] **Status:** DONE. `admin_get_driver_stats` and per-area breakdown
+    now compute earnings live from completed, legacy-excluded rides (one
+    batched query, not N+1). Also fixed a related gap found in the same
+    pass: `admin_get_driver_live_stats` (per-driver "Earnings" header)
+    lacked the legacy-ride exclusion its own "Payouts" tab already had —
+    same driver, same screen, two different numbers (Phase 3 cross-surface
+    finding #2 in the audit). Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-p1a-driver-earnings-dead-column.md`.
+- **P1-B — legacy PST possibly folded silently into the fare line on
+  imported historical receipts.**
+  - [x] **Status:** CLOSED, but the investigation surfaced something bigger
+    than the audit anticipated. Traced the *current* fare engine
+    (`features.calculate_all_fees`) and found it carried a comment
+    asserting "PST does NOT apply to rideshare" in Saskatchewan, with the
+    live `service_areas` config for Saskatoon/Regina set `pst_enabled:
+    false` — directly contradicting `.claude/context/regulatory-sk.md`'s
+    documented rule ("PST (6%, SK) on fare where applicable — ride-share
+    currently PST-applicable in SK"). **User confirmed PST does apply and
+    the code was wrong** — Saskatoon/Regina were under-collecting PST on
+    every live ride, not just legacy-imported ones. Per explicit user
+    direction, enabled PST now in production (`pst_enabled=true,
+    pst_rate=6` on the 4 real Saskatchewan `service_areas` rows only — not
+    the unrelated `riyadh`/`riyadh airport` test rows), effective
+    immediately for new fare quotes, no backdating of already-completed
+    rides. Fixed the stale code comment; added the first direct unit tests
+    for `calculate_all_fees`'s GST/PST/HST branches (none existed before).
+    The original legacy-import question (was PST hidden in the imported
+    receipts' fare line) is likely moot given PST wasn't being charged at
+    all until this fix — no separate legacy-receipt remediation needed.
+    Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-sk-pst-enable.md`.
+  - **Not verified / left open**: whether historical remediation (crediting
+    riders or drivers for the pre-fix under-collection period) is needed —
+    explicitly out of scope per "no backdating" instruction; flag to
+    Finance/Legal if that determination is still pending.
+- P2 findings from the same audit: see A28 below, triaged 2026-08-12.
+
+### A28. Audit's 4 P2 findings + P2-B (`docs/audit/2026-08-11-driver-rider-migration-audit.md`) — triaged 2026-08-12
+- **P2-C — rider importer never writes `legacy_import_metadata`.**
+  - [x] **Status:** already DONE — this is the exact same finding as P0-A
+    (see A25 above), fixed in PR #3678. No separate action needed; noting
+    the cross-reference here since the audit lists it under both P0 and P2
+    numbering.
+- **P2 — driver import validity gaps** (`driver_import_service.py`): VIN
+  stored plaintext with no format/checksum check; email/phone accepted
+  with no format validation; a document row can import with
+  `status="approved"` and an already-past `expiry_date`.
+  - [ ] **Status:** open, not fixed. Low urgency per the audit's own
+    triage — the document-expiry gap is defense-in-depth only
+    (`go_online`'s own expiry re-check, `routes/drivers/status.py:309-328`,
+    is the real runtime gate); VIN/email/phone are one-time CLI-operator
+    input, not user-facing. Fix direction if picked up: format-validate
+    (not necessarily checksum-validate) VIN/email/phone in `build_plan`,
+    reject an approved-document row whose `expiry_date` has already
+    passed.
+  - Also noted: `sgi_approved`/`work_authorization_status`/
+    `is_permanent_resident`/`is_citizen`/expiry dates/`decals_sent` are
+    nullable-by-design with no `plan.errors` entry when blank — the audit
+    flags this only to confirm it's the intended model (completeness
+    enforced by downstream `status`/`is_verified` gating), not to request
+    a change. No action needed unless product says otherwise.
+- **Float-on-money in `routes/drivers/earnings.py`** (adjacent finding,
+  flagged because it's inside the file the audit reviewed line-by-line
+  anyway — a genuine CLAUDE.md Decimal-discipline violation, 4 call sites).
+  - [x] **Status:** DONE (2026-08-12) — daily/weekly/monthly/comparison
+    earnings aggregation now uses `_d()`/Decimal throughout instead of raw
+    `float()` accumulation. Display-path only (no money movement), but
+    brings the file into CLAUDE.md compliance. Full Change Impact & Risk
+    Log: `docs/change-log/2026-08-12-driver-earnings-decimal-fix.md`.
+- **`/balance` vs `/earnings` composition can diverge** (Phase 3
+  cross-surface findings #6/#7): `/balance` sums fare components live and
+  excludes `ride_incentive_claims` bonuses/cancellation fees that
+  `/earnings` and driver statements include; `/earnings`-family endpoints
+  trust the stored `driver_earnings` column directly. Undocumented as
+  intentional or accidental.
+  - [ ] **Status:** open — needs a product decision, not a blind code
+    change. Reconciling the two compositions either way is a money-visible
+    behavior change on a live-tested surface (driver balance/payout
+    figures) and CLAUDE.md requires escalation when blast radius/intent is
+    unclear on a surface like this. Flag to product/finance: should
+    `payable_balance` include bonuses/cancellation fees (making it match
+    `/earnings`), or is the current split deliberate (balance = withdrawable
+    ride money only, earnings = full income picture)?
+- **Admin "total rides" vs rider-app "total rides" use different
+  definitions, unreconciled** (Phase 3 cross-surface finding #10): admin
+  counts all-status lifetime rides; rider-app counts completed-only,
+  period-scoped.
+  - [ ] **Status:** open, low priority — the audit itself frames this as
+    "by design," similar to the T4A-vs-earnings date-bucket difference
+    (finding #8) which is already documented in code as intentional. Likely
+    resolution is a one-line code comment on each definition rather than a
+    behavior change, once product confirms both are meant to differ.
+- **P2-B — no Change Impact Log exists for the driver or rider bulk-import
+  paths themselves** (only booking-import and Stripe-mapping migration have
+  runbooks/change-logs, despite both writing directly to `auth`/`users`/
+  `drivers`).
+  - [ ] **Status:** open — documentation-only gap, no code risk. Someone
+    should backfill `docs/change-log/` entries for
+    `driver_import_service.py`/`rider_import_service.py` describing the
+    existing (already-shipped) behavior, per CLAUDE.md's "live-tested
+    surface" documentation requirement.
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
@@ -5427,7 +5564,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `.github/workflows/mobile-bundle-smoke.yml` (new).
 
 ### C18. GitHub Actions steps use mutable version tags repo-wide, not pinned commit SHAs — Semgrep/GHAS flags it on every new workflow line
-- [ ] **Status:** open — found 2026-08-11, via GitHub Advanced Security /
+- [x] **Status:** CLOSED (2026-08-12) — all 176 `uses:` references across 23
+  `.github/workflows/*.yml` files pinned to verified commit SHAs, with the
+  human-readable version kept as a trailing comment
+  (`uses: actions/checkout@<sha> # v7`). Full Change Impact Log:
+  `docs/change-log/2026-08-12-c18-pin-github-actions-shas.md`.
+  **How the "Verification reliability" blocker below was resolved:** this
+  session's git proxy serves anonymous, read-only `git clone`/`git
+  ls-remote` access to any public GitHub repo even when it isn't in this
+  session's attached repository scope (confirmed via `add_repo`, which
+  reports read access already available without needing attachment). Used
+  that channel to clone all 19 distinct action repos referenced (18
+  originally enumerated below + `github/codeql-action`, a subpath-style
+  reference the original grep pattern missed — see the change log's §4) and
+  resolve each `@vN` tag to its exact commit SHA via `git ls-remote --tags`
+  against the real upstream repo, then cross-checked every SHA as a live ref
+  tip on `origin` before use. This is a direct read of the actual git ref
+  database — the same information `gh`/the GitHub API would return — not
+  the release-page scrape the original investigation correctly rejected as
+  unreliable for a character-exact hash.
+  One finding worth flagging on its own: `8398a7/action-slack@v3` had no
+  `v3` **tag** at all — it resolved to a **branch**, which is even more
+  mutable than an unpinned major-version tag normally is. That reference is
+  now pinned like everything else.
+- **(historical) Status:** open — found 2026-08-11, via GitHub Advanced Security /
   Semgrep OSS comments on PR #3668 (6 findings, rule
   `yaml.github-actions.security.github-actions-mutable-action-tag`) on the
   new `mobile-bundle-smoke.yml` workflow added by that PR. Confirmed real:

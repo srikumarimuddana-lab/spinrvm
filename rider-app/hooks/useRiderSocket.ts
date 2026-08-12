@@ -212,7 +212,11 @@ export function useRiderSocket() {
       default:
         console.log('[WS] Unhandled rider message type:', data.type);
     }
-  }, []);
+    // router is expo-router's stable singleton — adding it doesn't change
+    // handleMessage's identity (still effectively stable across renders),
+    // so `connect` below (deps: [handleMessage]) and the lifecycle effects
+    // that depend on `connect` staying stable are unaffected.
+  }, [router]);
 
   // ── Connect / disconnect ────────────────────────────────────────
   const connect = useCallback(async () => {
@@ -329,7 +333,9 @@ export function useRiderSocket() {
         setConnectionState('disconnected');
       }
     };
-  }, [handleMessage]);
+    // setConnectionState is itself a useCallback with deps: [] (stable),
+    // so adding it doesn't change connect's identity/stability either.
+  }, [handleMessage, setConnectionState]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -344,7 +350,8 @@ export function useRiderSocket() {
       wsRef.current = null;
     }
     setConnectionState('disconnected');
-  }, []);
+    // setConnectionState is a stable useCallback (deps: []).
+  }, [setConnectionState]);
 
   // ── Lifecycle: connect when ride starts, disconnect when it ends ─
   useEffect(() => {

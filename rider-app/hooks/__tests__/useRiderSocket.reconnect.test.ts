@@ -48,7 +48,17 @@ jest.mock('@shared/store/authStore', () => ({
 
 jest.mock('@shared/config', () => ({ API_URL: 'http://localhost:8000' }));
 jest.mock('../../constants/rideStatus', () => ({ RideStatus: { COMPLETED: 'completed' } }));
-jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn(), replace: jest.fn() }) }));
+// Real expo-router's useRouter() returns a module-level singleton object
+// (see node_modules/expo-router/build/hooks/useRouter.js), not a fresh
+// object per call — the mock router below is created once inside the
+// factory closure to match that, since useRiderSocket now depends on
+// `router` being referentially stable across renders (an unstable router
+// would make handleMessage/connect recreate every render and defeat the
+// hook's connect-once lifecycle effect).
+jest.mock('expo-router', () => {
+  const mockRouter = { push: jest.fn(), replace: jest.fn() };
+  return { useRouter: () => mockRouter };
+});
 jest.mock('react-native', () => ({
   AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
   Alert: { alert: jest.fn() },

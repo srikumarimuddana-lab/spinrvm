@@ -40,7 +40,14 @@ jest.mock('@shared/store/authStore', () => ({
   },
 }));
 jest.mock('../../store/toastStore', () => ({ showToast: jest.fn() }));
-jest.mock('expo-router', () => ({ useRouter: () => ({ replace: jest.fn(), push: jest.fn() }) }));
+// Real expo-router's useRouter() returns a module-level singleton object,
+// not a fresh object per call — matched here since useRiderSocket now
+// depends on `router` being referentially stable (see the same comment in
+// useRiderSocket.reconnect.test.ts).
+jest.mock('expo-router', () => {
+  const mockRouter = { replace: jest.fn(), push: jest.fn() };
+  return { useRouter: () => mockRouter };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

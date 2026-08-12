@@ -195,7 +195,11 @@ export default function TicketDetailPage() {
         if (!allowed) return;
         getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
         getDeskServiceAreas().then((r) => setAreas(r.data || [])).catch(() => {});
-        getZohoConfig().then((c) => setEmailSignature(c.helpdesk_email_signature || "")).catch(() => {});
+        getZohoConfig().then((c) => {
+            if (c.helpdesk_signature_enabled && c.helpdesk_signature_preview) {
+                setEmailSignature(c.helpdesk_signature_preview);
+            }
+        }).catch(() => {});
     }, [allowed]);
 
     // Resolve/auto-assign the ticket's service area once, on mount. The endpoint

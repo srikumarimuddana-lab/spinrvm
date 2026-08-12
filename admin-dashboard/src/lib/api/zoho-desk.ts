@@ -18,6 +18,8 @@ export interface ZohoConfigStatus {
     default_department_id: string;
     default_from_email: string;
     helpdesk_email_signature: string;
+    helpdesk_signature_enabled: boolean;
+    helpdesk_signature_preview: string;
     has_client_id: boolean;
     has_client_secret: boolean;
     has_refresh_token: boolean;
@@ -34,6 +36,7 @@ export interface ZohoConfigUpdate {
     default_department_id?: string;
     default_from_email?: string;
     helpdesk_email_signature?: string;
+    helpdesk_signature_enabled?: boolean;
     client_id?: string;
     client_secret?: string;
     refresh_token?: string;

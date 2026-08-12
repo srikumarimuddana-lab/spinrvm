@@ -288,7 +288,9 @@ function RootLayout() {
   // closure when deciding whether a resume navigation is redundant.
   const pathname = usePathname();
   const pathnameRef = useRef(pathname);
-  pathnameRef.current = pathname;
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;

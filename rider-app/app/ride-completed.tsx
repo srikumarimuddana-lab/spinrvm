@@ -340,7 +340,9 @@ function RideCompletedScreenContent() {
       setSubmitPhase('idle');
     }
   };
-  handleSubmitRef.current = handleSubmit;
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit;
+  });
 
   // Returned from the "Change Card" escape with a card chosen for this trip —
   // auto-retry the charge on it once. The ref guard stops a re-run on every

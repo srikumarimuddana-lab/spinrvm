@@ -67,7 +67,7 @@ function DriverArrivingScreenContent() {
 
   const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
-  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<Array<Array<{ latitude: number; longitude: number }>>>([]);
+  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<{ latitude: number; longitude: number }[][]>([]);
   useEffect(() => {
     api.get('/service-areas').then((res: any) => {
       const areas: any[] = res.data || [];
@@ -97,7 +97,7 @@ function DriverArrivingScreenContent() {
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message?: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', variant: 'info' });
   const [reasonVisible, setReasonVisible] = useState(false);
 

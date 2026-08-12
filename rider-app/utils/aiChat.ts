@@ -136,7 +136,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const parser = new SseFrameParser();
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;

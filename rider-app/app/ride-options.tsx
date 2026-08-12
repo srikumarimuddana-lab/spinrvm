@@ -213,7 +213,7 @@ function RideOptionsScreenContent() {
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const mapRef = useRef<MapView>(null);
@@ -224,7 +224,7 @@ function RideOptionsScreenContent() {
 
   // Service area boundary polygons — fetched once per mount and shown as a
   // translucent zone overlay on the map so riders can see the coverage area.
-  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<Array<Array<{ latitude: number; longitude: number }>>>([]);
+  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<{ latitude: number; longitude: number }[][]>([]);
   useEffect(() => {
     api.get('/service-areas').then((res: any) => {
       const areas: any[] = res.data || [];

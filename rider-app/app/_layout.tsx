@@ -1,11 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-
-export const StripeKeyContext = React.createContext<string | null>(null);
-// Public base URL for the "Share Trip" tracking page, served from
-// app_settings.track_base_url via GET /settings. Null while loading or
-// until the admin configures it. Consumers should disable the share
-// action when null/empty rather than fall back to a hardcoded URL.
-export const TrackBaseUrlContext = React.createContext<string | null>(null);
 import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AppState, View, Text, Platform } from 'react-native';
@@ -14,17 +7,9 @@ import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
-
-// Minimum time the branded splash (logo + tagline) stays on screen, even when
-// auth/location init finishes sooner — otherwise the tagline animation (which
-// only starts ~400ms in) is cut off and the rider barely sees the branding.
-// The full intro (logo + tagline + footer loader) settles by ~1.1s, so 1.8s
-// shows the branding with a brief beat without the logo sitting idle on a
-// white screen long enough to feel stuck.
-const SPLASH_MIN_DISPLAY_MS = 1800;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
-import api from '@shared/api/client';
+import api, { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
@@ -41,6 +26,39 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
+import Analytics from '@shared/analytics';
+import { initMetaSdk } from '@shared/analytics/meta';
+import {
+  initFirebaseServices,
+  requestNotificationPermission,
+  requestPushPermissionAndGetToken,
+  onForegroundMessage,
+  setBackgroundMessageHandler,
+  onTokenRefresh,
+  getAppCheckToken,
+} from '@shared/services/firebase';
+import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
+
+import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
+import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
+import ConfirmSheet from '../components/ConfirmSheet';
+import type { ConfirmSheetButton } from '../components/ConfirmSheet';
+import Toast from '../components/Toast';
+
+export const StripeKeyContext = React.createContext<string | null>(null);
+// Public base URL for the "Share Trip" tracking page, served from
+// app_settings.track_base_url via GET /settings. Null while loading or
+// until the admin configures it. Consumers should disable the share
+// action when null/empty rather than fall back to a hardcoded URL.
+export const TrackBaseUrlContext = React.createContext<string | null>(null);
+
+// Minimum time the branded splash (logo + tagline) stays on screen, even when
+// auth/location init finishes sooner — otherwise the tagline animation (which
+// only starts ~400ms in) is cut off and the rider barely sees the branding.
+// The full intro (logo + tagline + footer loader) settles by ~1.1s, so 1.8s
+// shows the branding with a brief beat without the logo sitting idle on a
+// white screen long enough to feel stuck.
+const SPLASH_MIN_DISPLAY_MS = 1800;
 
 // EAS Observe. Native module — present only in binaries built with it, so the
 // guarded require keeps older installed builds and Expo Go booting with
@@ -61,25 +79,6 @@ try {
   ObserveMetricsRoot = null;
   ObserveMetrics = null;
 }
-import Analytics from '@shared/analytics';
-import { initMetaSdk } from '@shared/analytics/meta';
-import {
-  initFirebaseServices,
-  requestNotificationPermission,
-  requestPushPermissionAndGetToken,
-  onForegroundMessage,
-  setBackgroundMessageHandler,
-  onTokenRefresh,
-  getAppCheckToken,
-} from '@shared/services/firebase';
-import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
-import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
-
-import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
-import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
-import ConfirmSheet from '../components/ConfirmSheet';
-import type { ConfirmSheetButton } from '../components/ConfirmSheet';
-import Toast from '../components/Toast';
 
 // Register App Check token retrieval at module load so early startup requests
 // (public settings, active-ride hydration, and login OTP) wait for Firebase

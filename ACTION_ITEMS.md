@@ -3009,6 +3009,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `admin-dashboard` passed (not just `tsc`/dev server) per CLAUDE.md's
     requirement. Full Change Impact & Risk Log:
     `docs/change-log/2026-08-12-a29-tax-config-audit-justification.md`.
+    **2026-08-12 addendum:** a parallel session independently reached the
+    same fix for both dead endpoints (PR #3773) — closed as superseded by
+    the above once discovered, since this fix is strictly more complete
+    (it also fixed the actually-live `admin_update_service_area` path and
+    the admin-dashboard UI, which #3773 didn't touch). One genuine gap
+    #3773 found that this fix didn't cover: `admin_update_area_tax`
+    (`routes/admin/service_areas.py`) 500s with an unhandled
+    `AttributeError` instead of a 404 when `area_id` doesn't exist —
+    `area` resolves to `None` and the final `{k: area.get(k) ...}` crashes;
+    `features.py`'s sibling endpoint already guards this correctly. Fixed
+    separately; see `docs/change-log/2026-08-12-a29-tax-endpoint-404-fix.md`.
 - **`corporate_statement_pdf.py` GST/PST fallback risk.** Falls back to a
   single combined "Tax (GST/PST)" line (lines 93-98) whenever
   `tax_by_type` is empty — e.g. a statement period mixing pre-/post-PST-

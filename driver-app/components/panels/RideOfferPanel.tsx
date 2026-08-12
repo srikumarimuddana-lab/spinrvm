@@ -83,6 +83,15 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
     const screenHeight = Dimensions.get('window').height;
 
+    // react-hooks/refs ("Cannot access refs during render") flags the JSX
+    // uses of these two below (interpolate() calls, transform binding).
+    // Standard Animated.Value driver idiom: Animated mutates these values
+    // imperatively outside the render cycle via .spring()/.timing(), which
+    // is why they're refs, not useState. Verified safe — grepped this file
+    // for `.current =`: zero matches, so nothing ever reassigns either ref
+    // after creation, and React guarantees useRef() returns the same ref
+    // object every render, so a discarded/replayed concurrent render
+    // reading `.current` here always observes the identical instance.
     const slideAnim = useRef(new Animated.Value(screenHeight)).current;
     const progressAnim = useRef(new Animated.Value(1)).current;
 
@@ -178,10 +187,12 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
             <Animated.View
                 style={[
                     styles.dim,
+                    // eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver ref, see note above declarations
                     { opacity: slideAnim.interpolate({ inputRange: [0, screenHeight], outputRange: [1, 0] }) }
                 ]}
             />
 
+            {/* eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver ref, see note above declarations */}
             <Animated.View style={[styles.container, { transform: [{ translateY: slideAnim }] }]}>
                 <View style={styles.card}>
 
@@ -191,6 +202,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             styles.timerFill,
                             {
                                 backgroundColor: timerColor,
+                                // eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver ref, see note above declarations
                                 width: progressAnim.interpolate({
                                     inputRange: [0, 1],
                                     outputRange: ['0%', '100%']

@@ -7,7 +7,19 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-12 — A28 CLOSED: audit's 4 P2 findings + P2-B
+_Last updated: 2026-08-12 — B8 CLOSED (Regina/Saskatoon only, stopgap): applied
+the 1.4×/1.8× multiplier proposal against production to fix identical fares
+across vehicle tiers, but only after catching that live data had drifted
+since the original 2026-08-11 investigation (Regina's Economy rate was
+`0.02/0.02` live, not the documented `2/2`; Saskatoon had an undocumented
+Economy>XL per_km inversion) and that the drafted `UPDATE` SQL used the
+wrong JSON shape (object-keyed `jsonb_set`, not the actual array-of-objects
+schema — would have silently no-op'd). Absolute price-vs-Uber positioning
+explicitly deferred per user direction, not resolved by this stopgap — see
+`docs/change-log/2026-08-12-b8-regina-saskatoon-vehicle-pricing.md`. New
+follow-ups logged: undocumented "Saskatoon Airport" area has the same
+identical-fares defect; a "Regina Airpot" (typo) area also has it. Prior
+same-day: A28 CLOSED: audit's 4 P2 findings + P2-B
 triaged. P2-C already closed (same finding as P0-A/#3678). Float-on-money
 in `routes/drivers/earnings.py` (4 sites) fixed — Decimal accumulation
 instead of raw `float()`, with regression tests independently verified to
@@ -3152,7 +3164,55 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   production via the Session pooler connection string once convenient.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
-- [ ] **Status:** open — **parked 2026-08-11 pending contributor sign-off on the
+- [x] **Status:** Regina/Saskatoon CLOSED (2026-08-12) as an explicit
+  **stopgap** — the 1.4×/1.8× multiplier proposal below was applied
+  against production, fixing the "all tiers cost the same" defect for
+  these two areas. **Not a claim about being priced below Uber** — the
+  user explicitly raised that Spinr's 0% driver-commission model gives
+  real room to undercut Uber's list price (distinct from chasing Uber's
+  unsustainable promotional discounts), and just as explicitly deferred
+  that question: this session has no live Uber comparative fare data to
+  compute a real target, so absolute price-level-vs-Uber positioning is
+  tracked as a separate follow-up, not resolved here. Full Change Impact
+  Log: `docs/change-log/2026-08-12-b8-regina-saskatoon-vehicle-pricing.md`.
+  **Two things the original proposal below got wrong, caught before
+  running anything (see the change log for full detail):**
+  1. **Live data had drifted since 2026-08-11.** Regina's live Economy
+     rate was actually `0.02/0.02` (not the documented `2/2` — two orders
+     of magnitude off, confirmed with the user as a decimal-entry error
+     and corrected to `2.00` before applying multipliers). Saskatoon's
+     live Economy `per_km` was `1.2` (not documented `1`), *higher* than
+     XL's `1.0` — an inversion not in this entry's original scope,
+     corrected in the same pass per user direction rather than shipping a
+     second visible pricing oddity alongside the fix.
+  2. **The drafted `UPDATE` statements below use the wrong JSON shape** —
+     they assume `vehicle_pricing` is a JSON object keyed by vehicle-type
+     name (`jsonb_set(..., '{XL}', ...)`), but the live schema is a JSON
+     **array** of `{vehicle_type: "...", ...}` objects (confirmed against
+     `routes/fares.py:249-254`'s actual read path). Running the SQL below
+     as literally written would have been a **silent no-op** — do not run
+     it verbatim; see the change log for the corrected full-array-replace
+     statements that were actually executed.
+  - **Final live values (Regina):** Economy `2.00/2.00`, XL `2.80/2.80`,
+    Premium `3.60/3.60` (base_fare/per_km).
+  - **Final live values (Saskatoon):** Economy `4.00/1.00`, XL
+    `5.60/1.40`, Premium `7.20/1.80`.
+  - **Discovered, not fixed this pass — new follow-up items:**
+    - A 6th service area, **"Saskatoon Airport"** (created 2026-07-30,
+      after the last full-area inventory this entry's original
+      investigation ran), has the identical all-tiers-same-price defect
+      and was never caught. Needs its own pricing pass.
+    - A service area literally named **"Regina Airpot"** (typo — missing
+      the second "r") also carries the defect. The typo itself may be a
+      separate bug if anything elsewhere matches on the area name string
+      — not investigated.
+    - **Uber competitive positioning** (raised by the user): should
+      Economy's absolute rate undercut Uber's current list price in
+      Regina/Saskatoon, and by how much? Needs real comparative fare data
+      this session doesn't have access to. `riyadh`/`riyadh airport`
+      remain untouched (confirmed intentional international-market
+      pricing per the original investigation).
+- **(historical) Status:** open — **parked 2026-08-11 pending contributor sign-off on the
   multiplier proposal below** (superseding the earlier "parked pending a
   pricing decision (2026-07-27)" note — same blocker, now with the exact
   statements ready to run once approved). No code change needed; the join

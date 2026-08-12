@@ -129,3 +129,51 @@ def test_no_line_items_renders_placeholder():
     text = _pdf_text(generate_corporate_statement_pdf(_COMPANY, fixture))
     assert "No rides in this period" in text
     assert "No member activity in this period" in text
+
+
+def test_empty_tax_by_type_with_zero_tax_renders_combined_line_silently(caplog):
+    """A29: no tax collected at all (e.g. no rides) is a harmless case for
+    the combined-line fallback — must not fire the loud alert."""
+    fixture = {**_FIXTURE, "summary": {**_FIXTURE["summary"], "tax_by_type": {}, "tax_total": "0.00"}}
+    with caplog.at_level("ERROR", logger="utils.corporate_statement_pdf"):
+        text = _pdf_text(generate_corporate_statement_pdf(_COMPANY, fixture))
+    assert "Tax (GST/PST)" in text
+    assert not any("combined GST/PST fallback" in rec.message for rec in caplog.records)
+
+
+def test_empty_tax_by_type_with_nonzero_tax_logs_loudly(caplog):
+    """A29 (ACTION_ITEMS.md): tax_by_type empty but tax_total > 0 means a
+    real tax amount is being collapsed into one line without knowing
+    whether it's GST, PST, or both — must be logged as an error so a real
+    occurrence is caught immediately instead of shipping a regulatory-
+    noncompliant statement silently. The statement must still render (a
+    corporate customer still needs their invoice)."""
+    fixture = {**_FIXTURE, "summary": {**_FIXTURE["summary"], "tax_by_type": {}, "tax_total": "1.25"}}
+    with caplog.at_level("ERROR", logger="utils.corporate_statement_pdf"):
+        pdf = generate_corporate_statement_pdf(_COMPANY, fixture)
+
+    assert pdf.startswith(b"%PDF")
+    text = _pdf_text(pdf)
+    assert "Tax (GST/PST)" in text
+    assert "1.25" in text
+
+    error_records = [rec for rec in caplog.records if rec.levelname == "ERROR"]
+    assert len(error_records) == 1
+    message = error_records[0].message
+    assert "combined GST/PST fallback" in message
+    assert "company_id=c1" in message
+    assert "month=2026-07" in message
+    assert "tax_total=1.25" in message
+
+
+def test_missing_tax_by_type_key_with_nonzero_tax_logs_loudly(caplog):
+    """Same guard applies when `tax_by_type` is absent entirely (not just
+    an empty dict) — e.g. a future tax type the aggregator doesn't bucket
+    yet, per the A29 finding."""
+    summary = {k: v for k, v in _FIXTURE["summary"].items() if k != "tax_by_type"}
+    fixture = {**_FIXTURE, "summary": {**summary, "tax_total": "2.00"}}
+    with caplog.at_level("ERROR", logger="utils.corporate_statement_pdf"):
+        pdf = generate_corporate_statement_pdf(_COMPANY, fixture)
+
+    assert pdf.startswith(b"%PDF")
+    assert any("combined GST/PST fallback" in rec.message for rec in caplog.records)

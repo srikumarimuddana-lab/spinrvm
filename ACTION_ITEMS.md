@@ -3018,9 +3018,29 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   by label, but the fallback path exists and would violate the
   separate-line-items rule (regulatory-sk.md) if ever hit for a period
   with real GST+PST both present.
-  - [ ] **Status:** open, low priority. Fix direction: either remove the
-    combined-line fallback (fail loudly instead) or confirm/document why
-    it's an acceptable degrade path.
+  - [x] **Status:** done — kept the combined-line fallback (removing it and
+    raising would deny a corporate customer their invoice over an edge
+    case, which CLAUDE.md's "do not silently swallow errors" section treats
+    as a worse outcome than a logged degrade path) but made it loud instead
+    of silent. `generate_corporate_statement_pdf`
+    (`utils/corporate_statement_pdf.py`) now calls a new
+    `_log_combined_tax_fallback()` at the fallback site: no-ops when
+    `tax_total` is genuinely zero (nothing to itemize, not a regulatory
+    risk), otherwise emits `logger.error(...)` with company id / statement
+    month / tax_total / the raw `tax_by_type` value, plus a best-effort
+    `sentry_sdk.capture_message(..., tags={"domain": "corporate",
+    "surface": "backend"})` (mirrors `services/ledger_service.py::escalate`'s
+    no-op-if-unconfigured pattern). Rendered PDF output is unchanged in
+    every case. 3 new tests in `test_corporate_statement_pdf.py` (zero-tax
+    stays silent, nonzero-tax logs with expected context, `tax_by_type` key
+    entirely absent also logs); full file re-run 12/12 pass, plus the
+    8/8-passing route-level `test_corporate_statement_pdf_routes.py`
+    (mocks the generator, so it exercises the two PDF-download routes
+    end-to-end without hitting this fallback branch). **Not verified:**
+    against a real Supabase/live corporate account, or that a Sentry event
+    actually lands (delivery not observed, only the no-op-safe call path).
+    Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-12-a29-gst-pst-fallback-hardening.md`.
 - **No `service_area_tax_history` (or equivalent) audit table.** The PST
   enablement's only queryable-in-DB trace is the 4 retroactive `audit_logs`
   rows (A27); there's no dedicated append-only table capturing

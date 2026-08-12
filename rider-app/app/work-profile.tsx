@@ -69,6 +69,19 @@ export default function WorkProfileScreen() {
     }
   }, [activeCompanyId, fetchProfiles, fetchBalance]);
 
+  // TODO(C20): exhaustive-deps flags `loadAll` as missing here. It is NOT
+  // safe to just add: loadAll is a useCallback keyed on
+  // [activeCompanyId, fetchProfiles, fetchBalance], so its identity changes
+  // on every company switch — adding it would make this "mount-only" effect
+  // ALSO re-run loadAll() (fetchProfiles + fetchBalance + rides) on every
+  // activeCompanyId change, stacking a THIRD fetch of the same
+  // `/rider/work-profile/:id/rides` endpoint on top of the two that already
+  // race in the effect below (see its own TODO(C20), flagged in round 3 —
+  // docs/change-log/2026-08-12-c20-lint-tier3-rider-app.md). Whether this
+  // mount effect should even keep running independently of that one is
+  // exactly the open question round 3 already punted to a human; deciding
+  // this finding one way or the other means guessing at that same
+  // unresolved design intent. Left unsuppressed and unfixed, not guessed.
   useEffect(() => {
     // Mount-only load; deps are empty so the state loadAll sets can't
     // retrigger this effect.
@@ -98,7 +111,10 @@ export default function WorkProfileScreen() {
         .catch(() => setRides([]))
         .finally(() => setRidesLoading(false));
     }
-  }, [activeCompanyId]);
+    // fetchBalance is a zustand action (stable reference) — this addition
+    // doesn't touch the redundant-fetch question flagged above; it only
+    // makes this effect's own dep array honest.
+  }, [activeCompanyId, fetchBalance]);
 
   const onRefresh = async () => {
     setRefreshing(true);

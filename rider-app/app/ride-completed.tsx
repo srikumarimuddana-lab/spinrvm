@@ -89,10 +89,16 @@ function RideCompletedScreenContent() {
     () => toReactNativeRouteSections(currentRide?.actual_route_segments),
     [currentRide?.actual_route_segments],
   );
-  const plannedSegments = useMemo(
-    () => toReactNativeSegments(currentRide?.planned_route_polyline ? [currentRide.planned_route_polyline] : []),
-    [currentRide?.planned_route_polyline],
-  );
+  const plannedSegments = useMemo(() => {
+    // Read the field once so the compiler's inferred dependency matches the
+    // declared one exactly (react-hooks/preserve-manual-memoization): the
+    // previous two-site read — one optional-chained (`currentRide?.…`), one
+    // not (`currentRide.…`) — made the inferred dependency the coarser
+    // `currentRide` object instead of the declared `.planned_route_polyline`
+    // field, so manual memoization silently wasn't being preserved.
+    const polyline = currentRide?.planned_route_polyline;
+    return toReactNativeSegments(polyline ? [polyline] : []);
+  }, [currentRide?.planned_route_polyline]);
   const isV2Route = toNum(currentRide?.route_schema_version) >= 2;
   const hasActualRoute = actualSections.length > 0;
   const mapCoordinates = useMemo(

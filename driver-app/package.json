@@ -93,7 +93,7 @@
     "babel-plugin-module-resolver": "^5.0.2",
     "cross-env": "^10.1.0",
     "eslint": "^9.8.0",
-    "eslint-config-expo": "~57.0.0",
+    "eslint-config-expo": "~57.0.1",
     "jest": "^30.3.0",
     "jest-expo": "~57.0.3",
     "patch-package": "^8.0.1",
@@ -145,12 +145,10 @@
         "react-native",
         "react-native-reanimated",
         "react-native-worklets",
-        "react-native-gesture-handler",
         "react-native-screens",
         "@react-navigation/native",
         "@react-navigation/bottom-tabs",
         "@react-native-async-storage/async-storage",
-        "eslint-config-expo",
         "jest",
         "@types/jest"
       ]

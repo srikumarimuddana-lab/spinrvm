@@ -49,6 +49,10 @@ export default function SettingsScreen() {
   useEffect(() => {
     const prefs: any = notificationPrefs;
     if (prefs == null) return;
+    // Syncs local toggle state from the fetched preference; none of
+    // pushEnabled/emailEnabled/smsEnabled is a dep of this effect (only
+    // notificationPrefs is), so no loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (prefs.push_enabled != null) setPushEnabled(Boolean(prefs.push_enabled));
     if (prefs.email_enabled != null) setEmailEnabled(Boolean(prefs.email_enabled));
     if (prefs.sms_enabled != null) setSmsEnabled(Boolean(prefs.sms_enabled));

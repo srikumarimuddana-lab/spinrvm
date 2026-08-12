@@ -138,6 +138,11 @@ function DriverArrivingScreenContent() {
       currentDriver?.lat != null &&
       currentDriver?.lng != null
     ) {
+      // Guarded by driverOriginSnapshot === null above; driverOriginSnapshot
+      // is not a dep of this effect (only currentDriver's lat/lng are), so
+      // this fires once per driver (reset to null on reassignment by the
+      // effect above) and can't loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDriverOriginSnapshot({
         latitude: currentDriver.lat,
         longitude: currentDriver.lng,
@@ -166,6 +171,9 @@ function DriverArrivingScreenContent() {
 
   // ── ETA logic ──
   useEffect(() => {
+    // Resets the countdown whenever the backend sends a fresh ETA;
+    // countdownSeconds itself isn't a dep, so no loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (driverEtaSeconds !== null) setCountdownSeconds(driverEtaSeconds);
   }, [driverEtaSeconds]);
 

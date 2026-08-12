@@ -80,6 +80,10 @@ export default function RideTrackingWebviewScreen() {
 
   useEffect(() => {
     if (!trackingUrl && rideId) {
+      // trackingUrl is a route param, never set by fetchTrackingUrl (which
+      // sets resolvedUrl/loading/error instead), so this guard can't
+      // self-retrigger via this effect's own deps.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchTrackingUrl(rideId);
     }
   }, [rideId, trackingUrl, trackBaseUrl]);

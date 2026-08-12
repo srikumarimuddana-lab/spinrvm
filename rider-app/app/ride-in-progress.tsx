@@ -173,6 +173,9 @@ function RideInProgressScreenContent() {
     // Calculate estimated arrival time
     const now = new Date();
     now.setMinutes(now.getMinutes() + eta);
+    // estimatedTime isn't a dep of this effect (only eta is) — pure
+    // derived-display state, can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEstimatedTime(now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
   }, [eta]);
 
@@ -226,6 +229,10 @@ function RideInProgressScreenContent() {
     // Use != null (not !dLat) so coords of exactly 0 are treated as valid.
     if (dLat == null || dLng == null || dropLat == null || dropLng == null) return;
     const etaMin = _haversineEtaMin(dLat, dLng, dropLat, dropLng);
+    // Neither eta nor lastEtaMin is a dep of this effect (routeFetched and
+    // the driver's live lat/lng are) — recomputed display state driven by
+    // GPS updates, can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEta(etaMin);
     setLastEtaMin(etaMin);
   }, [routeFetched, currentDriver?.lat, currentDriver?.lng]);

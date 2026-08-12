@@ -44,6 +44,9 @@ export default function LegalScreen() {
     };
 
     useEffect(() => {
+        // Re-fetches only when the `type` route param changes; the
+        // loading/text state this sets isn't in the dep array.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchLegalText();
     }, [type]);
 

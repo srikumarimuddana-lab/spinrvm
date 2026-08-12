@@ -72,11 +72,15 @@ class MockRateLimitError extends Error {
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
-jest.mock('@shared/api/client', () => ({
-  __esModule: true,
-  default: { post: (...args: any[]) => mockApiPost(...args) },
-  RateLimitError: MockRateLimitError,
-}));
+jest.mock('@shared/api/client', () => {
+  const actual = jest.requireActual('@shared/api/client');
+  return {
+    __esModule: true,
+    ...actual,
+    default: { post: (...args: any[]) => mockApiPost(...args) },
+    RateLimitError: MockRateLimitError,
+  };
+});
 
 // `email_verified` isn't declared on the shared `User` type yet (see
 // app/verify-email.tsx's `VerifiableUser` comment) — extend it locally for

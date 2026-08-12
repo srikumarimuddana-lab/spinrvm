@@ -169,6 +169,9 @@ export default function RideDetailsScreen() {
   };
 
   useEffect(() => {
+    // Refetches only when rideId changes; the state fetchRide sets isn't
+    // in this effect's own deps.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (rideId) fetchRide();
   }, [rideId]);
 

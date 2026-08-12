@@ -599,7 +599,7 @@ function RootLayout() {
         const dispatchedRideId = remoteMessage?.data?.ride_id as string | undefined;
         if (dispatchedRideId) {
           useRideStore.getState().fetchRide(dispatchedRideId).catch((e) =>
-            console.warn('[Layout] fetchRide on scheduled dispatch failed:', e?.message ?? e),
+            console.warn('[Layout] fetchRide on scheduled dispatch failed:', e),
           );
           router.push({ pathname: '/driver-arriving', params: { rideId: dispatchedRideId } } as any);
         }
@@ -620,7 +620,7 @@ function RootLayout() {
                 text: "I'm okay",
                 style: 'default',
                 onPress: () => {
-                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch((e) => console.warn('[Layout] Safety checkin failed:', e?.message ?? e));
+                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch((e) => console.warn('[Layout] Safety checkin failed:', e));
                 },
               },
             ],
@@ -646,7 +646,7 @@ function RootLayout() {
 
       const currentRide = useRideStore.getState().currentRide;
       if (currentRide?.id) {
-        useRideStore.getState().fetchRide(currentRide.id).catch((e) => console.warn('[Layout] fetchRide on foreground failed:', e?.message ?? e));
+        useRideStore.getState().fetchRide(currentRide.id).catch((e) => console.warn('[Layout] fetchRide on foreground failed:', e));
       }
     });
 

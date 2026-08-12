@@ -63,6 +63,9 @@ export default function OtpScreen() {
       const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
       return () => clearTimeout(timer);
     } else {
+      // Countdown-reached-zero transition; canResend isn't a dep of this
+      // effect (only countdown is), so no loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCanResend(true);
     }
   }, [countdown]);

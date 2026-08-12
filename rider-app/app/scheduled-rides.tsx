@@ -35,6 +35,9 @@ export default function ScheduledRidesScreen() {
   };
 
   useEffect(() => {
+    // Mount-only load; deps are empty so the state loadRides sets can't
+    // retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadRides();
   }, []);
 

@@ -36,6 +36,9 @@ export default function PrivacySettingsScreen() {
   const updatePreferences = useUpdateNotificationPreferences();
   useEffect(() => {
     const prefs: any = notificationPrefs;
+    // Syncs local toggle state from the fetched preference; pushNotifications
+    // isn't a dep of this effect (only notificationPrefs is), so no loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (prefs?.push_enabled != null) setPushNotifications(Boolean(prefs.push_enabled));
   }, [notificationPrefs]);
   const handlePushToggle = async (value: boolean) => {

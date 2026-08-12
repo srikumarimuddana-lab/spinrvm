@@ -70,9 +70,25 @@ export default function WorkProfileScreen() {
   }, [activeCompanyId, fetchProfiles, fetchBalance]);
 
   useEffect(() => {
+    // Mount-only load; deps are empty so the state loadAll sets can't
+    // retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll();
   }, []);
 
+  // TODO(C20): this effect re-fetches balance + the same rides list that
+  // loadAll() above already fetches whenever activeCompanyId is set on
+  // mount — the two run concurrently on first render (loadAll's fetch and
+  // this effect's fetch to the same `/rider/work-profile/:id/rides`
+  // endpoint), so whichever response resolves last silently wins. Not a
+  // render loop (ridesLoading/rides aren't deps here), but it is a
+  // redundant-fetch / minor race that looks unintentional rather than a
+  // deliberate "load once, then re-load on company switch" split — the
+  // duplication should probably be removed by having the mount effect only
+  // call loadAll() and let *this* effect handle both company-switch AND
+  // initial load, but confirming that's safe needs someone who knows why
+  // both paths were written. Left unfixed — flagged in the C20 round 3
+  // report as needing a human decision (rider-app/app/work-profile.tsx:76-85).
   useEffect(() => {
     if (activeCompanyId) {
       fetchBalance();

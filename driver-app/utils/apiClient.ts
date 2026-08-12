@@ -3,6 +3,11 @@ import { useAuthStore } from '@shared/store/authStore'
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8000'
 
+// axios's default export IS the configured instance this file needs
+// (.create(), .get, ...); the rule's suggested `import { create } from
+// 'axios'` would drop the instance methods this file relies on everywhere
+// else.
+// eslint-disable-next-line import/no-named-as-default-member
 const apiClient = axios.create({
   baseURL: BACKEND_URL,
   timeout: 10000,

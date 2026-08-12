@@ -8,6 +8,11 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import api, { getAuthHeader, getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';

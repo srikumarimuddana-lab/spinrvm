@@ -30,6 +30,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { showToast } from '../../hooks/useToast';
 import { ensureFreshToken, getAuthHeader } from '@shared/api/client';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { useDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';

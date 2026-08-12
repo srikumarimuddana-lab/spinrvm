@@ -18,10 +18,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api, { getAuthHeader, getApiErrorMessage } from '@shared/api/client';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { showToast } from '../hooks/useToast';
 import { useLocationStore } from '@shared/store/locationStore';
-import useDriverStore from '../store/driverStore';
+import { useDriverStore } from '../store/driverStore';
 
 type SafetyCategory = 'Road Hazard' | 'Passenger Behaviour' | 'Vehicle Issue' | 'Other';
 

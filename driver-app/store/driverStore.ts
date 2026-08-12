@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import api, { getApiErrorMessage } from '@shared/api/client';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';

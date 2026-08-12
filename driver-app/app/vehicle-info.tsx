@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
     View,
     Text,
@@ -64,7 +64,10 @@ export default function VehicleInfoScreen() {
     // Declared before the `useEffect` below (react-hooks/immutability /
     // React Compiler flags referencing a function before its source-order
     // declaration) — same expression, same effect timing, no behavior change.
-    const fetchVehicleTypes = async () => {
+    // useCallback([driver]) — this function's only reactive input is
+    // `driver` (already the effect's own dep below), so wrapping it makes
+    // its identity stable per that same trigger with zero extra re-runs.
+    const fetchVehicleTypes = useCallback(async () => {
         setVehicleTypesStatus('loading');
         try {
             const areaId = driver?.service_area_id;
@@ -89,7 +92,7 @@ export default function VehicleInfoScreen() {
             setVehicleTypesStatus('error');
             showToast('error', 'Error', getApiErrorMessage(error, 'Could not load vehicle types. Check your connection.'));
         }
-    };
+    }, [driver]);
 
     useEffect(() => {
         // Re-seed the local form from the driver prop whenever it changes
@@ -108,7 +111,7 @@ export default function VehicleInfoScreen() {
             });
         }
         fetchVehicleTypes();
-    }, [driver]);
+    }, [driver, fetchVehicleTypes]);
 
     const handleVehicleTypeSelect = (vehicleType: VehicleType) => {
         setForm(prev => ({ ...prev, vehicle_type_id: vehicleType.id }));

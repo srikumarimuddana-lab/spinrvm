@@ -26,8 +26,10 @@ export default function PayoutHistoryScreen() {
     const STATUS_FILTERS = ['all', 'completed', 'pending', 'processing', 'failed'] as const;
 
     useEffect(() => {
+        // fetchPayoutHistory is a stable driverStore action; adding it
+        // doesn't change this mount-only effect's firing.
         fetchPayoutHistory();
-    }, []);
+    }, [fetchPayoutHistory]);
 
     const filteredHistory = useMemo(() => {
         const sorted = [...(payoutHistory || [])].sort((a, b) =>

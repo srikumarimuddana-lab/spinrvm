@@ -60,6 +60,12 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
       duration: 200,
       useNativeDriver: false,
     }).start();
+    // bannerHeight intentionally excluded — same verified-safe stable
+    // useRef(...).current animation-driver idiom noted above; adding a
+    // ref-derived value to a dependency array is itself a render-time ref
+    // read under react-hooks/refs (confirmed in otp.tsx's dotAnims). Its
+    // identity never changes, so excluding it changes nothing about firing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showBanner]);
 
   const bannerText = bannerLevel === 'no_internet'

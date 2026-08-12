@@ -76,9 +76,14 @@ export default function Index() {
     router.replace('/login' as any);
   }, [logout, router]);
 
+  // Extracted so the effect's dep array is a single statically checkable
+  // boolean instead of the inline `navigationRef.isReady()` call the linter
+  // flagged as a "complex expression" — same value (recomputed every render,
+  // same as before), same re-run trigger via primitive equality.
+  const navReady = navigationRef.isReady();
   useEffect(() => {
     if (!isInitialized || hasNavigated.current) return;
-    if (!navigationRef.isReady()) return;
+    if (!navReady) return;
 
     // Session is recoverable (transient failure, refresh token intact) —
     // show a reconnecting indicator instead of bouncing to /login.
@@ -102,7 +107,12 @@ export default function Index() {
     } else {
       router.replace('/driver/' as any);
     }
-  }, [isInitialized, token, user, navigationRef.isReady(), sessionRecoverable]);
+    // logout is a stable authStore action; router is already treated as a
+    // safe/stable dep elsewhere in this file (handleSignInInstead above).
+    // The hasNavigated ref guard makes this effect idempotent regardless —
+    // even a spurious extra re-run from either identity can't trigger a
+    // second navigation.
+  }, [isInitialized, token, user, navReady, sessionRecoverable, logout, router]);
 
   if (sessionRecoverable) {
     return (

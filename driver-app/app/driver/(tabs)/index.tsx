@@ -87,6 +87,7 @@ function DriverDashboard() {
     earnings,
     rateRider,
     isLoading,
+    error,
   } = useDriverStore();
 
   // Declared here (before first use in the `useEffect` below) rather than
@@ -529,16 +530,21 @@ function DriverDashboard() {
       },
       400
     );
-  }, [location, rideState]);
+    // mapRef is a stable useRef object from useDriverDashboard() — adding it
+    // doesn't change when this effect fires.
+  }, [location, rideState, mapRef]);
 
-  // Error handling
+  // Error handling. `error` is destructured from the top-level useDriverStore()
+  // call above (full-store subscription, not a selector), so this component
+  // already re-renders on every store mutation including `error` — reading it
+  // as a plain variable here instead of an inline useDriverStore.getState()
+  // call in the deps array is a pure refactor, not a new subscription.
   useEffect(() => {
-    const { error } = useDriverStore.getState();
     if (error) {
       showToast('error', 'Something Went Wrong', error || 'Please try again.');
       clearError();
     }
-  }, [useDriverStore.getState().error]);
+  }, [error, clearError]);
 
   // Ride pickup/dropoff markers. Memoised so the countdown ticking
   // every second during `ride_offered` doesn't rebuild the marker

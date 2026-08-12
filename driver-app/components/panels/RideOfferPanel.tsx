@@ -112,6 +112,15 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                 useNativeDriver: true,
             }).start();
         }
+        // slideAnim intentionally excluded — same verified-safe stable
+        // useRef(...).current animation-driver idiom noted above (never
+        // reassigned after creation). Listing a ref-derived value in a
+        // dependency array is itself a render-time ref read under
+        // react-hooks/refs (confirmed in otp.tsx's dotAnims this round —
+        // adding it there was tested and traded one violation for another).
+        // Its identity never changes, so excluding it doesn't change when
+        // this ride-offer slide-in animation fires.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [incomingRide]);
 
     useEffect(() => {
@@ -122,6 +131,9 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
             easing: Easing.linear,
             useNativeDriver: false,
         }).start();
+        // progressAnim intentionally excluded for the same reason as
+        // slideAnim above.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [countdownSeconds, maxCountdown]);
 
     if (!incomingRide) return null;

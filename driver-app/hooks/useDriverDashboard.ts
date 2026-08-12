@@ -1723,7 +1723,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [isOnline, user, setIncomingRide, resetRideState]);
+    // offerSound is now a stable object (useRideOfferSound was fixed to
+    // memoize its returned { play, stop } — see that file's comment) so
+    // it's safe to add here. Before that fix it was a fresh object every
+    // render; naively adding it here would have re-subscribed
+    // onForegroundMessage on every render, risking a missed FCM message in
+    // the brief unsubscribe/resubscribe gap on this ride-offer delivery
+    // path — fixed at the root instead of masked with a suppression.
+  }, [isOnline, user, setIncomingRide, resetRideState, offerSound]);
 
   return {
     // State

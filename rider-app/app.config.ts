@@ -32,9 +32,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     ios: {
         supportsTablet: true,
-        // @ts-expect-error minimumOsVersion is valid Expo config but still absent from the
-        // ExpoConfig ios type as of SDK 57 (verified 2026-08-11: tsc errors without this)
-        minimumOsVersion: '16.0', // floor raised 13.0 → 16.0 at SDK 55; unchanged through SDK 57
+        // @ts-expect-error minimumOsVersion is not in the SDK 57 ExpoConfig ios type, and a
+        // grep of the installed @expo/* + expo-build-properties tooling finds NO consumer of
+        // it (verified 2026-08-12) — the ENFORCED iOS floor is expo-build-properties'
+        // ios.deploymentTarget: '16.4' below, not this key. Kept only in case store-side/EAS
+        // tooling reads it from the uploaded config; do not edit it expecting to change the
+        // supported-OS floor.
+        minimumOsVersion: '16.4', // matches deploymentTarget — the actual floor (history: 13.0 → 16.0 at SDK 55, 16.4 since Voltra Live Activities)
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         // No ios.config.googleMapsApiKey on purpose: iOS uses Apple Maps. Every

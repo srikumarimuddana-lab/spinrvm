@@ -2674,10 +2674,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     impact log at `docs/change-log/2026-08-11-rider-import-pii-protection.md`.
     PR #3674.
 - **P0-A — rider importer has no provenance trail.**
-  - [ ] **Status:** open. `rider_import_service.py`'s `batch` param is never
-    persisted to `legacy_import_metadata` (contrast `driver_import_service.py`,
-    which does). Fix: write a `legacy_import_metadata` row per imported/updated
-    rider row, mirroring the driver importer's pattern.
+  - [x] **Status:** DONE — stale checkbox, corrected here. Already fixed in
+    PR #3678 (same finding also listed as A28's P2-C, which already notes
+    "no separate action needed"). Confirmed directly against
+    `backend/services/rider_import_service.py`: every imported/updated
+    rider row now sets `legacy_import_metadata` (see lines ~298-299,
+    ~327). No code change needed; correcting this entry's own checkbox so
+    it doesn't keep reading as open.
 - **P0-B — 3 admin financial dashboards double-count legacy-imported ride
   earnings.**
   - [x] **Status:** DONE (2026-08-11) — new migrations
@@ -2821,14 +2824,62 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   stored plaintext with no format/checksum check; email/phone accepted
   with no format validation; a document row can import with
   `status="approved"` and an already-past `expiry_date`.
-  - [ ] **Status:** open, not fixed. Low urgency per the audit's own
-    triage — the document-expiry gap is defense-in-depth only
-    (`go_online`'s own expiry re-check, `routes/drivers/status.py:309-328`,
-    is the real runtime gate); VIN/email/phone are one-time CLI-operator
-    input, not user-facing. Fix direction if picked up: format-validate
-    (not necessarily checksum-validate) VIN/email/phone in `build_plan`,
-    reject an approved-document row whose `expiry_date` has already
-    passed.
+  - [x] **Status:** DONE (2026-08-12) — fixed per the direction this entry
+    itself scoped. `build_plan` now:
+    1. Format-validates `phone` against the same `^\+1\d{10}$` shape
+       `SendOTPRequest`/`VerifyOTPRequest` (`schemas.py`) require at
+       signup, and `email` (when present — it's optional) against a
+       permissive structural check (`^[^\s@]+@[^\s@]+\.[^\s@]+$`) — reject
+       the row (`plan.errors`, skip) on either failure. Deliberately not
+       full RFC 5322 email grammar: this is one-time CLI-operator CSV
+       input, not a live user-facing form, so the bar is "catch a
+       structurally broken value," matching this entry's own stated intent.
+    2. Format/checksum-validates `vin` by reusing the existing
+       `validators.validate_vin` (17-char ISO 3779 alphanumeric, I/O/Q
+       excluded — the same helper `schemas.py` already used elsewhere for
+       live vehicle registration, not a new checksum implementation) at
+       **both** VIN write sites: the new-driver-insert path and the
+       resumed-driver vehicle-update path (`vehicle_field_changes`'s
+       `vin_plain`). A valid-but-differently-cased VIN is normalized
+       (uppercased) rather than merely accepted, so downstream storage is
+       consistent.
+    3. Rejects a document row whose `status == "approved"` and
+       `expiry_date` has already passed (`date.fromisoformat(expiry) <
+       date.today()`) — a `status == "pending"` row with the same past
+       date still imports (correct: it hasn't been approved yet, and the
+       real runtime gate — `go_online`'s own expiry re-check,
+       `routes/drivers/status.py:309-328` — still applies before a driver
+       can go online either way). This stays defense-in-depth, exactly as
+       this entry originally framed it, not a replacement for that gate.
+    - **Files:** `backend/services/driver_import_service.py` (all three
+      fixes); `backend/tests/test_driver_import_service.py` (6 new tests:
+      malformed phone, malformed email, blank email is not an error, VIN
+      format on new-driver insert incl. case-normalization, VIN format on
+      resumed-driver update); `backend/tests/test_driver_import_service_coverage.py`
+      (2 new tests: expired+approved document rejected, expired+pending
+      document still allowed).
+    - **Verification:** full existing suite for this module + its callers
+      re-run clean: `test_driver_import_service.py` (23/23),
+      `test_driver_import_service_coverage.py` (70/70 — includes the
+      pre-existing `test_resume_updates_changed_vehicle_fields` /
+      `test_resume_unchanged_vin_is_not_updated`, which already used real
+      valid VINs and confirm the new VIN check doesn't reject legitimate
+      values), `test_admin_driver_import.py` (9/9),
+      `test_admin_drivers_coverage.py` (129/129) — 231/231 total, 0 failed.
+      `services/driver_import_service.py` module coverage 98.51%
+      (`coverage.xml`, measured directly — the aggregate `--cov=.` run's
+      terminal table is too wide to grep the module's own row out of
+      reliably). `python3 -c "import ast; ast.parse(...)"` clean after
+      every edit.
+    - **What was NOT verified:** not exercised against the real CLI script
+      (`scripts/import_saskatoon_drivers.py`) or the admin HTTP upload
+      flow end-to-end with a live Supabase — verified at the `build_plan`
+      unit-test layer only (mocked/fake Supabase client), consistent with
+      how every other validation rule in this file is tested. The
+      "nullable-by-design, no `plan.errors` entry when blank" fields this
+      entry also noted (`sgi_approved`/`work_authorization_status`/etc.)
+      were confirmed intentional by the original audit and were not
+      touched here.
   - Also noted: `sgi_approved`/`work_authorization_status`/
     `is_permanent_resident`/`is_citizen`/expiry dates/`decals_sent` are
     nullable-by-design with no `plan.errors` entry when blank — the audit

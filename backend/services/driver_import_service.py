@@ -38,10 +38,12 @@ try:
     from ..documents import _extract_signed_url
     from ..supabase_client import supabase
     from ..utils.driver_code import generate_driver_code
+    from ..validators import validate_vin
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
     from documents import _extract_signed_url
     from supabase_client import supabase
     from utils.driver_code import generate_driver_code
+    from validators import validate_vin
 
 REQUIRED_DRIVER_COLUMNS = {
     "old_driver_id",
@@ -261,6 +263,19 @@ def normalize_phone(phone: str) -> str:
     if len(digits) == 11 and digits.startswith("1"):
         return f"+{digits}"
     return phone.strip()
+
+
+# Same shape SendOTPRequest/VerifyOTPRequest (schemas.py) require at signup —
+# reused here so a CSV row that couldn't be normalized to a valid Canadian/US
+# E.164 number is caught at import time, not discovered as a broken login
+# later. `normalize_phone` above already returns the raw (un-normalizable)
+# input unchanged when it can't confidently reshape it, so this regex is what
+# actually enforces the format.
+_PHONE_RE = re.compile(r"^\+1\d{10}$")
+# Deliberately permissive (one-time CLI-operator input, not a live user-facing
+# form) — this only rejects structurally-broken values (no '@', no domain
+# dot), not the full RFC 5322 grammar.
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 def slug(value: str) -> str:
@@ -536,6 +551,17 @@ def build_plan(
 
         phone = normalize_phone(row.get("phone", ""))
         email = (row.get("email") or "").strip().lower()
+        # A25/A28 P2 (ACTION_ITEMS.md): format-validate CSV-sourced phone/email
+        # before they're used to match against existing users/drivers or
+        # written to the users/drivers tables — a malformed value here was
+        # previously accepted silently (one-time CLI-operator input, no
+        # runtime form validation like the app's own signup flow gets).
+        if not _PHONE_RE.match(phone):
+            plan.errors.append(ImportErrorItem(old_id, "phone", "phone is not a valid 10-digit North American number"))
+            continue
+        if email and not _EMAIL_RE.match(email):
+            plan.errors.append(ImportErrorItem(old_id, "email", "email is not a valid format"))
+            continue
         # Prefetched maps replace per-row queries; preserve "match by phone,
         # else by email" for users and "match by phone" for drivers.
         matched_user = users_by_phone.get(phone) or (users_by_email.get(email) if email else None)
@@ -558,6 +584,12 @@ def build_plan(
                 # (e.g. an operator re-uploads with VIN/colour filled in). A row
                 # with no vehicle changes is still just skipped.
                 changes, vin_plain = vehicle_field_changes(row, existing)
+                if vin_plain is not None:
+                    try:
+                        vin_plain = validate_vin(vin_plain)
+                    except ValueError as exc:
+                        plan.errors.append(ImportErrorItem(old_id, "vin", str(exc)))
+                        continue
                 if changes or vin_plain is not None:
                     plan.drivers_to_update.append(
                         {"id": existing["id"], "old_driver_id": old_id, "changes": changes, "vin_plain": vin_plain}
@@ -592,6 +624,14 @@ def build_plan(
         if row.get("date_of_birth") and not dob:
             plan.errors.append(ImportErrorItem(old_id, "date_of_birth", "could not parse date"))
             continue
+
+        vin_raw = row.get("vin") or None
+        if vin_raw:
+            try:
+                vin_raw = validate_vin(vin_raw)
+            except ValueError as exc:
+                plan.errors.append(ImportErrorItem(old_id, "vin", str(exc)))
+                continue
 
         for date_field in DRIVER_DATE_FIELDS:
             if date_is_ambiguous(row.get(date_field, "")):
@@ -652,7 +692,7 @@ def build_plan(
                 "license_plate": row.get("vehicle_plate", ""),
                 "vehicle_vin": None,
                 "license_number": None,
-                "_plain_vehicle_vin": row.get("vin") or None,
+                "_plain_vehicle_vin": vin_raw,
                 "_plain_license_number": row.get("license_number") or None,
                 "license_class": row.get("license_class") or None,
                 "date_of_birth": dob,
@@ -771,6 +811,19 @@ def build_plan(
                     "date parses differently day-first vs month-first; verify the source sheet's format before commit",
                 )
             )
+        # A28 P2 (ACTION_ITEMS.md): a document row can otherwise import with
+        # status="approved" and an already-past expiry_date. go_online's own
+        # expiry re-check (routes/drivers/status.py) is the real runtime
+        # gate, so this is defense-in-depth, not the only protection — but
+        # there's no reason to let an operator accidentally approve an
+        # already-expired document at import time.
+        if status == "approved" and expiry and date.fromisoformat(expiry) < date.today():
+            plan.errors.append(
+                ImportErrorItem(
+                    old_id, "expiry_date", f"document is already expired ({expiry}) but status is 'approved'"
+                )
+            )
+            continue
         plan.docs_to_insert.append(
             {
                 "id": doc_id,

@@ -6465,6 +6465,83 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       `@use-voltra/ios-server` as a manual post-`yarn install` step, not a
       repo dependency; "fixing" it would mean adding an unlisted package,
       out of scope.
+  - **Round 3 (2026-08-12, rider-app only, branch
+    `claude/c20-lint-tier3-rider-app`)**: closed the two rider-app
+    categories round 2 explicitly deferred — `no-restricted-syntax`
+    (14→0) and `react-hooks/set-state-in-effect` (40→1, one left
+    deliberately unfixed for human review). Re-measured fresh via `npx
+    eslint . --format json` at the start of the session (not trusted from
+    ACTION_ITEMS.md), confirming both numbers matched the task brief
+    exactly. driver-app was not touched.
+    - `no-restricted-syntax` (14→0): the project's own rule banning raw
+      `error.message` surfaced to users, routing instead through
+      `getApiErrorMessage(err, fallback)`. Of the 14, only **8 were
+      actual raw-error-to-UI sites** and got the intended fix (a real,
+      if small, UX text change — see the round's Change Impact Log for
+      the full before/after per site): `chat-driver.tsx` (hand-rolled
+      `.detail || .message || fallback` ladder replaced 1:1 —
+      `getApiErrorMessage`'s `extractError` already covers the `.detail`
+      case), `manage-cards.tsx` (a Stripe `createPaymentMethod` error's
+      raw `.message`; `getApiErrorMessage`'s own fallback ladder already
+      handles a plain-object error with only `.message`), and
+      `verify-email.tsx` (4 findings, all inside one local
+      `resolveErrorCopy()` helper — a hand-rolled duplicate of
+      `getApiErrorMessage` that lacked its noise-filtering and would
+      have shown a raw "Request failed with status code 500"-style
+      string verbatim if that happened to be `err.message`; kept its
+      unique i18n `messageKey`→`tKey` lookup, which
+      `getApiErrorMessage` has no equivalent for, but now sources that
+      lookup's fallback text from `getApiErrorMessage` instead of raw
+      `err.message`). **The other 6 were not user-facing** and did NOT
+      get the `getApiErrorMessage` treatment, per this round's own task
+      instructions to not force-fit a fix where the finding isn't
+      actually a UI-surfaced case: 4 were `console.warn(...,
+      e?.message ?? e)` logging calls in `app/_layout.tsx` (×3) and
+      `app/ride-options.tsx` (×1) — fixed by passing the whole error
+      object instead, matching the rule's own guidance text ("for
+      logging, pass the whole error object") and an existing compliant
+      call site already in the same file; 2 were
+      `error?.message?.includes('already active')` control-flow checks
+      in `payment-confirm.tsx`/`ride-options.tsx` used only to route to
+      an already-active ride on a 409, not to build display text (the
+      real user-visible message a few lines below both already used
+      `getApiErrorMessage`) — narrow `eslint-disable-next-line` with a
+      comment explaining why, not a fix.
+    - `react-hooks/set-state-in-effect` (40→1): reviewed every finding
+      individually (no bulk pass), tracing each effect's dependency
+      array against the state it sets to confirm no cascading-loop risk,
+      per CLAUDE.md's explicit warning that this rule can hide real
+      bugs. Categorization: **39 (a) benign** — the state each site sets
+      is never in that same effect's own dep array, so none can
+      retrigger itself; covers mount-only data loads (deps `[]` or a
+      stable `useCallback`), guarded one-shot state-machine transitions
+      (`BookingProposalCard.tsx`'s `phase` field — traced all 5
+      `setPhase` call sites in the file to confirm the transition is
+      one-directional), countdown/timer resets synced to an external
+      value (including the rider-side ~15s dispatch-offer-countdown
+      display in `ride-status.tsx`, reviewed with extra care given the
+      dispatch adjacency — no ride-state-machine or backend interaction,
+      pure display), prop/store-to-local-state sync, and the canonical
+      "synchronize an external system" pattern in `useRiderSocket.ts`'s
+      connect/disconnect lifecycle effect (the hook driving the live
+      ride WebSocket, 4 consumers — reviewed carefully given the blast
+      radius; comment-only change, no logic touched). **0 (b)
+      refactorable** — none of the 40 was a safe candidate for a
+      lazy-`useState`-initializer or derive-during-render rewrite
+      without a real behavior question attached (the sync-from-prop
+      cases are user-editable local state initialized from a fetched
+      value, not pure derived values). **1 (c) suspicious, left
+      unfixed** — `rider-app/app/work-profile.tsx:76-85`: a second
+      effect duplicates the mount effect's own `loadAll()` fetch of
+      balance + the same `/rider/work-profile/:id/rides` endpoint,
+      so both run concurrently on first mount when `activeCompanyId` is
+      already set, racing on which response wins. Not a render loop, but
+      looks like unintentional duplicated logic rather than a deliberate
+      "load once vs. reload on company switch" split. Given a `TODO(C20)`
+      comment instead of a suppression (left flagged, not silenced) —
+      **needs a human decision**, not guessed at.
+    - Full Change Impact Log:
+      `docs/change-log/2026-08-12-c20-lint-tier3-rider-app.md`.
   - Mobile lint is still not a CI gate (`ci.yml` lints only `frontend/` +
     `admin-dashboard/`), so none of this blocked anything — it's cleanup
     debt closed opportunistically, not a red pipeline fixed.

@@ -167,7 +167,7 @@ export default function ManageCardsScreen() {
       });
 
       if (error || !paymentMethod) {
-        showToast('Processing Failed', error?.message || 'Could not process card. Please try again.', 'danger');
+        showToast('Processing Failed', getApiErrorMessage(error, 'Could not process card. Please try again.'), 'danger');
         return;
       }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
     View,
     Text,
@@ -36,7 +36,13 @@ export default function RideDetailScreen() {
     // Declared before the `useEffect` below (react-hooks/immutability /
     // React Compiler flags referencing a function before its source-order
     // declaration) — same expression, same effect timing, no behavior change.
-    const loadRide = async (showLoading = false) => {
+    // useCallback([id]) — loadRide's only reactive dependency is `id` (used
+    // directly in the request URL), which is already this effect's own dep,
+    // so wrapping it changes nothing about when either consumer re-runs.
+    // useCompletedRouteRefresh (below) already tolerates either a stable or
+    // per-render-fresh function via its own internal ref, so this doesn't
+    // change that consumer's behavior either.
+    const loadRide = useCallback(async (showLoading = false) => {
         if (showLoading) setLoading(true);
         try {
             const res = await api.get(`/rides/${id}`);
@@ -45,14 +51,14 @@ export default function RideDetailScreen() {
             console.log('Failed to load ride detail:', err);
         }
         if (showLoading) setLoading(false);
-    };
+    }, [id]);
 
     useEffect(() => {
         // Refetch when the route's ride id changes; loadRide sets state after
         // its own await, not synchronously at the top of the effect.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         if (id) void loadRide(true);
-    }, [id]);
+    }, [id, loadRide]);
 
     useCompletedRouteRefresh(ride, loadRide);
 

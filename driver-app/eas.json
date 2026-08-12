@@ -77,7 +77,7 @@
     "android-auto": {
       "android": {
         "serviceAccountKeyPath": "./play-service-account.json",
-        "track": "Auto",
+        "track": "internal",
         "releaseStatus": "completed"
       }
     }

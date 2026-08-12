@@ -6407,10 +6407,25 @@ Remaining, roughly in order of user impact:
   once the branded version has been seen in real inboxes. Two shells and a
   switch are a real carrying cost; both `_LEGACY_*` constants are commented
   to say so.
-- [ ] **N12. No visual/snapshot regression tooling for email** — standing gap.
-  `tests/test_email_layout.py` asserts the logo URL, brand colour and footer
-  lines are present, but nothing catches a layout that renders badly in Gmail,
-  Apple Mail or Outlook. Client rendering is verified by hand or not at all.
+- [x] **N12. No visual/snapshot regression tooling for email** — **partially
+  closed (2026-08-12).** The "nothing pins the whole rendered document" half
+  is fixed: new `backend/tests/_html_snapshot.py` (golden-file diffing
+  helper, missing-snapshot-writes-and-passes / drift-fails-with-a-diff /
+  `SPINR_UPDATE_EMAIL_SNAPSHOTS=1` to update deliberately) plus
+  `backend/tests/test_email_snapshots.py` (6 tests, 9 committed golden
+  files under `backend/tests/snapshots/email/`) pins the full HTML+text
+  output of `utils/email_layout.py`'s `render_email`/`render_from_text`
+  (minimal and fully-populated shapes) and `utils/email_receipt.py`'s
+  legacy/branded shells — the two real template generators in this repo.
+  Verified the failure path actually fires (corrupted a golden file,
+  confirmed a readable diff, restored it) before relying on it. No
+  application code changed. **What this does NOT close, still a real
+  gap:** actual rendering in Gmail/Outlook/Apple Mail — that needs a
+  per-client renderer/screenshot pipeline this pass didn't build, same as
+  N12's own original text already said. `utils/subscription_invoice.py`
+  (PDF + kwargs, not raw HTML, DB-dependent) also wasn't brought into this
+  net — different shape of problem. See
+  `docs/change-log/2026-08-12-n12-email-snapshot-tooling.md`.
 - [x] ~~**N13. Rider-side lifecycle emails**~~ — done for welcome (R4),
   email-address-change security notice (R7), account-deletion confirmation
   (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in

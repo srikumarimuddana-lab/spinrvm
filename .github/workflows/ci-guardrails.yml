@@ -853,7 +853,7 @@ jobs:
           PYEOF
 
       - name: Apply label
-        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const level = '${{ steps.risk.outputs.level }}';
@@ -904,7 +904,7 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     steps:
       - name: Summarise results
-        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const jobs = {

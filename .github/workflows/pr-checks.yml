@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Post size advisory if large
-        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const FILE_LIMIT = 15;
@@ -105,7 +105,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Verify template placeholders are filled
-        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             // Blocking check. Fails (red) if required fields are empty or still
@@ -303,7 +303,7 @@ jobs:
 
       - name: Post advisory + apply label
         if: steps.scan.outputs.has_merges == 'true'
-        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           MERGES: ${{ steps.scan.outputs.merges }}
         with:
@@ -365,7 +365,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Append Tier 5–7 subsections when diff warrants
-        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             // Appends per-area subsection templates to the PR body based on
@@ -568,7 +568,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Post/update PR auto-summary
-        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             // Posts a single comment that summarises:

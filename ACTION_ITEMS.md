@@ -6468,6 +6468,95 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   - Mobile lint is still not a CI gate (`ci.yml` lints only `frontend/` +
     `admin-dashboard/`), so none of this blocked anything — it's cleanup
     debt closed opportunistically, not a red pipeline fixed.
+  - **Round 3 (2026-08-12, driver-app only, branch
+    `claude/c20-lint-tier3-driver-app`)**: closed BOTH categories round 2
+    explicitly deferred for driver-app — `react-hooks/set-state-in-effect`
+    and `no-restricted-syntax` — to zero. Fresh `npx eslint . --format json`
+    measured at the start of this round (not trusting round 2's own
+    already-stale 27 figure): 30 `set-state-in-effect` findings (round 2's
+    log said 27 — had already drifted by 3 in the time between rounds) and
+    2 `no-restricted-syntax` findings, confirmed against the actual starting
+    commit. End-of-round fresh measurement: both 0. Total driver-app error
+    count 40→8 (only pre-existing `react-hooks/exhaustive-deps` and
+    `react-hooks/refs` findings remain, both explicitly out of scope this
+    round too).
+    - `no-restricted-syntax` (2→0): **both findings were logger-only
+      `console.warn`/`console.log` calls, never surfaced to the driver** —
+      not the raw-error-to-UI case the rule targets. Per the rule's own
+      message ("For logging, pass the whole error object"), fixed by
+      passing the caught error object itself instead of `.message`,
+      matching existing house style elsewhere in the app (e.g.
+      `app/_layout.tsx`'s many `console.log('[X] ... failed:', e)` calls).
+      `getApiErrorMessage` was NOT used at either site since neither is
+      user-facing — flagging explicitly since the task anticipated a
+      possible discrepancy from the "always route through
+      getApiErrorMessage" assumption, and this is it.
+      (`app/driver/(tabs)/profile.tsx:102`, `app/profile-setup.tsx:87`.)
+    - `set-state-in-effect` (30→0): per-finding review, not a bulk pass —
+      categorized every finding:
+      - **(a) benign, safe pattern — 29 of 30**: narrow
+        `eslint-disable-next-line` + one-line justification each. Two
+        recurring shapes: (1) mount-only `fetch*`/`load*` calls in an
+        empty-deps effect (the function sets state only after its own
+        `await`, never synchronously at the top of the effect) —
+        `become-driver.tsx` (×2), `documents.tsx`, `driver/addresses.tsx`,
+        `driver/destination-mode.tsx`, `driver/emergency-contacts.tsx`
+        (verified `fetchContacts` is `useCallback([])`, stable),
+        `driver/faq.tsx`, `driver/referral.tsx`, `driver/tax-documents.tsx`,
+        `driver/subscription.tsx`, `legal.tsx`,
+        `driver/lost-and-found-chat.tsx` (verified `loadCase` is
+        `useCallback([])`, stable), `driver/ride-detail.tsx`,
+        `driver/payout.tsx`'s `loadData`, `hooks/useDriverDashboard.ts`'s
+        `refreshLocation` at mount; (2) reset/re-seed-on-dependency-change,
+        verified the setState never feeds back into its own dep array —
+        `driver/(tabs)/index.tsx` (×3: heatmap-on-idle, offer countdown
+        re-seed, route/ETA reset), `driver/payout.tsx`'s GST-field sync,
+        `driver/settings.tsx` (×2: WAV toggle, notification-prefs sync),
+        `vehicle-info.tsx`'s form seed, `app/index.tsx`'s attempt-counter
+        reset, `app/otp.tsx`'s resend-timer flag, `CancelReasonSheet.tsx`'s
+        form reset, `ActiveRidePanel.tsx` (×2: live-distance reset,
+        wait-timer reset — local DISPLAY-only accumulators, not the
+        server-computed fare distance), `useDriverDashboard.ts`'s
+        WS-connection-state sync on going offline, and
+        `useDriverDashboard.ts`'s one-time `isOnline` profile-hydration
+        effect (the most scrutinized of the 30 — traced the
+        `onlineHydratedRef` guard chain line by line: the ref is set
+        `true` on the same pass, before the `setIsOnline` call, so every
+        subsequent run short-circuits at the top even though `isOnline` is
+        itself in the dep array; only ever sets the driver-toggled
+        `isOnline` flag, never the system-computed `is_available`, so the
+        CLAUDE.md invariant `is_available ⇒ is_online` is untouched).
+      - **(b) refactorable, zero behavior change — 1 of 30**:
+        `components/CarMarker.tsx`'s `imageFailed` reset
+        (`useEffect(() => setImageFailed(false), [imageUri])`) rewritten
+        as React's documented "adjust state during render" pattern (a
+        `prevImageUri` comparison, reset inline) instead of a suppression —
+        same reset semantics, and arguably a small correctness improvement
+        since the effect version could flash the fallback image for one
+        render after `imageUri` changed before its post-commit pass
+        corrected it.
+      - **(c) suspicious / needs a human decision — 0 of 30**. No finding
+        in this batch had a dependency array that didn't guard against
+        re-firing, an unbounded setState-into-its-own-dep loop, or a logic
+        change too uncertain to call safe. None flagged for escalation.
+    - Dispatch/payments-risk-posture files got individual dedicated
+      commits and extra scrutiny per CLAUDE.md: `driver/(tabs)/index.tsx`
+      (main dashboard), `driver/payout.tsx` (money), `ActiveRidePanel.tsx`
+      (active-ride bottom sheet), `hooks/useDriverDashboard.ts` (WS +
+      online-flag) — none of the 11 findings across these 4 files touched
+      ride-state-machine transitions, dispatch-offer accept/decline logic,
+      or fare/wallet writes; all are local UI-display state resets or
+      one-way syncs from server data.
+    - Verification: `yarn tsc --noEmit` clean before and after; full
+      `yarn jest` — only the pre-existing, documented
+      `__tests__/androidAutoDistribution.test.ts` flake failed (confirmed
+      untouched: zero diff to that test file or `eas.json`); targeted
+      re-runs of `__tests__/components/ActiveRidePanel.test.tsx` (11/11),
+      `__tests__/components/RideOfferPanel.test.tsx` (17/17, unchanged
+      file, run as an adjacent-surface dispatch-offer check), and
+      `hooks/__tests__/useDriverDashboard.chat.test.ts` (8/8).
+    - Full Change Impact Log:
+      `docs/change-log/2026-08-12-c20-lint-tier3-driver-app.md`.
 - [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
   ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
   SDK across the fleet, both still gated OFF on Android (hidden-API hang, see

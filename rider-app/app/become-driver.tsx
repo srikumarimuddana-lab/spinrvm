@@ -110,6 +110,9 @@ export default function BecomeDriverScreen() {
   };
 
   useEffect(() => {
+    // Mount-only data load; deps are empty so the setLoadingTypes/loading
+    // state these functions set on entry can't retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchVehicleTypes();
     fetchRequirements();
     Linking.canOpenURL(DRIVER_APP_SCHEME).then(setDriverAppInstalled).catch(() => setDriverAppInstalled(false));

@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api, { RateLimitError } from '@shared/api/client';
+import api, { RateLimitError, getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -48,13 +48,14 @@ interface StructuredApiError {
 
 function resolveErrorCopy(err: unknown, fallback: string): string {
   const e = err as StructuredApiError | null | undefined;
+  // getApiErrorMessage() is the shared, noise-filtered fallback for both
+  // branches below — it strips technical strings ("Request failed with
+  // status code 500", "Network Error") that the old code here would have
+  // shown verbatim if e.message happened to be one of those.
   if (e && typeof e === 'object' && e.messageKey) {
-    return tKey(e.messageKey, e.message || fallback);
+    return tKey(e.messageKey, getApiErrorMessage(err, fallback));
   }
-  if (e && typeof e === 'object' && typeof e.message === 'string' && e.message) {
-    return e.message;
-  }
-  return fallback;
+  return getApiErrorMessage(err, fallback);
 }
 
 export default function VerifyEmailScreen() {
@@ -163,6 +164,11 @@ export default function VerifyEmailScreen() {
 
   useEffect(() => {
     if (email && !alreadyVerified) {
+      // Fires once per email value (deps are [email]); none of the state
+      // requestCode sets (sending/codeSent/countdown/alreadyVerified) is a
+      // dep of this effect, so it can't retrigger itself even though
+      // alreadyVerified is deliberately excluded from the array above.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       requestCode(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -348,7 +348,18 @@ export function useRiderSocket() {
 
   // ── Lifecycle: connect when ride starts, disconnect when it ends ─
   useEffect(() => {
+    // Canonical "synchronize an external system (the WS connection) with
+    // React state" effect — exactly the pattern the rule's own guidance
+    // text (react.dev/learn/you-might-not-need-an-effect) describes as
+    // correct. connectionState (set inside disconnect()/connect()) isn't a
+    // dep of this effect; connect/disconnect are stable useCallbacks
+    // (disconnect: [], connect: [handleMessage]), so this only re-runs on
+    // an actual user/ride identity change, never as a result of its own
+    // connectionState write. Reviewed carefully given this hook drives the
+    // live ride WebSocket and is shared by 4 consumers (ai-assistant.tsx,
+    // app/_layout.tsx, ride-status.tsx, store/rideStore.ts).
     if (!user?.id || !currentRide?.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       disconnect();
       return;
     }

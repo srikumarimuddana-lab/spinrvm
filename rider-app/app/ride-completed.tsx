@@ -160,6 +160,9 @@ function RideCompletedScreenContent() {
   // Check if ride was already paid (e.g. coming back to this screen)
   useEffect(() => {
     if (currentRide?.payment_status === 'paid') {
+      // alreadyPaid isn't a dep of this effect (only payment_status is), and
+      // this only ever sets true (never flips back), so no loop risk.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAlreadyPaid(true);
     }
   }, [currentRide?.payment_status]);

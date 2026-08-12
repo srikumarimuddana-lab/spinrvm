@@ -60,6 +60,9 @@ export default function SearchDestinationScreen() {
   // users who have denied location permission.
   const [locationReady, setLocationReady] = useState(!!bias);
   useEffect(() => {
+    // locationReady isn't a dep of this effect (only bias's lat/lng are)
+    // and is guarded, so once true this can't re-fire itself.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (bias && !locationReady) setLocationReady(true);
   }, [bias?.lat, bias?.lng]);
   useEffect(() => {
@@ -91,6 +94,9 @@ export default function SearchDestinationScreen() {
       addRecentSearch(location);
       if (params.mapPickField === 'pickup') {
         setPickup(location);
+        // Deps are the map-pick lat/lng params; pickupText isn't a dep, so
+        // this can't retrigger this effect.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setPickupText(location.address);
         if (!dropoff) setActiveField('dropoff');
       } else {
@@ -139,6 +145,9 @@ export default function SearchDestinationScreen() {
     if (userLocation) {
       if (!pickup || pickup.address === 'Current Location') {
         setPickup({ address: 'Current Location', lat: userLocation.latitude, lng: userLocation.longitude });
+        // pickupText isn't a dep of this effect (only userLocation is), and
+        // the outer guard prevents this from firing once a real pickup is set.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setPickupText('Current Location');
       }
     }
@@ -146,6 +155,8 @@ export default function SearchDestinationScreen() {
 
   // Sync stop texts when stops change
   useEffect(() => {
+    // stopTexts isn't a dep of this effect (only stops.length is), so no loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStopTexts(stops.map(s => s.address || ''));
   }, [stops.length]);
 

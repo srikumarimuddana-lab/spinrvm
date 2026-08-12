@@ -68,6 +68,9 @@ export default function SavedPlacesScreen() {
   };
 
   useEffect(() => {
+    // Mount-only load; deps are empty so the state loadData sets can't
+    // retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadData();
   }, []);
 

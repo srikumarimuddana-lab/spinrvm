@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRideStore } from '../store/rideStore';
 import type { ChatMessage } from '../store/rideStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -150,8 +150,7 @@ export default function ChatDriverScreen() {
       const current = useRideStore.getState().chatMessages;
       setChatMessages(current.filter(m => m.id !== optimisticId));
       setMessage(trimmed);
-      const detail = e?.response?.data?.detail || e?.message || 'Could not send message. Check your connection.';
-      showToast('Send Failed', detail, 'danger');
+      showToast('Send Failed', getApiErrorMessage(e, 'Could not send message. Check your connection.'), 'danger');
     } finally {
       setSending(false);
     }

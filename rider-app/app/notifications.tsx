@@ -69,6 +69,9 @@ export default function NotificationsScreen() {
     }
   }, []);
 
+  // loadNotifications is a useCallback with a stable ([]) dep array, so
+  // this fires once on mount; the state it sets isn't in this effect's deps.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadNotifications(); }, [loadNotifications]);
 
   const handleRefresh = () => {

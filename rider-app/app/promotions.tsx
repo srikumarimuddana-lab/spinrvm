@@ -39,6 +39,9 @@ export default function PromotionsScreen() {
     finally { setLoading(false); }
   };
 
+  // Mount-only load; deps are empty so the state loadPromos sets can't
+  // retrigger this effect.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadPromos(); }, []);
 
   const handleApply = async () => {

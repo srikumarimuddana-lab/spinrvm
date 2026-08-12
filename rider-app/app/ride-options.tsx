@@ -302,6 +302,9 @@ function RideOptionsScreenContent() {
   useEffect(() => {
     if (pickup && dropoff) {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers');
+      // Deps are [pickup, dropoff]; neither is set by these calls (they set
+      // fetchError/estimates/nearbyDrivers instead), so no loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void Promise.all([handleFetchEstimates(), fetchNearbyDrivers()]);
       const driversInterval = setInterval(() => fetchNearbyDrivers(), 10000);
       const estimatesInterval = setInterval(() => void handleFetchEstimates(), 15000);
@@ -324,6 +327,9 @@ function RideOptionsScreenContent() {
 
   useEffect(() => {
     if (!estimates || estimates.length === 0) return;
+    // Deps are [estimates, isLoading]; selectedIndex isn't a dep, so the
+    // out-of-bounds guard/reset below can't retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedIndex(prev => (prev >= estimates.length ? 0 : prev));
     if (!selectedVehicle) {
       const firstAvailableIndex = estimates.findIndex(e => e.available);
@@ -378,7 +384,7 @@ function RideOptionsScreenContent() {
       // default), so a new customer's first card is auto-selected.
       setSelectedCardId((prev) => selectDefaultCardId(prev, cards));
     }).catch((e) => {
-      console.warn('[RideOptions] Failed to load saved cards:', e?.message ?? e);
+      console.warn('[RideOptions] Failed to load saved cards:', e);
     });
   }, []);
 
@@ -386,6 +392,11 @@ function RideOptionsScreenContent() {
 
   useEffect(() => {
     if (workModeEnabled && corporateAccounts.length > 0) {
+      // Keeps the corporate toggle in sync when work mode is enabled
+      // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
+      // this effect (workModeEnabled/corporateAccounts.length are), so no
+      // loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUseCorporate(true);
       setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
     }
@@ -397,6 +408,9 @@ function RideOptionsScreenContent() {
   useEffect(() => {
     if (routePolyline && routePolyline.length >= 2) {
       const coords = routePolyline.map(([lat, lng]: [number, number]) => ({ latitude: lat, longitude: lng }));
+      // routeCoordinates isn't a dep of this effect (only routePolyline
+      // is), so syncing it here can't retrigger this effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRouteCoordinates(coords);
     } else {
       // The store clears routePolyline whenever a waypoint changes (e.g. the
@@ -542,6 +556,11 @@ function RideOptionsScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
       }
     } catch (error: any) {
+      // Not user-facing: `error.message` here only drives the 409-detection
+      // control-flow branch below (routing to the rider's already-active
+      // ride instead of retrying booking). The actual user-visible message a
+      // few lines down already goes through getApiErrorMessage().
+      // eslint-disable-next-line no-restricted-syntax
       const is409 = error?.response?.status === 409 || error?.message?.includes('already active');
       if (is409) {
         const active = await useRideStore.getState().fetchActiveRide();
@@ -656,7 +675,7 @@ function RideOptionsScreenContent() {
               strokeWidth={0}
               strokeColor="transparent"
               onReady={onReadyDirections}
-              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err?.message ?? err)}
+              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err)}
               // NO optimizeWaypoints: the backend prices + dispatches `stops` in
               // the rider-entered order, so Directions must keep that order.
               // Optimising would let onReady persist a reordered polyline as

@@ -47,6 +47,10 @@ export default function RideStatusScreen() {
 
   const [searchElapsed, setSearchElapsed] = useState(0);
   useEffect(() => {
+    // searchElapsed isn't a dep of this effect (only currentRide?.status
+    // is) — resets the counter when status changes, then a setInterval
+    // (not a sync effect-body call) drives further increments.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (currentRide?.status !== 'searching') { setSearchElapsed(0); return; }
     setSearchElapsed(0);
     const id = setInterval(() => setSearchElapsed(s => s + 1), 1000);
@@ -82,6 +86,12 @@ export default function RideStatusScreen() {
     };
 
     const total = computeTotal();
+    // Neither offerTotalSeconds nor offerSecondsLeft is a dep of this
+    // effect (status/offer_expires_at/offer_timeout_seconds are) — this is
+    // the rider-side display of the ~15s dispatch offer countdown,
+    // recomputed from the server-provided expiry once per offer, then the
+    // setInterval below (not a sync effect-body call) ticks it down.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOfferTotalSeconds(total);
     setOfferSecondsLeft(computeLeft());
 

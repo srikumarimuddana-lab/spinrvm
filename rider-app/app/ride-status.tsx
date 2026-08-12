@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -62,12 +62,18 @@ export default function RideStatusScreen() {
   const [offerSecondsLeft, setOfferSecondsLeft] = useState<number>(15);
   const [offerTotalSeconds, setOfferTotalSeconds] = useState<number>(15);
 
+  // Hoisted out of the effect below (was `const ride = currentRide as any;`
+  // then `ride.offer_expires_at`/`ride.offer_timeout_seconds` inside it) —
+  // aliasing the whole ride object made the linter want the whole
+  // `currentRide` object as a dep, which changes on every ride poll/WS
+  // update (far more often than the offer countdown actually needs to
+  // reset). Reading just these two fields directly keeps the effect keyed
+  // to the same three primitives it was already using.
+  const offerExpiresAt: string | null | undefined = (currentRide as any)?.offer_expires_at;
+  const offerTimeoutSeconds: number = (currentRide as any)?.offer_timeout_seconds ?? 15;
+
   useEffect(() => {
     if (currentRide?.status !== 'driver_assigned') return;
-
-    const ride = currentRide as any;
-    const offerExpiresAt: string | null | undefined = ride.offer_expires_at;
-    const offerTimeoutSeconds: number = ride.offer_timeout_seconds ?? 15;
 
     const computeTotal = (): number => {
       if (offerExpiresAt) {
@@ -102,7 +108,7 @@ export default function RideStatusScreen() {
     }, 500);
 
     return () => clearInterval(interval);
-  }, [currentRide?.status, (currentRide as any)?.offer_expires_at, (currentRide as any)?.offer_timeout_seconds]);
+  }, [currentRide?.status, offerExpiresAt, offerTimeoutSeconds]);
 
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
@@ -116,7 +122,7 @@ export default function RideStatusScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const performCancel = async (reason?: string) => {
+  const performCancel = useCallback(async (reason?: string) => {
     try {
       await cancelRide(reason);
       clearRide();
@@ -124,7 +130,7 @@ export default function RideStatusScreen() {
     } catch (err) {
       showToast('Could not cancel', getApiErrorMessage(err, 'The server rejected the request. Please try again.'), 'danger');
     }
-  };
+  }, [cancelRide, clearRide, router]);
 
   useEffect(() => {
     if (rideId) {
@@ -143,12 +149,19 @@ export default function RideStatusScreen() {
       // Drop to 15s once the driver has accepted — location updates then
       // come over the WS exclusively and state changes are infrequent.
       const status = currentRide?.status;
+      // Rewritten from `!currentRide || status === ...` to read only
+      // currentRide?.status (status == null covers the "no ride yet" case
+      // the same way !currentRide did) so this doesn't need the whole
+      // currentRide object as a dep — that object changes on every ride
+      // poll/WS field update, which would defeat the fast/slow-poll
+      // distinction this effect exists to make.
       const fastPoll =
-        !currentRide || status === 'searching' || status === 'driver_assigned';
+        status == null || status === 'searching' || status === 'driver_assigned';
       const interval = setInterval(() => fetchRide(rideId), fastPoll ? 3000 : 15000);
       return () => clearInterval(interval);
     }
-  }, [rideId, currentRide?.status]);
+    // fetchRide is a zustand action (stable reference).
+  }, [rideId, currentRide?.status, fetchRide]);
 
   useEffect(() => {
     // Pulse animation for searching
@@ -165,20 +178,34 @@ export default function RideStatusScreen() {
     Animated.loop(
       Animated.timing(dotAnim, { toValue: 3, duration: 1500, useNativeDriver: false })
     ).start();
-  }, [currentRide?.status]);
+    // Both are stable Animated.Value instances: `useState(new Animated.Value(x))`
+    // constructs a fresh value on every render, but React's useState only
+    // ever keeps the FIRST call's result as the returned state — so
+    // pulseAnim/dotAnim never change identity across renders even though no
+    // setter is destructured here to guard against reassignment.
+  }, [currentRide?.status, pulseAnim, dotAnim]);
 
-  const handleBackPress = () => {
-    if (!currentRide) {
+  // UX-001: Use server-provided cancellation fee (from app_settings) instead
+  // of the old hardcoded Math.min(5, fare * 0.2) formula. Hoisted to
+  // component scope (rather than read inside handleBackPress from a
+  // `currentRide.X` whole-object access) so handleBackPress's useCallback
+  // below can depend on these specific primitives instead of the whole
+  // currentRide object, which changes on every ride poll/WS field update.
+  const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
+  const freeCancelSecondsLeft = (currentRide as any)?.free_cancel_seconds_remaining ?? null;
+
+  const handleBackPress = useCallback(() => {
+    // currentRide?.status == null covers both "no ride loaded yet" (the
+    // previous `!currentRide` check) and, in principle, a ride with no
+    // status — same outcome either way: go back instead of showing a
+    // cancel-confirm dialog for a ride that isn't really there.
+    const status = currentRide?.status;
+    if (status == null) {
       router.back();
       return;
     }
 
-    // UX-001: Use server-provided cancellation fee (from app_settings) instead
-    // of the old hardcoded Math.min(5, fare * 0.2) formula.
-    const cancellationFee = (currentRide as any).cancellation_fee ?? 3.0;
-    const freeCancelSecondsLeft = (currentRide as any).free_cancel_seconds_remaining ?? null;
     const isFreeCancel = freeCancelSecondsLeft === null || freeCancelSecondsLeft > 0;
-    const status = currentRide.status;
 
     // A driver is involved → collect a reason before cancelling. Plain search
     // cancels (no driver yet) skip the reason step.
@@ -220,7 +247,10 @@ export default function RideStatusScreen() {
         ],
       });
     }
-  };
+    // cancellationFee/freeCancelSecondsLeft are plain numbers derived from
+    // currentRide at component scope; performCancel is now a useCallback
+    // with its own correct deps; router is expo-router's stable singleton.
+  }, [currentRide?.status, cancellationFee, freeCancelSecondsLeft, performCancel, router]);
 
   // Handle hardware back button (Android)
   useEffect(() => {
@@ -229,7 +259,11 @@ export default function RideStatusScreen() {
       return true; // prevent default back
     });
     return () => sub.remove();
-  }, [currentRide?.status]);
+    // handleBackPress is now a useCallback (see above) with its own correct
+    // deps, so depending on it keeps the back-button confirm dialog's fee
+    // text fresh instead of the previous [currentRide?.status]-only
+    // tracking (same fix pattern as driver-arrived.tsx/driver-arriving.tsx).
+  }, [handleBackPress]);
 
   // handleSimulateArrival and handleRideComplete removed for production
 

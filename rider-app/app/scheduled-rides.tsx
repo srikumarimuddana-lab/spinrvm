@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   ActivityIndicator, RefreshControl,
@@ -28,18 +28,21 @@ export default function ScheduledRidesScreen() {
     buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
-  const loadRides = async () => {
+  // fetchScheduledRides is a zustand action (stable), so loadRides wrapped
+  // in useCallback is also stable — depending on it below doesn't change
+  // when the mount effect fires.
+  const loadRides = useCallback(async () => {
     setLoading(true);
     await fetchScheduledRides();
     setLoading(false);
-  };
+  }, [fetchScheduledRides]);
 
   useEffect(() => {
     // Mount-only load; deps are empty so the state loadRides sets can't
     // retrigger this effect.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadRides();
-  }, []);
+  }, [loadRides]);
 
   const onRefresh = async () => {
     setRefreshing(true);

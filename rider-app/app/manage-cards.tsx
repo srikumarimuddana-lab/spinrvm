@@ -114,6 +114,19 @@ export default function ManageCardsScreen() {
     buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
 
+  const fetchCards = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get<Card[]>('/payments/cards');
+      setCards((res.data as Card[]) || []);
+    } catch {
+      // No cards yet — show empty state
+      setCards([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchCards();
   }, []);
@@ -134,19 +147,6 @@ export default function ManageCardsScreen() {
   const selectCard = (id: string) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setSelectedId(id);
-  };
-
-  const fetchCards = async () => {
-    setLoading(true);
-    try {
-      const res = await api.get<Card[]>('/payments/cards');
-      setCards((res.data as Card[]) || []);
-    } catch {
-      // No cards yet — show empty state
-      setCards([]);
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handleAddCard = async () => {

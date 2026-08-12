@@ -41,6 +41,33 @@ export default function PickOnMapScreen() {
   const [geocoding, setGeocoding] = useState(false);
   const geocodeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The pin coordinates the displayed address was geocoded FOR. The reverse
+  // geocode is debounced, so `address` always describes a slightly older pin
+  // than `region`; on a fast pan-then-confirm the two can be blocks apart —
+  // the confirmed coordinate then carries the PREVIOUS spot's address, and
+  // that mismatched pair gets stored in recents and booked.
+  const addressForRef = useRef<{ lat: number; lng: number } | null>(null);
+
+  const reverseGeocode = async (lat: number, lng: number) => {
+    setGeocoding(true);
+    try {
+      const params = new URLSearchParams({ lat: String(lat), lng: String(lng) });
+      const { data } = await api.get<{ formatted_address: string }>(
+        `/maps/reverse-geocode?${params.toString()}`,
+      );
+      if (data?.formatted_address) {
+        setAddress(data.formatted_address);
+      } else {
+        setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+      }
+    } catch {
+      setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    } finally {
+      addressForRef.current = { lat, lng };
+      setGeocoding(false);
+    }
+  };
+
   useEffect(() => {
     (async () => {
       // The assistant supplied an approximate point — start there instead of
@@ -77,33 +104,6 @@ export default function PickOnMapScreen() {
       setLoading(false);
     })();
   }, []);
-
-  // The pin coordinates the displayed address was geocoded FOR. The reverse
-  // geocode is debounced, so `address` always describes a slightly older pin
-  // than `region`; on a fast pan-then-confirm the two can be blocks apart —
-  // the confirmed coordinate then carries the PREVIOUS spot's address, and
-  // that mismatched pair gets stored in recents and booked.
-  const addressForRef = useRef<{ lat: number; lng: number } | null>(null);
-
-  const reverseGeocode = async (lat: number, lng: number) => {
-    setGeocoding(true);
-    try {
-      const params = new URLSearchParams({ lat: String(lat), lng: String(lng) });
-      const { data } = await api.get<{ formatted_address: string }>(
-        `/maps/reverse-geocode?${params.toString()}`,
-      );
-      if (data?.formatted_address) {
-        setAddress(data.formatted_address);
-      } else {
-        setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
-      }
-    } catch {
-      setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
-    } finally {
-      addressForRef.current = { lat, lng };
-      setGeocoding(false);
-    }
-  };
 
   /** ~metres between two points at city scale (equirectangular — fine under a
    * few km, and we only compare against a 60 m threshold). */

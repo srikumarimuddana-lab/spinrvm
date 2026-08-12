@@ -28,10 +28,26 @@ type Props = { onLayout?: (e: LayoutChangeEvent) => void };
  * RN Animated (no Reanimated) so it can mount before the rest of the app is up.
  */
 export default function BrandSplash({ onLayout }: Props) {
+  // react-hooks/refs ("Cannot access refs during render") flags every
+  // `.current` read below, including these 5 declarations, the deps array,
+  // and the JSX style bindings. All are the standard Animated.Value driver
+  // idiom, not runtime state read for rendering — React guarantees useRef()
+  // returns the same ref object every render, and nothing in this file ever
+  // reassigns `.current` after creation (verified: grepped this file for
+  // `.current =`, no matches), so a discarded/replayed concurrent render
+  // reading `.current` would get the identical Animated.Value instance
+  // every time. Animated mutates these values imperatively outside the
+  // render cycle (Animated.timing/.spring), which is exactly why they're
+  // refs and not useState — suppressed at each read site below.
+  // eslint-disable-next-line react-hooks/refs
   const logoOpacity = useRef(new Animated.Value(0)).current;
+  // eslint-disable-next-line react-hooks/refs
   const logoScale = useRef(new Animated.Value(0.92)).current;
+  // eslint-disable-next-line react-hooks/refs
   const tagOpacity = useRef(new Animated.Value(0)).current;
+  // eslint-disable-next-line react-hooks/refs
   const tagY = useRef(new Animated.Value(-8)).current;
+  // eslint-disable-next-line react-hooks/refs
   const footerOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -77,6 +93,7 @@ export default function BrandSplash({ onLayout }: Props) {
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
+    // eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver refs, see note above declarations
   }, [logoOpacity, logoScale, tagOpacity, tagY, footerOpacity]);
 
   return (
@@ -85,10 +102,12 @@ export default function BrandSplash({ onLayout }: Props) {
         <Animated.Image
           source={LOGO}
           resizeMode="contain"
+          // eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver refs, see note above declarations
           style={[styles.logo, { opacity: logoOpacity, transform: [{ scale: logoScale }] }]}
         />
         <Animated.Text
           allowFontScaling={false}
+          // eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver refs, see note above declarations
           style={[styles.tagline, { opacity: tagOpacity, transform: [{ translateY: tagY }] }]}
         >
           Ride Local · Support Local

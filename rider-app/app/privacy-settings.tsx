@@ -25,7 +25,7 @@ import {
 
 export default function PrivacySettingsScreen() {
   const router = useRouter();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { logout } = useAuthStore();
   const { t } = useTranslation();

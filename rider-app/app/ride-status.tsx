@@ -103,7 +103,7 @@ export default function RideStatusScreen() {
   }>({ visible: false, title: '', variant: 'info' });
   const [reasonVisible, setReasonVisible] = useState(false);
 
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const performCancel = async (reason?: string) => {

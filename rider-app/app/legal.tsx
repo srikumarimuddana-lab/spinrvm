@@ -26,10 +26,6 @@ export default function LegalScreen() {
 
     const title = type === 'tos' ? 'Terms of Service' : 'Privacy Policy';
 
-    useEffect(() => {
-        fetchLegalText();
-    }, [type]);
-
     const fetchLegalText = async () => {
         try {
             const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
@@ -46,6 +42,10 @@ export default function LegalScreen() {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        fetchLegalText();
+    }, [type]);
 
     return (
         <SafeAreaView style={styles.safeArea}>

@@ -23,6 +23,7 @@ import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePaym
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { onRideRated } from '@shared/utils/appRating';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
@@ -81,17 +82,23 @@ function RideCompletedScreenContent() {
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
   const mapRef = React.useRef<MapView>(null);
   const [routeMapReady, setRouteMapReady] = useState(false);
-  const successScale = useRef(new Animated.Value(0)).current;
-  const successOpacity = useRef(new Animated.Value(0)).current;
+  const successScale = useAnimatedValue(0);
+  const successOpacity = useAnimatedValue(0);
 
   const actualSections = useMemo(
     () => toReactNativeRouteSections(currentRide?.actual_route_segments),
     [currentRide?.actual_route_segments],
   );
-  const plannedSegments = useMemo(
-    () => toReactNativeSegments(currentRide?.planned_route_polyline ? [currentRide.planned_route_polyline] : []),
-    [currentRide?.planned_route_polyline],
-  );
+  const plannedSegments = useMemo(() => {
+    // Read the field once so the compiler's inferred dependency matches the
+    // declared one exactly (react-hooks/preserve-manual-memoization): the
+    // previous two-site read — one optional-chained (`currentRide?.…`), one
+    // not (`currentRide.…`) — made the inferred dependency the coarser
+    // `currentRide` object instead of the declared `.planned_route_polyline`
+    // field, so manual memoization silently wasn't being preserved.
+    const polyline = currentRide?.planned_route_polyline;
+    return toReactNativeSegments(polyline ? [polyline] : []);
+  }, [currentRide?.planned_route_polyline]);
   const isV2Route = toNum(currentRide?.route_schema_version) >= 2;
   const hasActualRoute = actualSections.length > 0;
   const mapCoordinates = useMemo(

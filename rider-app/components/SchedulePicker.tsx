@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Pressable,
   ScrollView, Animated, Dimensions,
@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
@@ -35,8 +36,8 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
   // ─── Animations ───────────────────────────────────────────────────────────
   // Always mounted — no conditional rendering. Fabric crashes when you insert
   // children into an absoluteFill view after mount. We animate instead.
-  const slideAnim = useRef(new Animated.Value(SCREEN_H)).current;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useAnimatedValue(SCREEN_H);
+  const fadeAnim = useAnimatedValue(0);
 
   useEffect(() => {
     Animated.parallel([
@@ -55,7 +56,11 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
   }, [visible]);
 
   // ─── State ────────────────────────────────────────────────────────────────
-  const initDate = useMemo(() => new Date(Date.now() + 30 * 60_000), []);
+  // useState's lazy initializer (not useMemo) — React only guarantees a
+  // single evaluation for the former; useMemo's cache is not guaranteed to
+  // run its factory exactly once, so an impure `Date.now()` call belongs
+  // here, not there (react-hooks/purity).
+  const [initDate] = useState(() => new Date(Date.now() + 30 * 60_000));
   const minStr = toDateStr(minDate);
   const maxStr = toDateStr(maxDate);
   const todayStr = toDateStr(new Date());

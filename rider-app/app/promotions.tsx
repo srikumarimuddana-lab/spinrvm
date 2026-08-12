@@ -30,8 +30,6 @@ export default function PromotionsScreen() {
   const [loading, setLoading] = useState(true);
   const [code, setCode] = useState('');
   const [applying, setApplying] = useState(false);
-  useEffect(() => { loadPromos(); }, []);
-
   const loadPromos = async () => {
     setLoading(true);
     try {
@@ -40,6 +38,8 @@ export default function PromotionsScreen() {
     } catch {}
     finally { setLoading(false); }
   };
+
+  useEffect(() => { loadPromos(); }, []);
 
   const handleApply = async () => {
     const c = code.trim().toUpperCase();

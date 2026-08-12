@@ -20,6 +20,7 @@ import { Analytics } from '@shared/analytics';
 import { logCompleteRegistration } from '@shared/analytics/meta';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
 
 const CODE_LENGTH = 4;
 
@@ -38,10 +39,8 @@ export default function OtpScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const shakeAnim = useRef(new Animated.Value(0)).current;
-  const dotAnims = useRef(
-    Array.from({ length: CODE_LENGTH }, () => new Animated.Value(0)),
-  ).current;
+  const shakeAnim = useAnimatedValue(0);
+  const dotAnims = useAnimatedValues(CODE_LENGTH, 0);
 
   useEffect(() => {
     if (!phoneNumber) router.back();

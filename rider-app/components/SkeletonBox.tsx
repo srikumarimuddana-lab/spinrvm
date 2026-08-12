@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import { Animated, StyleSheet, ViewStyle } from 'react-native';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
 interface Props {
   width?: number | string;
@@ -9,7 +10,7 @@ interface Props {
 }
 
 export default function SkeletonBox({ width = '100%', height = 16, borderRadius = 6, style }: Props) {
-  const opacity = useRef(new Animated.Value(0.4)).current;
+  const opacity = useAnimatedValue(0.4);
 
   useEffect(() => {
     const pulse = Animated.loop(

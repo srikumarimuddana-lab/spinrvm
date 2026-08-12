@@ -84,24 +84,6 @@ export default function BecomeDriverScreen() {
   const [loadingTypes, setLoadingTypes] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null); // reqId_side
 
-  useEffect(() => {
-    fetchVehicleTypes();
-    fetchRequirements();
-    Linking.canOpenURL(DRIVER_APP_SCHEME).then(setDriverAppInstalled).catch(() => setDriverAppInstalled(false));
-  }, []);
-
-  const openDriverApp = async () => {
-    const phone = user?.phone || '';
-    const deepLink = `${DRIVER_APP_SCHEME}onboard?phone=${encodeURIComponent(phone)}`;
-    const canOpen = await Linking.canOpenURL(deepLink);
-    if (canOpen) {
-      await Linking.openURL(deepLink);
-    } else {
-      const storeUrl = Platform.OS === 'ios' ? DRIVER_APP_STORE_IOS : DRIVER_APP_STORE_ANDROID;
-      await Linking.openURL(storeUrl);
-    }
-  };
-
   const fetchVehicleTypes = async () => {
     setLoadingTypes(true);
     try {
@@ -124,6 +106,24 @@ export default function BecomeDriverScreen() {
       }
     } catch (e) {
       console.log('Error fetching requirements:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchVehicleTypes();
+    fetchRequirements();
+    Linking.canOpenURL(DRIVER_APP_SCHEME).then(setDriverAppInstalled).catch(() => setDriverAppInstalled(false));
+  }, []);
+
+  const openDriverApp = async () => {
+    const phone = user?.phone || '';
+    const deepLink = `${DRIVER_APP_SCHEME}onboard?phone=${encodeURIComponent(phone)}`;
+    const canOpen = await Linking.canOpenURL(deepLink);
+    if (canOpen) {
+      await Linking.openURL(deepLink);
+    } else {
+      const storeUrl = Platform.OS === 'ios' ? DRIVER_APP_STORE_IOS : DRIVER_APP_STORE_ANDROID;
+      await Linking.openURL(storeUrl);
     }
   };
 

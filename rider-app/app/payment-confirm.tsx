@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -29,6 +29,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { Analytics } from '@shared/analytics';
 import { useResponsive } from '@shared/utils/responsive';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
 
 interface CorporateAccount {
   id: string;
@@ -73,13 +74,13 @@ function PaymentConfirmScreenContent() {
   const styles = useMemo(() => createStyles(colors, sf), [colors, sf]);
   const { scheduleReminder } = useScheduledRideReminder();
   const [fareExpanded, setFareExpanded] = useState(false);
-  const fareHeightAnim = useRef(new Animated.Value(0)).current;
+  const fareHeightAnim = useAnimatedValue(0);
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
   // Staggered fade-in + slide-up for each section
-  const sectionAnims = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
-  const slideAnims = useRef([0, 1, 2].map(() => new Animated.Value(20))).current;
+  const sectionAnims = useAnimatedValues(3, 0);
+  const slideAnims = useAnimatedValues(3, 20);
 
   useEffect(() => {
     const animations = sectionAnims.map((anim, i) =>

@@ -3352,12 +3352,40 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     - [x] A service area literally named **"Regina Airpot"** (typo — missing
       the second "r") also carried the defect. **CLOSED 2026-08-12** —
       same fix applied, same final values as Saskatoon Airport above.
-      The name typo itself was intentionally left untouched — renaming a
-      `service_areas.name` value needs its own blast-radius check (any
-      other table/config that might match on the exact string) before
-      touching it, and that wasn't asked for or investigated this pass.
-      Still open as its own separate item if the typo is ever confirmed
-      to cause a functional bug (not just a cosmetic one).
+      The name typo itself was intentionally left untouched at the time —
+      renaming a `service_areas.name` value needed its own blast-radius
+      check first.
+      - **Typo itself CLOSED 2026-08-12 (separate follow-up)**: blast-radius
+        check performed (grepped all 4 surfaces for name-string matches on
+        "Regina Airport"/"Regina Airpot"). Found two *historical, already-
+        applied* migrations/changes that filtered on the correct spelling
+        (`Regina Airport`) and would have silently missed this row —
+        migration 263's `city` backfill, and the 2026-08-11 PST-enable
+        change's own change log claim of "verified... all correctly
+        named". Live-checked both before renaming: `city='Regina'` and
+        `pst_enabled=true, pst_rate=6` were **already correctly set** on
+        the real row despite the name mismatch (set via some other
+        mechanism — not fully diagnosed, not needed to be, since the
+        current state is correct) — no data gap from the typo itself.
+        The only code reference found (`routes/service_areas.py`'s
+        comment, `test_service_areas_public.py`'s docstring) is
+        documentation/description, not a live name-string match — the
+        actual filtering logic uses `is_airport`/`parent_service_area_id`
+        flags, confirmed by reading the route and by all 44
+        `test_service_areas_public.py`/`test_admin_service_areas_coverage.py`
+        tests passing unchanged (they mock `get_rows` and assert on filter
+        shape, not on the row's name). Renamed `'Regina Airpot'` →
+        `'Regina Airport'` directly against production. Change Impact Log:
+        `docs/change-log/2026-08-12-b8-regina-airport-rename.md`.
+      - **New finding surfaced while checking this, NOT fixed — see B10**:
+        the main **`Regina`** (non-airport) service area currently has
+        `pst_enabled=false` despite `pst_rate=6` already being set, and
+        despite the 2026-08-11 PST-enable change log explicitly claiming
+        all 4 Saskatchewan rows (including plain "Regina") were set to
+        `pst_enabled=true`. Live data contradicts that log. Not touched
+        here — flagged as its own item pending user confirmation of
+        whether this is a live tax-under-collection bug or an intentional
+        reversal this session has no record of.
     - **Uber competitive positioning** (raised by the user): should
       Economy's absolute rate undercut Uber's current list price in
       Regina/Saskatoon, and by how much? Needs real comparative fare data
@@ -4703,6 +4731,62 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   caveat, not confirmed missing); whether `run-maestro` has ever been
   applied to a real PR; whether a Maestro Cloud account/org is even
   provisioned yet at console.mobile.dev.
+
+### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
+- [ ] **Status:** open — **NOT fixed, needs user confirmation before touching**.
+  Discovered 2026-08-12 as a side effect of the B8 "Regina Airpot" rename
+  blast-radius check (unrelated task; querying `service_areas` to confirm
+  it was safe to rename surfaced this by coincidence).
+- **Root cause:** unconfirmed, and that's the point of this item — live data
+  directly contradicts a prior session's own Change Impact Log.
+  `docs/change-log/2026-08-11-sk-pst-enable.md` (2026-08-11, same day as the
+  original B8 investigation, different session) states it applied
+  `pst_enabled: false→true, pst_rate: 0→6` to "the 4 real Saskatchewan rows
+  (Saskatoon, Saskatoon Airport, Regina, Regina Airport)" and explicitly
+  lists as verification: *"Verified via direct Supabase query that only the
+  4 real Saskatchewan `service_areas` rows were updated (`UPDATE ...
+  RETURNING` showed exactly 4 rows, all correctly named)"*. Live query
+  2026-08-12 shows Saskatoon, Saskatoon Airport, and Regina Airport (née
+  Regina Airpot) all have `pst_enabled=true, pst_rate=6` as claimed — but
+  plain **`Regina`** shows `pst_enabled=false, pst_rate=6`. The rate field
+  landed; the enable flag didn't (or landed and was later flipped back off).
+  Not the B8 vehicle-pricing fix's doing — B8's `UPDATE`s
+  (`docs/change-log/2026-08-12-b8-regina-saskatoon-vehicle-pricing.md`)
+  only ever `SET vehicle_pricing = ...`, never touched `pst_enabled`/
+  `pst_rate` on any row.
+- **Why this matters:** per `.claude/context/regulatory-sk.md` and the
+  2026-08-11 change log's own finding, PST currently applies to
+  Saskatchewan rideshare. If `pst_enabled=false` on `Regina` is a live bug
+  (not an intentional, undocumented reversal), every Regina ride quoted
+  since whenever this flag flipped false has been **under-collecting PST
+  by 6% of the taxable fare** — the exact live tax-compliance gap the
+  2026-08-11 change was supposed to close, now silently reopened for
+  Spinr's primary market. This is not something to guess at or silently
+  "fix" — could equally be an intentional, deliberate reversal this
+  session has no record of (e.g. someone found a problem with Regina PST
+  specifically and turned it off on purpose without logging it, per this
+  same doc's own rollback-plan mechanism).
+- **Action (blocked on user confirmation, not on more investigation):**
+  1. Ask the user directly: is `Regina.pst_enabled=false` intentional
+     (and if so, `pst_enabled=true` on Regina Airport/Saskatoon/Saskatoon
+     Airport needs the same question asked in reverse), or is it a bug
+     that should be corrected back to `true` immediately?
+  2. If confirmed a bug: `UPDATE service_areas SET pst_enabled = true
+     WHERE name = 'Regina'` (single-column, matches the B8 fix's
+     established safe pattern) — plus, per the 2026-08-11 log's own
+     "no backdating" precedent, explicitly decide whether any
+     already-completed Regina rides during the gap window need PST
+     remediation (refund/credit) or are left as-is like the original
+     under-collection was.
+  3. Either way, write a Change Impact Log — this is exactly the kind of
+     "silent behavior change to a live-tested flow" CLAUDE.md's pre-merge
+     gates require documentation for, whichever direction it resolves.
+- **Files:** none yet (data-only, pending decision) — reference:
+  `docs/change-log/2026-08-11-sk-pst-enable.md`,
+  `backend/features.py::calculate_all_fees`
+- **Acceptance:** `Regina.pst_enabled` matches the deliberate, current,
+  confirmed policy — and whichever way it resolves, that decision is
+  written down so this doesn't silently drift a third time.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

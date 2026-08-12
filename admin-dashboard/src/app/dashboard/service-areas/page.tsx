@@ -188,9 +188,22 @@ export default function ServiceAreasPage() {
     } catch (e) { crudToast.error("create airport zone", e); }
   };
 
+  // A29 (ACTION_ITEMS.md): GST/PST/HST config carries real regulatory +
+  // financial weight (every rider's charge, CRA/SK remittance), so the
+  // backend now requires a written justification for any of these fields —
+  // mirroring the existing surge-above-cap justification prompt. Ask for it
+  // here, before the request, rather than letting the save silently 400.
+  const TAX_FIELDS = new Set(["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]);
+
   const handleFieldUpdate = async (areaId: string, field: string, value: any) => {
     try {
-      await updateServiceArea(areaId, { [field]: value });
+      const payload: Record<string, any> = { [field]: value };
+      if (TAX_FIELDS.has(field)) {
+        const justification = window.prompt("Reason for this tax-configuration change (required):")?.trim();
+        if (!justification) return;
+        payload.tax_justification = justification;
+      }
+      await updateServiceArea(areaId, payload);
       setAreas(prev => prev.map(a => {
         if (a.id === areaId) return { ...a, [field]: value };
         if (a.sub_regions?.length) {

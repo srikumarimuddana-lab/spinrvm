@@ -267,6 +267,56 @@ class TestUpdateServiceAreaGuards:
             result = await admin_update_service_area("area-1", req, admin=_ADMIN)
         assert result == {"message": "Service area updated"}
 
+    # ── A29 (ACTION_ITEMS.md): tax-rate justification requirement ──────
+
+    @pytest.mark.anyio
+    async def test_tax_change_without_justification_rejected(self):
+        req = ServiceAreaUpdateRequest(pst_enabled=True, pst_rate=6.0)
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+        assert exc_info.value.status_code == 400
+        assert "justification" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_tax_change_with_justification_logs_and_succeeds(self):
+        log_admin_action = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", log_admin_action),
+        ):
+            req = ServiceAreaUpdateRequest(
+                pst_enabled=True, pst_rate=6.0, tax_justification="SK PST enablement, approved by finance"
+            )
+            result = await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        assert result == {"message": "Service area updated"}
+        actions = [c.args[1] for c in log_admin_action.await_args_list]
+        assert "tax_config_updated" in actions
+        tax_call = next(c for c in log_admin_action.await_args_list if c.args[1] == "tax_config_updated")
+        assert set(tax_call.args[4]["updated_fields"]) == {"pst_enabled", "pst_rate"}
+
+    @pytest.mark.anyio
+    async def test_non_tax_field_update_does_not_require_justification(self):
+        """A plain field edit (no gst/pst/hst touched) must not be blocked by
+        the tax-justification gate — only actual tax-field changes trigger it."""
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(name="Saskatoon Renamed")
+            result = await admin_update_service_area("area-1", req, admin=_ADMIN)
+        assert result == {"message": "Service area updated"}
+
     @pytest.mark.anyio
     async def test_subscription_required_true_forces_spinr_pass_enabled(self):
         update_one = AsyncMock()
@@ -567,13 +617,30 @@ class TestAreaTax:
             "backend.routes.admin.service_areas.db_supabase",
             update_one=update_one,
             get_rows=AsyncMock(return_value=[updated_row]),
-        ):
-            req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0)
-            result = await admin_update_area_tax("area-1", req)
+        ), patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()) as log_action:
+            req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0, tax_justification="SK PST enablement")
+            result = await admin_update_area_tax("area-1", req, admin=_ADMIN)
 
         update_one.assert_awaited_once()
+        log_action.assert_awaited_once()
+        assert log_action.call_args.args[1] == "tax_config_updated"
         assert result["pst_enabled"] is True
         assert result["pst_rate"] == 6.0
+
+    @pytest.mark.anyio
+    async def test_update_area_tax_requires_justification(self):
+        update_one = AsyncMock()
+        with patch.multiple(
+            "backend.routes.admin.service_areas.db_supabase",
+            update_one=update_one,
+            get_rows=AsyncMock(return_value=[{}]),
+        ):
+            req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0)
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_update_area_tax("area-1", req, admin=_ADMIN)
+
+        assert exc_info.value.status_code == 400
+        update_one.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_update_area_tax_empty_payload_skips_write_still_returns_row(self):
@@ -592,7 +659,7 @@ class TestAreaTax:
             get_rows=AsyncMock(return_value=[row]),
         ):
             req = AreaTaxRequest()
-            result = await admin_update_area_tax("area-1", req)
+            result = await admin_update_area_tax("area-1", req, admin=_ADMIN)
 
         update_one.assert_not_awaited()
         assert result["gst_rate"] == 5.0

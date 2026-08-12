@@ -39,6 +39,7 @@ try:
     from .services.fare_service import DEFAULT_FARE, calculate_fare
     from .services.fare_service import _d as _fare_d
     from .services.fare_service import _f as _fare_f
+    from .utils.audit_logger import log_admin_action
     from .utils.pii import geohash as _geohash
     from .utils.surge_engine import SURGE_CAP
 except ImportError:
@@ -49,6 +50,7 @@ except ImportError:
     from services.fare_service import DEFAULT_FARE, calculate_fare
     from services.fare_service import _d as _fare_d
     from services.fare_service import _f as _fare_f
+    from utils.audit_logger import log_admin_action
     from utils.pii import geohash as _geohash
     from utils.surge_engine import SURGE_CAP
 
@@ -657,6 +659,7 @@ class UpdateTaxConfigRequest(BaseModel):
     pst_rate: Optional[float] = None
     hst_enabled: Optional[bool] = None
     hst_rate: Optional[float] = None
+    tax_justification: Optional[str] = None
 
 
 @pricing_router.get("/areas/{area_id}/fees")
@@ -720,8 +723,15 @@ async def delete_area_fee(area_id: str, fee_id: str):
 
 
 @pricing_router.put("/areas/{area_id}/tax")
-async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
-    """Update tax configuration for a service area."""
+async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest, admin: dict = Depends(get_admin_user)):
+    """Update tax configuration for a service area.
+
+    A29 (ACTION_ITEMS.md): not currently reachable from any frontend (no
+    caller for this `/api/v1/areas/{id}/tax` path today — the admin-
+    dashboard's own tax editor goes through `PUT /api/admin/service-areas/
+    {area_id}`, see the justification requirement there) but hardened here
+    too for consistency and in case this endpoint gets wired up later.
+    """
     update_data: Dict[str, Any] = {}
     for field in ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]:
         val = getattr(req, field)
@@ -729,7 +739,21 @@ async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
             update_data[field] = val
 
     if update_data:
+        justification = (req.tax_justification or "").strip()
+        if not justification:
+            raise HTTPException(
+                status_code=400,
+                detail="Changing GST/PST/HST configuration requires a written justification "
+                "(regulatory + financial risk).",
+            )
         await db_supabase.update_one("service_areas", {"id": area_id}, update_data)
+        await log_admin_action(
+            admin,
+            "tax_config_updated",
+            "service_areas",
+            area_id,
+            {"updated_fields": list(update_data.keys()), "justification": justification},
+        )
 
     area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:

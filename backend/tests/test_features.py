@@ -5,11 +5,14 @@ Tests cover support tickets, FAQs, surge pricing, notifications, and other featu
 
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+_ADMIN = {"id": "admin-1", "email": "admin@spinr.ca", "role": "super_admin"}
 
 
 class TestSupportTickets:
@@ -340,6 +343,59 @@ class TestServiceAreas:
 
         # Point outside polygon
         assert point_in_polygon(52.0, -106.65, polygon) is False
+
+
+class TestAreaTaxJustification:
+    """A29 (ACTION_ITEMS.md): `pricing_router`'s dedicated PUT /areas/{id}/tax
+    (not currently reachable from any frontend, but hardened for consistency)
+    requires a written justification, same as the live admin-dashboard tax
+    editor at routes/admin/service_areas.py."""
+
+    @pytest.mark.asyncio
+    async def test_tax_change_without_justification_rejected(self):
+        from backend.features import UpdateTaxConfigRequest, update_area_tax
+
+        req = UpdateTaxConfigRequest(pst_enabled=True, pst_rate=6.0)
+        with pytest.raises(HTTPException) as exc_info:
+            await update_area_tax("area-1", req, admin=_ADMIN)
+        assert exc_info.value.status_code == 400
+        assert "justification" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_tax_change_with_justification_logs_and_succeeds(self):
+        from backend.features import UpdateTaxConfigRequest, update_area_tax
+
+        log_admin_action = AsyncMock()
+        updated_row = {"gst_enabled": True, "gst_rate": 5.0, "pst_enabled": True, "pst_rate": 6.0}
+        with (
+            patch("backend.features.db_supabase.update_one", AsyncMock()) as update_one,
+            patch("backend.features.db_supabase.get_rows", AsyncMock(return_value=[updated_row])),
+            patch("backend.features.log_admin_action", log_admin_action),
+        ):
+            req = UpdateTaxConfigRequest(
+                pst_enabled=True, pst_rate=6.0, tax_justification="SK PST enablement, approved by finance"
+            )
+            result = await update_area_tax("area-1", req, admin=_ADMIN)
+
+        update_one.assert_awaited_once()
+        log_admin_action.assert_awaited_once()
+        assert log_admin_action.call_args.args[1] == "tax_config_updated"
+        assert result["pst_enabled"] is True
+        assert result["pst_rate"] == 6.0
+
+    @pytest.mark.asyncio
+    async def test_empty_payload_skips_write_and_justification_check(self):
+        from backend.features import UpdateTaxConfigRequest, update_area_tax
+
+        with (
+            patch("backend.features.db_supabase.update_one", AsyncMock()) as update_one,
+            patch("backend.features.db_supabase.get_rows", AsyncMock(return_value=[{"gst_rate": 5.0}])),
+        ):
+            req = UpdateTaxConfigRequest()
+            result = await update_area_tax("area-1", req, admin=_ADMIN)
+
+        update_one.assert_not_awaited()
+        assert result["gst_rate"] == 5.0
 
 
 class TestSavedAddresses:

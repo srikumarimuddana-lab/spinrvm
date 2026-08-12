@@ -21,6 +21,12 @@ yarn-error.*
 *.tsbuildinfo
 app-example
 
+# Google Play publishing key — decoded into this directory by
+# .github/workflows/deploy-driver-play-testing.yml before `eas build`.
+# EAS reads .easignore INSTEAD of .gitignore (not merged), so the
+# .gitignore entry alone does NOT keep this out of the uploaded archive.
+play-service-account.json
+
 # EAS-specific: skip Gradle caches (rebuilt on EAS servers)
 android/.gradle/
 .gradle/

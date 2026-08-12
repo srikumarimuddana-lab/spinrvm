@@ -76,6 +76,15 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     return () => {
       try { goAnim.stopAnimation(); } catch {}
     };
+    // goAnim is intentionally excluded: it's the same verified-safe stable
+    // useRef(...).current animation-driver idiom noted above (never
+    // reassigned after creation). Adding a ref-derived value to a
+    // dependency array is itself a render-time ref read under
+    // react-hooks/refs (confirmed in otp.tsx's dotAnims — same fix applied
+    // here). goAnim's identity never changes across this component's
+    // lifetime, so excluding it changes nothing about when this effect
+    // fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canGoOnline, isOnline]);
 
   // Welcome / Onboarding Notification Check — fires once when documents are

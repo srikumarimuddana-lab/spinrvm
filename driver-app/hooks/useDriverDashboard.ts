@@ -201,7 +201,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     hydrateDriverRideState,
     fetchEarnings,
     applyDriverConfig,
-    earnings,
     acceptRide: storeAcceptRide,
     declineRide: storeDeclineRide,
   } = useDriverStore();

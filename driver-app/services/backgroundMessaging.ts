@@ -52,7 +52,7 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
     parseRideOfferEvent = svc.parseRideOfferEvent;
     displayRideOfferNotification = svc.displayRideOfferNotification;
     dismissRideOfferNotification = svc.dismissRideOfferNotification;
-  } catch (e) {
+  } catch {
     console.log('[Notifee] native module not available — background ride-offer notifications disabled');
   }
 }

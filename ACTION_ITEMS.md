@@ -7,7 +7,13 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-11 — A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
+_Last updated: 2026-08-12 — C18 CLOSED: all 176 `uses:` references across 23
+`.github/workflows/*.yml` files pinned from mutable version tags (`@v7`) to
+verified commit SHAs (`@<sha> # v7`), resolved via anonymous public-repo git
+reads (not the release-page scrape the original investigation correctly
+rejected) — see `docs/change-log/2026-08-12-c18-pin-github-actions-shas.md`.
+One reference (`8398a7/action-slack@v3`) turned out to resolve to a mutable
+**branch**, not even a tag. Prior (2026-08-11): A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
 an unsatisfiable `legacy_import_metadata IS NULL` SQL predicate against a
 `NOT NULL DEFAULT '{}'::jsonb` column, matching zero rows always at 9+
 driver-facing earnings/statement/T4A call sites — confirmed live against
@@ -5427,7 +5433,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `.github/workflows/mobile-bundle-smoke.yml` (new).
 
 ### C18. GitHub Actions steps use mutable version tags repo-wide, not pinned commit SHAs — Semgrep/GHAS flags it on every new workflow line
-- [ ] **Status:** open — found 2026-08-11, via GitHub Advanced Security /
+- [x] **Status:** CLOSED (2026-08-12) — all 176 `uses:` references across 23
+  `.github/workflows/*.yml` files pinned to verified commit SHAs, with the
+  human-readable version kept as a trailing comment
+  (`uses: actions/checkout@<sha> # v7`). Full Change Impact Log:
+  `docs/change-log/2026-08-12-c18-pin-github-actions-shas.md`.
+  **How the "Verification reliability" blocker below was resolved:** this
+  session's git proxy serves anonymous, read-only `git clone`/`git
+  ls-remote` access to any public GitHub repo even when it isn't in this
+  session's attached repository scope (confirmed via `add_repo`, which
+  reports read access already available without needing attachment). Used
+  that channel to clone all 19 distinct action repos referenced (18
+  originally enumerated below + `github/codeql-action`, a subpath-style
+  reference the original grep pattern missed — see the change log's §4) and
+  resolve each `@vN` tag to its exact commit SHA via `git ls-remote --tags`
+  against the real upstream repo, then cross-checked every SHA as a live ref
+  tip on `origin` before use. This is a direct read of the actual git ref
+  database — the same information `gh`/the GitHub API would return — not
+  the release-page scrape the original investigation correctly rejected as
+  unreliable for a character-exact hash.
+  One finding worth flagging on its own: `8398a7/action-slack@v3` had no
+  `v3` **tag** at all — it resolved to a **branch**, which is even more
+  mutable than an unpinned major-version tag normally is. That reference is
+  now pinned like everything else.
+- **(historical) Status:** open — found 2026-08-11, via GitHub Advanced Security /
   Semgrep OSS comments on PR #3668 (6 findings, rule
   `yaml.github-actions.security.github-actions-mutable-action-tag`) on the
   new `mobile-bundle-smoke.yml` workflow added by that PR. Confirmed real:

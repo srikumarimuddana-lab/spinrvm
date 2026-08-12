@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     View,
     Text,
@@ -80,7 +80,11 @@ export default function DestinationModeScreen() {
     // Declared before the `useEffect` below (react-hooks/immutability /
     // React Compiler flags referencing a function before its source-order
     // declaration) — same expression, same effect timing, no behavior change.
-    const fetchDestination = async () => {
+    // useCallback([]) so the mount-only effect below can list it as a dep
+    // (satisfying exhaustive-deps) with a genuinely stable reference — this
+    // function is only ever called from that one effect, and captures no
+    // reactive props/state that would otherwise be missing from its deps.
+    const fetchDestination = useCallback(async () => {
         setLoading(true);
         try {
             const res = await api.get<DestinationState>('/drivers/destination');
@@ -94,14 +98,17 @@ export default function DestinationModeScreen() {
         } finally {
             setLoading(false);
         }
-    };
+        // t is a stable languageStore action (reads current language via
+        // get() internally on every call, never closes over a stale value) —
+        // safe to add directly.
+    }, [t]);
 
     useEffect(() => {
         // Mount-only fetch; fetchDestination sets state after its own await,
         // not synchronously at the top of the effect. Empty deps, runs once.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchDestination();
-    }, []);
+    }, [fetchDestination]);
 
     const handleSave = async () => {
         const trimmed = addressInput.trim();

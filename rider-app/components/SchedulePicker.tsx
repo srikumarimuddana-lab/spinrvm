@@ -56,7 +56,11 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
   }, [visible]);
 
   // ─── State ────────────────────────────────────────────────────────────────
-  const initDate = useMemo(() => new Date(Date.now() + 30 * 60_000), []);
+  // useState's lazy initializer (not useMemo) — React only guarantees a
+  // single evaluation for the former; useMemo's cache is not guaranteed to
+  // run its factory exactly once, so an impure `Date.now()` call belongs
+  // here, not there (react-hooks/purity).
+  const [initDate] = useState(() => new Date(Date.now() + 30 * 60_000));
   const minStr = toDateStr(minDate);
   const maxStr = toDateStr(maxDate);
   const todayStr = toDateStr(new Date());

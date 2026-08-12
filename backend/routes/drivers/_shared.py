@@ -119,6 +119,24 @@ def _ride_income(r: dict) -> Decimal:
     return _d(r.get("base_fare")) + _d(r.get("distance_fare")) + _d(r.get("time_fare")) + _d(r.get("tip_amount"))
 
 
+def _ride_tax(r: dict) -> Decimal:
+    """GST/PST collected on a ride, passed through to the driver as their
+    income (not part of driver_earnings/fare components — see
+    services/fare_service.py: driver_earnings = total_fare - admin_earnings,
+    computed before tax is added on top). Falls back to the fare snapshot's
+    tax lines for rows where tax_amount wasn't backfilled. Same rule as
+    utils/driver_statement.py's _ride_tax (duplicated there because utils
+    must not import from routes — keep the two in sync)."""
+    tax = _d(r.get("tax_amount"))
+    if tax != Decimal("0"):
+        return tax
+    snap = r.get("fare_breakdown_snapshot") or {}
+    for line in snap.get("lines") or []:
+        if line.get("type") in ("tax", "gst", "pst"):
+            tax += _d(line.get("amount"))
+    return tax
+
+
 # ── Vault encryption for driver PII (P2-5) ───────────────────────────────────
 # licence_number lives in a plain TEXT column, but the value stored there is a
 # vault.secrets UUID, not plaintext — actual ciphertext is held in vault.secrets

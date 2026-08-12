@@ -7,7 +7,15 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-11 — A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
+_Last updated: 2026-08-12 — A1c/Sub-tier C: `utils/kyb_reverification.py`
+CLOSED, 67% → 92% (75 stmts) — a gap in the prior "fully CLOSED" sweeps
+(2026-08-03, 2026-08-10/11), found via a live `pytest --cov` re-check
+before starting a planned 28-file batch; the other 27 files in that batch
+were already closed by concurrent sessions (in most cases under the exact
+same test-file name this session independently chose) and were discarded
+without being committed — see
+`docs/change-log/2026-08-12-a1c-kyb-reverification-coverage.md` for the
+full collision list. Prior (2026-08-11): A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
 an unsatisfiable `legacy_import_metadata IS NULL` SQL predicate against a
 `NOT NULL DEFAULT '{}'::jsonb` column, matching zero rows always at 9+
 driver-facing earnings/statement/T4A call sites — confirmed live against

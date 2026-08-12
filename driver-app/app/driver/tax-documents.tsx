@@ -45,10 +45,9 @@ function TaxDocumentsScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [sendingId, setSendingId] = useState<string | null>(null);
 
-    useEffect(() => {
-        fetchDocuments();
-    }, []);
-
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
     const fetchDocuments = async () => {
         try {
             // Only years the driver actually earned in. This used to synthesize
@@ -77,6 +76,10 @@ function TaxDocumentsScreen() {
             setRefreshing(false);
         }
     };
+
+    useEffect(() => {
+        fetchDocuments();
+    }, []);
 
     const onRefresh = () => {
         setRefreshing(true);

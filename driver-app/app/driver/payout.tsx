@@ -74,28 +74,12 @@ function PayoutScreen() {
     // rather than offering a $0.00 slip for a year they never drove.
     const [taxYears, setTaxYears] = useState<{ year: number; total_earnings: string; total_trips: number }[]>([]);
 
-    useEffect(() => {
-        loadData();
-    }, []);
-
-    const loadData = async () => {
-        setInitialLoading(true);
-        try {
-            await Promise.all([
-                fetchDriverBalance(),
-                fetchBankAccount(),
-                loadStripeStatus(),
-                loadBonuses(),
-                loadTaxYears(),
-                // GST is sourced from useDriverMe — no manual fetch needed.
-            ]);
-        } catch {
-            // Errors are handled individually in each function
-        } finally {
-            setInitialLoading(false);
-        }
-    };
-
+    // All four declared before `loadData`/the `useEffect` below
+    // (react-hooks/immutability / React Compiler flags referencing a
+    // function before its source-order declaration) — same expressions,
+    // same effect timing, no behavior change. fetchDriverBalance/
+    // fetchBankAccount come from the store destructure above and were
+    // already declared before this point.
     const loadBonuses = async () => {
         try {
             const res = await api.get<{ bonuses?: typeof bonuses }>('/drivers/bonuses');
@@ -128,6 +112,28 @@ function PayoutScreen() {
             setStripeIdOnFile(false);
         }
     };
+
+    const loadData = async () => {
+        setInitialLoading(true);
+        try {
+            await Promise.all([
+                fetchDriverBalance(),
+                fetchBankAccount(),
+                loadStripeStatus(),
+                loadBonuses(),
+                loadTaxYears(),
+                // GST is sourced from useDriverMe — no manual fetch needed.
+            ]);
+        } catch {
+            // Errors are handled individually in each function
+        } finally {
+            setInitialLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadData();
+    }, []);
 
     // Seed the GST input from the cached driver row whenever it changes.
     // The hook has its own cache + background refetch, so this replaces

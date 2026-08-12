@@ -27,6 +27,7 @@ from ._shared import (  # noqa: F401
     _d,
     _money_str,
     _ride_income,
+    _ride_tax,
 )
 
 try:
@@ -69,18 +70,61 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         )
         # Decimal-only money: float accumulation over many rows drifts cents,
         # and this feeds payable_balance which bounds the Stripe payout Transfer.
-        total_earnings = sum(
-            (
-                _d(r.get("base_fare") or 0)
-                + _d(r.get("distance_fare") or 0)
-                + _d(r.get("time_fare") or 0)
-                + _d(r.get("tip_amount") or 0)
-                for r in rides
-            ),
-            Decimal("0"),
-        )
+        # _ride_income (driver_earnings, fare-component fallback for legacy
+        # rows) — same rule /earnings and driver statements already use, not
+        # a raw fare-component recompute. Before this fix /balance always
+        # recomputed from fare components even when driver_earnings had
+        # since been corrected, which could silently disagree with every
+        # other earnings surface (ACTION_ITEMS.md A28, "/balance vs
+        # /earnings composition can diverge" — decided 2026-08-12: balance
+        # should match earnings' full composition, not the other way round).
+        ride_earnings = sum((_ride_income(r) for r in rides), Decimal("0"))
         total_tips = sum((_d(r.get("tip_amount") or 0) for r in rides), Decimal("0"))
         total_rides = len(rides)
+
+        # GST/PST collected from riders, passed through to the driver as
+        # income (utils/driver_statement.py and /earnings already include
+        # this in their totals — driver_earnings is computed BEFORE tax is
+        # added, see services/fare_service.py, so this is additive, not
+        # double-counted).
+        total_tax = sum((_ride_tax(r) for r in rides), Decimal("0"))
+
+        # Per-ride pickup/surge incentive bonuses — same source /earnings
+        # and driver statements already fold in. Unlike /earnings (a
+        # read-only display), this number feeds payable_balance, which
+        # bounds the Stripe payout Transfer — a swallowed failure here would
+        # silently under-report what a driver can withdraw. Let it propagate
+        # to the outer except below (503), don't soft-fail to 0.
+        total_incentives = Decimal("0")
+        _ride_ids = [r["id"] for r in rides if r.get("id")]
+        if _ride_ids:
+            _claims = (
+                db_supabase.supabase.table("ride_incentive_claims")
+                .select("bonus_amount")
+                .in_("ride_id", _ride_ids)
+                .execute()
+            ).data or []
+            total_incentives = sum((_d(c.get("bonus_amount") or 0) for c in _claims), Decimal("0"))
+
+        # Cancellation/no-show fees the driver earned — lifetime, no date
+        # filter (matches every other sum in this endpoint). No
+        # EXCLUDE_LEGACY_RIDES filter here: booking_import_service.py hard-
+        # filters imports to TARGET_BOOKING_STATUS = "completed" and never
+        # writes status="cancelled", so no legacy-imported row can appear in
+        # this query today. If a future importer change starts importing
+        # cancelled/no-show legacy bookings, this (and the equivalent
+        # unfiltered queries in get_driver_earnings and
+        # utils/driver_statement.py) would need the same exclusion added.
+        _cancelled_rides = await db_supabase.get_rows(
+            "rides", {"driver_id": driver["id"], "status": RideStatus.CANCELLED}, limit=10000
+        )
+        total_cancel_fees = sum((_d(r.get("cancellation_fee_driver") or 0) for r in _cancelled_rides), Decimal("0"))
+
+        # Full gross income this endpoint reports as "total_earnings" — same
+        # composition /earnings and driver statements use (ride income + tax
+        # + incentives + cancel fees; bonuses folded in below alongside the
+        # existing driver_bonuses fetch).
+        total_earnings = ride_earnings + total_tax + total_incentives + total_cancel_fees
 
         # Deduct EVERY payout that represents money sent or in-flight — only
         # explicitly reversed/failed payouts (money returned or never left) are
@@ -170,14 +214,23 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         )
 
     return {
+        # total_earnings = ride income + tax + incentives + cancel fees +
+        # bonuses — full gross composition, matching /earnings and driver
+        # statements (ACTION_ITEMS.md A28). The driver-app payout screen
+        # relies on the identity total_earnings == payable_balance +
+        # pending_payouts + total_paid_out; keep all four in sync together.
         "total_earnings": _money_str(total_earnings + total_bonuses),
-        # payable_balance = ride earnings + bonuses - ALL money-out payouts
+        # payable_balance = ride earnings + tax + incentives + cancel fees +
+        # bonuses - ALL money-out payouts
         "payable_balance": _money_str(total_earnings + total_bonuses - total_payouts),
         "pending_payouts": _money_str(pending_payouts),
         "total_paid_out": _money_str(total_payouts - pending_payouts),
         "previous_app_paid_total": _money_str(previous_app_paid),
         "total_bonuses": _money_str(total_bonuses),
         "total_referral_bonuses": _money_str(total_referral_bonuses),
+        "total_incentives": _money_str(total_incentives),
+        "total_cancel_fees": _money_str(total_cancel_fees),
+        "total_tax": _money_str(total_tax),
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
         "stripe_id_number_provided": bool(driver.get("stripe_id_number_provided", False)),
@@ -297,15 +350,7 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         _cancel_fees_total = sum(Decimal(str(r.get("cancellation_fee_driver") or 0)) for r in _cancelled_rides)
 
         # Tax collected from riders — passed through to driver as their income
-        _total_tax = Decimal("0")
-        for r in rides:
-            _t = Decimal(str(r.get("tax_amount") or 0))
-            if _t == 0:
-                _snap = r.get("fare_breakdown_snapshot") or {}
-                for _ln in _snap.get("lines") or []:
-                    if _ln.get("type") in ("tax", "gst", "pst"):
-                        _t += Decimal(str(_ln.get("amount") or 0))
-            _total_tax += _t
+        _total_tax = sum((_ride_tax(r) for r in rides), Decimal("0"))
 
         stats = {
             # Driver INCOME = driver_earnings (canonical), fare-component fallback

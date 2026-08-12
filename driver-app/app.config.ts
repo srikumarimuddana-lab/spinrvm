@@ -32,11 +32,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     ios: {
         supportsTablet: true,
-        // @ts-expect-error minimumOsVersion is valid Expo config but still absent from the
-        // ExpoConfig ios type as of SDK 57 (same suppression as rider-app; previously this
-        // whole ios block was cast `as any`, which also hid real type errors — narrowed
-        // 2026-08-11, everything else in the block typechecks clean on SDK 57)
-        minimumOsVersion: '16.4', // expo-build-properties 57.x requires ios.deploymentTarget >= 16.4 (was 16.0 under 55.0.14); SDK 55 itself only required 16.0
+        // @ts-expect-error minimumOsVersion is not in the SDK 57 ExpoConfig ios type, and a
+        // grep of the installed @expo/* + expo-build-properties tooling finds NO consumer of
+        // it (verified 2026-08-12) — the ENFORCED iOS floor is expo-build-properties'
+        // ios.deploymentTarget: '16.4' below, not this key. Kept only in case store-side/EAS
+        // tooling reads it from the uploaded config; do not edit it expecting to change the
+        // supported-OS floor. (Previously this whole ios block was cast `as any`, which also
+        // hid real type errors — narrowed 2026-08-11; the rest typechecks clean on SDK 57.)
+        minimumOsVersion: '16.4', // matches deploymentTarget — the actual floor (expo-build-properties 57.x hard-validates deploymentTarget >= 16.4; was 16.0 under SDK 55)
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         // No ios.config.googleMapsApiKey on purpose: iOS uses Apple Maps. Every

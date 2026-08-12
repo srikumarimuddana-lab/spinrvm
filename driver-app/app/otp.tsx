@@ -78,6 +78,9 @@ export default function OtpScreen() {
       const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
       return () => clearTimeout(timer);
     } else {
+      // Countdown finished — allow resend. Doesn't feed back into
+      // `countdown`, and React bails out once canResend is already true.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCanResend(true);
     }
   }, [countdown]);

@@ -99,7 +99,10 @@ function ProfileScreenInner() {
   useEffect(() => {
     api.get<{ name?: string; address?: string; phone?: string; email?: string; website?: string }>('/company-info')
       .then(res => setCompanyInfo(res?.data || {}))
-      .catch((e) => console.warn('[DriverProfile] company-info fetch failed:', e?.message ?? e));
+      // Logger-only, never surfaced to the driver — pass the whole error
+      // object per the no-restricted-syntax rule's own guidance rather than
+      // routing through getApiErrorMessage (which is for user-visible text).
+      .catch((e) => console.warn('[DriverProfile] company-info fetch failed:', e));
   }, []);
 
   // Edit modal state

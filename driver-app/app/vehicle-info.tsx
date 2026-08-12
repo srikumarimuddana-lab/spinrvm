@@ -92,7 +92,11 @@ export default function VehicleInfoScreen() {
     };
 
     useEffect(() => {
+        // Re-seed the local form from the driver prop whenever it changes
+        // (initial load, or a background refetch). Local edits aren't fed
+        // back into `driver`, so this can't loop.
         if (driver) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setForm({
                 vehicle_type_id: driver.vehicle_type_id || '',
                 vehicle_make: driver.vehicle_make || '',

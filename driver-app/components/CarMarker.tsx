@@ -212,9 +212,17 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
 
     // Custom marker failed to load (offline + cold cache, dead URL) — fall
     // back to the bundled variant. Reset when the URL changes so a fixed
-    // upload is retried.
+    // upload is retried. Adjusted directly during render (React's documented
+    // "adjusting state when a prop changes" pattern) rather than via a
+    // useEffect — same reset semantics, but avoids the one-render flash of
+    // the stale imageFailed value that the effect version would show before
+    // its post-commit cleanup pass corrected it.
     const [imageFailed, setImageFailed] = useState(false);
-    useEffect(() => setImageFailed(false), [imageUri]);
+    const [prevImageUri, setPrevImageUri] = useState(imageUri);
+    if (imageUri !== prevImageUri) {
+        setPrevImageUri(imageUri);
+        setImageFailed(false);
+    }
     const useCustomImage = !!imageUri && !imageFailed;
 
     return (

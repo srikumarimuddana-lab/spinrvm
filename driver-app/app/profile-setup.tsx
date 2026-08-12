@@ -84,7 +84,10 @@ export default function ProfileSetupScreen() {
           return;
         }
       } catch (err: any) {
-        console.log('[ProfileSetup] /auth/me refetch failed:', err?.message || err);
+        // Logger-only, never surfaced to the driver — pass the whole error
+        // object per the no-restricted-syntax rule's own guidance rather than
+        // routing through getApiErrorMessage (which is for user-visible text).
+        console.log('[ProfileSetup] /auth/me refetch failed:', err);
       }
       if (!cancelled) setIsCheckingExisting(false);
     })();

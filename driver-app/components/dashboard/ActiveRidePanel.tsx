@@ -221,7 +221,10 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   // Reset distance when ride phase OR ride id changes — prevents stale
   // accumulation carrying over to a different ride if the panel is recycled.
+  // Local display-only accumulator (not the fare-settlement distance, which
+  // is computed server-side) — doesn't feed back into rideState/ride.id.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLiveDistanceKm(0);
     setHasLiveData(false);
     lastLocRef.current = null;
@@ -255,6 +258,8 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   useEffect(() => {
     if (rideState === 'arrived_at_pickup') {
+      // Local wait-timer display, doesn't feed back into rideState.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setWaitSeconds(0);
       const id = setInterval(() => setWaitSeconds(s => s + 1), 1000);
       waitTimerRef.current = id;

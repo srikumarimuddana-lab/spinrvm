@@ -279,6 +279,9 @@ function DriverDashboard() {
   // Fetch heatmap data when idle (backend returns empty if admin disabled it)
   useEffect(() => {
     if (rideState !== 'idle') {
+      // Clear stale heatmap points on leaving idle. Doesn't feed back into
+      // rideState, so this can't loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setHeatmapPoints([]);
       return;
     }
@@ -316,7 +319,10 @@ function DriverDashboard() {
   useEffect(() => {
     if (rideState !== 'ride_offered') return;
     // Re-seed local state from the store so we always start from the
-    // configured countdown when a fresh offer arrives.
+    // configured countdown when a fresh offer arrives. Deps are [rideState]
+    // only (see the exhaustive-deps suppression below) — this doesn't
+    // re-fire on countdownSeconds changes, so it can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCountdownState(countdownSeconds);
     const interval = setInterval(() => {
       setCountdownState((prev) => {
@@ -391,6 +397,10 @@ function DriverDashboard() {
   // stays framed on the pickup/dropoff bounding box from the previous ride
   // and the driver marker ends up off-screen.
   useEffect(() => {
+    // Reset route/ETA display state on every ride-phase transition (new
+    // phase = new route). Deps are [rideState, _hasRidePolyline] below;
+    // none of these setters feed back into either dep, so this can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDirectionsFailed(false);
     setRouteEtaMinutes(null);
     setRouteDistanceKm(null);

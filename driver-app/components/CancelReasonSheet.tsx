@@ -50,7 +50,10 @@ export default function CancelReasonSheet({
   const [isPending, setIsPending] = useState(false);
 
   useEffect(() => {
+    // Reset the form fields whenever the sheet re-opens. Doesn't feed back
+    // into `visible`, so this can't loop.
     if (visible) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelected(null);
       setNote('');
     }

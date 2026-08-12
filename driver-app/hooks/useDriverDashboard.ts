@@ -518,6 +518,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   }, []);
 
   useEffect(() => {
+    // Mount-only fetch; refreshLocation (useCallback([]), stable) sets state
+    // after its own await, not synchronously at the top of the effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshLocation(true);
     const sub = AppState.addEventListener('change', (next) => {
       // Skip cache on resume — we want a fresh fix, not yesterday's.
@@ -1219,6 +1222,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (going offline):', e); }
         wsRef.current = null;
       }
+      // Sync connection-state UI with the driver going offline / signing
+      // out. Doesn't feed back into isOnline/user, so this can't loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setConnectionState('disconnected');
       return;
     }
@@ -1548,6 +1554,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (isTogglingRef.current) return; // a toggle in flight is authoritative — let it settle
     onlineHydratedRef.current = true;
     if (!!serverOnline === isOnline) return;
+    // One-time hydration, guarded by onlineHydratedRef above (set true on
+    // the same pass, before this call) — every subsequent run of this
+    // effect short-circuits on the first line, so this can never re-fire
+    // and cascade even though `isOnline` is itself in the dep array below.
+    // Only sets the driver-toggled isOnline flag, never the system-computed
+    // is_available (CLAUDE.md invariant: is_available ⇒ is_online) — that
+    // stays entirely backend-owned.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsOnline(!!serverOnline);
     if (serverOnline) {
       // Re-arm background tracking for a resumed-online session. Idempotent:

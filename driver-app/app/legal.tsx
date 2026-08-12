@@ -94,6 +94,10 @@ export default function LegalScreen() {
     };
 
     useEffect(() => {
+        // Mount-only fetch; fetchLegalContent sets state after its own await
+        // (or in its catch fallback), not synchronously at the top of the
+        // effect. Empty deps, runs once.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchLegalContent();
     }, []);
 

@@ -64,12 +64,10 @@ test.describe('rider-app: rating submission (B-P0-1 regression)', () => {
     const errors: string[] = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
-    let rateCallBody: unknown = null;
     await seedAuthedSession(page);
     await mockBackend(page, { activeRide: COMPLETED_RIDE });
 
     await page.route('**/api/v1/rides/*/rate', async (route) => {
-      rateCallBody = await route.request().postDataJSON().catch(() => null);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',

@@ -16,6 +16,9 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+import PrivacySettingsScreen from '../app/privacy-settings';
+import CustomToggle from '../components/CustomToggle';
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), replace: jest.fn() }) }));
 jest.mock('react-native-safe-area-context', () => {
@@ -51,9 +54,6 @@ jest.mock('@shared/hooks/queries', () => ({
   useNotificationPreferences: () => ({ data: mockPrefsData }),
   useUpdateNotificationPreferences: () => ({ mutate: mockMutate }),
 }));
-
-import PrivacySettingsScreen from '../app/privacy-settings';
-import CustomToggle from '../components/CustomToggle';
 
 function renderScreen() {
   let renderer!: TestRenderer.ReactTestRenderer;

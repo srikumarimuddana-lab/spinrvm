@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { Linking } from 'react-native';
 import { showToast } from './toastStore';
 import api, { SpinrApiError, hasAuthToken, getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
@@ -192,7 +191,7 @@ export interface Ride {
   /** v2 durable route contract. Segments intentionally remain separate to avoid gap chords. */
   actual_route_segments?: unknown;
   actual_completion_point?: { latitude: number; longitude: number };
-  planned_route_polyline?: Array<[number, number]>;
+  planned_route_polyline?: [number, number][];
   route_quality?: { coverage_ratio?: number; coverage_pct?: number; missing_tail?: boolean; [key: string]: unknown };
   route_revision?: number;
   snapshot_revision?: number;

@@ -18,7 +18,6 @@
 // We reuse whatever Node.js already provides and fall back to no-ops for the
 // ones that don't exist in the test environment.
 
-const noop = () => {};
 const GLOBALS_TO_LOCK = {
   __ExpoImportMetaRegistry: { url: null },
   structuredClone:

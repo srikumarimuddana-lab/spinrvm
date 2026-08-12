@@ -41,7 +41,7 @@ export default function ChatDriverScreen() {
   // warm cache that hasn't been loaded into the store yet.
   const cacheReadDoneRef = useRef(false);
 
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const CHAT_STORAGE_KEY = rideId ? `spinr_chat_rider_${rideId}` : null;

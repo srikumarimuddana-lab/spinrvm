@@ -11,6 +11,8 @@
  * Code under test: rider-app/store/rideStore.ts::addChatMessage
  */
 
+import { useRideStore } from '../rideStore';
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
   Alert: { alert: jest.fn() },
@@ -37,8 +39,6 @@ jest.mock('@shared/store/authStore', () => ({
   registerLogoutCallback: jest.fn(),
   useAuthStore: { getState: jest.fn(() => ({ user: null, token: null })) },
 }));
-
-import { useRideStore } from '../rideStore';
 
 const _msg = (id: string, text = 'hi', sender: 'rider' | 'driver' = 'rider') => ({
   id,

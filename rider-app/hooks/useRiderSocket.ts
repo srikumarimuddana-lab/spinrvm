@@ -3,6 +3,7 @@ import { AppState, Vibration } from 'react-native';
 import { showToast } from '../store/toastStore';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
+import { ensureFreshToken } from '@shared/api/client';
 import { useRideStore } from '../store/rideStore';
 import { API_URL } from '@shared/config';
 import { RideStatus } from '../constants/rideStatus';
@@ -230,7 +231,6 @@ export function useRiderSocket() {
     // the reconnect loop spins forever with a stale token, freezing the
     // live driver position on the rider's map.
     try {
-      const { ensureFreshToken } = require('@shared/api/client');
       await ensureFreshToken();
     } catch (err) {
       console.warn('[WS] ensureFreshToken failed, proceeding with current token:', err);

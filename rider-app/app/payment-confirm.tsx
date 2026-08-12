@@ -26,7 +26,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { useResponsive } from '@shared/utils/responsive';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 
@@ -65,10 +65,10 @@ function PaymentConfirmScreenContent() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
 
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { sf } = useResponsive();
   const styles = useMemo(() => createStyles(colors, sf), [colors, sf]);
   const { scheduleReminder } = useScheduledRideReminder();
@@ -483,7 +483,7 @@ function PaymentConfirmScreenContent() {
             <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
             <Text style={styles.holdNoteText}>
               A temporary hold of ${(totalFare + 10).toFixed(2)} (estimated fare + $10) is placed on your card.
-              You're only charged the final fare plus any tip you add after the ride.
+              You&apos;re only charged the final fare plus any tip you add after the ride.
             </Text>
           </View>
         )}

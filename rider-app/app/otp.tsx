@@ -16,7 +16,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { logCompleteRegistration } from '@shared/analytics/meta';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';

@@ -22,7 +22,7 @@ for (const name of EXPO_WINTER_GLOBALS) {
   const desc = Object.getOwnPropertyDescriptor(global, name);
   if (desc && typeof desc.get === 'function') {
     try {
-      // eslint-disable-next-line no-unused-expressions
+       
       void global[name]; // triggers the lazy getter; defineLazyObjectProperty then replaces it with a static value
     } catch (_e) {
       // getter resolution failed; install a safe stub so test-module loading won't re-trigger

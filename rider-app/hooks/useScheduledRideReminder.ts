@@ -25,6 +25,10 @@ const REMINDER_LEAD_MS = REMINDER_LEAD_MINUTES * 60 * 1000;
 // Lazy-load expo-notifications so the app still runs in Expo Go / web.
 let Notifications: any = null;
 try {
+  // Guarded native-module require — must stay runtime require(), not a
+  // static import, so a missing native binary (Expo Go/web) hits the catch
+  // below instead of crashing at module load.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   Notifications = require('expo-notifications');
 } catch {
   // Not available in Expo Go or web

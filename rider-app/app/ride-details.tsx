@@ -153,7 +153,7 @@ export default function RideDetailsScreen() {
       } else {
         showToast('Saved', 'Receipt PDF generated.', 'success');
       }
-    } catch (e: any) {
+    } catch {
       showToast('PDF Unavailable', 'PDF export requires the latest app version. Please update the app and try again.', 'warning');
     } finally {
       setPdfBusy(false);

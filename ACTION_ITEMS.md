@@ -6235,12 +6235,74 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - [ ] **expo-speech-recognition 57.x watch** (rider): no 57-line release
   exists (npm latest = 56.0.1, verified 2026-08-11). Works on 57 today;
   re-check each SDK cycle and bump when the community package catches up.
-- [ ] **Mobile lint debt under the SDK 57 ruleset**: rider 379 problems (176
-  errors) after eslint-config-expo ~57.0.1; driver 240 problems (105 errors)
-  on the config it already had. Mobile lint is not a CI gate (ci.yml lints
-  only frontend/ + admin-dashboard/), so this is cleanup debt, not a red
-  pipeline — but the new react-hooks 7 "refs during render" errors are the
-  kind that become real bugs; burn down by surface, don't bulk-disable rules.
+- [ ] **Mobile lint debt under the SDK 57 ruleset** (2026-08-12 pass, branches
+  `claude/c20-mobile-lint-rider-app` / `claude/c20-mobile-lint-driver-app`):
+  **partially closed, not fully** — the counts in this bullet had drifted
+  from actual `yarn lint` output (rider was 504 problems / 187 errors on a
+  fresh run, not 379/176; driver was 423 / 181, not 240/105), so treat any
+  future count here as stale until re-measured, same as this one now is.
+  - **Fixed**: rider 504 → 262 problems (48% down, 337 errors → 167), driver
+    423 → 153 problems (64% down, 181 errors → 104). Categories closed to
+    zero: `no-unused-vars`/`@typescript-eslint/no-unused-vars`,
+    `import/first`, `import/no-duplicates`, `no-undef` (missing jest/node
+    globals for plain-`.js` mock/setup files — config fix in both
+    `eslint.config.js`), `react/no-unescaped-entities`,
+    `@typescript-eslint/array-type` (driver), `import/no-named-as-default`
+    (either fixed via named import or a documented suppression where a
+    named import would break a test's `jest.mock()` shape — see below),
+    `@typescript-eslint/no-require-imports` in all production code (app/,
+    components/, hooks/, services/, store/, utils/ — either converted to a
+    static import or given a documented suppression for genuinely-guarded
+    native-module requires), and the 4 total `react-hooks/refs` "Cannot
+    update ref during render" (write) findings — the higher-risk half of
+    that rule explicitly called out below.
+  - **Found and fixed one real bug from a self-inflicted regression, not a
+    pre-existing one**: converting `SpinrConfig`'s default import to a named
+    import (mechanically matching the safe `Analytics`/`CarMarker` fix)
+    broke `rider-app/utils/__tests__/aiChat.test.ts`, because several test
+    files across both apps `jest.mock('@shared/config/spinr.config', () =>
+    ({ default: {...} }))` without a matching named export. Reverted in both
+    apps; the ~9 other `SpinrConfig` default-import sites were left alone
+    with a documented `eslint-disable` instead of "fixed" the same wrong
+    way. Also removed one ~130-line dead `renderRideOfferPanel` function in
+    driver-app's dashboard (superseded by the extracted `<RideOfferPanel>`
+    component) found via `no-unused-vars` investigation.
+  - **Deliberately deferred, not fixed** (documented reasons, not silent):
+    - `react-hooks/refs` **read**-during-render pattern (98 rider / 59
+      driver remaining) — lower risk than the write pattern already fixed
+      (mostly `useState(() => ({ ...ref.current }))`-style initializers,
+      which only run once on mount) but still needs a real look, not a bulk
+      fix; not attempted this pass given the volume.
+    - `react-hooks/exhaustive-deps` (72 rider / 38 driver),
+      `react-hooks/set-state-in-effect` (32 / 20), `react-hooks/immutability`
+      (11 / 16), `react-hooks/purity` (9 / 6),
+      `react-hooks/preserve-manual-memoization` (2 / 1) — none touched.
+      These are exactly the findings CLAUDE.md/this bullet's own prior
+      wording warns can be real bugs, not style noise; blindly adding a
+      missing dep or reordering a `set`-during-render call can change
+      re-render timing or introduce a loop. Needs per-finding review with
+      real behavioral tracing, not a bulk pass.
+    - `no-restricted-syntax` (14 rider / 2 driver) — the project's own
+      raw-`error.message`-surfacing rule. Fixing these routes user-visible
+      text through `getApiErrorMessage(err, fallback)`, which changes what
+      text a rider/driver actually sees on an error — a real UX change, not
+      a style fix, and out of scope for a lint-cleanup PR per this task's
+      instructions to keep scope to lint/code-quality only.
+    - `@typescript-eslint/no-require-imports` remaining (23 rider / 11
+      driver) — all in `__tests__/`/`e2e/` files, where a dynamic
+      `require()` mid-test-body is the idiomatic way to grab a
+      `jest.mock()`'d module's mock functions for
+      `.mockImplementationOnce()` etc.; converting these to static imports
+      risks changing when Jest's module registry resolves them relative to
+      `jest.mock()` hoisting, not worth the risk for a cosmetic warning.
+    - `import/no-unresolved` (1, rider `scripts/render-voltra-templates.mjs`)
+      — the script's own header comment already documents
+      `@use-voltra/ios-server` as a manual post-`yarn install` step, not a
+      repo dependency; "fixing" it would mean adding an unlisted package,
+      out of scope.
+  - Mobile lint is still not a CI gate (`ci.yml` lints only `frontend/` +
+    `admin-dashboard/`), so none of this blocked anything — it's cleanup
+    debt closed opportunistically, not a red pipeline fixed.
 - [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
   ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
   SDK across the fleet, both still gated OFF on Android (hidden-API hang, see

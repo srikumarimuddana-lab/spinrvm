@@ -1,10 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import SpinrConfig from '@shared/config/spinr.config';
-
-const COLORS = SpinrConfig.theme.colors;
-
 interface FreeCancelTimerProps {
   /** ISO timestamp when driver accepted the ride (null if not yet accepted). */
   driverAcceptedAt: string | null | undefined;

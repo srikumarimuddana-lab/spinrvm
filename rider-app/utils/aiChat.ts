@@ -8,6 +8,12 @@
  * Fallback plan if a device misbehaves: swap the transport for
  * react-native-sse — the parser and event contract stay identical.
  */
+// Keep the default import: utils/__tests__/aiChat.test.ts (and other test
+// files across the repo) jest.mock('@shared/config/spinr.config', () => ({
+// default: {...} })) without a matching named 'SpinrConfig' export, so a
+// named import resolves to undefined under that mock and breaks
+// SpinrConfig.backendUrl below.
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { ensureFreshToken, getAuthHeader } from '@shared/api/client';
 import type { AiSseEvent } from '@shared/types/ai';
@@ -69,7 +75,12 @@ export interface StreamChatOptions {
 
 async function defaultFetch(url: string, init: any): Promise<any> {
   // expo/fetch supports streaming response bodies on iOS and Android
-  // (RN's built-in fetch does not).
+  // (RN's built-in fetch does not). Lazy require (not a static import) is
+  // deliberate: per the file header, fetchImpl is an injectable test seam —
+  // tests that supply their own fetchImpl never call this function, so they
+  // never pay for loading expo/fetch. A static import would load it eagerly
+  // for every importer of this module, mocked or not.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { fetch: expoFetch } = require('expo/fetch');
   return expoFetch(url, init);
 }
@@ -136,7 +147,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const parser = new SseFrameParser();
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;

@@ -5,6 +5,9 @@
  */
 import { act } from '@testing-library/react-native';
 
+import { useRideStore } from '../rideStore';
+import api from '@shared/api/client';
+
 // Mock AsyncStorage (used by addRecentSearch / loadRecentSearches)
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
@@ -43,9 +46,6 @@ jest.mock('@shared/store/authStore', () => ({
 jest.mock('expo-router', () => ({
   router: { push: jest.fn(), replace: jest.fn() },
 }));
-
-import { useRideStore } from '../rideStore';
-import api from '@shared/api/client';
 
 const mockApi = api as jest.Mocked<typeof api>;
 
@@ -321,9 +321,8 @@ describe('rideStore — hydrateActiveRide', () => {
       JSON.stringify({ currentRide: storedRide, currentDriver: null })
     );
 
-    let result: any;
     await act(async () => {
-      result = await useRideStore.getState().hydrateActiveRide?.();
+      await useRideStore.getState().hydrateActiveRide?.();
     });
 
     // hydrateActiveRide may not exist yet — verify the store has the method or skip

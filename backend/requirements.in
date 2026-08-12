@@ -89,7 +89,7 @@ boto3>=1.42.89
 # staticmap composites OSM tiles + our phase_polylines server-side.
 # Pillow is a transitive dep; pin it explicitly for clarity.
 staticmap>=0.5.7
-Pillow>=10.4.0
+Pillow>=12.3.0
 
 # CRA T4A PDF generation (pure-Python, no system deps).
 # Used by backend/utils/t4a_pdf.py for on-demand driver tax slip download.

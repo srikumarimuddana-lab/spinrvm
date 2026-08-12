@@ -350,6 +350,36 @@ class DispatchService:
         }
         if ride.get("requires_wav"):
             driver_filter["is_wav"] = True
+        # Cross-service-area ride guard: restrict candidates to drivers whose
+        # approved service area is compatible with the ride's pickup area.
+        if ride.get("service_area_id"):
+            _compat: set = {ride["service_area_id"]}
+            try:
+                _sa = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
+                if _sa and _sa.get("parent_service_area_id"):
+                    _compat.add(_sa["parent_service_area_id"])
+                _children = await self.db.get_rows(
+                    "service_areas",
+                    {"parent_service_area_id": ride["service_area_id"], "is_active": True},
+                    columns="id",
+                    limit=50,
+                )
+                for _c in _children or []:
+                    _compat.add(_c["id"])
+            except Exception:
+                logger.error(
+                    "Service-area guard lookup failed for area=%s — failing open",
+                    ride["service_area_id"],
+                    exc_info=True,
+                )
+                _compat = None  # type: ignore[assignment]
+            if _compat is not None:
+                driver_filter["service_area_id"] = {"$in": list(_compat)}
+                logger.info(
+                    "Service-area guard: ride area=%s, compatible driver areas=%s",
+                    ride["service_area_id"],
+                    list(_compat),
+                )
         rows = await self.db.get_rows(
             "drivers",
             driver_filter,

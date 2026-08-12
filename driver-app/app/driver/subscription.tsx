@@ -54,17 +54,9 @@ export default function SubscriptionScreen() {
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  useEffect(() => { loadData(); }, []);
-
-  // The Stripe-checkout deep-link return (spinr-driver://subscription/success)
-  // is owned by the dedicated app/subscription/success.tsx landing screen,
-  // which verifies the session and routes back here with fresh data. The
-  // in-app-browser happy path is handled inline in doSubscribe() via
-  // WebBrowser.openAuthSessionAsync. A `Linking` listener here would be a third,
-  // overlapping path that double-verified and double-toasted on the Android
-  // Custom-Tab case where the OS dispatches the deep link to the app, so it was
-  // removed.
-
+  // Declared before the `useEffect` below (react-hooks/immutability /
+  // React Compiler flags referencing a function before its source-order
+  // declaration) — same expression, same effect timing, no behavior change.
   const loadData = async () => {
     setLoading(true);
     try {
@@ -94,6 +86,17 @@ export default function SubscriptionScreen() {
     } catch (e) { console.log('Sub load error:', e); }
     finally { setLoading(false); }
   };
+
+  useEffect(() => { loadData(); }, []);
+
+  // The Stripe-checkout deep-link return (spinr-driver://subscription/success)
+  // is owned by the dedicated app/subscription/success.tsx landing screen,
+  // which verifies the session and routes back here with fresh data. The
+  // in-app-browser happy path is handled inline in doSubscribe() via
+  // WebBrowser.openAuthSessionAsync. A `Linking` listener here would be a third,
+  // overlapping path that double-verified and double-toasted on the Android
+  // Custom-Tab case where the OS dispatches the deep link to the app, so it was
+  // removed.
 
   const loadMorePayments = async () => {
     if (paymentsLoadingMore || paymentsOffset >= paymentsTotal) return;

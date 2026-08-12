@@ -33,10 +33,9 @@ export default function RideDetailScreen() {
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
-    useEffect(() => {
-        if (id) void loadRide(true);
-    }, [id]);
-
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
     const loadRide = async (showLoading = false) => {
         if (showLoading) setLoading(true);
         try {
@@ -47,6 +46,10 @@ export default function RideDetailScreen() {
         }
         if (showLoading) setLoading(false);
     };
+
+    useEffect(() => {
+        if (id) void loadRide(true);
+    }, [id]);
 
     useCompletedRouteRefresh(ride, loadRide);
 

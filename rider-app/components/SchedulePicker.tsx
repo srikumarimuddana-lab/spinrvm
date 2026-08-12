@@ -53,7 +53,8 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
         useNativeDriver: true,
       }),
     ]).start();
-  }, [visible]);
+    // Both are stable Animated.Value instances (useAnimatedValue, created once).
+  }, [visible, slideAnim, fadeAnim]);
 
   // ─── State ────────────────────────────────────────────────────────────────
   // useState's lazy initializer (not useMemo) — React only guarantees a

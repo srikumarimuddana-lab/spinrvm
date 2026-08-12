@@ -3263,8 +3263,9 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   production via the Session pooler connection string once convenient.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
-- [x] **Status:** Regina/Saskatoon CLOSED (2026-08-12) as an explicit
-  **stopgap** — the 1.4×/1.8× multiplier proposal below was applied
+- [x] **Status:** Regina/Saskatoon/Saskatoon Airport/Regina Airpot all
+  CLOSED (2026-08-12) as an explicit **stopgap** — the 1.4×/1.8×
+  multiplier proposal below was applied
   against production, fixing the "all tiers cost the same" defect for
   these two areas. **Not a claim about being priced below Uber** — the
   user explicitly raised that Spinr's 0% driver-commission model gives
@@ -3297,14 +3298,29 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   - **Final live values (Saskatoon):** Economy `4.00/1.00`, XL
     `5.60/1.40`, Premium `7.20/1.80`.
   - **Discovered, not fixed this pass — new follow-up items:**
-    - A 6th service area, **"Saskatoon Airport"** (created 2026-07-30,
+    - [x] A 6th service area, **"Saskatoon Airport"** (created 2026-07-30,
       after the last full-area inventory this entry's original
-      investigation ran), has the identical all-tiers-same-price defect
-      and was never caught. Needs its own pricing pass.
-    - A service area literally named **"Regina Airpot"** (typo — missing
-      the second "r") also carries the defect. The typo itself may be a
-      separate bug if anything elsewhere matches on the area name string
-      — not investigated.
+      investigation ran), had the identical all-tiers-same-price defect.
+      **CLOSED 2026-08-12** — same stopgap multiplier applied (this area
+      has non-zero `per_min`/`min_fare`/`booking_fee`, unlike Regina/
+      Saskatoon main, so the doc's "~1.2×/~1.5× on per_min/booking_fee"
+      modest-scaling note was extended to `min_fare` too, treated as
+      another floor-amount field rather than a per-unit rate). Final
+      live values: Economy `3.50/1.50/0.25/8.00/2.00`, XL/Van (same
+      multiplier, same resulting numbers per the doc's original "XL/Van
+      ≈1.4×" framing) `4.90/2.10/0.30/9.60/2.40`, Premium
+      `6.30/2.70/0.38/12.00/3.00` (base_fare/per_km/per_min/min_fare/
+      booking_fee). Change Impact Log:
+      `docs/change-log/2026-08-12-b8-airport-vehicle-pricing.md`.
+    - [x] A service area literally named **"Regina Airpot"** (typo — missing
+      the second "r") also carried the defect. **CLOSED 2026-08-12** —
+      same fix applied, same final values as Saskatoon Airport above.
+      The name typo itself was intentionally left untouched — renaming a
+      `service_areas.name` value needs its own blast-radius check (any
+      other table/config that might match on the exact string) before
+      touching it, and that wasn't asked for or investigated this pass.
+      Still open as its own separate item if the typo is ever confirmed
+      to cause a functional bug (not just a cosmetic one).
     - **Uber competitive positioning** (raised by the user): should
       Economy's absolute rate undercut Uber's current list price in
       Regina/Saskatoon, and by how much? Needs real comparative fare data

@@ -116,6 +116,11 @@ function PaymentConfirmScreenContent() {
   // Keep corporate toggle in sync when work mode is toggled elsewhere
   useEffect(() => {
     if (workModeEnabled && corporateAccounts.length > 0) {
+      // Keeps the corporate toggle in sync when work mode is enabled
+      // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
+      // this effect (workModeEnabled/corporateAccounts.length are), so no
+      // loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUseCorporate(true);
       setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
     }

@@ -50,6 +50,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { TrackBaseUrlContext } from './_layout';
 import { getRideMapCoords } from '../utils/rideMapCoords';
+import { useTranslation } from '../i18n';
 
 function RideInProgressScreenContent() {
   const router = useRouter();
@@ -61,6 +62,7 @@ function RideInProgressScreenContent() {
     activeRideRouteCoords, lastEtaMin,
     setActiveRideRouteCoords, setLastEtaMin,
   } = useRideStore();
+  const { t } = useTranslation();
   // Seed ETA and route from store so this screen shows correct values
   // immediately even before the first Directions fetch completes — and
   // skips the fetch entirely if driver-arriving already retrieved the route.
@@ -553,7 +555,7 @@ function RideInProgressScreenContent() {
           <Text style={styles.actionBtnText}>Live Map</Text>
         </TouchableOpacity>
         <View style={styles.actionBtn}>
-          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
+          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
           <Text style={styles.actionBtnText}>SOS</Text>
         </View>
         <TouchableOpacity style={styles.actionBtn} onPress={() => {
@@ -611,7 +613,7 @@ function RideInProgressScreenContent() {
 
       {/* SOS — floating top-right, always visible even when bottom sheet is collapsed */}
       <SafeAreaView edges={['top']} style={styles.sosOverlay} pointerEvents="box-none">
-        <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} size="small" />
+        <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} size="small" t={t} />
       </SafeAreaView>
 
       {/* Map Area */}

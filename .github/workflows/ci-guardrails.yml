@@ -31,12 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
@@ -118,18 +118,88 @@ jobs:
               print("PASS: Coverage within tolerance.")
           PYEOF
 
+  # ─── 1b. Corporate per-module coverage floor ─────────────────────────────
+  # CLAUDE.md targets >=80% for backend/{routes,services}/corporate_*.py
+  # (same tier as rides/dispatch -- moves real money via
+  # corporate_wallet_apply_delta) and says explicitly this is "not yet
+  # enforced by a --cov-fail-under gate on this module specifically."
+  # coverage-regression-gate above does not close that gap: it is
+  # whole-codebase-aggregate (a module can sit at 33% forever as long as it
+  # doesn't drop further) and advisory (continue-on-error: true). This gate
+  # is scoped and BLOCKING, but only for a PR that actually touches a
+  # tracked corporate_* module -- an unrelated PR is a no-op pass, so it
+  # ratchets without blocking anything it didn't change. Floor values and
+  # their provenance (measured vs. conservative-starting) live in
+  # backend/scripts/check_corporate_coverage_floor.py -- read that file's
+  # docstring before changing a floor.
+  corporate-coverage-floor-gate:
+    name: Corporate coverage floor check
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: List changed files
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
+          git diff --name-only "$BASE"...HEAD > /tmp/changed_files.txt || true
+          echo "Changed files in this PR:"
+          cat /tmp/changed_files.txt
+
+      - name: Install backend deps
+        working-directory: backend
+        # See coverage-regression-gate above for why this step tolerates a
+        # transient install failure: the blocking backend-test job in ci.yml
+        # already surfaces a real dependency problem.
+        continue-on-error: true
+        run: |
+          pip install --require-hashes -r requirements-locked.txt --quiet \
+            || pip install -r requirements-locked.txt --quiet || true
+
+      - name: Run corporate test suite with coverage
+        working-directory: backend
+        env:
+          SUPABASE_URL: https://test.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: test_key
+          JWT_SECRET: ci-only-not-a-real-secret-000000000000
+          ADMIN_PASSWORD: ci-placeholder-password
+          ENV: test
+        run: |
+          # Scoped to the corporate test files (48 of them) rather than the
+          # full suite -- same targeted-measurement pattern already used
+          # throughout docs/change-log/2026-07-28-corporate-*-coverage-80.md
+          # ("pytest tests/ -k allowance" etc). --cov=. still measures every
+          # source file those tests actually exercise, which is exactly the
+          # corporate_* modules this gate cares about.
+          pytest tests/ tests/services/ -k corporate \
+            --cov=. --cov-report=json:../corp-coverage.json -q --no-header 2>/dev/null || true
+
+      - name: Check per-module floors
+        working-directory: backend
+        run: |
+          python3 scripts/check_corporate_coverage_floor.py \
+            --coverage-json ../corp-coverage.json \
+            --changed-files-file /tmp/changed_files.txt
+
   # ─── 2. Lint warning count gate ───────────────────────────────────────────
   lint-trend-gate:
     name: Lint warning trend check
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
@@ -156,7 +226,7 @@ jobs:
           " || echo "0" > /tmp/lint_pr_count
 
       - name: Set up Node (for admin lint)
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "20"
           cache: "npm"
@@ -200,10 +270,10 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
@@ -325,7 +395,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -558,7 +628,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -613,7 +683,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Ensure no test files under an Expo Router app/ tree
         run: python3 scripts/check_mobile_test_placement.py
@@ -629,7 +699,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -733,7 +803,7 @@ jobs:
     continue-on-error: true
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -783,7 +853,7 @@ jobs:
           PYEOF
 
       - name: Apply label
-        uses: actions/github-script@v9
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         with:
           script: |
             const level = '${{ steps.risk.outputs.level }}';
@@ -824,6 +894,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - coverage-regression-gate
+      - corporate-coverage-floor-gate
       - lint-trend-gate
       - security-posture-gate
       - migration-safety-gate
@@ -833,11 +904,12 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     steps:
       - name: Summarise results
-        uses: actions/github-script@v9
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         with:
           script: |
             const jobs = {
               'Coverage Regression':  '${{ needs.coverage-regression-gate.result }}',
+              'Corporate Coverage Floor': '${{ needs.corporate-coverage-floor-gate.result }}',
               'Lint Trend':           '${{ needs.lint-trend-gate.result }}',
               'Security Posture':     '${{ needs.security-posture-gate.result }}',
               'Migration Safety':     '${{ needs.migration-safety-gate.result }}',

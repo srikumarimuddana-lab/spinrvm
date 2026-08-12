@@ -3,7 +3,6 @@
 Extracted from db_supabase.py (Phase 2 of god-object decomposition).
 """
 
-import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -12,17 +11,21 @@ from loguru import logger
 
 try:
     from ._base import (
+        _apply_filters,
         _rows_from_res,
         _serialize_for_api,
         _single_row_from_res,
+        _write_skipped,
         run_sync,
         supabase,
     )
 except ImportError:
     from repositories._base import (
+        _apply_filters,
         _rows_from_res,
         _serialize_for_api,
         _single_row_from_res,
+        _write_skipped,
         run_sync,
         supabase,
     )
@@ -53,11 +56,23 @@ async def get_all_corporate_accounts(
         query = supabase.table("corporate_accounts").select("*").range(skip, skip + limit - 1)
 
         if search:
-            # Escape special PostgREST ilike characters to prevent filter injection
-            safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            # Strip characters that could break PostgREST filter syntax
-            safe = re.sub(r"[,\.\(\)]", "", safe)
-            query = query.or_(f"name.ilike.%{safe}%,contact_name.ilike.%{safe}%,contact_email.ilike.%{safe}%")
+            # Shared $regex/$or escaping (repositories/_base.py._apply_filters)
+            # instead of a hand-rolled escape+strip — see corporate module
+            # review gap #42. _build_or_clause_term's $regex branch escapes
+            # LIKE wildcards (_escape_like) and PostgREST or()-group reserved
+            # characters (_postgrest_pattern) rather than silently stripping
+            # them, so a search term containing a comma or parenthesis still
+            # matches instead of having that character dropped.
+            query = _apply_filters(
+                query,
+                {
+                    "$or": [
+                        {"name": {"$regex": search, "$options": "i"}},
+                        {"contact_name": {"$regex": search, "$options": "i"}},
+                        {"contact_email": {"$regex": search, "$options": "i"}},
+                    ]
+                },
+            )
 
         if is_active is not None:
             query = query.eq("is_active", is_active)
@@ -127,6 +142,7 @@ async def update_corporate_account(account_id: str, update_data: Dict[str, Any])
         Updated corporate account data or None if failed
     """
     if not supabase:
+        _write_skipped("update_corporate_account", "corporate_accounts")
         return None
 
     update_data = _serialize_for_api(update_data)
@@ -149,6 +165,7 @@ async def delete_corporate_account(account_id: str) -> bool:
         True if successful, False otherwise
     """
     if not supabase:
+        _write_skipped("delete_corporate_account", "corporate_accounts")
         return False
 
     def _fn():
@@ -179,11 +196,17 @@ async def list_corporate_accounts_filtered(
         if size_tier:
             q = q.eq("size_tier", size_tier)
         if search:
-            # Escape PostgREST ilike special chars to prevent filter injection
-            # (same pattern as get_all_corporate_accounts above).
-            safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            safe = re.sub(r"[,\.\(\)]", "", safe)
-            q = q.or_(f"name.ilike.%{safe}%,legal_name.ilike.%{safe}%")
+            # Shared $regex/$or escaping — see get_all_corporate_accounts above
+            # and corporate module review gap #42.
+            q = _apply_filters(
+                q,
+                {
+                    "$or": [
+                        {"name": {"$regex": search, "$options": "i"}},
+                        {"legal_name": {"$regex": search, "$options": "i"}},
+                    ]
+                },
+            )
         q = q.order("created_at", desc=True).range(skip, skip + limit - 1)
         return _rows_from_res(q.execute())
 
@@ -403,13 +426,30 @@ async def sum_autotopups_today(wallet_id: str) -> Decimal:
 
 
 async def get_default_payment_method(stripe_customer_id: str, stripe_secret: str) -> Optional[str]:
-    """Return the Stripe customer's first card payment method, if any."""
+    """Return the Stripe customer's first card payment method, if any.
+
+    Uses ``asyncio.to_thread``, NOT ``run_sync``. This is a Stripe call that
+    happens to live in a repository module; routing it through the database
+    helper had two real consequences:
+
+      1. every Stripe exception was re-raised as ``DatabaseError``, so callers
+         could not tell a "no such customer" (the test→live key-rotation
+         symptom, which they repair) from a genuine outage — the corporate
+         repair paths silently never fired;
+      2. Stripe's failures counted against the *database* circuit breaker and
+         its retry budget, so a Stripe incident could open the breaker and 503
+         unrelated DB traffic.
+
+    Callers now see the real ``stripe.error.*`` exception.
+    """
+    import asyncio
+
     import stripe
 
     def _fn():
         return stripe.PaymentMethod.list(customer=stripe_customer_id, type="card", api_key=stripe_secret)
 
-    methods = await run_sync(_fn)
+    methods = await asyncio.to_thread(_fn)
     data = getattr(methods, "data", None) or []
     return data[0].id if data else None
 
@@ -437,6 +477,74 @@ async def mark_low_balance_notified(*, wallet_id: str) -> None:
         supabase.table("corporate_wallets").update({"low_balance_notified_at": now_iso}).eq("id", wallet_id).execute()
 
     await run_sync(_fn)
+
+
+async def list_wallet_risk_portfolio() -> List[Dict[str, Any]]:
+    """Every corporate wallet annotated with risk flags, for the admin
+    portfolio-risk view (Corporate + admin portal review, round 2: "no
+    portfolio-level view of corporate wallet risk"). Reuses the same
+    "filter cross-column comparisons in Python" pattern as
+    list_wallets_needing_autotopup / list_wallets_low_balance_no_autotopup
+    (PostgREST can't compare balance to a sibling threshold column
+    server-side).
+
+    Company name/status is resolved via a second query on the returned
+    company_ids, not a PostgREST embed -- see CLAUDE.md's convention for
+    a name/email lookup spanning two tables: resolve IDs first, filter
+    the second query with $in. Guards the empty-wallets case so the
+    second query is never issued with an empty id list.
+    """
+
+    def _fn():
+        return supabase.table("corporate_wallets").select("*").execute()
+
+    res = await run_sync(_fn)
+    wallets = _rows_from_res(res)
+    if not wallets:
+        return []
+
+    company_ids = [w["company_id"] for w in wallets if w.get("company_id")]
+    accounts_by_id: Dict[str, Dict[str, Any]] = {}
+    if company_ids:
+
+        def _fn2():
+            return supabase.table("corporate_accounts").select("id,name,status").in_("id", company_ids).execute()
+
+        accounts_res = await run_sync(_fn2)
+        accounts_by_id = {a["id"]: a for a in _rows_from_res(accounts_res)}
+
+    out: List[Dict[str, Any]] = []
+    for w in wallets:
+        balance = Decimal(str(w.get("balance") or 0))
+        floor = Decimal(str(w.get("soft_negative_floor") if w.get("soft_negative_floor") is not None else -50))
+        threshold = w.get("auto_topup_threshold")
+        auto_topup_enabled = bool(w.get("auto_topup_enabled"))
+
+        flags: List[str] = []
+        if balance < 0:
+            flags.append("negative_balance")
+        if balance <= floor:
+            flags.append("at_floor")
+        if threshold is not None and balance < Decimal(str(threshold)):
+            flags.append("below_autotopup_threshold" if auto_topup_enabled else "low_balance_no_autotopup")
+
+        account = accounts_by_id.get(w.get("company_id"), {})
+        out.append(
+            {
+                "wallet_id": w.get("id"),
+                "company_id": w.get("company_id"),
+                "company_name": account.get("name"),
+                "company_status": account.get("status"),
+                "balance": str(balance),
+                "soft_negative_floor": str(floor),
+                "auto_topup_enabled": auto_topup_enabled,
+                "risk_flags": flags,
+            }
+        )
+
+    # Riskiest first: any flag beats none, most-negative balance beats less-negative.
+    out.sort(key=lambda r: (0 if r["risk_flags"] else 1, Decimal(r["balance"])))
+    return out
 
 
 async def list_wallet_transactions(*, wallet_id: str, skip: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
@@ -953,4 +1061,180 @@ async def upsert_corporate_policy(company_id: str, patch: Dict[str, Any]) -> Dic
         res = supabase.table("corporate_policies").insert(insert_doc).execute()
         return _single_row_from_res(res) or insert_doc
 
-    return await run_sync(_ins)
+    return await run_sync(_ins) or insert_doc
+
+
+# ============ Corporate Subscription (flat SaaS billing) Functions ============
+
+
+async def list_corporate_subscription_plans(active_only: bool = True) -> List[Dict[str, Any]]:
+    """Return the admin-managed catalog of flat SaaS subscription plans."""
+
+    def _fn():
+        q = supabase.table("corporate_subscription_plans").select("*")
+        if active_only:
+            q = q.eq("is_active", True)
+        return q.order("monthly_price").execute()
+
+    res = await run_sync(_fn)
+    return _rows_from_res(res)
+
+
+async def get_corporate_subscription_plan(plan_id: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        return supabase.table("corporate_subscription_plans").select("*").eq("id", plan_id).limit(1).execute()
+
+    rows = _rows_from_res(await run_sync(_fn))
+    return rows[0] if rows else None
+
+
+async def get_active_corporate_subscription(company_id: str) -> Optional[Dict[str, Any]]:
+    """Return the company's current active/past_due subscription row, if any.
+
+    At most one such row exists per company (enforced by a partial unique
+    index — see migration 281), so `.limit(1)` is a defensive belt, not the
+    source of the invariant.
+    """
+
+    def _fn():
+        return (
+            supabase.table("corporate_subscriptions")
+            .select("*")
+            .eq("company_id", company_id)
+            .in_("status", ["active", "past_due"])
+            .limit(1)
+            .execute()
+        )
+
+    rows = _rows_from_res(await run_sync(_fn))
+    return rows[0] if rows else None
+
+
+async def get_corporate_subscription_by_stripe_id(stripe_subscription_id: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        return (
+            supabase.table("corporate_subscriptions")
+            .select("*")
+            .eq("stripe_subscription_id", stripe_subscription_id)
+            .limit(1)
+            .execute()
+        )
+
+    rows = _rows_from_res(await run_sync(_fn))
+    return rows[0] if rows else None
+
+
+async def list_corporate_subscriptions_for_company(company_id: str) -> List[Dict[str, Any]]:
+    """Full subscription history for a company (admin detail view), newest first."""
+
+    def _fn():
+        return (
+            supabase.table("corporate_subscriptions")
+            .select("*")
+            .eq("company_id", company_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+    return _rows_from_res(await run_sync(_fn))
+
+
+async def create_corporate_subscription_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _fn():
+        res = supabase.table("corporate_subscriptions").insert(row).execute()
+        return _single_row_from_res(res) or row
+
+    return await run_sync(_fn)
+
+
+async def update_corporate_subscription(subscription_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    patch = {**patch, "updated_at": datetime.now(timezone.utc).isoformat()}
+
+    def _fn():
+        res = supabase.table("corporate_subscriptions").update(patch).eq("id", subscription_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+# ============ Corporate Section Budgets (visibility-only) Functions ============
+
+
+async def record_section_spend(*, section_id: str, month: str, amount: Decimal) -> Decimal:
+    """Atomically add `amount` to a section's running month-to-date spend
+    total via the corporate_section_spend_add RPC (migration 282) — a
+    single-statement upsert-increment, safe under concurrency without a
+    row lock. Visibility only: never raises for "over budget," there is no
+    budget-cap enforcement here. Returns the new running total.
+    """
+
+    def _fn():
+        return supabase.rpc(
+            "corporate_section_spend_add",
+            {"p_section_id": section_id, "p_month": month, "p_delta": str(amount)},
+        ).execute()
+
+    res = await run_sync(_fn)
+    data = getattr(res, "data", None)
+    return Decimal(str(data)) if data is not None else Decimal("0")
+
+
+async def get_section_spend_map(section_ids: List[str], month: str) -> Dict[str, Decimal]:
+    """Batch-read current month-to-date spend for a set of sections.
+
+    Returns {section_id: used}; a section with no rows for `month` (no
+    settled rides yet, or the column predates this feature) is simply
+    absent from the dict — callers should default missing keys to 0.
+    """
+    if not section_ids:
+        return {}
+
+    def _fn():
+        return (
+            supabase.table("corporate_section_spend")
+            .select("section_id,used")
+            .in_("section_id", section_ids)
+            .eq("month", month)
+            .execute()
+        )
+
+    rows = _rows_from_res(await run_sync(_fn))
+    return {r["section_id"]: Decimal(str(r.get("used") or 0)) for r in rows}
+
+
+# ============ Corporate KYB Re-verification (staleness reminder) Functions ============
+
+
+async def list_companies_needing_kyb_reverification(*, reviewed_before_iso: str) -> List[Dict[str, Any]]:
+    """Active, KYB-approved companies whose last review predates the given
+    cutoff. Does not filter on kyb_reverify_flagged_at — the background
+    loop applies its own cooldown check in Python over the result,
+    mirroring list_wallets_low_balance_no_autotopup's established pattern
+    (see utils/corporate_low_balance.py) rather than building an $or
+    filter for it.
+    """
+
+    def _fn():
+        return (
+            supabase.table("corporate_accounts")
+            .select("*")
+            .eq("status", "active")
+            .eq("kyb_last_decision", "approved")
+            .lt("kyb_reviewed_at", reviewed_before_iso)
+            .execute()
+        )
+
+    return _rows_from_res(await run_sync(_fn))
+
+
+async def mark_kyb_reverify_flagged(*, company_id: str) -> None:
+    """Replay-safety claim flag only (migration 283) — not the source of
+    truth for staleness, which the admin filter computes live from
+    kyb_reviewed_at."""
+
+    def _fn():
+        supabase.table("corporate_accounts").update(
+            {"kyb_reverify_flagged_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("id", company_id).execute()
+
+    await run_sync(_fn)

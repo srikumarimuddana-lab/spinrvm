@@ -1,8 +1,18 @@
 name: Security Gates
 
-# Gates G1–G5 from docs/ci-security-gates.md (SAST, Semgrep, dep audit, secrets).
-# Non-blocking for the first 2 weeks — treat as baselining window. After that,
-# flip `continue-on-error` to `false` for each job to enforce.
+# Gates G1–G7 from docs/ci-security-gates.md (SAST, Semgrep, dep audit, secrets,
+# container scan, license check).
+#
+# Status as of 2026-08-03 (CI gate health audit, docs/ci/gate-health-2026-08.md;
+# CR-2026-007): the original "2-week baselining window" is over and
+# enforcement already happened — 8 of 10 jobs (G1, G2, G3, G4a, G4b, G4c, G6,
+# G7) are `continue-on-error: false` (blocking). Only G5a (gitleaks
+# git-history) and G5b (gitleaks admin bundle) remain `continue-on-error:
+# true` — see each job's own comment below for why: G5a has a specific,
+# still-open leaked-key reason; G5b does not (it's a candidate to flip to
+# blocking once a clean-baseline window has passed). Do not read this file's
+# age as evidence a job is still advisory; check that job's own
+# `continue-on-error` line and comment.
 #
 # Runs on every PR to main and on a daily schedule for main itself.
 
@@ -32,8 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
       - run: pip install bandit[toml]
@@ -47,7 +57,7 @@ jobs:
             --severity-level high \
             --confidence-level high \
             -f json -o bandit-report.json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         # always() so the report is still available for triage on the run that
         # failed — which is the only run anyone needs it for.
         if: always()
@@ -61,11 +71,23 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     strategy:
+      # Without this, one failing module cancels the others mid-run and their
+      # lint status is never reported. Observed 2026-08-02 on PR #3246:
+      # driver-app failed (it could not install — @testing-library/jest-dom
+      # required node >=22 while this job pinned 20) and rider-app came back
+      # `cancelled`, so neither mobile app was actually linted by this security
+      # gate. The node pin has since been fixed; this stops the next failure in
+      # any one module from silently taking the others with it.
+      #
+      # Same defect as the G4b matrix, fixed in #3109 — when adding a matrix
+      # here, default to fail-fast: false unless the legs genuinely share a
+      # failure mode.
+      fail-fast: false
       matrix:
         module: [rider-app, driver-app, admin-dashboard]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '22'
           # No `cache:` here — admin-dashboard uses package-lock.json, others
@@ -158,7 +180,7 @@ jobs:
     container:
       image: semgrep/semgrep:latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The Spinr ruleset silently failed to parse for its entire existence
       # (unquoted `- pattern:` scalars containing `": "`; fixed 2026-07-30). The
@@ -242,7 +264,7 @@ jobs:
             echo "::warning::semgrep reported findings — visible in the Security tab (not yet merge-blocking; rule tuning pending)"
           fi
 
-      - uses: github/codeql-action/upload-sarif@v4
+      - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         if: always()
         with:
           sarif_file: semgrep.sarif
@@ -253,8 +275,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
       - run: pip install pip-audit
@@ -280,8 +302,8 @@ jobs:
       matrix:
         module: [rider-app, driver-app, admin-dashboard, shared]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
       - name: Audit
@@ -307,8 +329,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -345,10 +367,10 @@ jobs:
     # the gate look enforced.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -356,13 +378,26 @@ jobs:
   # A build-time env var that should have been server-only can slip into
   # the bundle (e.g. NEXT_PUBLIC_API_KEY) and pass git-history scanning
   # while still being present in the shipped artefact.
+  #
+  # continue-on-error (2026-08-03, CR-2026-007): unlike G5a above, this is
+  # NOT advisory because of a known, still-open leak — it's a separate scan
+  # target (the built client bundle, not git history) and no triaged finding
+  # has ever been recorded against it. It has been green on every `main` run
+  # checked as of this date. It was set to true when this file was first
+  # authored, alongside G5a, without its own documented reason — likely
+  # inherited G5a's caution by proximity rather than a finding specific to
+  # this job. If it stays green through a few more weeks of real traffic
+  # (a genuinely new admin-dashboard env var landing is the main risk to
+  # watch for), flip this to `continue-on-error: false` — do not leave an
+  # advisory gate with no reason attached indefinitely; that's the failure
+  # mode this comment exists to prevent.
   bundle-secrets:
     name: G5b · Gitleaks (admin bundle)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
       - name: Build admin dashboard
@@ -401,7 +436,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build backend Docker image
         run: |
           docker build \
@@ -409,7 +444,7 @@ jobs:
             --tag spinr-backend:sec-${{ github.sha }} \
             backend/
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: spinr-backend:sec-${{ github.sha }}
           format: table
@@ -434,7 +469,7 @@ jobs:
           skip-files: '**/pip/_vendor/bom.cdx.json'
       - name: Upload SARIF to GitHub Security
         if: always()
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: spinr-backend:sec-${{ github.sha }}
           format: sarif
@@ -443,7 +478,7 @@ jobs:
           vuln-type: 'os,library'
           severity: HIGH,CRITICAL
           skip-files: '**/pip/_vendor/bom.cdx.json'
-      - uses: github/codeql-action/upload-sarif@v4
+      - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         if: always()
         with:
           sarif_file: trivy-container.sarif
@@ -458,8 +493,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
       - name: Install deps + pip-licenses
@@ -491,6 +526,41 @@ jobs:
           print(f'OK — {len(data)} packages, no copyleft/proprietary licences detected.')
           "
 
+  # G7b — license-checker: same denylist strategy as G7 (pip-licenses), for the
+  # JS surfaces. ACTION_ITEMS.md E10: G7 already covered Python deps; this was
+  # the missing JS half.
+  license-check-js:
+    name: G7b · license-checker (JS deps)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    strategy:
+      # Same rationale as the G4b yarn-audit matrix above: one failing module
+      # must not cancel the others mid-run and mask their license state.
+      fail-fast: false
+      matrix:
+        module: [rider-app, driver-app, admin-dashboard, shared]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20'
+      - name: Install deps
+        working-directory: ${{ matrix.module }}
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          elif [ -f package-lock.json ]; then npm ci
+          else echo "No lockfile in ${{ matrix.module }}" && exit 1
+          fi
+      - name: Print full license summary
+        working-directory: ${{ matrix.module }}
+        run: npx --yes license-checker --production --excludePrivatePackages --summary
+      - name: Block copyleft / proprietary licenses (production deps only —
+          "shipped surfaces" per ACTION_ITEMS.md E10, not devDependencies)
+        working-directory: ${{ matrix.module }}
+        run: |
+          npx --yes license-checker --production --excludePrivatePackages \
+            --failOn 'GPL;AGPL;LGPL;SSPL;Elastic;Commons-Clause;BUSL'
+
   # Summary job — required check for branch protection once gates are enforced
   summary:
     name: Security gates summary
@@ -502,9 +572,12 @@ jobs:
         run: |
           echo "## Security Gates Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Gates G1–G7 (bandit, eslint-security, semgrep, pip-audit," >> $GITHUB_STEP_SUMMARY
-          echo "yarn-audit, gitleaks, container-scan, license-check) are" >> $GITHUB_STEP_SUMMARY
-          echo "**blocking** (OI-003–OI-006 resolved, pre-production enforcement)." >> $GITHUB_STEP_SUMMARY
+          echo "G1 (bandit), G2 (eslint-security), G3 (semgrep), G4a-c" >> $GITHUB_STEP_SUMMARY
+          echo "(pip-audit/yarn-audit/npm-audit), G6 (container-scan), and G7" >> $GITHUB_STEP_SUMMARY
+          echo "(license-check) are **blocking** (OI-003-OI-006 resolved," >> $GITHUB_STEP_SUMMARY
+          echo "pre-production enforcement). G5a/G5b (gitleaks) remain" >> $GITHUB_STEP_SUMMARY
+          echo "**advisory** pending a clean secrets baseline — see that job's" >> $GITHUB_STEP_SUMMARY
+          echo "own comment for why." >> $GITHUB_STEP_SUMMARY
           echo "Review findings in individual job outputs; file P1 items for" >> $GITHUB_STEP_SUMMARY
           echo "any new HIGH/CRITICAL results in \`OPEN-ITEMS-TRACKER.md\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

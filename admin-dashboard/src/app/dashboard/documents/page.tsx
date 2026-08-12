@@ -7,6 +7,6 @@
  */
 import { redirect } from "next/navigation";
 
-export default function DocumentRequirementsPage() {
+export default function DocumentRequirementsPage(): never {
     redirect("/dashboard/service-areas");
 }

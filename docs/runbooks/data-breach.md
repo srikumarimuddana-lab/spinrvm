@@ -76,11 +76,17 @@ SELECT COUNT(DISTINCT rider_id)
 FROM rides
 WHERE created_at BETWEEN '<breach_start>'::timestamptz AND '<breach_end>'::timestamptz;
 
--- Audit log entries for the affected endpoint / RLS bypass window
-SELECT COUNT(DISTINCT user_id)
+-- Audit log entries for the affected endpoint / RLS bypass window.
+-- audit_logs has no user_id column — entity_id is the affected record's
+-- ID (e.g. the rider/driver whose data the action touched); actor_id is
+-- who performed the action. For counting affected individuals, filter to
+-- the relevant entity_type so entity_id isn't counting unrelated rows
+-- (rides, corporate accounts, etc.) that happen to share the action name.
+SELECT COUNT(DISTINCT entity_id)
 FROM audit_logs
 WHERE created_at BETWEEN '<breach_start>'::timestamptz AND '<breach_end>'::timestamptz
-  AND action LIKE '%<endpoint>%';
+  AND action LIKE '%<endpoint>%'
+  AND entity_type IN ('users', 'drivers');
 ```
 
 ### 1c. Determine "real risk of significant harm" (PIPEDA threshold)
@@ -285,14 +291,9 @@ if their platform holds the data (check `docs/vendor-register.md`).
 
 ## 7. Post-mortem (within 5 business days)
 
-Format: `docs/audit/postmortem-YYYY-MM-DD-<slug>.md`
-
-Required sections:
-1. Timeline (UTC timestamps)
-2. Root cause (5-whys)
-3. What went well
-4. What went wrong
-5. Action items (owner + due date for each)
+Use the shared template: `docs/templates/postmortem.md` (timeline, impact,
+5-whys, action items with owner + due date for each). Save the completed
+copy to `docs/audit/postmortem-YYYY-MM-DD-<slug>.md`.
 
 Share with: IC, Tech Lead, Legal, on-call rotation. Store in `docs/audit/`.
 

@@ -19,6 +19,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Pagination } from "@/components/ui/pagination";
 import { Download, Mail, FileText, RefreshCw } from "lucide-react";
 import {
     getDriverStatements,
@@ -27,6 +29,8 @@ import {
     type DriverStatement,
     type StatementSelection,
 } from "@/lib/api";
+
+const STMT_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 function triggerBrowserDownload(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob);
@@ -68,6 +72,8 @@ export function DriverStatementsPanel({ driverId, driverName, notify }: DriverSt
     const [busyKey, setBusyKey] = useState<string | null>(null);
     const [from, setFrom] = useState(daysAgoISO(30));
     const [to, setTo] = useState(todayISO());
+    const [stmtPage, setStmtPage] = useState(0);
+    const [stmtPageSize, setStmtPageSize] = useState<number>(25);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -216,7 +222,7 @@ export function DriverStatementsPanel({ driverId, driverName, notify }: DriverSt
                         No statements sent yet. Weekly statements go out Mondays and monthly on the 1st.
                     </p>
                 ) : (
-                    statements.map((s) => {
+                    statements.slice(stmtPage * stmtPageSize, (stmtPage + 1) * stmtPageSize).map((s) => {
                         const style = STATUS_STYLE[s.status] ?? { label: s.status, cls: "bg-muted text-muted-foreground" };
                         const selection = {
                             period_type: s.period_type as "weekly" | "monthly",
@@ -233,7 +239,16 @@ export function DriverStatementsPanel({ driverId, driverName, notify }: DriverSt
                                         {s.totals?.earnings?.total && (
                                             <span className="text-[10px] text-muted-foreground tabular-nums">
                                                 ${s.totals.earnings.total} earned
-                                                {s.totals.payouts_total ? ` · $${s.totals.payouts_total} paid out` : ""}
+                                                {/* One era per number: previous-app money gets its
+                                                    own label instead of inflating "paid out".
+                                                    Rows stored before the split fall back to the
+                                                    gross figure. */}
+                                                {s.totals.payouts_previous_app_total != null && parseFloat(s.totals.payouts_previous_app_total) > 0 ? (
+                                                    <>
+                                                        {` · $${s.totals.payouts_spinr_total ?? "0.00"} paid out`}
+                                                        {` · $${s.totals.payouts_previous_app_total} previous app`}
+                                                    </>
+                                                ) : s.totals.payouts_total ? ` · $${s.totals.payouts_total} paid out` : ""}
                                             </span>
                                         )}
                                     </div>
@@ -266,6 +281,33 @@ export function DriverStatementsPanel({ driverId, driverName, notify }: DriverSt
                     })
                 )}
             </div>
+            {statements && statements.length > 0 && (
+                <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Show</span>
+                        <Select value={String(stmtPageSize)} onValueChange={(v) => { setStmtPageSize(Number(v)); setStmtPage(0); }}>
+                            <SelectTrigger className="h-8 text-xs w-[70px]">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {STMT_PAGE_SIZE_OPTIONS.map(n => (
+                                    <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">per page</span>
+                    </div>
+                    {statements.length > stmtPageSize && (
+                        <Pagination
+                            page={stmtPage}
+                            pageSize={stmtPageSize}
+                            hasNextPage={statements.length > (stmtPage + 1) * stmtPageSize}
+                            totalCount={statements.length}
+                            onPageChange={setStmtPage}
+                        />
+                    )}
+                </div>
+            )}
         </div>
     );
 }

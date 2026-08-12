@@ -27,6 +27,7 @@ try:
         places_new_headers,
     )
     from ...utils.insurance_periods import record_period_transition
+    from ...utils.legacy_rides import drop_legacy_rides
     from ...utils.money import dollars_to_cents
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
@@ -48,6 +49,7 @@ except ImportError:
         places_new_headers,
     )
     from utils.insurance_periods import record_period_transition
+    from utils.legacy_rides import drop_legacy_rides
     from utils.money import dollars_to_cents
     from utils.rate_limiter import default_limiter as limiter
 
@@ -473,6 +475,7 @@ async def admin_cancel_ride(
                     "Ride Cancelled",
                     reason,
                     {"type": "ride_cancelled", "ride_id": ride_id},
+                    target_app="driver",
                 )
             except Exception as e:
                 logger.warning(f"admin_cancel_ride: driver push failed: {e}")
@@ -489,6 +492,7 @@ async def admin_cancel_ride(
                 "Ride Cancelled",
                 reason,
                 {"type": "ride_cancelled", "ride_id": ride_id},
+                target_app="rider",
             )
         except Exception as e:
             logger.warning(f"admin_cancel_ride: rider push failed: {e}")
@@ -889,6 +893,33 @@ async def admin_create_ride(
         },
     )
 
+    if promo_application_id:
+        # N15/R33 (ACTION_ITEMS.md): an admin redeeming a promo on the rider's
+        # behalf previously left zero trace on the rider's device — the
+        # discount just showed up on the fare with no explanation. This is a
+        # best-effort, non-time-critical informational push (send_push_
+        # notification already honours the rider's push opt-out for
+        # priority="normal") — a delivery failure here must never undo the
+        # promo redemption or ride creation that already committed above.
+        try:
+            await send_push_notification(
+                body.rider_id,
+                "Promo code applied",
+                f"{promo_code_normalised} was applied to your ride — you saved ${discount_amount}.",
+                data={
+                    "type": "promo_applied",
+                    "ride_id": ride_doc["id"],
+                    "promo_code": promo_code_normalised or "",
+                    "discount_amount": str(discount_amount),
+                },
+                target_app="rider",
+            )
+        except Exception as e:
+            logger.warning(
+                f"admin_create_ride: rider promo-applied push failed ride_id={ride_doc['id']}: {e}",
+                exc_info=True,
+            )
+
     if body.driver_id:
         try:
             await db_supabase.set_driver_available(body.driver_id, False)
@@ -947,6 +978,7 @@ async def admin_create_ride(
                 f"{ride_doc['pickup_address']} → {ride_doc['dropoff_address']}",
                 {k: str(v) for k, v in dispatch_payload.items() if v is not None},
                 priority="dispatch",
+                target_app="driver",
             )
             asyncio.create_task(
                 _offer_timeout_handler(
@@ -2108,17 +2140,47 @@ async def admin_get_earnings_rides(
         filters["service_area_id"] = service_area_id
 
     # Over-fetch by `limit + offset` and slice — Supabase helper doesn't
-    # expose OFFSET natively. Bounded by the 10k limit cap so the worst
-    # case is one full-table scan, which is fine for the finance use case
+    # expose OFFSET natively. Bounded by _EXPORT_MAX_ROWS so the worst case
+    # is one full-table scan, which is fine for the finance use case
     # (monthly closeout is the realistic upper bound).
-    fetch_size = limit + offset
-    rides = await db_supabase.get_rows(
-        "rides",
-        filters,
-        order="ride_completed_at",
-        desc=True,
-        limit=fetch_size,
-    )
+    #
+    # P0-B (docs/audit/2026-08-11-driver-rider-migration-audit.md): a
+    # legacy-imported ride has no real Stripe charge — finance uses this
+    # export to reconcile against Stripe/bank ledger, so an unfiltered
+    # export is indistinguishable from a real charge row unless finance
+    # separately knows to filter it. Dropped post-fetch (not via a
+    # server-side EXCLUDE_LEGACY_RIDES filter): that constant compiles to a
+    # real SQL `legacy_import_metadata IS NULL`, which can never match this
+    # column (NOT NULL DEFAULT '{}'::jsonb, migration 268) — see
+    # ACTION_ITEMS.md's EXCLUDE_LEGACY_RIDES entry. drop_legacy_rides() uses
+    # the same Python-truthy check utils/legacy_rides.py's own
+    # is_legacy_ride() defines and is documented as exactly the "post-fetch
+    # companion for callers that cannot add a filter to their query."
+    #
+    # Filtering AFTER a fixed-size fetch can under-fill the page: if legacy
+    # rows sort inside the raw `fetch_size` window, real rows beyond that
+    # window are never even retrieved — dropping legacy rows afterward then
+    # silently loses real ones too, undercounting `total` for the exact
+    # finance-reconciliation use case this endpoint exists for. Loop,
+    # doubling the raw fetch, until enough real rows are collected to fill
+    # `offset + limit` or the window is exhausted (raw fetch came back
+    # smaller than requested) or the _EXPORT_MAX_ROWS cap is hit.
+    target = offset + limit
+    fetch_size = min(target, _EXPORT_MAX_ROWS)
+    rides: list = []
+    while True:
+        raw = await db_supabase.get_rows(
+            "rides",
+            filters,
+            order="ride_completed_at",
+            desc=True,
+            limit=fetch_size,
+        )
+        rides = drop_legacy_rides(raw)
+        exhausted = len(raw) < fetch_size
+        if len(rides) >= target or exhausted or fetch_size >= _EXPORT_MAX_ROWS:
+            break
+        fetch_size = min(fetch_size * 2, _EXPORT_MAX_ROWS)
     page = rides[offset : offset + limit]
 
     # Batch-fetch driver + rider names. The reconciliation flow often
@@ -2697,11 +2759,17 @@ async def admin_export_drivers(
                 "is_citizen": d.get("is_citizen"),
                 "decals_sent": d.get("decals_sent"),
                 "decals_sent_at": d.get("decals_sent_at"),
+                "decal_generated_at": d.get("decal_generated_at"),
+                "decal_number": d.get("decal_number"),
                 "subscription_status": _sub_status,
                 "subscription_plan": _sub_plan,
                 "subscription_expires_at": _sub_expires,
                 "joined_at": d.get("created_at"),
                 "approved_at": d.get("verified_at"),
+                # Account deletion cannot change `status` (no 'deleted' value in
+                # the set), so without this column a departed driver exports as
+                # a plain active driver.
+                "deleted_at": d.get("deleted_at"),
                 "last_status_changed_at": d.get("last_status_changed_at"),
                 "updated_at": d.get("updated_at"),
             }

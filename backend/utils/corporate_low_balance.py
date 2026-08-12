@@ -51,6 +51,24 @@ _RATE_LIMIT = timedelta(hours=12)
 
 
 async def run_low_balance_tick() -> None:
+    # Kill switch (ACTION_ITEMS.md E5): pauses automatic corporate money
+    # movement for an incident. Shared with settle_corporate and the other
+    # 3 corporate loops. Fail-open on a settings-read error. Lazy dual
+    # import -- see settle_corporate's identical pattern/comment in
+    # services/payment_service.py for why (a formatter hook in this repo
+    # strips additions to some files' module-level except-branch imports).
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        settings = await get_app_settings()
+        if not settings.get("corporate_billing_enabled", True):
+            logger.info("low-balance: corporate_billing_enabled is False, skipping tick")
+            return
+    except Exception as settings_err:
+        logger.warning("low-balance: app_settings lookup failed (%s), proceeding as enabled", settings_err)
+
     wallets = await list_wallets_low_balance_no_autotopup()
     for w in wallets:
         last = w.get("low_balance_notified_at")
@@ -58,7 +76,17 @@ async def run_low_balance_tick() -> None:
             try:
                 last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
             except ValueError:
-                last_dt = None
+                # A malformed timestamp must not bypass the rate limit and
+                # re-send every tick until the DB value is repaired — fail
+                # closed by treating it as "just notified" (full rate-limit
+                # window applies) rather than "never notified".
+                logger.error(
+                    "low-balance: malformed low_balance_notified_at %r for wallet %s — "
+                    "treating as just-notified, not never-notified",
+                    last,
+                    w.get("id"),
+                )
+                last_dt = datetime.now(timezone.utc)
             if last_dt and datetime.now(timezone.utc) - last_dt < _RATE_LIMIT:
                 continue
         try:

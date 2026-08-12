@@ -80,12 +80,19 @@ export interface ExportApprovalRequiredResult {
     row_count: number;
 }
 export interface DataTransferExportScopeOptions {
+    /** Which document types appear in the bundle at all (as metadata rows).
+     * Omit for every type. */
     docTypes?: string[];
     // PIA recommendation R-B (ACTION_ITEMS.md B11) — default true (current
     // full-fidelity behavior) on both; the backend's ExportRequest defaults
     // match, so omitting these entirely is still safe/backward-compatible.
     includeRideGps?: boolean;
     includeDocumentBytes?: boolean;
+    /** Which document types have their actual FILE (scan/image/PDF) bundled,
+     * as opposed to a metadata row only. Overrides includeDocumentBytes on
+     * the backend when present; pass `[]` for metadata-only. Omit entirely to
+     * keep the older all-or-nothing includeDocumentBytes behavior. */
+    docFileTypes?: string[];
 }
 export const exportDataTransferEntities = (
     entities: DataTransferExportEntityRef[],
@@ -102,6 +109,10 @@ export const exportDataTransferEntities = (
             reason,
             include_ride_gps: options?.includeRideGps ?? true,
             include_document_bytes: options?.includeDocumentBytes ?? true,
+            // null (not undefined) so an explicit empty array survives
+            // JSON.stringify and reaches the backend as "metadata only"
+            // rather than being dropped from the payload entirely.
+            doc_file_types: options?.docFileTypes ?? null,
         }),
     });
 
@@ -145,6 +156,36 @@ export const adminCommitDataTransferImport = (file: File, batch?: string, update
 };
 
 export type SgiFormType = "driver_details" | "vehicle_details";
+
+/** A driver who left but is still filed with the regulator. Spinr stops
+ *  dispatching the moment they delete their account, but SGI keeps listing
+ *  them as an active passenger-for-hire driver until the D00032 removal row
+ *  is filed — and their vehicle until D00033. */
+export interface SgiRemovalQueueEntry {
+    /** users.id — the id the generate endpoint and Search & Select take. */
+    entity_id: string | null;
+    driver_id: string;
+    name: string;
+    license_plate: string;
+    regulatory_authority: string | null;
+    /** Date the driver actually stopped, used as the removal's effective date. */
+    effective_date: string | null;
+    driver_form_filed_at: string | null;
+    vehicle_form_filed_at: string | null;
+    driver_form_outstanding: boolean;
+    vehicle_form_outstanding: boolean;
+}
+export interface SgiRemovalQueue {
+    drivers: SgiRemovalQueueEntry[];
+    count: number;
+    /** Queue entries with no linked users row — they cannot be selected for
+     *  form generation, so they would never clear on their own. */
+    unresolvable: number;
+}
+export const getSgiRemovalQueue = (includeFiled = false) =>
+    request<SgiRemovalQueue>(
+        `/api/admin/data-transfer/sgi-forms/removal-queue${includeFiled ? "?include_filed=true" : ""}`,
+    );
 // PDF binary response — can't use the generic request<T>() helper (it always
 // calls res.json()). Mirrors fetchKybDocumentBlob's manual fetch + auth
 // header pattern, adding the CSRF header this call needs since it's a POST.
@@ -169,6 +210,78 @@ export async function generateSgiForm(
     return res.blob();
 }
 
+export interface SgiSupportingDocumentsResult {
+    blob: Blob;
+    /** Documents listed in the bundle, and how many of those actually have a
+     *  file in it. Read from the response headers so the caller can say
+     *  "12 of 14 included" without unzipping; the ZIP's own documents.csv
+     *  carries the per-document reason. */
+    listed: number;
+    included: number;
+}
+
+/** ZIP of the selected drivers' supporting scans, for filing alongside a
+ *  D00032/D00033 submission. Binary response, so same manual authed-fetch
+ *  pattern as generateSgiForm above. */
+export async function downloadSgiSupportingDocuments(
+    driverIds: string[],
+    reason: string,
+    docTypes?: string[],
+): Promise<SgiSupportingDocumentsResult> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/documents", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds, reason, doc_types: docTypes ?? null }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not download documents (${res.status})`);
+    }
+    return {
+        blob: await res.blob(),
+        listed: Number(res.headers.get("X-Documents-Listed") ?? 0),
+        included: Number(res.headers.get("X-Documents-Included") ?? 0),
+    };
+}
+
+export interface SgiPackageResult {
+    blob: Blob;
+    checksIncluded: number;
+    checksMissing: number;
+}
+
+/** The complete SGI submission: both filled forms plus each driver's criminal
+ *  record check, in one ZIP. Binary response, so same manual authed-fetch
+ *  pattern as generateSgiForm. */
+export async function downloadSgiSubmissionPackage(
+    driverIds: string[],
+    reason: string,
+    action: "add" | "remove" | "change" = "add",
+): Promise<SgiPackageResult> {
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/data-transfer/sgi-forms/package", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds, reason, action }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not build the submission package (${res.status})`);
+    }
+    return {
+        blob: await res.blob(),
+        checksIncluded: Number(res.headers.get("X-Checks-Included") ?? 0),
+        checksMissing: Number(res.headers.get("X-Checks-Missing") ?? 0),
+    };
+}
+
 // ─── Compliance & Tax Reporting ────────────────────────────────────────
 
 export type ComplianceReportFormat = "pdf" | "csv" | "xlsx" | "docx";
@@ -183,7 +296,7 @@ const COMPLIANCE_FILE_EXTENSIONS: Record<ComplianceReportFormat, string> = {
 /** Shared GET-and-download for the Compliance & Tax Reporting endpoints —
  *  both return a branded PDF/CSV/Excel/Word file, not JSON, so they use a
  *  raw authed fetch like generateSgiForm rather than request<T>. */
-async function downloadComplianceReport(path: string, fallbackFilename: string): Promise<Blob> {
+async function downloadComplianceReport(path: string): Promise<Blob> {
     const store = useAuthStore.getState();
     const headers: Record<string, string> = {};
     if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
@@ -221,10 +334,7 @@ export async function downloadGstPstRemittance(
     dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
-    const blob = await downloadComplianceReport(
-        `/api/admin/compliance/gst-pst-remittance?${sp.toString()}`,
-        "gst_pst_remittance",
-    );
+    const blob = await downloadComplianceReport(`/api/admin/compliance/gst-pst-remittance?${sp.toString()}`);
     return { blob, filename: `gst_pst_remittance.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
@@ -239,7 +349,7 @@ export async function downloadDriverRoster(
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ format });
     if (status) sp.set("status", status);
-    const blob = await downloadComplianceReport(`/api/admin/compliance/driver-roster?${sp.toString()}`, "driver_roster");
+    const blob = await downloadComplianceReport(`/api/admin/compliance/driver-roster?${sp.toString()}`);
     return { blob, filename: `driver_roster.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
@@ -252,7 +362,7 @@ export async function downloadT4aFilerHandoff(
     format: ComplianceReportFormat,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ year: String(year), format });
-    const blob = await downloadComplianceReport(`/api/admin/compliance/t4a-filer-handoff?${sp.toString()}`, "t4a_filer_handoff");
+    const blob = await downloadComplianceReport(`/api/admin/compliance/t4a-filer-handoff?${sp.toString()}`);
     return { blob, filename: `t4a_filer_handoff_${year}.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
@@ -265,10 +375,7 @@ export async function downloadInsuranceBillingSgi(
     dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
-    const blob = await downloadComplianceReport(
-        `/api/admin/compliance/insurance-billing-sgi?${sp.toString()}`,
-        "insurance_billing_sgi",
-    );
+    const blob = await downloadComplianceReport(`/api/admin/compliance/insurance-billing-sgi?${sp.toString()}`);
     return { blob, filename: `insurance_billing_sgi.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
@@ -283,7 +390,6 @@ export async function downloadInsuranceBillingKnightArcher(
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
     const blob = await downloadComplianceReport(
         `/api/admin/compliance/insurance-billing-knight-archer?${sp.toString()}`,
-        "insurance_billing_knight_archer",
     );
     return { blob, filename: `insurance_billing_knight_archer.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
@@ -296,7 +402,7 @@ export async function downloadAirportTrips(
     dateTo?: string,
 ): Promise<{ blob: Blob; filename: string }> {
     const sp = new URLSearchParams({ ...dateWindowParams(dateFrom, dateTo), format });
-    const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`, "airport_trips");
+    const blob = await downloadComplianceReport(`/api/admin/compliance/airport-trips?${sp.toString()}`);
     return { blob, filename: `airport_trips.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 

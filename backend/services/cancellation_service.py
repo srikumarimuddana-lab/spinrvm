@@ -60,6 +60,40 @@ def _resolve_cancel_fees(
     return fee_admin, fee_driver, window
 
 
+def calculate_scheduled_cancel_notice_fee(ride: dict, settings: dict) -> Decimal:
+    """Notice-window fee for a PRE-DISPATCH scheduled-ride cancellation
+    (scheduled-rides gap review, Finding #01).
+
+    Unlike ``calculate_cancellation_fee`` above, no driver is ever involved
+    pre-dispatch — this is rider-only, nothing is disbursed to a driver.
+    Flag-gated (``scheduled_ride_notice_window_fee_enabled``, default off).
+    Returns 0 (free) when: the flag is off, ``scheduled_time`` is missing or
+    unparseable, the pickup time has already passed (should be unreachable
+    via the normal cancel flow — the dispatcher would have claimed the ride
+    by then — but never charge against a stale timestamp), the ride is
+    corporate-paid (``payment_method == "company_allowance"`` — that fee
+    belongs on the corporate wallet ledger, intentionally not wired up here,
+    mirroring the same exclusion in ``calculate_cancellation_fee``'s card
+    branch), or the cancellation happened outside the notice window.
+    """
+    if not settings.get("scheduled_ride_notice_window_fee_enabled", False):
+        return _d(0)
+    if (ride.get("payment_method") or "").lower() == "company_allowance":
+        return _d(0)
+    scheduled_time_str = ride.get("scheduled_time")
+    if not scheduled_time_str:
+        return _d(0)
+    scheduled_time = parse_iso_utc(scheduled_time_str)
+    if scheduled_time is None:
+        return _d(0)
+
+    window_minutes = int(settings.get("scheduled_ride_notice_window_minutes", 60))
+    seconds_to_pickup = (scheduled_time - datetime.now(timezone.utc)).total_seconds()
+    if seconds_to_pickup < 0 or seconds_to_pickup > window_minutes * 60:
+        return _d(0)
+    return _d(settings.get("scheduled_ride_notice_window_fee_amount", "3.00"))
+
+
 def calculate_cancellation_fee(
     ride: dict,
     settings: dict,
@@ -165,11 +199,8 @@ async def pay_driver_cancellation_fee(
                 },
             )
         except Exception:
-            logger.error(
-                "[CANCEL] audit_log write failed for cancellation_fee_charged ride=%s driver=%s",
-                ride_id,
-                driver_id,
-                exc_info=True,
+            logger.opt(exception=True).error(
+                "[CANCEL] audit_log write failed for cancellation_fee_charged ride={} driver={}", ride_id, driver_id
             )
 
         await send_push_notification(
@@ -177,11 +208,9 @@ async def pay_driver_cancellation_fee(
             title="Cancellation fee earned",
             body=f"${fee_dec:.2f} cancellation fee added to your earnings.",
             data={"type": "cancellation_fee_paid", "ride_id": ride_id},
+            target_app="driver",
         )
         return True
     except Exception as fee_err:
-        logger.error(
-            f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}")
         return False

@@ -93,6 +93,40 @@ class TestScheduledDispatch:
         assert admin_payload["ride"]["id"] == RIDE_ID
         assert admin_payload["ride"]["status"] == "searching"
 
+    async def test_timeout_still_arms_when_match_driver_to_ride_raises(self):
+        """Finding #15: match_driver_to_ride documents itself as 'never
+        raises', but the ride_search_timeout safety net must still arm even
+        if that contract is ever violated -- the ride is genuinely in
+        'searching' status once the claim above succeeds, regardless of
+        what happens during the immediate match attempt."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+        created_tasks: list = []
+
+        def _fake_create_task(coro):
+            created_tasks.append(coro)
+            coro.close()  # avoid an un-awaited-coroutine warning
+            return None
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(return_value={**ride, "status": "searching"})),
+            patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID})),
+            patch("routes.rides.matching.match_driver_to_ride", AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("routes.rides.matching.ride_search_timeout", AsyncMock()) as timeout_fn,
+            patch.object(sr.manager, "broadcast_ride_status", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()),
+            patch.object(sr, "send_push_notification", AsyncMock()),
+            patch("asyncio.create_task", _fake_create_task),
+        ):
+            # Must not raise, even though match_driver_to_ride did.
+            await sr._dispatch_scheduled_ride(ride)
+
+        # The timeout coroutine was still created (and for the right ride),
+        # despite the matching call above raising.
+        assert created_tasks, "ride_search_timeout was never armed"
+        timeout_fn.assert_called_once_with(RIDE_ID)
+
     async def test_dispatch_aborts_when_claim_lost(self):
         """If another replica already flipped the row, update_one returns None
         and we must NOT run driver matching again."""
@@ -141,6 +175,88 @@ class TestScheduledDispatch:
         push.assert_awaited_once()
         assert push.await_args.args[0] == RIDER_ID
 
+    async def test_defer_below_threshold_sends_routine_notice_only(self):
+        """Finding #03: below the escalation threshold, only the routine
+        'waiting on your other trip' push fires — no error log, no metric,
+        no admin broadcast."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+
+        def _raise_conflict(*_a, **_k):
+            raise RuntimeError('duplicate key value violates unique constraint "rides_one_active_per_rider"')
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=_raise_conflict)),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "redis_incr", AsyncMock(return_value=1)),
+            patch.object(sr, "redis_expire", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+        ):
+            await sr._dispatch_scheduled_ride(ride)
+
+        admin_bcast.assert_not_awaited()
+        push.assert_awaited_once()
+        assert push.await_args.args[1] == "Your scheduled ride is waiting"
+
+    async def test_defer_at_threshold_escalates_once(self):
+        """At exactly _SCHEDULE_DEFER_ESCALATE_AFTER deferrals, escalate:
+        error log + metric + admin broadcast + the distinct escalated push —
+        not a hard cancel, the ride keeps retrying."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+
+        def _raise_conflict(*_a, **_k):
+            raise RuntimeError('duplicate key value violates unique constraint "rides_one_active_per_rider"')
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=_raise_conflict)),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "redis_incr", AsyncMock(return_value=sr._SCHEDULE_DEFER_ESCALATE_AFTER)),
+            patch.object(sr, "redis_expire", AsyncMock()),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+        ):
+            await sr._dispatch_scheduled_ride(ride)
+
+        admin_bcast.assert_awaited_once()
+        admin_payload = admin_bcast.await_args.args[0]
+        assert admin_payload["type"] == "scheduled_ride_stuck"
+        assert admin_payload["ride_id"] == RIDE_ID
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_defer_exhausted_total")
+        push.assert_awaited_once()
+        assert push.await_args.args[1] == "Still working on your scheduled ride"
+
+    async def test_defer_past_threshold_does_not_re_escalate_every_tick(self):
+        """Once past the threshold, the admin broadcast and metric fire only
+        on the tick that first crosses it — not on every subsequent tick —
+        so ops isn't paged repeatedly for the same still-stuck ride."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+
+        def _raise_conflict(*_a, **_k):
+            raise RuntimeError('duplicate key value violates unique constraint "rides_one_active_per_rider"')
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=_raise_conflict)),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "redis_incr", AsyncMock(return_value=sr._SCHEDULE_DEFER_ESCALATE_AFTER + 5)),
+            patch.object(sr, "redis_expire", AsyncMock()),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+        ):
+            await sr._dispatch_scheduled_ride(ride)
+
+        admin_bcast.assert_not_awaited()
+        metric_inc.assert_not_called()
+        # The rider still gets nudged (its own 1h dedupe key governs repeats).
+        push.assert_awaited_once()
+
     async def test_check_queries_scheduled_status(self):
         """check_scheduled_rides must read rows in status='scheduled'."""
         from backend.utils import scheduled_rides as sr
@@ -152,12 +268,697 @@ class TestScheduledDispatch:
             return []
 
         with (
+            # Isolate the app_settings lookup (Finding #07's kill switch)
+            # from the rides query below — both go through db.get_rows, and
+            # asserting on "the first call" would otherwise be order-
+            # dependent on an unrelated lookup this test isn't about.
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_dispatch_enabled": True})),
             patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
             patch.object(sr.db, "get_rows", AsyncMock(side_effect=_get_rows)),
         ):
             await sr.check_scheduled_rides()
 
-        assert get_rows_calls, "scheduled rides were never queried"
-        _, filters = get_rows_calls[0]
+        rides_calls = [(t, f) for t, f in get_rows_calls if t == "rides"]
+        assert rides_calls, "scheduled rides were never queried"
+        _, filters = rides_calls[0]
         assert filters.get("status") == "scheduled"
         assert filters.get("is_scheduled") is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #06: check_scheduled_rides()'s return-value contract, which
+# scheduled_ride_dispatcher_loop uses to track consecutive fetch failures.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestCheckScheduledRidesReturnValue:
+    async def test_returns_false_on_fetch_failure(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", AsyncMock(side_effect=RuntimeError("db down"))),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is False
+
+    async def test_returns_true_on_successful_fetch(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[])),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is True
+
+    async def test_returns_none_when_lock_held_by_another_replica(self):
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=False)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is None
+        # Skipped entirely — must not even reach the candidate query.
+        get_rows_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+class TestDispatcherLoopFailureAlerting:
+    async def test_alerts_once_after_sustained_consecutive_failures(self):
+        """The loop's own consecutive-failure counter (fed by
+        check_scheduled_rides()'s True/False/None contract) must escalate
+        exactly once at the threshold, not on every tick after it — same
+        escalate-once shape as _track_defer_and_maybe_escalate."""
+        from backend.utils import scheduled_rides as sr
+
+        # Drive the loop body directly rather than the real `while True` +
+        # asyncio.sleep loop: break out via StopAsyncIteration from sleep
+        # after N iterations, which is the standard way to bound an
+        # otherwise-infinite background loop under test.
+        call_count = {"n": 0}
+
+        async def _fake_sleep(_seconds):
+            call_count["n"] += 1
+            if call_count["n"] >= sr._FETCH_FAILURE_ALERT_THRESHOLD + 2:
+                raise StopAsyncIteration
+
+        with (
+            patch.object(sr, "check_scheduled_rides", AsyncMock(return_value=False)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.asyncio, "sleep", _fake_sleep),
+            patch.object(sr, "_record_heartbeat", lambda *_a, **_k: None),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await sr.scheduled_ride_dispatcher_loop()
+
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_fetch_failures_sustained_total")
+
+    async def test_success_resets_the_failure_counter(self):
+        """A single successful tick between failures must reset the count,
+        so a flaky-but-recovering DB doesn't eventually cross the threshold
+        purely by accumulating occasional failures over a long uptime."""
+        from backend.utils import scheduled_rides as sr
+
+        # Fail (threshold - 1) times, succeed once, then fail
+        # (threshold - 1) times again — should never reach the threshold.
+        results = (
+            [False] * (sr._FETCH_FAILURE_ALERT_THRESHOLD - 1)
+            + [True]
+            + [False] * (sr._FETCH_FAILURE_ALERT_THRESHOLD - 1)
+        )
+        call_count = {"n": 0}
+
+        async def _fake_sleep(_seconds):
+            call_count["n"] += 1
+            if call_count["n"] >= len(results):
+                raise StopAsyncIteration
+
+        with (
+            patch.object(sr, "check_scheduled_rides", AsyncMock(side_effect=results)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.asyncio, "sleep", _fake_sleep),
+            patch.object(sr, "_record_heartbeat", lambda *_a, **_k: None),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await sr.scheduled_ride_dispatcher_loop()
+
+        metric_inc.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #14: _send_reminder's push-send and reminder_sent-flag-write must
+# fail independently without either duplicating or permanently losing the
+# reminder.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _reminder_ride(**extra) -> dict:
+    return {
+        "id": RIDE_ID,
+        "rider_id": RIDER_ID,
+        "dropoff_address": "456 Broadway",
+        "reminder_sent": False,
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+class TestSendReminderIdempotency:
+    async def test_happy_path_pushes_once_and_sets_flag(self):
+        from backend.utils import scheduled_rides as sr
+
+        ride = _reminder_ride()
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.db, "update_one", AsyncMock()) as update,
+        ):
+            await sr._send_reminder(ride)
+
+        push.assert_awaited_once()
+        update.assert_awaited_once_with("rides", {"id": RIDE_ID}, {"$set": {"reminder_sent": True}})
+
+    async def test_push_failure_releases_the_dedupe_claim_for_retry(self):
+        """If the push itself fails, the next tick must still retry it —
+        the dedupe claim taken before the send must be released, not left
+        in place blocking a legitimate retry."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _reminder_ride()
+        delete_mock = AsyncMock()
+        update_mock = AsyncMock()
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "redis_delete", delete_mock),
+            patch.object(sr, "send_push_notification", AsyncMock(side_effect=RuntimeError("push failed"))),
+            patch.object(sr.db, "update_one", update_mock),
+        ):
+            await sr._send_reminder(ride)
+
+        delete_mock.assert_awaited_once_with(f"spinr:sched_reminder_pushed:{RIDE_ID}")
+        # The flag write must NOT run — the push never actually went out.
+        update_mock.assert_not_awaited()
+
+    async def test_flag_write_failure_does_not_duplicate_push_next_tick(self):
+        """Regression for Finding #14: a successful push followed by a
+        failed reminder_sent write used to cause a duplicate push on the
+        next tick (reminder_sent still False). The dedupe claim from the
+        first attempt must survive to block the second attempt's push."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _reminder_ride()
+        push_mock = AsyncMock()
+
+        # Attempt 1: push succeeds, DB write fails.
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", push_mock),
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=RuntimeError("db write failed"))),
+        ):
+            await sr._send_reminder(ride)
+
+        push_mock.assert_awaited_once()
+
+        # Attempt 2 (next tick, reminder_sent still False): dedupe key from
+        # attempt 1 is still claimed, so redis_set_nx now returns False.
+        with (
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=False)),
+            patch.object(sr, "send_push_notification", push_mock),
+            patch.object(sr.db, "update_one", AsyncMock()) as update_mock,
+        ):
+            await sr._send_reminder(ride)
+
+        # Still only ever pushed once across both attempts.
+        push_mock.assert_awaited_once()
+        # But the flag write is retried and this time succeeds.
+        update_mock.assert_awaited_once_with("rides", {"id": RIDE_ID}, {"$set": {"reminder_sent": True}})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #07 (ACTION_ITEMS.md E5): scheduled_dispatch_enabled kill switch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestDispatchKillSwitch:
+    async def test_disabled_skips_the_tick_entirely(self):
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_dispatch_enabled": False})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is None
+        # Disabled means no work at all — not even the leader-lock Redis
+        # call, let alone the candidate query.
+        get_rows_mock.assert_not_awaited()
+
+    async def test_disabled_tick_does_not_count_as_a_failure(self):
+        """A kill-switch pause must not trip Finding #13's sustained-failure
+        alert — it's an intentional admin action, not an outage."""
+        from backend.utils import scheduled_rides as sr
+
+        call_count = {"n": 0}
+
+        async def _fake_sleep(_seconds):
+            call_count["n"] += 1
+            if call_count["n"] >= sr._FETCH_FAILURE_ALERT_THRESHOLD + 2:
+                raise StopAsyncIteration
+
+        with (
+            patch.object(sr, "check_scheduled_rides", AsyncMock(return_value=None)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr.asyncio, "sleep", _fake_sleep),
+            patch.object(sr, "_record_heartbeat", lambda *_a, **_k: None),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await sr.scheduled_ride_dispatcher_loop()
+
+        metric_inc.assert_not_called()
+
+    async def test_enabled_by_default_proceeds_normally(self):
+        """Default AppSettings (or a settings-lookup failure) must not
+        accidentally disable dispatch — fail open, not closed."""
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={})),  # key absent -> defaults True
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is True
+        get_rows_mock.assert_awaited_once()
+
+    async def test_settings_lookup_failure_fails_open(self):
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(side_effect=RuntimeError("settings db down"))),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+        ):
+            result = await sr.check_scheduled_rides()
+
+        assert result is True
+        get_rows_mock.assert_awaited_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #06: driver heads-up nudge for upcoming scheduled demand.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _nudge_ride(**extra) -> dict:
+    return {"id": RIDE_ID, "pickup_lat": 52.1, "pickup_lng": -106.6, **extra}
+
+
+@pytest.mark.asyncio
+class TestDriverNudge:
+    async def test_disabled_by_default_sends_nothing(self):
+        """New driver-facing feature ships dark -- must not fire unless
+        explicitly enabled, even with everything else set up to succeed."""
+        from backend.utils import scheduled_rides as sr
+
+        push_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={})),  # key absent -> defaults False
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"user_id": "driver-1"}])),
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            await sr._maybe_nudge_nearby_drivers(_nudge_ride())
+
+        push_mock.assert_not_awaited()
+
+    async def test_enabled_nudges_nearby_online_drivers(self):
+        from backend.utils import scheduled_rides as sr
+
+        get_rows_mock = AsyncMock(return_value=[{"user_id": "driver-1"}, {"user_id": "driver-2"}])
+        push_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", get_rows_mock),
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            await sr._maybe_nudge_nearby_drivers(_nudge_ride())
+
+        # Queried the drivers table with an online+available+geo-bounded filter.
+        get_rows_mock.assert_awaited_once()
+        table, filters = get_rows_mock.await_args.args[0], get_rows_mock.await_args.args[1]
+        assert table == "drivers"
+        assert filters["is_online"] is True
+        assert filters["is_available"] is True
+        assert "$and" in filters  # dispatch_geo_bounds() output
+        # One push per nearby driver.
+        assert push_mock.await_count == 2
+        recipients = {call.args[0] for call in push_mock.await_args_list}
+        assert recipients == {"driver-1", "driver-2"}
+
+    async def test_dedupe_prevents_a_second_nudge_for_the_same_ride(self):
+        from backend.utils import scheduled_rides as sr
+
+        push_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=False)),  # already claimed by an earlier tick
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"user_id": "driver-1"}])) as get_rows_mock,
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            await sr._maybe_nudge_nearby_drivers(_nudge_ride())
+
+        get_rows_mock.assert_not_awaited()
+        push_mock.assert_not_awaited()
+
+    async def test_missing_pickup_location_is_a_silent_no_op(self):
+        from backend.utils import scheduled_rides as sr
+
+        push_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            await sr._maybe_nudge_nearby_drivers({"id": RIDE_ID, "pickup_lat": None, "pickup_lng": None})
+
+        push_mock.assert_not_awaited()
+
+    async def test_one_recipients_push_failure_does_not_block_the_others(self):
+        from backend.utils import scheduled_rides as sr
+
+        push_mock = AsyncMock(side_effect=[RuntimeError("fcm down"), None])
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(return_value={"scheduled_ride_driver_nudge_enabled": True})),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"user_id": "driver-1"}, {"user_id": "driver-2"}])),
+            patch.object(sr, "send_push_notification", push_mock),
+        ):
+            # Must not raise even though the first push failed.
+            await sr._maybe_nudge_nearby_drivers(_nudge_ride())
+
+        assert push_mock.await_count == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding #17: dispatch-time corporate policy/allowance re-check.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _corp_ride(**extra) -> dict:
+    return {
+        "id": RIDE_ID,
+        "rider_id": RIDER_ID,
+        "payment_method": "company_allowance",
+        "corporate_account_id": "corp-1",
+        "grand_total": "20.00",
+        **extra,
+    }
+
+
+class _FakePolicyResult:
+    def __init__(self, passed: bool, failed_rules=None):
+        self.passed = passed
+        self.failed_rules = failed_rules or []
+
+
+@pytest.mark.asyncio
+class TestCorporatePolicyRecheck:
+    @pytest.fixture(autouse=True)
+    def _default_company_and_membership_gates(self):
+        """Baseline: company bookable, rider has an active membership at
+        corp-1. Tests below that exercise gate 1 (company-active) or gate 3
+        (membership-active) specifically override these within their own
+        `with` block. Without this, every test in this class would trip the
+        new gates added by the 2026-08-11 corporate scheduled-ride audit,
+        since the default mock_supabase_client response (empty rows) reads
+        as "company not found" / "no active memberships" for gates that
+        don't mock their own lookup.
+        """
+        with (
+            patch("services.corporate_policy_service.require_company_bookable", AsyncMock(return_value=None)),
+            patch(
+                "db_supabase.list_active_memberships_for_user",
+                AsyncMock(return_value=[{"id": "member-1", "company_id": "corp-1"}]),
+            ),
+        ):
+            yield
+
+    async def test_non_corporate_ride_is_unaffected(self):
+        from backend.utils import scheduled_rides as sr
+
+        eval_mock = AsyncMock()
+        with patch("services.corporate_policy_service.evaluate_policy_for_ride", eval_mock):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_scheduled_row(payment_method="card"))
+
+        assert allowed is True
+        eval_mock.assert_not_awaited()
+
+    async def test_corporate_ride_missing_account_id_is_unaffected(self):
+        from backend.utils import scheduled_rides as sr
+
+        eval_mock = AsyncMock()
+        with patch("services.corporate_policy_service.evaluate_policy_for_ride", eval_mock):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride(corporate_account_id=None))
+
+        assert allowed is True
+        eval_mock.assert_not_awaited()
+
+    async def test_policy_pass_allows_dispatch_with_no_notification(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=True)),
+            ),
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+        push.assert_not_awaited()
+        admin_bcast.assert_not_awaited()
+
+    async def test_policy_failure_blocks_dispatch_and_notifies_once(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=False, failed_rules=["allowed_payment_source"])),
+            ),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is False
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+        push.assert_awaited_once()
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push.await_args.kwargs.get("target_app") == "rider"
+        admin_bcast.assert_awaited_once()
+        admin_payload = admin_bcast.await_args.args[0]
+        assert admin_payload["type"] == "scheduled_ride_policy_blocked"
+        assert admin_payload["failed_rules"] == ["allowed_payment_source"]
+
+    async def test_policy_failure_dedupes_repeat_notifications(self):
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=False, failed_rules=["max_fare_per_ride"])),
+            ),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=False)),  # already notified
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is False
+        push.assert_not_awaited()
+        admin_bcast.assert_not_awaited()
+
+    async def test_evaluation_error_fails_open(self):
+        """A policy-service hiccup must not strand every corporate scheduled
+        ride in the fleet -- matches evaluate_policy_for_ride's own
+        documented fail-open contract."""
+        from backend.utils import scheduled_rides as sr
+
+        with patch(
+            "services.corporate_policy_service.evaluate_policy_for_ride",
+            AsyncMock(side_effect=RuntimeError("policy service down")),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+
+    async def test_dispatch_skips_the_claim_entirely_when_policy_blocks(self):
+        """The gate must run BEFORE the atomic claim -- a blocked ride must
+        stay in 'scheduled' untouched, not get claimed into 'searching' and
+        need to be unwound."""
+        from backend.utils import scheduled_rides as sr
+
+        update_mock = AsyncMock()
+        with (
+            patch.object(sr, "_corporate_policy_still_allows_dispatch", AsyncMock(return_value=False)),
+            patch.object(sr.db, "update_one", update_mock),
+        ):
+            await sr._dispatch_scheduled_ride(_corp_ride())
+
+        update_mock.assert_not_awaited()
+
+    # ── 2026-08-11 corporate scheduled-ride audit: gate 1 (company-active) ──
+
+    async def test_company_inactive_blocks_dispatch(self):
+        """A company suspended/closed between booking and dispatch must
+        block dispatch -- previously this gate didn't exist at all, so the
+        ride sailed through and only failed at settlement (stuck 'pending'
+        with no valid payer)."""
+        from fastapi import HTTPException
+
+        from backend.utils import scheduled_rides as sr
+
+        eval_mock = AsyncMock()
+        with (
+            patch(
+                "services.corporate_policy_service.require_company_bookable",
+                AsyncMock(side_effect=HTTPException(status_code=403, detail={"code": "company_not_active"})),
+            ),
+            patch("services.corporate_policy_service.evaluate_policy_for_ride", eval_mock),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is False
+        # Blocked before the fare/policy rules even ran.
+        eval_mock.assert_not_awaited()
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+        push.assert_awaited_once()
+        admin_bcast.assert_awaited_once()
+        assert admin_bcast.await_args.args[0]["failed_rules"] == ["company_inactive"]
+
+    async def test_company_check_lookup_error_fails_open(self):
+        """A transient error evaluating company status (not a confirmed
+        inactive company) must not strand the ride -- fail open and let the
+        rest of the checks run."""
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "services.corporate_policy_service.require_company_bookable",
+                AsyncMock(side_effect=RuntimeError("db hiccup")),
+            ),
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=True)),
+            ),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+
+    async def test_settings_fetch_error_skips_new_gates_but_not_policy_rules(self):
+        """If app_settings can't be loaded at all, the new company/membership
+        gates are skipped (fail open) but the pre-existing fare/policy check
+        still runs and can still block."""
+        from backend.utils import scheduled_rides as sr
+
+        require_mock = AsyncMock()
+        with (
+            patch.object(sr, "get_app_settings", AsyncMock(side_effect=RuntimeError("settings down"))),
+            patch("services.corporate_policy_service.require_company_bookable", require_mock),
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=False, failed_rules=["max_fare_per_ride"])),
+            ),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        require_mock.assert_not_awaited()
+        assert allowed is False
+
+    # ── 2026-08-11 corporate scheduled-ride audit: gate 3 (membership-active) ──
+
+    async def test_membership_removed_blocks_dispatch(self):
+        """A member removed between booking and dispatch, with the
+        suspension/offboarding sweep missing this specific ride, must block
+        dispatch rather than sail through with a silently-empty allowance."""
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch("db_supabase.list_active_memberships_for_user", AsyncMock(return_value=[])),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "_metric_inc") as metric_inc,
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride(corporate_member_id="member-9"))
+
+        assert allowed is False
+        metric_inc.assert_called_once_with("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+        push.assert_awaited_once()
+        assert admin_bcast.await_args.args[0]["failed_rules"] == ["membership_inactive"]
+
+    async def test_membership_check_matches_stamped_member_id_not_just_company(self):
+        """A company_allowance ride stamps the exact membership it was
+        booked under -- if THAT membership is gone, it must block even if
+        the rider has since joined a different active membership row at the
+        same company."""
+        from backend.utils import scheduled_rides as sr
+
+        with (
+            patch(
+                "db_supabase.list_active_memberships_for_user",
+                AsyncMock(return_value=[{"id": "member-new", "company_id": "corp-1"}]),
+            ),
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride(corporate_member_id="member-old"))
+
+        assert allowed is False
+
+    async def test_membership_lookup_error_fails_open(self):
+        from backend.utils import scheduled_rides as sr
+
+        with patch("db_supabase.list_active_memberships_for_user", AsyncMock(side_effect=RuntimeError("db down"))):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+
+    async def test_membership_removal_kill_switch_disabled_allows_dispatch(self):
+        """corporate_member_removal_blocks_booking=False (the same kill
+        switch routes/rides/booking.py's fail-closed membership check
+        respects) must also gate this dispatch-time re-check."""
+        from backend.utils import scheduled_rides as sr
+
+        list_mock = AsyncMock(return_value=[])
+        with (
+            patch.object(
+                sr,
+                "get_app_settings",
+                AsyncMock(return_value={"corporate_member_removal_blocks_booking": False}),
+            ),
+            patch("services.corporate_policy_service.require_company_bookable", AsyncMock(return_value=None)),
+            # evaluate_policy_for_ride's own real implementation also calls
+            # list_active_memberships_for_user internally to resolve the
+            # allowance -- mock it out (passed=True) so list_mock only
+            # observes calls from gate 3, the thing under test here.
+            patch(
+                "services.corporate_policy_service.evaluate_policy_for_ride",
+                AsyncMock(return_value=_FakePolicyResult(passed=True)),
+            ),
+            patch("db_supabase.list_active_memberships_for_user", list_mock),
+        ):
+            allowed = await sr._corporate_policy_still_allows_dispatch(_corp_ride())
+
+        assert allowed is True
+        list_mock.assert_not_awaited()

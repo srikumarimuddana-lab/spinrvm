@@ -51,6 +51,7 @@ import {
     ArrowLeft,
     Building2,
     CheckCircle2,
+    CreditCard,
     FileText,
     PauseCircle,
     Pencil,
@@ -349,11 +350,16 @@ export default function CompanyDetailPage() {
                             <ShieldCheck className="mr-2 h-4 w-4" /> Policy
                         </Button>
                     </Link>
+                    <Link href={`/dashboard/corporate-accounts/${id}/subscription`}>
+                        <Button variant="outline">
+                            <CreditCard className="mr-2 h-4 w-4" /> Subscription
+                        </Button>
+                    </Link>
                     {company.status !== "suspended" && company.status !== "closed" && (
                         <Button
                             variant="outline"
                             onClick={() => openTransition("suspend")}
-                            className="text-orange-700"
+                            className="text-orange-700 dark:text-orange-400"
                         >
                             <PauseCircle className="mr-2 h-4 w-4" /> Suspend
                         </Button>
@@ -370,7 +376,7 @@ export default function CompanyDetailPage() {
                         <Button
                             variant="outline"
                             onClick={() => openTransition("close")}
-                            className="text-red-700"
+                            className="text-destructive"
                         >
                             <XCircle className="mr-2 h-4 w-4" /> Close
                         </Button>

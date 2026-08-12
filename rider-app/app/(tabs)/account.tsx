@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from 'expo-router/react-navigation';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -28,6 +28,9 @@ export default function AccountScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuthStore();
+  // `email_verified` isn't declared on the shared `User` type yet (see the
+  // cast note beside the Email row below) — read it defensively.
+  const isEmailVerified = !!(user as (User & { email_verified?: boolean }) | null)?.email_verified;
   const { profiles, workModeEnabled } = useWorkProfileStore();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -52,7 +55,18 @@ export default function AccountScreen() {
         setIsRefreshing(true);
         try {
           const userRes = await api.get<User>('/auth/me');
-          if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
+          // Merge (not replace): GET /auth/me's response schema doesn't
+          // return `email_verified` (backend/schemas.py's UserProfile — out
+          // of scope for this rider-app-only change), so a plain replace
+          // would silently wipe the flag verify-email.tsx sets locally on a
+          // successful confirm the moment this screen refocuses. Every key
+          // /auth/me DOES return (including explicit null/false values)
+          // still overwrites normally since spread copies present keys.
+          if (!cancelled && userRes.data) {
+            useAuthStore.setState((state) => ({
+              user: state.user ? { ...state.user, ...userRes.data } : userRes.data,
+            }));
+          }
         } catch {}
         finally { if (!cancelled) setIsRefreshing(false); }
       })();
@@ -176,6 +190,29 @@ export default function AccountScreen() {
                   <Text style={styles.cardLabel}>Email</Text>
                   <Text style={styles.cardValue}>{user?.email || 'N/A'}</Text>
                 </View>
+                {/* N14: optional, additive self-serve verification — never
+                    gates anything (see ACTION_ITEMS.md N14(b), still an open
+                    product decision). `email_verified` isn't yet returned by
+                    GET /auth/me (backend/schemas.py's UserProfile omits it —
+                    a backend change, out of scope here), so this reads
+                    whatever verify-email.tsx merged into the store locally
+                    this session; it defaults to "not verified" otherwise. */}
+                {!!user?.email && (
+                  isEmailVerified ? (
+                    <View style={styles.emailVerifiedPill} accessibilityLabel="Email verified">
+                      <Ionicons name="checkmark-circle" size={12} color="#10B981" />
+                      <Text style={styles.emailVerifiedPillText}>Verified</Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.emailVerifyPill}
+                      onPress={() => router.push('/verify-email' as any)}
+                      accessibilityLabel="Verify email"
+                    >
+                      <Text style={styles.emailVerifyPillText}>Verify</Text>
+                    </TouchableOpacity>
+                  )
+                )}
               </View>
               {user?.gender && (
                 <>
@@ -435,6 +472,17 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   cardInfo: { flex: 1 },
   cardLabel: { color: colors.textDim, fontSize: 11, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
   cardValue: { color: colors.text, fontSize: 15, fontWeight: '700', marginTop: 2 },
+  emailVerifiedPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(16, 185, 129, 0.1)', borderRadius: 12,
+    paddingVertical: 5, paddingHorizontal: 10,
+  },
+  emailVerifiedPillText: { color: '#10B981', fontSize: 12, fontWeight: '700' },
+  emailVerifyPill: {
+    backgroundColor: colors.primary, borderRadius: 12,
+    paddingVertical: 6, paddingHorizontal: 12,
+  },
+  emailVerifyPillText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   actionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 14 },
   actionContent: { flex: 1 },
   actionText: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '600' },

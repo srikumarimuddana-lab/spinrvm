@@ -19,7 +19,7 @@ could `POST /api/admin/staff` to create themselves as a super-admin.
 by server.py as a separate router and stays public so the dashboard
 can reach /api/admin/auth/login without a token.
 
-Auth coverage audit — 2026-05-06
+Auth coverage audit — 2026-05-06 (corrected 2026-08-02)
 ----------------------------------
 All admin API endpoints have been audited for authentication gating.
 Coverage is provided by two complementary mechanisms:
@@ -27,18 +27,36 @@ Coverage is provided by two complementary mechanisms:
 1. Router-level dependency (this file):
    ``admin_router = APIRouter(dependencies=[Depends(get_admin_user)])``
    covers every sub-router included via ``admin_router.include_router()``.
-   This is the primary gate for all sub-routers in this package.
+   This is the primary gate for all sub-routers in this package,
+   including ``monitoring_router`` (see below) and every ``require_module``/
+   ``require_super_admin``-gated sub-router further down this file.
 
 2. Per-handler ``Depends(get_admin_user)`` in function signatures:
-   Used by ``routes/admin/monitoring.py``, which is mounted directly on
-   ``app`` (not via ``admin_router``) in server.py. Every endpoint in
-   that file carries the dependency individually.
+   ``routes/admin/monitoring.py`` also carries the dependency on every
+   individual handler. Corporate + admin portal review, Admin #5: this
+   comment previously claimed monitoring.py was "mounted directly on
+   app (not via admin_router)" as the reason for the per-handler
+   dependency — that stopped being true when ``monitoring_router`` was
+   added to ``admin_router.include_router()`` below (with
+   ``require_module("dashboard")``), so it is now double-gated: the
+   router-level dependency, the module-gate at its include_router() call,
+   AND its own per-handler dependency. The per-handler checks are
+   redundant defense-in-depth now, not the sole gate the old comment
+   described — correcting the claim rather than removing the (harmless)
+   redundant checks themselves.
 
 Excluded from ``admin_router`` by design (public):
    - ``admin_auth_router`` (login, session, logout, MFA, refresh, unlock)
      — mounted separately by server.py; login must be reachable pre-auth.
 
-No unprotected admin API endpoints exist as of this audit.
+No unprotected admin API endpoints exist as of this audit. Scope note:
+this audit covers routers assembled into ``admin_router`` by this file.
+Corporate account/wallet routers (``routes/corporate_accounts.py``,
+``routes/corporate_wallet.py``) are a separate top-level ``routes/``
+module, not part of this package, and are mounted independently in
+server.py with their own ``require_module("corporate_accounts")`` gate
+(corporate + admin portal review, Critical #3) — out of this docstring's
+scope, not an omission from it.
 """
 
 from fastapi import APIRouter, Depends
@@ -78,16 +96,20 @@ from .promotions import router as promotions_router
 from .rider_import import router as rider_import_router
 from .rides import router as rides_router
 from .safety import router as safety_router
+from .sentry import router as sentry_router
 from .service_areas import router as service_areas_router
 from .settings import router as settings_router
 from .sgi_forms import router as sgi_forms_router
 from .staff import router as staff_router
+from .stripe_connect_ledger import router as stripe_connect_ledger_router
 from .stripe_import import router as stripe_import_router
+from .stripe_mode_audit import router as stripe_mode_audit_router
 from .stripe_payout_sync import router as stripe_payout_sync_router
 from .subscriptions import offer_analytics_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
 from .support_tickets import router as support_tickets_router
+from .tax_id_import import router as tax_id_import_router
 from .users import router as users_router
 from .vehicle_fleet import router as vehicle_fleet_router
 from .venues import router as venues_router
@@ -127,6 +149,17 @@ admin_router.include_router(stripe_import_router, dependencies=[Depends(require_
 # Transfer truth). Writes to payouts, so it takes the booking-import posture:
 # require_super_admin at the mount AND re-checked inside each handler.
 admin_router.include_router(stripe_payout_sync_router, dependencies=[Depends(require_super_admin)])
+# Connected-account ledger sync (bank payouts + balance transactions into
+# driver_stripe_payouts / driver_stripe_ledger). Reads every driver's full
+# financial history from Stripe and spends API quota per account, so it
+# takes the same super_admin posture as the payout sync above.
+admin_router.include_router(stripe_connect_ledger_router, dependencies=[Depends(require_super_admin)])
+# Stripe key-mode drift diagnostic. Read-mostly (its only write is stamping an
+# identity's observed mode), but it reports which drivers have an unreachable
+# payout destination and spends Stripe API quota, so it takes the same
+# super_admin posture as the mapping import: gated at the mount AND re-checked
+# inside each handler.
+admin_router.include_router(stripe_mode_audit_router, dependencies=[Depends(require_super_admin)])
 # Data Transfer module (export/import users+drivers with docs/history between
 # Spinr's own environments) — gated on require_super_admin, not a module flag.
 # Previously gated on require_module("bulk_operations"); that module string
@@ -155,6 +188,10 @@ admin_router.include_router(export_approvals_router, dependencies=[Depends(requi
 # get_driver_balance reads to bound a Stripe payout Transfer. The handlers
 # re-check the role themselves so the guard survives a future re-mount.
 admin_router.include_router(booking_import_router, dependencies=[Depends(require_super_admin)])
+# Bulk driver tax-ID import (SIN + GST BN migration for drivers who predate
+# in-app collection). Writes Vault-encrypted SINs, so it takes the reveal-sin
+# posture: require_super_admin at the mount AND re-checked in each handler.
+admin_router.include_router(tax_id_import_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])
@@ -179,5 +216,11 @@ admin_router.include_router(wallet_router, dependencies=[Depends(require_module(
 admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])
+# Live Sentry issue viewer (read production errors across surfaces + resolve
+# them). Raw production error data is super_admin-only — same posture as the
+# data-transfer / booking-import surfaces above. As with stripe_payout_sync,
+# require_super_admin is declared BOTH here and on each handler, so the gate
+# travels with the handler if the router is ever remounted or reused.
+admin_router.include_router(sentry_router, dependencies=[Depends(require_super_admin)])
 
 __all__ = ["admin_router", "admin_auth_router"]

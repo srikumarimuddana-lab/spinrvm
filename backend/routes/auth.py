@@ -43,6 +43,7 @@ try:
         TokenExpiredException,
     )
     from ..utils.error_keys import ErrorKeys
+    from ..utils.metrics import inc as _metric_inc
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.redis_client import (
         redis_delete,
@@ -52,11 +53,13 @@ try:
         redis_set,
     )
     from ..utils.refresh_tokens import (
+        is_new_device,
         issue_refresh_token,
         lookup_refresh_token,
         revoke_all_for_user,
         revoke_refresh_token,
     )
+    from ..utils.rider_emails import send_new_device_notice
     from ..utils.session_revocation import revoke_session, should_tombstone
     from ..validators import validate_phone
 except ImportError:
@@ -92,6 +95,7 @@ except ImportError:
         TokenExpiredException,
     )
     from utils.error_keys import ErrorKeys
+    from utils.metrics import inc as _metric_inc
     from utils.rate_limiter import default_limiter as limiter
     from utils.redis_client import (
         redis_delete,
@@ -101,11 +105,13 @@ except ImportError:
         redis_set,
     )
     from utils.refresh_tokens import (
+        is_new_device,
         issue_refresh_token,
         lookup_refresh_token,
         revoke_all_for_user,
         revoke_refresh_token,
     )
+    from utils.rider_emails import send_new_device_notice
     from utils.session_revocation import revoke_session, should_tombstone
     from validators import validate_phone
 
@@ -226,6 +232,7 @@ async def _record_otp_failure(phone: str) -> None:
             # via logger.error so on-call can correlate spikes to potential
             # credential-stuffing campaigns. Audit row also written below.
             logger.error(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
+            _metric_inc("spinr_auth_otp_lockout_total")
             try:
                 import asyncio
 
@@ -533,6 +540,24 @@ async def _activate_pending_company_invites(email: str, user_id: str) -> None:
         await db_supabase.accept_member_invite(member_id=member_id, user_id=user_id)
 
 
+async def _alert_if_new_device(user: Dict[str, Any], user_agent: str) -> None:
+    """Fire-and-forget "new sign-in" email if ``user_agent`` is a device we
+    haven't seen before for this rider (ACTION_ITEMS.md N15/R8).
+
+    Must be called with the pre-login user row/user_agent BEFORE
+    ``issue_refresh_token`` mints this login's own refresh_tokens row —
+    see ``is_new_device``'s docstring. Never raises and never blocks the
+    login response; a failure here is logged and swallowed, matching every
+    other post-login side effect in this file (audit log, corporate invite
+    activation, etc.).
+    """
+    try:
+        if await is_new_device(user["id"], "rider", user_agent):
+            asyncio.create_task(send_new_device_notice(user))
+    except Exception:
+        logger.error("new-device alert check failed for user_id=%s", user.get("id"), exc_info=True)
+
+
 async def _issue_company_email_session(
     *,
     request: Request,
@@ -607,6 +632,12 @@ async def _issue_company_email_session(
     )
     await _activate_pending_company_invites(email, user["id"])
 
+    if not is_new_user:
+        # A brand-new signup has no prior device to compare against — every
+        # device is "new" by definition, so alerting here would be pure
+        # noise on account creation, not a security signal.
+        await _alert_if_new_device(user, user_agent)
+
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(
         user["id"],
@@ -647,7 +678,51 @@ async def send_company_email_otp(request: Request, body: CompanyEmailOtpSendRequ
     # It would only strip the recovery path from a legitimate user whose
     # address someone else mistyped into the lockout.
     await _enforce_otp_send_cap(_synthetic_phone_for_company_email(email))
-    otp_code = generate_otp()
+
+    # Email-provider bypass, mirroring the phone /send-otp dev bypass above:
+    #  - SES or Resend configured  → real random OTP delivered via email.
+    #  - Neither configured + non-production (dev/preview/staging)
+    #                        → fixed code "1234" so testing works without a
+    #                          working email provider.
+    #  - Neither configured + production
+    #                        → refuse; a static-code bypass in production would
+    #                          let anyone log in as any company email.
+    app_settings = None
+    try:
+        app_settings = await get_app_settings()
+    except Exception as e:
+        logger.error(f"Could not read app_settings from DB: {e}", exc_info=True)
+
+    email_provider_configured = bool(
+        app_settings
+        and (
+            (app_settings.get("aws_ses_access_key_id") and app_settings.get("aws_ses_secret_access_key"))
+            or app_settings.get("resend_api_key")
+        )
+    )
+    is_production = settings.ENV.lower() == "production"
+    deliver_via_email = True
+    if email_provider_configured:
+        otp_code = generate_otp()
+    elif not is_production:
+        otp_code = "1234"
+        deliver_via_email = False
+        logger.info(
+            "Email provider not configured — OTP bypass active (code=1234) for %s (ENV=%s)",
+            _email_log_id(email),
+            settings.ENV,
+        )
+    else:
+        logger.error(
+            "Email provider not configured in production — refusing to issue OTP (static-code bypass is disabled in production)"
+        )
+        raise SpinrException(
+            message="Verification is temporarily unavailable, please try again later",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
+
     otp_row = {
         "id": str(uuid.uuid4()),
         "email": email,
@@ -669,24 +744,39 @@ async def send_company_email_otp(request: Request, body: CompanyEmailOtpSendRequ
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
 
-    sent = await send_transactional_email(
-        to=email,
-        subject="Your Spinr for Business verification code",
-        text=f"Your Spinr for Business verification code is {otp_code}. It expires in {OTP_EXPIRY_MINUTES} minutes.",
-        html=(
-            "<p>Your Spinr for Business verification code is "
-            f"<strong>{otp_code}</strong>.</p>"
-            f"<p>It expires in {OTP_EXPIRY_MINUTES} minutes.</p>"
-        ),
-        log_id=_email_log_id(email),
-        email_type="corporate_email_otp",
-    )
-    if not sent:
+    if deliver_via_email:
         try:
-            await db_supabase.delete_many(_CORPORATE_EMAIL_OTP_TABLE, {"id": otp_row["id"]})
-        except Exception:
-            logger.error("company email auth: failed-code cleanup failed for %s", _email_log_id(email), exc_info=True)
-        raise HTTPException(status_code=502, detail="Could not send verification code")
+            from ..utils.email_layout import render_email
+        except ImportError:
+            from utils.email_layout import render_email  # type: ignore
+
+        # A verification code arriving as two bare <p> tags with no branding is
+        # exactly what a phishing attempt looks like. Rendering it through the
+        # shared shell puts the real logo and the configured company details on
+        # the one email whose whole job is to be trusted.
+        _otp_rendered = await render_email(
+            heading="Your verification code",
+            paragraphs=[
+                f"Your Spinr for Business verification code is {otp_code}.",
+                f"It expires in {OTP_EXPIRY_MINUTES} minutes. If you didn't request it, you can ignore this email.",
+            ],
+        )
+        sent = await send_transactional_email(
+            to=email,
+            subject="Your Spinr for Business verification code",
+            text=_otp_rendered.text,
+            html=_otp_rendered.html,
+            log_id=_email_log_id(email),
+            email_type="corporate_email_otp",
+        )
+        if not sent:
+            try:
+                await db_supabase.delete_many(_CORPORATE_EMAIL_OTP_TABLE, {"id": otp_row["id"]})
+            except Exception:
+                logger.error(
+                    "company email auth: failed-code cleanup failed for %s", _email_log_id(email), exc_info=True
+                )
+            raise HTTPException(status_code=502, detail="Could not send verification code")
 
     return {"success": True, "message": "Verification code sent"}
 
@@ -979,6 +1069,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             )
             user_id = existing_user["id"]
             token_version = int(existing_user.get("token_version") or 0)
+            await _alert_if_new_device(existing_user, user_agent)
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(
                 user_id,
@@ -1204,6 +1295,7 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
         logger.error(f"reactivate: could not set session_id for user {user_id}: {e}", exc_info=True)
     await redis_set(f"session:{user_id}", session_id, ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
     token_version = int(user.get("token_version") or 0)
+    await _alert_if_new_device(user, user_agent)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(

@@ -132,7 +132,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 - `backend/server.py` — app factory; mounts ~25 routers
 - `backend/core/config.py` — pydantic-settings `Settings`; fails fast in production on weak secrets
-- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 17 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
+- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 18 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
 - `backend/core/middleware.py` — CORS, security headers, rate limiting (SlowAPI + Redis)
 - `backend/db_supabase.py` — ~66 helper functions wrapping `supabase-py` via `run_sync()` (thread-pool with one retry on H2 GOAWAY)
 - `backend/socket_manager.py` — `ConnectionManager` (in-process WS registry); delegates to Redis pub/sub when active
@@ -315,7 +315,7 @@ Test tiers:
 Coverage minimums (per domain):
 - `routes/payments.py`, `services/fare_service.py`, `utils/crypto.py`: ≥ 90%
 - `routes/rides.py`, `services/dispatch_service.py`: ≥ 80%
-- `routes/corporate_*.py`, `services/corporate_*.py`: **target ≥ 80%** (same tier as rides/dispatch — moves real money via `corporate_wallet_apply_delta`). As of 2026-07-28 the module averages ~52% aggregate (new code from the corporate lifecycle audit is 79–90%; pre-existing files like `corporate_accounts.py` at 39% and `corporate_signup.py`/`corporate_rider.py`/`corporate_company_kyb.py` at 32–33% are the gap). Not yet enforced by a `--cov-fail-under` gate on this module specifically — closing it is tracked as its own backlog item, not blocking new corporate PRs in the meantime.
+- `routes/corporate_*.py`, `services/corporate_*.py`: **target ≥ 80%**, now met (same tier as rides/dispatch — moves real money via `corporate_wallet_apply_delta`). As of 2026-08-02 the module averages ~92% aggregate across `routes/corporate_accounts.py` (97%), `routes/corporate_company.py` (88%), `routes/corporate_company_bookings.py` (91%), `routes/corporate_company_kyb.py` (98%), `routes/corporate_rider.py` (97%), `routes/corporate_signup.py` (89%), `routes/corporate_subscriptions.py` (93%), `routes/corporate_wallet.py` (88%), and the `services/corporate_*.py` files (79–100%) — the earlier gap (2026-07-28: ~52% aggregate, `corporate_accounts.py` at 39%, `corporate_signup.py`/`corporate_rider.py`/`corporate_company_kyb.py` at 32–33%) closed as round-2 corporate/admin review work added tests alongside each fix. Not yet enforced by a `--cov-fail-under` gate on this module specifically.
 - Admin routes, utilities: ≥ 70%
 
 What must have a test:
@@ -401,7 +401,7 @@ Data residency:
 User rights:
 - **Access**: rider/driver can request full data export via Support → backend generates JSON dump
 - **Correction**: profile fields are self-serve; non-trivial corrections go through Support
-- **Deletion**: right-to-delete retains only what the Saskatchewan Transportation Act requires (see regulatory section below). All other PII is scrubbed within 30 days. Ride records become anonymized (user_id nulled, coordinates rounded to city).
+- **Deletion**: right-to-delete retains only what the Saskatchewan Transportation Act requires (see regulatory section below). Profile fields (name, email, home address, payment methods) are scrubbed within 30 days of the request (`purge_pii_retention()` Step N, migration 296) — independent of the ride-record retention below. Ride records stay fully attributable (no anonymization) for the full 7-year window, then are hard-deleted (migration 216/289's "Uber/Lyft attributable retention" model — recorded decision, ACTION_ITEMS.md B18); only GPS pickup/dropoff drops earlier, at the separate 3-year ceiling. The general "rider identity hashed after 2 years" promise in `regulatory-sk.md` is not yet implemented — tracked as ACTION_ITEMS.md B23, since the literal fix would break active riders' own trip history.
 - **Consent**: consent language version is stored on signup. Material changes require re-consent.
 
 Breach protocol:

@@ -81,10 +81,25 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
     const authAckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const shouldReconnectRef = useRef(true);
     const onEventRef = useRef(onEvent);
-    onEventRef.current = onEvent;
+    // Keeping the "latest onEvent" ref fresh must happen in an effect, not a
+    // direct assignment during render (react-hooks/refs — refs aren't meant
+    // to be written while rendering; the write can be observed by a
+    // concurrent-render or Strict Mode double-render before it's meant to
+    // "count").
+    useEffect(() => {
+        onEventRef.current = onEvent;
+    }, [onEvent]);
 
-    const clientId = useRef(
-        typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).slice(2)
+    // useState's lazy initializer is the sanctioned one-time-impure-call
+    // escape hatch (unlike a bare useRef(randomUUID()), whose argument is
+    // still evaluated — and discarded — on every render, and unlike a
+    // null-guarded ref write, which react-hooks/purity still flags for the
+    // Math.random() fallback branch specifically). The setter is never
+    // called; this is a stable id for the lifetime of the hook instance.
+    const [clientId] = useState<string>(() =>
+        typeof crypto !== "undefined" && crypto.randomUUID
+            ? crypto.randomUUID()
+            : Math.random().toString(36).slice(2),
     );
 
     const clearRetryTimer = useCallback(() => {
@@ -106,6 +121,11 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
             wsRef.current.send(JSON.stringify(msg));
         }
     }, []);
+
+    // "Latest connect" ref — see the reconnect setTimeout in ws.onclose
+    // below for why this exists instead of referencing `connect` directly
+    // from inside its own useCallback body.
+    const connectRef = useRef<(() => void) | null>(null);
 
     const requestSnapshots = useCallback(() => {
         send({ type: "get_drivers_snapshot" });
@@ -147,7 +167,7 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
             );
             return;
         }
-        const url = `${wsBase}/ws/admin/${clientId.current}`;
+        const url = `${wsBase}/ws/admin/${clientId}`;
 
         setStatus("connecting");
         setLastError(null);
@@ -235,12 +255,42 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
                 );
                 const delay = reconnectDelayWithJitter(retryCountRef.current);
                 retryCountRef.current += 1;
-                retryTimerRef.current = setTimeout(connect, delay);
+                // Schedule through connectRef rather than closing over `connect`
+                // directly: `connect` is declared with `const` inside this same
+                // useCallback body, so referencing it here would capture
+                // whichever `connect` closure was bound at the time *this*
+                // ws.onclose callback was created — if connect's deps (token,
+                // clearAuthAckTimer, clearRetryTimer, requestSnapshots) change
+                // before this timer fires, that stale closure would reconnect
+                // with a stale token instead of the current one
+                // (react-hooks/immutability: "connect is accessed before it is
+                // declared, which prevents the earlier access from updating
+                // when this value changes over time"). connectRef.current is
+                // kept fresh by the effect right after this callback, so the
+                // timer always calls whatever `connect` is current when it fires.
+                retryTimerRef.current = setTimeout(() => connectRef.current?.(), delay);
             }
         };
-    }, [token, clearAuthAckTimer, clearRetryTimer, requestSnapshots]);
+    }, [token, clientId, clearAuthAckTimer, clearRetryTimer, requestSnapshots]);
 
     useEffect(() => {
+        connectRef.current = connect;
+    }, [connect]);
+
+    useEffect(() => {
+        // connect() must run synchronously on mount, not deferred — the
+        // test suite (use-monitoring-socket.test.tsx) and real behavior both
+        // depend on the WebSocket existing immediately after render (no
+        // timer tick required), and correctly assert exact pending-timer
+        // counts elsewhere in this hook. react-hooks/set-state-in-effect
+        // flags this because connect()'s body can synchronously
+        // setStatus/setLastError before the (inherently async) WebSocket
+        // handshake — that's the intended "kick off a connection to an
+        // external system" use of an effect, not the cascading-render
+        // anti-pattern the rule targets, so this one call is intentionally
+        // exempted rather than reworked into a behavior change on a
+        // live-tested admin surface.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         connect();
         return () => {
             shouldReconnectRef.current = false;

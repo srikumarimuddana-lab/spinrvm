@@ -16,6 +16,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..utils.money import cents_to_dollars
     from ..utils.rate_limiter import default_limiter
+    from ..utils.rider_emails import send_refund_email, send_wallet_topup_email
 except ImportError:
     import db_supabase
     from core.config import settings as app_config
@@ -30,6 +31,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from utils.money import cents_to_dollars
     from utils.rate_limiter import default_limiter
+    from utils.rider_emails import send_refund_email, send_wallet_topup_email
 import asyncio
 import json
 import logging
@@ -440,6 +442,96 @@ def _event_to_plain_dict(event):
         return dict(event)
 
 
+async def _sync_corporate_subscription_event(event_type: str, data_object: dict, corp_sub: dict, event_id: str) -> None:
+    """Mirror a corporate flat-SaaS subscription's Stripe state into
+    corporate_subscriptions. Stripe owns the recurring-charge schedule
+    (services/corporate_subscription_service.py only ever creates/cancels
+    the Subscription object); this is the read-model sync, the corporate
+    equivalent of the driver_subscriptions handling elsewhere in this file
+    — deliberately a separate table and a separate code path, zero shared
+    state or logic with Spinr Pass.
+    """
+    row_id = corp_sub["id"]
+    terminal = corp_sub.get("status") == "cancelled"
+
+    if event_type == "customer.subscription.deleted":
+        if not terminal:
+            await db_supabase.update_corporate_subscription(
+                row_id,
+                {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                    "cancel_at_period_end": False,
+                },
+            )
+        logger.info(
+            "Corporate subscription cancelled via Stripe: row=%s sub=%s",
+            row_id,
+            corp_sub.get("stripe_subscription_id"),
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+        return
+
+    # A late/duplicate event arriving after a terminal cancel must never
+    # resurrect the row — same guard the driver_subscriptions invoice.paid
+    # handler applies for the same reason.
+    if terminal:
+        logger.warning(
+            "Corporate subscription event %s ignored for cancelled row=%s",
+            event_type,
+            row_id,
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+        return
+
+    if event_type == "customer.subscription.updated":
+        stripe_status = data_object.get("status")
+        patch: dict = {
+            "cancel_at_period_end": bool(data_object.get("cancel_at_period_end")),
+        }
+        period_end = data_object.get("current_period_end")
+        if period_end:
+            patch["current_period_end"] = datetime.fromtimestamp(int(period_end), tz=timezone.utc).isoformat()
+        if stripe_status in ("active", "trialing"):
+            patch["status"] = "active"
+        elif stripe_status == "past_due":
+            patch["status"] = "past_due"
+        elif stripe_status in ("canceled", "unpaid", "incomplete_expired"):
+            patch["status"] = "cancelled"
+            patch["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+        await db_supabase.update_corporate_subscription(row_id, patch)
+        logger.info(
+            "Corporate subscription updated: row=%s stripe_status=%s -> status=%s",
+            row_id,
+            stripe_status,
+            patch.get("status", corp_sub.get("status")),
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+
+    elif event_type == "invoice.paid":
+        patch = {"status": "active"}
+        new_period_end = _invoice_period_end_iso(data_object)
+        if new_period_end:
+            patch["current_period_end"] = new_period_end
+        await db_supabase.update_corporate_subscription(row_id, patch)
+        logger.info(
+            "Corporate subscription renewed: row=%s sub=%s until=%s",
+            row_id,
+            corp_sub.get("stripe_subscription_id"),
+            new_period_end,
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+
+    elif event_type == "invoice.payment_failed":
+        await db_supabase.update_corporate_subscription(row_id, {"status": "past_due"})
+        logger.warning(
+            "Corporate subscription payment failed: row=%s sub=%s — flagged past_due, Stripe dunning in progress",
+            row_id,
+            corp_sub.get("stripe_subscription_id"),
+            extra={"domain": "corporate", "event_id": event_id},
+        )
+
+
 @api_router.post("/stripe")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events for server-side payment confirmation."""
@@ -540,6 +632,30 @@ async def stripe_webhook(request: Request):
     if not is_new:
         return {"received": True, "duplicate": True, "event_id": event_id}
 
+    # ── Corporate flat-SaaS subscription events ─────────────────────
+    # Checked first (cheap lookup) and, if matched, handled entirely by
+    # _sync_corporate_subscription_event and returned immediately — the
+    # driver-specific dispatch below assumes a driver_subscriptions row for
+    # these same event types and must never run against a corporate one.
+    if event_type in (
+        "customer.subscription.deleted",
+        "customer.subscription.updated",
+        "invoice.paid",
+        "invoice.payment_failed",
+    ):
+        _corp_stripe_sub_id = (
+            data_object.get("subscription") if event_type.startswith("invoice.") else data_object.get("id")
+        )
+        corp_sub = (
+            await db_supabase.get_corporate_subscription_by_stripe_id(_corp_stripe_sub_id)
+            if _corp_stripe_sub_id
+            else None
+        )
+        if corp_sub:
+            await _sync_corporate_subscription_event(event_type, data_object, corp_sub, event_id)
+            await mark_stripe_event_processed(event_id)
+            return {"received": True, "scope": "corporate_subscription", "event_id": event_id}
+
     # ── Dispatch ─────────────────────────────────────────────────────
     # Any exception raised below propagates as 5xx, leaving processed_at
     # NULL so Stripe retries. If Stripe's own retry window is exhausted
@@ -618,6 +734,13 @@ async def stripe_webhook(request: Request):
                     )
                 except Exception:
                     logger.warning("Push notification failed for wallet_topup", exc_info=True)
+                # Receipt for money the rider just moved into Spinr.
+                # Gated on the credit NOT being a dedup hit: wallet_apply_credit
+                # is idempotent on the payment_intent, so a replay returns the
+                # original balance without crediting again — mailing a second
+                # receipt for it would claim a top-up that did not happen.
+                if not credit.get("deduped"):
+                    await send_wallet_topup_email(user_id, amount, new_balance)
 
             return {"received": True, "scope": "wallet_topup", "event_id": event_id}
 
@@ -961,6 +1084,11 @@ async def stripe_webhook(request: Request):
                         )
                     except Exception as _e:
                         logger.debug(f"Refund push failed: {_e}")
+                    # A refund is a financial record; a push that scrolls out of
+                    # the tray is not one. Safe against a duplicate Stripe
+                    # delivery because claim_stripe_event(event_id) already
+                    # deduped this whole handler upstream. Self-swallowing.
+                    await send_refund_email(rider_id, refunded_amount, ride=ride)
             else:
                 await _record_orphan_refund(
                     charge=charge,
@@ -1873,17 +2001,35 @@ async def twilio_inbound_sms(request: Request):
     if auth_token:
         try:
             from twilio.request_validator import RequestValidator
-        except ImportError:  # pragma: no cover - twilio always installed in prod
-            RequestValidator = None  # type: ignore
-        if RequestValidator is not None:
-            # Twilio signs the PUBLIC URL configured in its console, not the
-            # internal one FastAPI sees behind the proxy — rebuild from config.
-            base = (app_config.PUBLIC_API_BASE_URL or "").rstrip("/")
-            url = f"{base}{request.url.path}"
-            params = {k: v for k, v in form.items()}
-            if not RequestValidator(auth_token).validate(url, params, signature):
-                logger.warning("[TWILIO] inbound SMS signature invalid — rejecting")
-                return Response(status_code=403)
+        except ImportError:
+            # FAIL CLOSED. This previously set RequestValidator = None and fell
+            # through to processing the webhook unverified: an admin had
+            # configured a token, so verification was *expected*, and an import
+            # failure silently turned the check off while still honouring the
+            # STOP/START it carried — anyone who could reach the endpoint could
+            # toggle marketing consent for an arbitrary phone number.
+            #
+            # twilio is a hard dependency (requirements.txt), so this branch is
+            # unreachable in production; the danger was never the missing
+            # package, it was that a security control could disable itself
+            # without anyone noticing. It stayed unnoticed for exactly that
+            # reason: three test modules stub sys.modules["twilio"] at import
+            # time, which sent the full-suite run down this path and turned
+            # test_invalid_signature_returns_403 red — reported as a flaky test
+            # rather than as the fail-open it was pointing at.
+            logger.error(
+                "[TWILIO] twilio.request_validator unavailable but twilio_auth_token "
+                "is configured — refusing to process an unverified inbound webhook"
+            )
+            return Response(status_code=503)
+        # Twilio signs the PUBLIC URL configured in its console, not the
+        # internal one FastAPI sees behind the proxy — rebuild from config.
+        base = (app_config.PUBLIC_API_BASE_URL or "").rstrip("/")
+        url = f"{base}{request.url.path}"
+        params = {k: v for k, v in form.items()}
+        if not RequestValidator(auth_token).validate(url, params, signature):
+            logger.warning("[TWILIO] inbound SMS signature invalid — rejecting")
+            return Response(status_code=403)
     else:
         logger.warning("[TWILIO] inbound SMS not signature-verified (twilio_auth_token unset)")
 

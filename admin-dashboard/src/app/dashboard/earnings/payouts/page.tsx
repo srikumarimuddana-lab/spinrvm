@@ -115,12 +115,12 @@ function RetryModal({ open, payout, onClose, onConfirm }: RetryModalProps) {
                             {payout.failure_reason && (
                                 <div className="flex justify-between">
                                     <span className="text-muted-foreground">Failure reason</span>
-                                    <span className="text-red-600 text-xs max-w-[200px] text-right">{payout.failure_reason}</span>
+                                    <span className="text-destructive text-xs max-w-[200px] text-right">{payout.failure_reason}</span>
                                 </div>
                             )}
                         </div>
                     )}
-                    {error && <p className="text-sm text-red-500">{error}</p>}
+                    {error && <p className="text-sm text-destructive">{error}</p>}
                 </div>
                 <DialogFooter>
                     <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
@@ -224,14 +224,14 @@ export default function PayoutsPage() {
 
             {/* Toast */}
             {toast && (
-                <div className="rounded-md bg-green-50 border border-green-200 text-green-800 text-sm px-4 py-2">
+                <div className="rounded-md bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-300 text-sm px-4 py-2">
                     {toast}
                 </div>
             )}
 
             {/* Failed alert */}
             {failedCount > 0 && (
-                <div className="rounded-md bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3 flex items-center gap-2">
+                <div className="rounded-md bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300 text-sm px-4 py-3 flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                     <span>
                         <strong>{failedCount} failed payout{failedCount !== 1 ? "s" : ""}</strong> require attention.{" "}
@@ -383,7 +383,7 @@ export default function PayoutsPage() {
                                         <TableCell>
                                             <Badge className={sc.cls}>{sc.label}</Badge>
                                             {p.failure_reason && (
-                                                <p className="text-xs text-red-500 mt-0.5">{p.failure_reason}</p>
+                                                <p className="text-xs text-destructive mt-0.5">{p.failure_reason}</p>
                                             )}
                                         </TableCell>
                                         <TableCell className="text-sm text-muted-foreground">

@@ -16,7 +16,9 @@ the POST /bookings pydantic body to a QUERY param, 422ing every real booking
 (same failure mode documented in corporate_signup.py; auth.py precedent).
 """
 
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -34,6 +36,8 @@ try:
     from ..dependencies.company_guard import require_company_admin, require_company_member
     from ..features import compute_fare_estimate
     from ..services.company_booking_service import create_company_guest_booking
+    from ..services.corporate_policy_service import require_company_bookable
+    from ..utils.audit_logger import log_user_action
     from ..utils.error_handling import db_error_text
     from ..validators import validate_phone
 except ImportError:
@@ -41,8 +45,12 @@ except ImportError:
     from dependencies.company_guard import require_company_admin, require_company_member  # type: ignore
     from features import compute_fare_estimate  # type: ignore
     from services.company_booking_service import create_company_guest_booking  # type: ignore
+    from services.corporate_policy_service import require_company_bookable  # type: ignore
+    from utils.audit_logger import log_user_action  # type: ignore
     from utils.error_handling import db_error_text  # type: ignore
     from validators import validate_phone  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company Bookings"])
 
@@ -97,16 +105,15 @@ def _booking_row(ride: Dict[str, Any], member: Optional[Dict[str, Any]], guest: 
 async def _require_company_active(company_id: str) -> None:
     """Typed 403 for non-active companies (M2.6): a pending_verification /
     suspended / closed company cannot book. The portal reads the `code` to
-    route the user to the verification page instead of a raw error."""
-    company = await db_supabase.get_corporate_account_by_id(company_id) or {}
-    if (company.get("status") or "").lower() != "active":
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "company_not_active",
-                "message": "This company hasn't completed verification yet. Bookings unlock once it's approved.",
-            },
-        )
+    route the user to the verification page instead of a raw error.
+
+    Thin wrapper around the shared ``require_company_bookable`` (scheduled-
+    rides gap review, Finding #20) — kept as a locally-named function so
+    this file's existing call site and docstring context don't need to
+    change; the actual status/kill-switch logic now lives in one place,
+    shared with the employee self-book path in ``routes/rides/booking.py``.
+    """
+    await require_company_bookable(company_id)
 
 
 @router.post("/bookings")
@@ -219,31 +226,52 @@ async def cancel_booking(
     """Cancel a company booking pre-trip. Members may cancel their own
     bookings; owner/admin any of the company's. Delegates to the canonical
     rider-cancel flow (atomic pre-trip claim, driver release, WS events)
-    with the guest as the acting rider."""
+    with the guest (or, for a self-booked employee ride, the employee
+    themselves) as the acting rider.
+
+    Covers both guest bookings AND an employee's own self-booked ride
+    (scheduled-rides gap review, Finding #19) — this endpoint previously
+    404'd on a self-booked ride even though it appears in the same booking
+    list this cancel button lives on, via a `guest_booking` check that had
+    no reason to exclude the self-booked case. The company-admin ownership
+    check below (role or corporate_member_id match) already applies
+    correctly to both.
+    """
     ride = await db_supabase.get_ride(ride_id)
-    if not ride or ride.get("corporate_account_id") != ctx["company_id"] or not ride.get("guest_booking"):
+    if not ride or ride.get("corporate_account_id") != ctx["company_id"]:
         raise HTTPException(status_code=404, detail="Booking not found")
     if ctx["role"] not in _ADMIN_ROLES and ride.get("corporate_member_id") != ctx["member_id"]:
         raise HTTPException(status_code=403, detail="You can only cancel your own bookings")
 
-    guest_user = await db_supabase.get_user_by_id(ride["rider_id"])
-    if not guest_user:
+    customer = await db_supabase.get_user_by_id(ride["rider_id"])
+    if not customer:
         raise HTTPException(status_code=404, detail="Booking customer not found")
 
     try:
         from .rides import cancel_ride_rider
+        from .rides.cancellation import cancel_scheduled_ride
     except ImportError:
         from routes.rides import cancel_ride_rider  # type: ignore
+        from routes.rides.cancellation import cancel_scheduled_ride  # type: ignore
 
-    result = await cancel_ride_rider(
-        ride_id,
-        reason="Cancelled by company",
-        request=request,
-        current_user=guest_user,
-    )
+    # A not-yet-dispatched scheduled booking (status='scheduled') isn't in
+    # cancel_ride_rider's cancellable-states list at all — cancel_scheduled_ride
+    # is the endpoint that actually handles it (pre-dispatch atomic claim, or
+    # falling through to cancel_ride_rider itself once dispatched), exactly
+    # mirroring the rider-app's own DELETE /rides/scheduled/{id} route.
+    if ride.get("is_scheduled"):
+        result = await cancel_scheduled_ride(ride_id, request=request, current_user=customer)
+    else:
+        result = await cancel_ride_rider(
+            ride_id,
+            reason="Cancelled by company",
+            request=request,
+            current_user=customer,
+        )
 
     # Tell the customer their ride is off (SMS for guests; app-holders get
-    # the standard cancel push from the flow above).
+    # the standard cancel push from the flow above). Safe to call
+    # unconditionally — notify_guest_cancelled no-ops for a non-guest rider.
     try:
         from ..services.guest_notification_service import notify_guest_cancelled
         from ..utils.background import spawn
@@ -268,7 +296,6 @@ async def booking_fare_estimate(
 ):
     """Fare preview for the portal book page — same canonical pipeline as the
     booking itself, surge pinned to 1.0 (corporate rides never surge)."""
-    from decimal import Decimal
 
     return await compute_fare_estimate(
         pickup_lat=pickup_lat,
@@ -288,6 +315,10 @@ async def booking_fare_estimate(
 class SectionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
+    # Corporate + admin portal review, round 2, "department/section budgets"
+    # — visibility only (business decision). Never read by any booking-time
+    # or settlement-time gate; purely a reference number the company sets.
+    monthly_budget_cap: Optional[Decimal] = Field(default=None, ge=0, decimal_places=2)
 
     @field_validator("name")
     @classmethod
@@ -305,6 +336,7 @@ class SectionUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
     status: Optional[str] = Field(default=None, pattern="^(active|archived)$")
+    monthly_budget_cap: Optional[Decimal] = Field(default=None, ge=0, decimal_places=2)
 
     @field_validator("name")
     @classmethod
@@ -319,8 +351,9 @@ class SectionUpdate(BaseModel):
 
 @router.get("/sections")
 async def list_sections(ctx: dict = Depends(require_company_member)):
-    """Sections with live member counts. Member-readable — the bookings list
-    filter needs them; only owner/admin can mutate."""
+    """Sections with live member counts and current-month budget spend.
+    Member-readable — the bookings list filter needs them; only
+    owner/admin can mutate."""
     sections = (
         await db_supabase.get_rows(
             "corporate_sections",
@@ -344,8 +377,23 @@ async def list_sections(ctx: dict = Depends(require_company_member)):
         sid = m.get("section_id")
         if sid:
             counts[sid] = counts.get(sid, 0) + 1
+
+    # Corporate + admin portal review, round 2, "department/section
+    # budgets" (visibility only). Batch read, not N+1 — one query for
+    # every section's current calendar month, not one per section.
+    current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    spend_map = await db_supabase.get_section_spend_map([s["id"] for s in sections], current_month)
+
     return {
-        "sections": [{**s, "member_count": counts.get(s["id"], 0)} for s in sections],
+        "sections": [
+            {
+                **s,
+                "member_count": counts.get(s["id"], 0),
+                "budget_month": current_month,
+                "budget_spend_used": str(spend_map.get(s["id"]) or Decimal("0.00")),
+            }
+            for s in sections
+        ],
     }
 
 
@@ -360,6 +408,7 @@ async def create_section(body: SectionCreate, ctx: dict = Depends(require_compan
         "name": body.name.strip(),
         "description": (body.description or "").strip() or None,
         "status": "active",
+        "monthly_budget_cap": float(body.monthly_budget_cap) if body.monthly_budget_cap is not None else None,
         "created_by": ctx["user"]["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -371,6 +420,16 @@ async def create_section(body: SectionCreate, ctx: dict = Depends(require_compan
         if "duplicate" in msg or "unique" in msg or "23505" in msg:
             raise HTTPException(status_code=409, detail="A section with this name already exists.") from e
         raise
+    try:
+        await log_user_action(
+            user=ctx["user"],
+            action="corporate_section_created",
+            resource="corporate_section",
+            resource_id=row["id"],
+            details={"company_id": ctx["company_id"], "name": row["name"]},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_section_created section=%s", row["id"], exc_info=True)
     return inserted or row
 
 
@@ -389,6 +448,8 @@ async def update_section(
     patch = {k: v for k, v in body.model_dump(exclude_none=True).items()}
     if "name" in patch:
         patch["name"] = patch["name"].strip()
+    if "monthly_budget_cap" in patch and isinstance(patch["monthly_budget_cap"], Decimal):
+        patch["monthly_budget_cap"] = float(patch["monthly_budget_cap"])
     if not patch:
         return existing[0]
     try:
@@ -398,6 +459,16 @@ async def update_section(
         if "duplicate" in msg or "unique" in msg or "23505" in msg:
             raise HTTPException(status_code=409, detail="A section with this name already exists.") from e
         raise
+    try:
+        await log_user_action(
+            user=ctx["user"],
+            action="corporate_section_updated",
+            resource="corporate_section",
+            resource_id=section_id,
+            details={"company_id": ctx["company_id"], "changes": patch},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_section_updated section=%s", section_id, exc_info=True)
     return updated or {**existing[0], **patch}
 
 
@@ -413,6 +484,16 @@ async def archive_section(section_id: str, ctx: dict = Depends(require_company_a
     if not existing:
         raise HTTPException(status_code=404, detail="Section not found")
     updated = await db_supabase.update_one("corporate_sections", {"id": section_id}, {"status": "archived"})
+    try:
+        await log_user_action(
+            user=ctx["user"],
+            action="corporate_section_archived",
+            resource="corporate_section",
+            resource_id=section_id,
+            details={"company_id": ctx["company_id"], "name": existing[0].get("name")},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_section_archived section=%s", section_id, exc_info=True)
     return updated or {**existing[0], "status": "archived"}
 
 

@@ -335,7 +335,7 @@ export default function DisputesPage() {
                     <Input value={adminNote} onChange={e => setAdminNote(e.target.value)} placeholder="Internal note about this resolution" />
                   </div>
                   {resolveError && (
-                    <p className="text-sm text-red-600">{resolveError}</p>
+                    <p className="text-sm text-destructive">{resolveError}</p>
                   )}
                   <div className="flex gap-2">
                     <Button variant="outline" className="flex-1" onClick={() => { setSelected(null); setResolveError(null); }}>Cancel</Button>

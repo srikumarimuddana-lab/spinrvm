@@ -5,6 +5,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   ScrollView,
   ActivityIndicator,
   useWindowDimensions,
@@ -18,7 +19,7 @@ import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop, BottomSheetTex
 import CustomToggle from '../components/CustomToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from 'expo-router/react-navigation';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Circle, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -966,8 +967,16 @@ function RideOptionsScreenContent() {
 
       {/* ═══ Payment method modal ═══ */}
       <Modal visible={showPaymentSheet} animationType="slide" transparent onRequestClose={() => setShowPaymentSheet(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPaymentSheet(false)}>
-          <TouchableOpacity activeOpacity={1} style={styles.paymentModal}>
+        {/* Backdrop is an absolute-fill SIBLING under the sheet, not a parent
+            Touchable: nesting the Done button inside two TouchableOpacity
+            wrappers stopped its presses from registering on the New
+            Architecture (rows inside the ScrollView kept working because they
+            route through the scroll responder), leaving riders stuck on this
+            sheet. A plain View sheet over a Pressable backdrop keeps
+            tap-outside-to-close without putting any Touchable above Done. */}
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowPaymentSheet(false)} />
+          <View style={styles.paymentModal}>
             <View style={styles.paymentModalHandle} />
             <Text style={styles.paymentModalTitle}>Payment method</Text>
 
@@ -1067,8 +1076,8 @@ function RideOptionsScreenContent() {
             <TouchableOpacity style={styles.paymentDoneBtn} onPress={() => setShowPaymentSheet(false)}>
               <Text style={styles.paymentDoneBtnText}>Done</Text>
             </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* ═══ Promo selection sheet ═══ */}

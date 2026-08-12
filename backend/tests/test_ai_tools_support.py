@@ -287,6 +287,22 @@ class TestEscalation:
         assert result["link"] == "/lost-and-found"
 
     @pytest.mark.anyio
+    async def test_cancel_ride_links_to_ride_status_not_a_ticket_message(self):
+        # ACTION_ITEMS.md AI11: cancelling is self-serve -- the rider should
+        # get a deep link back to the ride screen, not "handoff to human
+        # support" phrasing that implies they need to wait on a person.
+        with _settings():
+            result, ok = await execute_tool(
+                "escalate_to_support",
+                {"reason": "wants to cancel the ride", "category": "cancel_ride"},
+                user=RIDER,
+            )
+        assert ok
+        assert result["link"] == "/ride-status"
+        assert "human support" not in result["message"].lower()
+        assert "cancel" in result["message"].lower()
+
+    @pytest.mark.anyio
     async def test_safety_always_mentions_911(self):
         with _settings():
             result, _ = await execute_tool(

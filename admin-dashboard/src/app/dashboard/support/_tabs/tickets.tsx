@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
     getTickets, replyToTicket, closeTicket, createTicket, updateTicket, deleteTicket,
     getFaqs, createFaq, updateFaq, deleteFaq,
 } from "@/lib/api";
 import { formatDate, statusColor } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,7 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
-import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle } from "lucide-react";
+import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle, ExternalLink } from "lucide-react";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -45,7 +47,7 @@ export default function TicketsTab() {
         <div className="space-y-4">
             <div className="flex gap-1 border-b -mt-1">
                 {[{ k: "tickets", l: "Tickets", i: MessageSquare }, { k: "faqs", l: "FAQs", i: HelpCircle }].map((t) => (
-                    <button key={t.k} onClick={() => setSub(t.k as any)} className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${sub === t.k ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+                    <button key={t.k} onClick={() => setSub(t.k as any)} aria-label={`${t.l} sub-tab (within Tickets)`} className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${sub === t.k ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
                         <t.i className="h-3.5 w-3.5" />{t.l}
                     </button>
                 ))}
@@ -119,6 +121,25 @@ function TicketsList() {
 
     return (
         <div className="space-y-4">
+            {/* Corporate + admin portal review, round 2: "two parallel,
+                non-integrated ticketing systems." This in-house tab (getTickets/
+                replyToTicket/closeTicket) and the Help Desk (Zoho) integration
+                (support-tickets/tickets, getDeskTickets) are genuinely separate
+                backends, not the same data behind two UIs like Disputes/FAQs
+                were — full consolidation is a real migration, out of scope
+                here. Light-touch per product decision: point toward the
+                actively-developed system (Zoho Help Desk has its own Trends
+                analytics page and dedicated backend module; this one doesn't). */}
+            <Alert>
+                <ExternalLink className="h-4 w-4" />
+                <AlertDescription className="flex items-center justify-between gap-3">
+                    <span>Spinr&apos;s primary ticketing system is now the Help Desk (Zoho) integration.</span>
+                    <Link href="/dashboard/support-tickets/tickets" className="font-medium underline underline-offset-2 whitespace-nowrap">
+                        Open Help Desk
+                    </Link>
+                </AlertDescription>
+            </Alert>
+
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1 flex-wrap">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>

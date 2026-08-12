@@ -7,11 +7,15 @@ Reads available to any active member use require_company_member.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import stripe
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 try:
     from ..db_supabase import (  # type: ignore
@@ -22,6 +26,7 @@ try:
         get_corporate_member_by_id,
         get_corporate_policy,
         get_corporate_wallet_by_company,
+        get_default_payment_method,
         get_member_allowance,
         list_allowed_domains,
         list_company_allowance_requests,
@@ -50,6 +55,7 @@ try:
     )
     from ..services.corporate_allowance_service import apply_grant  # type: ignore
     from ..services.corporate_membership_service import invite_member  # type: ignore
+    from ..services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
         add_allowed_domain,
@@ -59,6 +65,7 @@ except ImportError:
         get_corporate_member_by_id,
         get_corporate_policy,
         get_corporate_wallet_by_company,
+        get_default_payment_method,
         get_member_allowance,
         list_allowed_domains,
         list_company_allowance_requests,
@@ -87,6 +94,7 @@ except ImportError:
     )
     from services.corporate_allowance_service import apply_grant  # type: ignore
     from services.corporate_membership_service import invite_member  # type: ignore
+    from services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
 
 try:
     from ..services.corporate_member_offboarding_service import cancel_pre_pickup_rides_for_member  # type: ignore
@@ -105,10 +113,34 @@ try:
 except ImportError:
     from utils.audit_logger import log_user_action  # type: ignore
 
+try:
+    from ..utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore
+except ImportError:
+    from utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore
+
+try:
+    from ..utils.money import dollars_to_cents  # type: ignore
+except ImportError:
+    from utils.money import dollars_to_cents  # type: ignore
+
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company"])
+
+
+def _annotate_geofence_enforcement(policy: dict) -> dict:
+    """Stamp geofence_enforced=False whenever a policy has allowed_geofence
+    set. Corporate + admin portal review, round 2: "geofence policy ...
+    silently does nothing" — services/corporate_policy_service.py's
+    evaluate_policy_for_ride permanently defers this rule pending PostGIS
+    (see its own "DEFERRED" comment), but nothing told an API caller that.
+    Never mutates the row that was actually stored/returned by the DB —
+    only adds this one derived, read-only field to the response dict.
+    """
+    if policy and policy.get("allowed_geofence"):
+        return {**policy, "geofence_enforced": False}
+    return policy
 
 
 def _validate_geofence(geofence: Optional[dict]) -> None:
@@ -181,16 +213,31 @@ async def invite(
 
             company = await get_corporate_account_by_id(company_id) or {}
             company_name = company.get("name") or "your company"
+            try:
+                from ..utils.email_layout import render_email
+            except ImportError:
+                from utils.email_layout import render_email  # type: ignore
+
+            _invite_subject = f"You're invited to {company_name} on Spinr for Business"
+            # A branded shell matters more here than on most: this is an
+            # unsolicited email containing a sign-in link, which is exactly the
+            # shape of a phishing attempt. The logo and the configured company
+            # details are what make it look like us.
+            _invite_rendered = await render_email(
+                heading=_invite_subject,
+                paragraphs=[
+                    f"You've been invited to join {company_name} on Spinr for Business "
+                    f"as {'an admin' if body.role.value in ('admin', 'owner') else 'a member'}.",
+                    "The link below signs you in with a one-time code sent to this address — no password needed.",
+                ],
+                cta=("Accept the invite", web_invite_url),
+                footnote="If you weren't expecting this invitation, you can ignore this email.",
+            )
             email_sent = await send_transactional_email(
                 to=body.email,
-                subject=f"You're invited to {company_name} on Spinr for Business",
-                text=(
-                    f"You've been invited to join {company_name} on Spinr for Business "
-                    f"as {'an admin' if body.role.value in ('admin', 'owner') else 'a member'}.\n\n"
-                    f"Accept the invite and sign in with this email address:\n{web_invite_url}\n\n"
-                    "The link signs you in with a one-time code sent to this address — "
-                    "no password needed."
-                ),
+                subject=_invite_subject,
+                text=_invite_rendered.text,
+                html=_invite_rendered.html,
                 log_id=member.get("id") or company_id,
                 email_type="corporate_member_invite",
             )
@@ -271,6 +318,63 @@ async def _maybe_revoke_access_on_removal(
             member_id,
             exc_info=True,
         )
+
+
+async def _maybe_log_role_or_policy_override_change(
+    *,
+    company_id: str,
+    member_id: str,
+    existing: dict,
+    patch: dict,
+    actor: dict,
+) -> None:
+    """Audit-log role and policy_override changes on a member update.
+
+    Every member status transition in this file is already audit-logged
+    (_maybe_revoke_access_on_removal / _maybe_log_reactivation), but role
+    (a privilege change — member vs admin) and policy_override (whether a
+    member is exempt from company-wide fare/surge policy) went through the
+    same PATCH endpoint with no audit trail at all. Corporate + admin
+    portal review, gap #38.
+    """
+    if "role" in patch and patch["role"] != existing.get("role"):
+        try:
+            await log_user_action(
+                user=actor,
+                action="corporate_member_role_changed",
+                resource="corporate_member",
+                resource_id=str(member_id),
+                details={
+                    "company_id": company_id,
+                    "old_role": existing.get("role"),
+                    "new_role": patch["role"],
+                },
+            )
+        except Exception:
+            logger.error(
+                "Audit log failed for corporate_member_role_changed member=%s",
+                member_id,
+                exc_info=True,
+            )
+    if "policy_override" in patch and patch["policy_override"] != existing.get("policy_override"):
+        try:
+            await log_user_action(
+                user=actor,
+                action="corporate_member_policy_override_changed",
+                resource="corporate_member",
+                resource_id=str(member_id),
+                details={
+                    "company_id": company_id,
+                    "old_policy_override": existing.get("policy_override"),
+                    "new_policy_override": patch["policy_override"],
+                },
+            )
+        except Exception:
+            logger.error(
+                "Audit log failed for corporate_member_policy_override_changed member=%s",
+                member_id,
+                exc_info=True,
+            )
 
 
 async def _maybe_log_reactivation(
@@ -369,6 +473,13 @@ async def update_member(
             new_status=patch["status"],
             actor=guard["user"],
         )
+    await _maybe_log_role_or_policy_override_change(
+        company_id=company_id,
+        member_id=member_id,
+        existing=existing,
+        patch=patch,
+        actor=guard["user"],
+    )
     return updated
 
 
@@ -484,7 +595,18 @@ async def add_domain(
     body: AllowedDomainCreate,
     guard=Depends(require_company_admin),
 ):
-    return await add_allowed_domain(company_id=company_id, domain=body.domain)
+    result = await add_allowed_domain(company_id=company_id, domain=body.domain)
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_allowed_domain_added",
+            resource="corporate_allowed_domain",
+            resource_id=body.domain,
+            details={"company_id": company_id},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_allowed_domain_added company=%s", company_id, exc_info=True)
+    return result
 
 
 @router.delete("/allowed-domains/{domain}")
@@ -494,6 +616,16 @@ async def remove_domain(
     guard=Depends(require_company_admin),
 ):
     await delete_allowed_domain(company_id=company_id, domain=domain.lower())
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_allowed_domain_removed",
+            resource="corporate_allowed_domain",
+            resource_id=domain.lower(),
+            details={"company_id": company_id},
+        )
+    except Exception:
+        logger.error("Audit log failed for corporate_allowed_domain_removed company=%s", company_id, exc_info=True)
     return {"status": "ok"}
 
 
@@ -532,12 +664,33 @@ async def decide_allowance_request(
             notes=f"approved request {request_id}",
             floor=Decimal(str(wallet.get("soft_negative_floor", "-50"))),
         )
-    return await update_allowance_request(
+    result = await update_allowance_request(
         request_id=request_id,
         status=new_status,
         reviewed_by=guard["user"]["id"],
         decision_notes=body.note,
     )
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_allowance_request_decided",
+            resource="corporate_allowance_request",
+            resource_id=str(request_id),
+            details={
+                "company_id": company_id,
+                "member_id": request["member_id"],
+                "decision": new_status,
+                "amount": str(request.get("amount")) if body.approve else None,
+                "note": body.note,
+            },
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_allowance_request_decided request=%s",
+            request_id,
+            exc_info=True,
+        )
+    return result
 
 
 # ---------- Policy ----------
@@ -554,7 +707,7 @@ async def get_policy(
     screen can display the policy summary ("Max $80/ride, Mon–Fri 9am–7pm").
     Returns an empty dict when no policy has been configured yet.
     """
-    return await get_corporate_policy(company_id) or {}
+    return _annotate_geofence_enforcement(await get_corporate_policy(company_id) or {})
 
 
 @router.put("/policy")
@@ -599,7 +752,7 @@ async def replace_policy(
     except Exception:
         logger.error("Audit log failed for corporate_policy_replaced company=%s", company_id, exc_info=True)
 
-    return result
+    return _annotate_geofence_enforcement(result)
 
 
 @router.patch("/policy")
@@ -615,7 +768,7 @@ async def patch_policy(
     """
     patch = body.model_dump(exclude_none=True)
     if not patch:
-        return await get_corporate_policy(company_id) or {}
+        return _annotate_geofence_enforcement(await get_corporate_policy(company_id) or {})
 
     if "allowed_payment_source" in patch and hasattr(patch["allowed_payment_source"], "value"):
         patch["allowed_payment_source"] = patch["allowed_payment_source"].value
@@ -642,7 +795,7 @@ async def patch_policy(
     except Exception:
         logger.error("Audit log failed for corporate_policy_patched company=%s", company_id, exc_info=True)
 
-    return result
+    return _annotate_geofence_enforcement(result)
 
 
 # ---------- Billing (Plan 6) ----------
@@ -683,15 +836,54 @@ def _money_str(v) -> str:
     return str(_d(v))
 
 
+async def _attach_ride_tax(rows: list[dict]) -> list[dict]:
+    """Merge rides.tax_amount / tax_breakdown onto ride_payment_sources rows.
+
+    Corporate + admin portal review, round 2: "no GST/PST breakdown on
+    corporate statements" — tax is already computed and persisted per-ride
+    (migration 46) and already shown on rider receipts
+    (utils/email_receipt.py, utils/receipt_pdf.py); it just never reached
+    the one place a corporate finance manager could self-serve it. Fetches
+    rides by $in on ride_payment_sources.ride_id (== rides.id), per
+    CLAUDE.md's convention for a lookup spanning two tables — never a
+    PostgREST embed.
+    """
+    try:
+        from ..db_supabase import get_rows as _get_rows
+    except ImportError:
+        from db_supabase import get_rows as _get_rows  # type: ignore
+
+    ride_ids = [r["ride_id"] for r in rows if r.get("ride_id")]
+    if not ride_ids:
+        return rows
+    ride_rows = await _get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids))
+    tax_by_ride = {r["id"]: r for r in ride_rows}
+    for r in rows:
+        ride = tax_by_ride.get(r.get("ride_id"), {})
+        r["tax_amount"] = ride.get("tax_amount") or 0
+        r["tax_breakdown"] = ride.get("tax_breakdown") or {}
+    return rows
+
+
 def _aggregate_rows(rows: list[dict]) -> dict:
     allowance_total = _ZERO
     master_total = _ZERO
+    tax_total = _ZERO
+    tax_by_type: dict[str, Decimal] = {}
     by_member: dict[str, dict] = {}
     for r in rows:
         ad = _d(r.get("allowance_debit_amount"))
         md = _d(r.get("master_fallback_amount"))
         allowance_total += ad
         master_total += md
+        tax = _d(r.get("tax_amount"))
+        tax_total += tax
+        breakdown = r.get("tax_breakdown") or {}
+        if isinstance(breakdown, dict):
+            for label, payload in breakdown.items():
+                if not isinstance(payload, dict):
+                    continue
+                tax_by_type[label] = tax_by_type.get(label, _ZERO) + _d(payload.get("amount"))
         mid = r.get("member_id") or "unknown"
         slot = by_member.setdefault(
             mid,
@@ -723,6 +915,8 @@ def _aggregate_rows(rows: list[dict]) -> dict:
         "master_total": _money_str(master_total),
         "total": _money_str(total),
         "avg_fare": _money_str(total / len(rows)) if rows else "0.00",
+        "tax_total": _money_str(tax_total),
+        "tax_by_type": {label: _money_str(amt) for label, amt in tax_by_type.items()},
         "by_member": by_member_out,
     }
 
@@ -762,6 +956,7 @@ async def billing_summary(
             break
         offset += page_size
 
+    all_rows = await _attach_ride_tax(all_rows)
     wallet = await get_corporate_wallet_by_company(company_id) or {}
     return {
         "month": month,
@@ -813,6 +1008,8 @@ async def billing_statement(
             break
         offset += page_size
 
+    line_items = await _attach_ride_tax(line_items)
+    all_rows = await _attach_ride_tax(all_rows)
     return {
         "month": month,
         "from": from_iso,
@@ -820,6 +1017,90 @@ async def billing_statement(
         "line_items": line_items,
         "summary": _aggregate_rows(all_rows),
     }
+
+
+async def _fetch_all_month_rows(company_id: str, from_iso: str, to_iso: str) -> list[dict]:
+    """Page through every ride_payment_sources row for a month, uncapped.
+
+    Extracted so build_full_month_statement (below) doesn't duplicate this
+    loop a third time — billing_summary/billing_statement above keep their
+    own inline copies untouched to avoid any risk to their existing tests.
+    """
+    all_rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        page = await list_company_ride_payment_sources(
+            company_id=company_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
+        )
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return all_rows
+
+
+async def build_full_month_statement(company_id: str, month: str) -> dict:
+    """Full (unpaginated) statement for a month: every line item plus the
+    aggregated summary. Corporate + admin portal review, round 2,
+    "invoicing" — feeds the PDF download routes (this file's
+    /billing/statements/{month}/pdf below, and the internal-admin mirror
+    in routes/corporate_accounts.py), which need the complete line-item
+    table rather than billing_statement's paginated JSON page.
+    """
+    from_iso, to_iso = _month_bounds(month)
+    all_rows = await _fetch_all_month_rows(company_id, from_iso, to_iso)
+    all_rows = await _attach_ride_tax(all_rows)
+    return {
+        "month": month,
+        "from": from_iso,
+        "to": to_iso,
+        "line_items": all_rows,
+        "summary": _aggregate_rows(all_rows),
+    }
+
+
+@router.get("/billing/statements/{month}/pdf")
+async def billing_statement_pdf(
+    company_id: str,
+    month: str,
+    guard=Depends(require_company_admin),
+):
+    """Downloadable PDF invoice for a monthly statement (corporate + admin
+    portal review round 2, business decision: downloadable PDF invoice per
+    statement period). Record-only — renders the same numbers
+    billing_statement already computes; does not move money."""
+    company = await get_corporate_account_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    statement = await build_full_month_statement(company_id, month)
+    pdf_bytes = generate_corporate_statement_pdf(company, statement)
+
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_statement_pdf_download",
+            resource="corporate_account",
+            resource_id=company_id,
+            details={"month": month},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_statement_pdf_download company=%s",
+            company_id,
+            exc_info=True,
+        )
+
+    filename = f"spinr-corporate-statement-{company_id[:8]}-{month}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/billing/transactions")
@@ -844,3 +1125,108 @@ async def billing_transactions(
         "currency": wallet.get("currency") or "CAD",
         "transactions": txns,
     }
+
+
+class SelfServeTopUpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: Decimal = Field(..., ge=Decimal("100"), le=Decimal("10000"), description="CAD between 100 and 10000")
+    payment_method_id: Optional[str] = None
+    client_idempotency_key: Optional[str] = None
+
+
+@router.post("/wallet/topup")
+async def self_serve_wallet_topup(
+    company_id: str,
+    body: SelfServeTopUpRequest,
+    guard=Depends(require_company_admin),
+):
+    """Company-admin self-serve wallet top-up (corporate + admin portal
+    review round 2 — business decision: self-serve funding via Stripe).
+
+    Deliberately mirrors routes/corporate_wallet.py::manual_topup's amount
+    bounds, idempotency-key scheme, and Stripe PaymentIntent shape exactly
+    — same metadata (scope=corporate_topup, company_id, wallet_id), so the
+    existing payment_intent.succeeded webhook handler (routes/webhooks.py)
+    credits the wallet identically whether a Spinr admin or a company admin
+    initiated the charge. `initiated_by` carries the company-admin's own
+    user id, not a Spinr staff id, so the ledger/audit trail already
+    distinguishes who actually paid.
+    """
+    company = await get_corporate_account_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if company.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Company is not active")
+    # No 409 on a missing stripe_customer_id — with_corporate_customer_repair
+    # below provisions one. Since the auto-topup loop NULLs this column when it
+    # retires a customer stranded by a key rotation, a 409 here would leave the
+    # company permanently unable to fund its own wallet. They still get a clean
+    # 422 from the repair path if no card is on file.
+
+    wallet = await get_corporate_wallet_by_company(company_id)
+    if not wallet:
+        raise HTTPException(status_code=500, detail="Wallet not provisioned")
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    # The payment-method lookup and the PaymentIntent both address the customer,
+    # so both live inside the repair wrapper: a company billing admin is present,
+    # so a customer stranded by a test→live key rotation is replaced here rather
+    # than 500ing their top-up. If the company's card lived on the replaced
+    # customer, the retry surfaces the honest 422 below.
+    async def _create_intent(customer_id: str):
+        payment_method_id = body.payment_method_id
+        if not payment_method_id:
+            payment_method_id = await get_default_payment_method(customer_id, stripe_secret)
+        if not payment_method_id:
+            raise HTTPException(
+                status_code=422,
+                detail="No payment method on file — provide payment_method_id or save a default card first",
+            )
+
+        intent_kwargs = dict(
+            amount=dollars_to_cents(body.amount),
+            currency="cad",
+            customer=customer_id,
+            payment_method=payment_method_id,
+            off_session=True,
+            confirm=True,
+            # Server-side off_session confirm: disable redirect-based payment
+            # methods so Stripe doesn't demand a return_url — same reasoning as
+            # the internal-admin manual_topup this mirrors.
+            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+            metadata={
+                "scope": "corporate_topup",
+                "company_id": company_id,
+                "wallet_id": wallet["id"],
+                "initiated_by": guard["user"]["id"],
+            },
+            api_key=stripe_secret,
+            idempotency_key=(
+                body.client_idempotency_key
+                or f"corp-selfserve-topup-{wallet['id']}-{customer_id}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
+            ),
+        )
+        return await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**intent_kwargs))
+
+    _, intent = await with_corporate_customer_repair(company, stripe_secret, _create_intent)
+
+    try:
+        await log_user_action(
+            user=guard["user"],
+            action="corporate_wallet_self_serve_topup",
+            resource="corporate_wallet",
+            resource_id=str(wallet["id"]),
+            details={"company_id": company_id, "amount": str(body.amount), "payment_intent_id": intent.id},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_wallet_self_serve_topup wallet=%s",
+            wallet["id"],
+            exc_info=True,
+        )
+
+    return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}

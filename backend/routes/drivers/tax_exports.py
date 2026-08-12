@@ -31,7 +31,102 @@ from ._shared import (  # noqa: F401
     _ride_income,
 )
 
+try:
+    from ...utils.company_details import load_company_details
+    from ...utils.legacy_rides import drop_legacy_rides
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils.company_details import load_company_details  # type: ignore
+    from utils.legacy_rides import drop_legacy_rides  # type: ignore
+
 router = APIRouter()
+
+# Matches the Saskatchewan trip-record retention window (7 years, see
+# CLAUDE.md § regulatory) — there is no reportable income older than the
+# records we are required to keep.
+_T4A_YEAR_LOOKBACK = 7
+
+
+# MUST stay declared BEFORE `/t4a/{year}`: that route types `year` as int, so
+# a request for /t4a/years would otherwise be matched there and 422 on the
+# path coercion instead of reaching this handler.
+@router.get("/t4a/years")
+async def get_t4a_years(current_user: dict = Depends(get_current_user)):
+    """Tax years this driver actually has reportable income for.
+
+    The apps used to synthesize "the last three completed years" client-side
+    and offer a T4A for each, so a new driver — or a migrated one whose only
+    income was previous-app rides now excluded from Spinr's books
+    (utils/legacy_rides) — was offered slips for years they earned nothing,
+    and emailing one produced a $0.00 document. Years with no income are
+    simply absent here so the client can render nothing instead of guessing.
+
+    Buckets by ``created_at`` because that is the field
+    ``get_rides_for_driver`` filters the slip on — using a different field
+    here would let this list disagree with the slip it advertises.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    this_year = datetime.now(timezone.utc).year
+    earliest = this_year - _T4A_YEAR_LOOKBACK + 1
+
+    # Same two income sources, and the same legacy exclusion, as the slip.
+    rides = drop_legacy_rides(
+        await db_supabase.get_rides_for_driver(
+            driver["id"],
+            statuses=[RideStatus.COMPLETED],
+            from_date=f"{earliest}-01-01",
+            to_date=f"{this_year + 1}-01-01",
+            limit=10000,
+        )
+    )
+    synced_rows = await db_supabase.get_rows(
+        "payouts",
+        {
+            "driver_id": driver["id"],
+            "payout_type": "stripe_sync",
+            "created_at": {
+                "$gte": f"{earliest}-01-01T00:00:00+00:00",
+                "$lt": f"{this_year + 1}-01-01T00:00:00+00:00",
+            },
+        },
+        limit=10000,
+    )
+
+    totals: dict[int, Decimal] = {}
+    trips: dict[int, int] = {}
+
+    def _year_of(row: dict) -> int | None:
+        stamp = str(row.get("created_at") or "")[:4]
+        return int(stamp) if stamp.isdigit() else None
+
+    for r in rides:
+        y = _year_of(r)
+        if y is None:
+            continue
+        totals[y] = totals.get(y, Decimal("0")) + _ride_income(r)
+        trips[y] = trips.get(y, 0) + 1
+    for p in synced_rows:
+        y = _year_of(p)
+        if y is None:
+            continue
+        totals[y] = totals.get(y, Decimal("0")) + Decimal(str(p.get("amount") or "0"))
+
+    years = [
+        {
+            "year": y,
+            "total_earnings": _money_str(total),
+            "total_trips": trips.get(y, 0),
+        }
+        for y, total in sorted(totals.items(), reverse=True)
+        # A year that nets to zero (or negative, via reversals) is not income
+        # worth offering a slip for.
+        if total > Decimal("0")
+    ]
+    return {"years": years}
 
 
 @router.get("/t4a/{year}")
@@ -42,21 +137,30 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    rides = await db_supabase.get_rides_for_driver(
-        driver["id"],
-        statuses=[RideStatus.COMPLETED],
-        from_date=f"{year}-01-01",
-        to_date=f"{year + 1}-01-01",
-        limit=10000,
+    # Previous-app rides brought in by the booking importer are NOT Spinr
+    # income: that money was earned and paid out by the old app, and where it
+    # was paid through Stripe it is already reported below via the
+    # 'stripe_sync' rows. Counting both would report the same legacy dollars
+    # to the CRA twice. The repo helper takes no extra filters, so the
+    # exclusion is applied here (see utils/legacy_rides).
+    rides = drop_legacy_rides(
+        await db_supabase.get_rides_for_driver(
+            driver["id"],
+            statuses=[RideStatus.COMPLETED],
+            from_date=f"{year}-01-01",
+            to_date=f"{year + 1}-01-01",
+            limit=10000,
+        )
     )
 
     # Legacy-era income synced from Stripe transfer history
-    # (services/stripe_payout_sync_service.py): the old app's rides were never
-    # imported, so payouts rows with payout_type='stripe_sync' are the only
-    # record of that income — the T4A must report it, attributed to the year of
-    # the transfer (CRA reports amounts PAID). App-native payouts are cash-outs
-    # of the ride earnings summed below, and 'legacy_import' offsets pair with
-    # imported rides — only the synced type is added, so nothing double-counts.
+    # (services/stripe_payout_sync_service.py): payouts rows with
+    # payout_type='stripe_sync' are the record of legacy income actually PAID
+    # through Stripe — the T4A must report it, attributed to the year of the
+    # transfer (CRA reports amounts paid). App-native payouts are cash-outs of
+    # the ride earnings summed below, and 'legacy_import' offsets pair with
+    # imported rides now excluded above — only the synced type is added, so
+    # nothing double-counts.
     # Queried via this module's db binding so the established
     # _deps.db_supabase patch point covers it in tests.
     synced_rows = await db_supabase.get_rows(
@@ -90,6 +194,11 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         "legacy_synced_earnings": _money_str(synced_earnings),
         "gst_registered": driver.get("gst_registered", False),
         "gst_bn": driver.get("gst_bn") or "",
+        # Last 4 only. The driver's slip shows it masked so they can confirm we
+        # hold the right number; `drivers.sin` itself is never read here, and
+        # this summary is returned over the API.
+        "sin_last4": driver.get("sin_last4") or "",
+        "sin_on_file": bool(driver.get("sin")),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "pdf_url": f"/api/v1/drivers/t4a/{year}/pdf",
         "driver_name": driver_name,
@@ -121,13 +230,16 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
     # CRA T4A-compatible CSV. GST/BN columns are required for drivers who
     # earn above the T4A reporting threshold and hold a GST/HST account.
     csv_data = (
-        "Year,Total Earnings,Total Trips,Net Earnings,GST Registered,GST/HST Business Number\n"
+        "Year,Total Earnings,Total Trips,Net Earnings,GST Registered,GST/HST Business Number,SIN\n"
         f"{year},"
         f"{summary_data['total_earnings']},"
         f"{summary_data['total_trips']},"
         f"{summary_data['net_earnings']},"
         f"{'Yes' if summary_data['gst_registered'] else 'No'},"
-        f"{summary_data['gst_bn']}"
+        f"{summary_data['gst_bn']},"
+        # Masked, matching the PDF. This file leaves our control the moment the
+        # driver forwards it to an accountant, so it carries the last 4 only.
+        f"{'Ending in ' + summary_data['sin_last4'] if summary_data['sin_last4'] else 'Not on file'}"
     )
     filename = f"earnings_export_{year}.csv"
 
@@ -202,17 +314,18 @@ async def _email_t4a_document(user_id: str, email: str, year: int, summary: dict
         logger.error("T4A PDF render failed for user %s year %s", user_id, year, exc_info=True)
         return
     filename = f"T4A_{year}_{user_id[:8]}.pdf"
+    company = await load_company_details()
     await _email_driver_document(
         user_id,
         email,
-        subject=f"Your Spinr T4A summary for {year}",
+        subject=f"Your {company.app_name} T4A summary for {year}",
         body=(
             "Hi,\n\n"
             f"As requested, your T4A earnings summary for the {year} tax year is "
             f'attached as a PDF ("{filename}").\n\n'
             "Keep this document for your Canadian tax filing. If you have any "
             "questions, contact support@spinr.ca.\n\n"
-            "— The Spinr Team"
+            f"— The {company.app_name} Team"
         ),
         filename=filename,
         content=pdf_bytes,
@@ -224,16 +337,17 @@ async def _email_t4a_document(user_id: str, email: str, year: int, summary: dict
 async def _email_earnings_csv(user_id: str, email: str, year: int, csv_data: str) -> None:
     """Background task: email the trip-by-trip earnings CSV to the driver."""
     filename = f"earnings_export_{year}.csv"
+    company = await load_company_details()
     await _email_driver_document(
         user_id,
         email,
-        subject=f"Your Spinr earnings export for {year}",
+        subject=f"Your {company.app_name} earnings export for {year}",
         body=(
             "Hi,\n\n"
             f"As requested, your detailed earnings export for {year} is attached "
             f'as a CSV ("{filename}").\n\n'
             "If you have any questions, contact support@spinr.ca.\n\n"
-            "— The Spinr Team"
+            f"— The {company.app_name} Team"
         ),
         filename=filename,
         content=csv_data.encode("utf-8"),
@@ -298,19 +412,20 @@ async def _email_statement_document(user_id: str, email: str, statement: dict) -
         logger.error("statement PDF render failed for user %s", user_id, exc_info=True)
         return
     filename = f"spinr-statement-{statement['period_type']}-{statement['period_start']}.pdf"
+    company = await load_company_details()
     await _email_driver_document(
         user_id,
         email,
-        subject=f"Your Spinr earnings statement — {statement['period_label']}",
+        subject=f"Your {company.app_name} earnings statement — {statement['period_label']}",
         body=(
             "Hi,\n\n"
-            f"As requested, your Spinr earnings statement for {statement['period_label']} "
+            f"As requested, your {company.app_name} earnings statement for {statement['period_label']} "
             f'is attached as a PDF ("{filename}").\n\n'
             f"  Total earnings: ${statement['earnings']['total']}\n"
             f"  Trips completed: {statement['trips']}\n"
             f"  Paid out this period: ${statement['payouts_total']}\n\n"
             "Questions? Contact support@spinr.ca.\n\n"
-            "— The Spinr Team"
+            f"— The {company.app_name} Team"
         ),
         filename=filename,
         content=pdf_bytes,
@@ -410,6 +525,15 @@ _EXPORT_REDACT_RIDE = frozenset(
 )
 
 
+# Per-ride fields omitted from a RIDER's export of their own `rides_as_rider`
+# (mirrors _EXPORT_REDACT_RIDE's rider_id stripping, in reverse): driver_id
+# identifies the DRIVER, not the rider (the data subject) here. Unlike the
+# driver-side export, pickup/dropoff coordinates and the route polyline are
+# the rider's OWN trip data (their own pickup/dropoff, not a third party's
+# home address) and are deliberately kept.
+_EXPORT_REDACT_RIDE_FOR_RIDER = frozenset({"driver_id"})
+
+
 # Driver-profile (drivers) fields omitted from a data export:
 #  - password_hash / fcm_token: credentials
 #  - stripe_account_id / bank_account: financial credentials (already excluded
@@ -470,47 +594,53 @@ def _object_to_csv(obj: dict) -> str:
     return buf.getvalue()
 
 
-def _build_export_readme(payload: dict, generated_on: str) -> str:
+def _build_export_readme(payload: dict, generated_on: str, app_name: str = "Spinr") -> str:
     """Human-readable index of what's in the export archive."""
     account = payload.get("account", {}) or {}
     raw_name = account.get("name") or account.get("full_name") or account.get("first_name") or "Driver"
     # Strip control characters so a name with newlines can't corrupt the README.
     name = " ".join(str(raw_name).split()) or "Driver"
     return (
-        "Spinr — Personal Data Export\n"
-        "============================\n\n"
+        f"{app_name} — Personal Data Export\n"
+        f"{'=' * len(f'{app_name} — Personal Data Export')}\n\n"
         f"Generated: {generated_on}\n"
         f"Account: {name}\n\n"
-        "This archive contains the personal data Spinr holds about you, provided\n"
+        f"This archive contains the personal data {app_name} holds about you, provided\n"
         "in PIPEDA-compliant form. Files:\n\n"
         "  account.csv                  Your account record (field,value).\n"
-        "  driver_profile.csv           Your driver profile (field,value).\n"
-        "  rides.csv                    Your trip history (one row per ride).\n"
+        "  driver_profile.csv           Your driver profile (field,value), if you're a driver.\n"
+        "  rides.csv                    Trips where you were the driver (one row per ride).\n"
+        "  rides_as_rider.csv           Trips where you were the rider (one row per ride).\n"
         "  payouts.csv                  Your payout history (one row per payout).\n"
         "  documents.csv                Records of documents you uploaded\n"
         "                               (the file contents themselves are not included).\n"
+        "  saved_addresses.csv          Addresses you saved as a rider.\n"
         "  notification_preferences.csv Your notification settings.\n"
         "  raw_data.json                The complete export in machine-readable JSON.\n\n"
         "Counts:\n"
-        f"  Rides:     {len(payload.get('rides') or [])}\n"
-        f"  Payouts:   {len(payload.get('payouts') or [])}\n"
-        f"  Documents: {len(payload.get('documents') or [])}\n\n"
+        f"  Rides (as driver): {len(payload.get('rides') or [])}\n"
+        f"  Rides (as rider):  {len(payload.get('rides_as_rider') or [])}\n"
+        f"  Payouts:           {len(payload.get('payouts') or [])}\n"
+        f"  Documents:         {len(payload.get('documents') or [])}\n"
+        f"  Saved addresses:   {len(payload.get('saved_addresses') or [])}\n\n"
         "Questions or deletion requests: privacy@spinr.ca\n"
     )
 
 
-def _build_export_zip(payload: dict, generated_on: str) -> bytes:
+def _build_export_zip(payload: dict, generated_on: str, app_name: str = "Spinr") -> bytes:
     """Bundle the export payload into a ZIP of CSV files + README + JSON."""
     import io  # noqa: PLC0415
     import zipfile  # noqa: PLC0415
 
     files = {
-        "README.txt": _build_export_readme(payload, generated_on),
+        "README.txt": _build_export_readme(payload, generated_on, app_name),
         "account.csv": _object_to_csv(payload.get("account", {})),
         "driver_profile.csv": _object_to_csv(payload.get("driver_profile", {})),
         "rides.csv": _rows_to_csv(payload.get("rides") or []),
+        "rides_as_rider.csv": _rows_to_csv(payload.get("rides_as_rider") or []),
         "payouts.csv": _rows_to_csv(payload.get("payouts") or []),
         "documents.csv": _rows_to_csv(payload.get("documents") or []),
+        "saved_addresses.csv": _rows_to_csv(payload.get("saved_addresses") or []),
         "notification_preferences.csv": _rows_to_csv(payload.get("notification_preferences") or []),
         "raw_data.json": json.dumps(payload, indent=2, default=str),
     }
@@ -521,28 +651,30 @@ def _build_export_zip(payload: dict, generated_on: str) -> bytes:
     return buf.getvalue()
 
 
-def _build_export_email_html(filename: str) -> str:
+def _build_export_email_html(filename: str, app_name: str = "Spinr") -> str:
     """Lyft-style 'your data is ready' HTML email body."""
     return (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
         'max-width:520px;margin:0 auto;color:#1a1a1a;line-height:1.5">'
         '<h2 style="margin:0 0 12px">Your data export is ready</h2>'
-        "<p>As requested, your personal data held by Spinr is attached as a ZIP archive "
+        f"<p>As requested, your personal data held by {app_name} is attached as a ZIP archive "
         f"(<strong>{filename}</strong>).</p>"
         "<p>Inside you'll find spreadsheet (CSV) files you can open in Excel, Numbers, or "
         "Google Sheets:</p>"
         "<ul>"
         "<li><strong>README.txt</strong> — what each file contains</li>"
         "<li><strong>account.csv</strong>, <strong>driver_profile.csv</strong> — your profile</li>"
-        "<li><strong>rides.csv</strong> — your trip history</li>"
+        "<li><strong>rides.csv</strong> — trips where you were the driver</li>"
+        "<li><strong>rides_as_rider.csv</strong> — trips where you were the rider</li>"
         "<li><strong>payouts.csv</strong> — your payout history</li>"
         "<li><strong>documents.csv</strong> — your uploaded document records</li>"
+        "<li><strong>saved_addresses.csv</strong> — addresses you saved as a rider</li>"
         "<li><strong>notification_preferences.csv</strong> — your notification settings</li>"
         "<li><strong>raw_data.json</strong> — the complete machine-readable export</li>"
         "</ul>"
         '<p style="color:#555;font-size:13px">Questions about your data or want it deleted? '
         'Contact <a href="mailto:privacy@spinr.ca">privacy@spinr.ca</a>.</p>'
-        '<p style="color:#888;font-size:12px">— The Spinr Team</p>'
+        f'<p style="color:#888;font-size:12px">— The {app_name} Team</p>'
         "</div>"
     )
 
@@ -621,47 +753,54 @@ async def _upload_export_zip(user_id: str, zip_bytes: bytes, expires_in_seconds:
     return _extract_signed_url(res)
 
 
-def _build_export_link_email_text(download_url: str, expires_human: str) -> str:
-    """Plain-text 'your data is ready' email with a download link + expiry."""
-    return (
-        "Hi,\n\n"
-        "As requested, your personal data held by Spinr is ready to download:\n\n"
-        f"  {download_url}\n\n"
-        f"This secure link expires on {expires_human}. If it expires before you "
-        "download it, just request a new export from the app.\n\n"
-        "The download is a ZIP archive containing:\n"
-        "  • README.txt — what each file contains\n"
-        "  • account.csv, driver_profile.csv — your profile\n"
-        "  • rides.csv — your trip history\n"
-        "  • payouts.csv — your payout history\n"
-        "  • documents.csv — your uploaded document records\n"
-        "  • notification_preferences.csv — your notification settings\n"
-        "  • raw_data.json — the complete machine-readable export\n\n"
-        "If you have any questions about your data or would like to request "
-        "deletion, please contact privacy@spinr.ca.\n\n"
-        "— The Spinr Team"
-    )
+#: What the export ZIP contains, itemised.
+#: An access request is answered properly by telling the person what they are
+#: being given, not just handing them an archive — so this manifest survives
+#: from the pre-branding plain-text version rather than being summarised away.
+_EXPORT_MANIFEST = (
+    "The download is a ZIP archive containing:\n"
+    "• README.txt — what each file contains\n"
+    "• account.csv, driver_profile.csv — your profile\n"
+    "• rides.csv — trips where you were the driver\n"
+    "• rides_as_rider.csv — trips where you were the rider\n"
+    "• payouts.csv — your payout history\n"
+    "• documents.csv — your uploaded document records\n"
+    "• saved_addresses.csv — addresses you saved as a rider\n"
+    "• notification_preferences.csv — your notification settings\n"
+    "• raw_data.json — the complete machine-readable export"
+)
 
 
-def _build_export_link_email_html(download_url: str, expires_human: str) -> str:
-    """Lyft-style 'your data is ready' HTML email with a download button."""
-    return (
-        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-        'max-width:520px;margin:0 auto;color:#1a1a1a;line-height:1.5">'
-        '<h2 style="margin:0 0 12px">Your data export is ready</h2>'
-        "<p>As requested, your personal data held by Spinr is ready to download.</p>"
-        f'<p style="margin:20px 0"><a href="{download_url}" '
-        'style="background:#FF3B30;color:#fff;text-decoration:none;padding:12px 22px;'
-        'border-radius:8px;display:inline-block;font-weight:600">Download my data (ZIP)</a></p>'
-        f'<p style="color:#555;font-size:13px">This secure link expires on '
-        f"<strong>{expires_human}</strong>. If it expires before you download it, just "
-        "request a new export from the app.</p>"
-        "<p>The download contains spreadsheet (CSV) files you can open in Excel, Numbers, "
-        "or Google Sheets, plus a README and the complete machine-readable JSON.</p>"
-        '<p style="color:#555;font-size:13px">Questions about your data or want it deleted? '
-        'Contact <a href="mailto:privacy@spinr.ca">privacy@spinr.ca</a>.</p>'
-        '<p style="color:#888;font-size:12px">— The Spinr Team</p>'
-        "</div>"
+async def _build_export_link_email(download_url: str, expires_human: str):
+    """'Your data is ready' email with a download button, on the shared shell.
+
+    A PIPEDA access request answered by an unbranded email containing a link to
+    "your personal data" is indistinguishable from a phishing attempt, which is
+    a poor way to deliver a privacy right. The shared layout puts the real logo
+    and the configured company details around it.
+
+    Replaces the separate HTML and plain-text builders this used to have: the
+    layout renders both from one source, so the two cannot drift.
+    """
+    try:
+        from ...utils.email_layout import render_email
+    except ImportError:
+        from utils.email_layout import render_email  # type: ignore
+
+    company = await load_company_details()
+    return await render_email(
+        greeting="Hi,",
+        heading="Your data export is ready",
+        paragraphs=[
+            f"As requested, your personal data held by {company.app_name} is ready to download.",
+            _EXPORT_MANIFEST,
+            "The CSV files open in Excel, Numbers, or Google Sheets.",
+            f"This secure link expires on {expires_human}. If it expires before you download "
+            "it, just request a new export from the app.",
+        ],
+        cta=("Download my data (ZIP)", download_url),
+        footnote="Questions about your data, or want it deleted? Contact privacy@spinr.ca.",
+        company=company,
     )
 
 
@@ -694,8 +833,15 @@ async def export_driver_data(
     return {"message": "Your data export is being prepared. Check your email."}
 
 
-async def _build_and_email_data_export(user_id: str, email: str) -> None:
-    """Background task: collect all driver data and email a JSON export."""
+async def _build_and_email_data_export(user_id: str, email: str) -> bool:
+    """Background task: collect all driver data and email a JSON export.
+
+    Returns True on success, False if the whole thing failed (already logged
+    at error level below — the return value exists only so a caller that
+    tracks request state, e.g. the rider DSAR queue, can reflect the real
+    outcome instead of assuming success). The original driver-side caller
+    (a fire-and-forget background task with no status to update) ignores it.
+    """
     import asyncio  # noqa: PLC0415
 
     try:
@@ -740,13 +886,42 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             payouts = payouts or []
             documents = documents or []
 
+        # Wave 3 (not driver_id-dependent — every account can have ridden as a
+        # passenger, driver or not) — the trips/addresses this function used
+        # to omit entirely for a rider-only account (ACTION_ITEMS.md N1: an
+        # export that only contained account + notification_preferences was
+        # not a real answer to a PIPEDA access request for someone whose main
+        # relationship with Spinr is as a rider). `rides_as_rider` is
+        # deliberately a separate key from `rides` (the driver-shaped list
+        # above) rather than merged into it — the two have different
+        # redaction rules (a driver's export strips the RIDER's identity from
+        # `rides`; a rider's export must strip the DRIVER's identity from
+        # `rides_as_rider` instead) and merging them risks a redaction rule
+        # from one context leaking into the other.
+        rides_as_rider, saved_addresses = await asyncio.gather(
+            db_supabase.get_rows(
+                "rides",
+                {"rider_id": user_id},
+                limit=500,
+                order="created_at",
+                desc=True,
+            ),
+            db_supabase.get_rows("saved_addresses", {"user_id": user_id}, limit=100),
+        )
+        rides_as_rider = rides_as_rider or []
+        saved_addresses = saved_addresses or []
+
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
             "account": {k: v for k, v in user.items() if k not in _EXPORT_REDACT_ACCOUNT},
             "driver_profile": {k: v for k, v in driver.items() if k not in _EXPORT_REDACT_DRIVER},
             "rides": [{k: v for k, v in r.items() if k not in _EXPORT_REDACT_RIDE} for r in rides],
+            "rides_as_rider": [
+                {k: v for k, v in r.items() if k not in _EXPORT_REDACT_RIDE_FOR_RIDER} for r in rides_as_rider
+            ],
             "payouts": payouts,
             "documents": [{k: v for k, v in doc.items() if k != "document_url"} for doc in documents],
+            "saved_addresses": saved_addresses,
             "notification_preferences": notification_prefs,
         }
 
@@ -755,8 +930,9 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         # Drivers get spreadsheets they can open, not a raw JSON blob.
         now = datetime.now(timezone.utc)
         generated_on = now.strftime("%Y-%m-%d")
-        zip_bytes = _build_export_zip(export_payload, generated_on)
-        subject = "Your Spinr data export is ready"
+        company = await load_company_details()
+        zip_bytes = _build_export_zip(export_payload, generated_on, company.app_name)
+        subject = f"Your {company.app_name} data export is ready"
 
         # Primary delivery: a time-limited signed download link (like Lyft) —
         # keeps PII out of the email body and lets a leaked link self-expire.
@@ -768,11 +944,12 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             # the attribute. (Triggers the attachment fallback below.)
             if not download_url.startswith("https://"):
                 raise ValueError(f"unexpected signed URL scheme: {download_url[:30]!r}")
+            _export_rendered = await _build_export_link_email(download_url, expires_human)
             await _deps.send_email(
                 to=email,
                 subject=subject,
-                body=_build_export_link_email_text(download_url, expires_human),
-                html=_build_export_link_email_html(download_url, expires_human),
+                body=_export_rendered.text,
+                html=_export_rendered.html,
                 email_type="dsar",
                 recipient_user_id=user_id,
                 log_id="dsar",
@@ -794,13 +971,13 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
                 subject=subject,
                 body=(
                     "Hi,\n\n"
-                    "As requested, your personal data held by Spinr is attached as a ZIP "
+                    f"As requested, your personal data held by {company.app_name} is attached as a ZIP "
                     f'archive ("{filename}").\n\n'
                     "If you have any questions about your data or would like to request "
                     "deletion, please contact privacy@spinr.ca.\n\n"
-                    "— The Spinr Team"
+                    f"— The {company.app_name} Team"
                 ),
-                html=_build_export_email_html(filename),
+                html=_build_export_email_html(filename, company.app_name),
                 attachments=[{"filename": filename, "content": zip_bytes, "mime": "application/zip"}],
                 email_type="dsar",
                 recipient_user_id=user_id,
@@ -815,6 +992,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
                 "metric": "dsar_export_completed",
             },
         )
+        return True
 
     except Exception as exc:
         # Surface the full traceback and, for DatabaseError, the original DB
@@ -827,3 +1005,4 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             f" — {original}" if original else "",
             exc_info=True,
         )
+        return False

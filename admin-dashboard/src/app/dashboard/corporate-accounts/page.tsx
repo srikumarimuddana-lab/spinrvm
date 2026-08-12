@@ -7,8 +7,12 @@ import {
     createCorporateAccount,
     updateCorporateAccount,
     deleteCorporateAccount,
+    getWalletRiskPortfolio,
+    getKybReverificationDue,
     CorporateAccount,
     CompanyStatus,
+    WalletRiskEntry,
+    KybReverificationCompany,
 } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { Card, CardContent } from "@/components/ui/card";
@@ -50,7 +54,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck } from "lucide-react";
+import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck, ShieldAlert, AlertTriangle } from "lucide-react";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -60,6 +64,13 @@ const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     active: "bg-emerald-100 text-emerald-800 hover:bg-emerald-100",
     suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100",
     closed: "bg-gray-200 text-gray-700 hover:bg-gray-200",
+};
+
+const RISK_FLAG_LABELS: Record<string, string> = {
+    negative_balance: "Negative balance",
+    at_floor: "At/below soft floor",
+    below_autotopup_threshold: "Below auto-topup threshold",
+    low_balance_no_autotopup: "Low balance, auto-topup off",
 };
 
 function StatusPill({ status }: { status: CompanyStatus }) {
@@ -82,6 +93,59 @@ export default function CorporateAccountsPage() {
     const [page, setPage] = useState(0);
     const [hasNextPage, setHasNextPage] = useState(false);
     const reqIdRef = useRef(0);
+
+    // Corporate + admin portal review, round 2: "no portfolio-level view of
+    // corporate wallet risk."
+    const [flaggedWallets, setFlaggedWallets] = useState<WalletRiskEntry[]>([]);
+    const [totalWallets, setTotalWallets] = useState(0);
+    const [riskLoading, setRiskLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+        getWalletRiskPortfolio()
+            .then((res) => {
+                if (cancelled) return;
+                setFlaggedWallets(res.wallets.filter((w) => w.risk_flags.length > 0));
+                setTotalWallets(res.total_wallets);
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setFlaggedWallets([]);
+                    setTotalWallets(0);
+                }
+            })
+            .finally(() => {
+                if (!cancelled) setRiskLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    // Corporate + admin portal review, round 2: "automated KYB
+    // re-verification" — visibility only, never auto-changes status.
+    const [kybDue, setKybDue] = useState<KybReverificationCompany[]>([]);
+    const [kybThresholdMonths, setKybThresholdMonths] = useState(12);
+    const [kybLoading, setKybLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+        getKybReverificationDue()
+            .then((res) => {
+                if (cancelled) return;
+                setKybDue(res.companies);
+                setKybThresholdMonths(res.threshold_months);
+            })
+            .catch(() => {
+                if (!cancelled) setKybDue([]);
+            })
+            .finally(() => {
+                if (!cancelled) setKybLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     // Dialog states
     const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -261,6 +325,77 @@ export default function CorporateAccountsPage() {
                     </Button>
                 </div>
             </div>
+
+            {/* Wallet risk portfolio — flags across every company at once,
+                so a risk doesn't require opening each account individually. */}
+            {!riskLoading && flaggedWallets.length > 0 && (
+                <Card className="border-amber-300/50 bg-amber-50/40 dark:bg-amber-950/10">
+                    <CardContent className="p-4">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-400 mb-2">
+                            <AlertTriangle className="h-4 w-4" />
+                            {flaggedWallets.length} of {totalWallets} wallets flagged
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {flaggedWallets.slice(0, 12).map((w) => (
+                                <Link
+                                    key={w.wallet_id}
+                                    href={`/dashboard/corporate-accounts/${w.company_id}`}
+                                    className="flex items-center gap-1.5 rounded-md border border-amber-300/60 bg-background px-2.5 py-1 text-xs hover:border-amber-500 transition"
+                                    title={w.risk_flags.map((f) => RISK_FLAG_LABELS[f] || f).join(", ")}
+                                >
+                                    <span className="font-medium">{w.company_name || w.company_id.slice(0, 8)}</span>
+                                    <span className="text-muted-foreground">${w.balance}</span>
+                                </Link>
+                            ))}
+                            {flaggedWallets.length > 12 && (
+                                <span className="text-xs text-muted-foreground self-center">
+                                    +{flaggedWallets.length - 12} more
+                                </span>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* KYB re-verification staleness — corporate + admin portal
+                review, round 2. Visibility only: this never changes a
+                company's status, it's a reminder for an admin to manually
+                re-run the KYB review flow. */}
+            {!kybLoading && kybDue.length > 0 && (
+                <Card className="border-sky-300/50 bg-sky-50/40 dark:bg-sky-950/10">
+                    <CardContent className="p-4">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-sky-800 dark:text-sky-400 mb-2">
+                            <ShieldAlert className="h-4 w-4" />
+                            {kybDue.length} compan{kybDue.length === 1 ? "y" : "ies"} due for KYB re-verification
+                            <span className="font-normal text-muted-foreground">
+                                (approved &gt;{kybThresholdMonths} months ago)
+                            </span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {kybDue.slice(0, 12).map((c) => (
+                                <Link
+                                    key={c.id}
+                                    href={`/dashboard/corporate-accounts/${c.id}`}
+                                    className="flex items-center gap-1.5 rounded-md border border-sky-300/60 bg-background px-2.5 py-1 text-xs hover:border-sky-500 transition"
+                                    title={c.kyb_reviewed_at ? `Last reviewed ${c.kyb_reviewed_at.slice(0, 10)}` : ""}
+                                >
+                                    <span className="font-medium">{c.legal_name || c.name || c.id.slice(0, 8)}</span>
+                                    {c.kyb_reviewed_at && (
+                                        <span className="text-muted-foreground">
+                                            {c.kyb_reviewed_at.slice(0, 10)}
+                                        </span>
+                                    )}
+                                </Link>
+                            ))}
+                            {kybDue.length > 12 && (
+                                <span className="text-xs text-muted-foreground self-center">
+                                    +{kybDue.length - 12} more
+                                </span>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
 
             <div className="flex items-center gap-2">
                 <div className="relative flex-1 max-w-sm">

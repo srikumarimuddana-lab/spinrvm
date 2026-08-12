@@ -87,7 +87,7 @@ async def save_favorite_route(req: SaveFavoriteRequest, current_user: dict = Dep
         ("pickup", req.pickup_address, req.pickup_lat, req.pickup_lng),
         ("dropoff", req.dropoff_address, req.dropoff_lat, req.dropoff_lng),
     ):
-        ok, mismatch_reason = await verify_address_matches_coordinate(address, lat, lng)
+        ok, mismatch_reason, _place_id = await verify_address_matches_coordinate(address, lat, lng)
         if not ok:
             raise HTTPException(
                 status_code=400,
@@ -119,17 +119,14 @@ async def use_favorite_route(favorite_id: str, current_user: dict = Depends(get_
     if not fav:
         raise HTTPException(status_code=404, detail="Favorite not found")
 
-    await db.update_one(
-        "favorite_routes",
-        {"id": favorite_id},
-        {
-            "$set": {
-                "use_count": (fav.get("use_count", 0) or 0) + 1,
-                "last_used_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
-    )
-    return fav
+    updates = {
+        "use_count": (fav.get("use_count", 0) or 0) + 1,
+        "last_used_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.update_one("favorite_routes", {"id": favorite_id}, {"$set": updates})
+    # Merge the write locally rather than re-fetching — the caller expects
+    # the post-increment row, not the pre-increment one fetched above.
+    return {**fav, **updates}
 
 
 @api_router.delete("/{favorite_id}")

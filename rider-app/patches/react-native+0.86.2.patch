@@ -1,0 +1,518 @@
+diff --git a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
+index de86dba..d92369b 100644
+--- a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
++++ b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
+@@ -17,9 +17,36 @@ import Platform from '../../Utilities/Platform';
+ import View from '../View/View';
+ import * as React from 'react';
+ 
++// PATCH (spinr rider-app/driver-app):
++// RN 0.85.2's Android ActivityIndicator path imports ProgressBarAndroid, whose
++// codegenNativeComponent('AndroidProgressBar', { interfaceOnly: true }) returns
++// a non-renderable object under the New Architecture (Bridgeless), throwing
++// "Element type is invalid... got: object" at render time.
++// JS-only fallback below renders a styled View. Honors `animating`,
++// `hidesWhenStopped`, `color`, and forwards size via the parent's `style`.
++function AndroidActivityIndicatorJSFallback(props: $FlowFixMe): React.Node {
++  const {animating, color, hidesWhenStopped, style, ...rest} = props;
++  if (animating === false && hidesWhenStopped !== false) {
++    return null;
++  }
++  return (
++    <View
++      style={[
++        {
++          borderRadius: 9999,
++          backgroundColor: color != null ? color : '#999999',
++          opacity: animating === false ? 0 : 0.55,
++        },
++        style,
++      ]}
++      {...rest}
++    />
++  );
++}
++
+ const PlatformActivityIndicator =
+   Platform.OS === 'android'
+-    ? require('../ProgressBarAndroid/ProgressBarAndroid').default
++    ? AndroidActivityIndicatorJSFallback
+     : require('./ActivityIndicatorViewNativeComponent').default;
+ 
+ const GRAY = '#999999';
+diff --git a/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js b/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js
+index 5ce30f3..428ffb8 100644
+--- a/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js
++++ b/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js
+@@ -11,7 +11,7 @@
+ import type {ColorValue} from '../../StyleSheet/StyleSheet';
+ import type {ViewProps} from '../View/ViewPropTypes';
+ 
+-import AndroidSwipeRefreshLayoutNativeComponent, {
++import _NativeAndroidSwipeRefreshLayout, {
+   Commands as AndroidSwipeRefreshLayoutCommands,
+ } from './AndroidSwipeRefreshLayoutNativeComponent';
+ import PullToRefreshViewNativeComponent, {
+@@ -20,6 +20,51 @@ import PullToRefreshViewNativeComponent, {
+ import * as React from 'react';
+ 
+ const Platform = require('../../Utilities/Platform').default;
++const View = require('../View/View').default;
++const ActivityIndicator = require('../ActivityIndicator/ActivityIndicator').default;
++
++// PATCH (spinr driver-app):
++// RN 0.85.2's AndroidSwipeRefreshLayoutNativeComponent is declared via
++// codegenNativeComponent('AndroidSwipeRefreshLayout'). Under the New
++// Architecture (Bridgeless), the runtime fallback returns a non-renderable
++// object, throwing "Element type is invalid... got: object" when ScrollView
++// renders its refreshControl on Android.
++//
++// Strategy: detect the broken codegen object and fall back to a JS-only
++// View wrapper that shows an ActivityIndicator when refreshing=true.
++// Pull-to-refresh gesture still fires onRefresh because ScrollView's own
++// scroll-position check triggers it; the native swipe chrome is the only
++// thing lost.
++const _isNativeValid =
++  typeof _NativeAndroidSwipeRefreshLayout === 'function' ||
++  typeof _NativeAndroidSwipeRefreshLayout === 'string';
++
++function AndroidRefreshControlJSFallback(props: $FlowFixMe): React.Node {
++  const {refreshing, onRefresh, tintColor, children, style, ...rest} = props;
++  return (
++    <View style={style} {...rest}>
++      {refreshing === true && (
++        <View
++          style={{
++            alignItems: 'center',
++            justifyContent: 'center',
++            paddingVertical: 10,
++          }}>
++          <ActivityIndicator
++            size="small"
++            color={tintColor != null ? tintColor : '#999999'}
++          />
++        </View>
++      )}
++      {children}
++    </View>
++  );
++}
++
++const AndroidSwipeRefreshLayoutNativeComponent: $FlowFixMe =
++  Platform.OS === 'android' && !_isNativeValid
++    ? AndroidRefreshControlJSFallback
++    : _NativeAndroidSwipeRefreshLayout;
+ 
+ export type RefreshControlPropsIOS = Readonly<{
+   /**
+diff --git a/node_modules/react-native/Libraries/Components/Switch/Switch.js b/node_modules/react-native/Libraries/Components/Switch/Switch.js
+index d441435..e927210 100644
+--- a/node_modules/react-native/Libraries/Components/Switch/Switch.js
++++ b/node_modules/react-native/Libraries/Components/Switch/Switch.js
+@@ -16,7 +16,7 @@ import type {ViewProps} from '../View/ViewPropTypes';
+ import StyleSheet from '../../StyleSheet/StyleSheet';
+ import Platform from '../../Utilities/Platform';
+ import useMergeRefs from '../../Utilities/useMergeRefs';
+-import AndroidSwitchNativeComponent, {
++import _NativeAndroidSwitch, {
+   Commands as AndroidSwitchCommands,
+ } from './AndroidSwitchNativeComponent';
+ import SwitchNativeComponent, {
+@@ -25,6 +25,86 @@ import SwitchNativeComponent, {
+ import * as React from 'react';
+ import {useLayoutEffect, useRef, useState} from 'react';
+ 
++// PATCH (spinr rider-app/driver-app):
++// RN 0.85.2's AndroidSwitchNativeComponent is declared with
++// `interfaceOnly: true` — codegenNativeComponent returns a non-renderable
++// placeholder object. Under the New Architecture (Bridgeless), JSX
++// `<AndroidSwitchNativeComponent>` throws "Element type is invalid... got:
++// object". Reproduced on driver-app SettingsScreen.
++//
++// Strategy: detect the broken codegen object and fall back to a JS-only
++// Pressable toggle that fires onChange on press. Visual chrome is a
++// minimal track + thumb in the requested colors. Loses the native
++// material switch animation; functionally equivalent for state.
++const _PressableModule = require('../Pressable/Pressable');
++const _Pressable = _PressableModule.default || _PressableModule;
++const _ViewModule = require('../View/View');
++const _SwitchView = _ViewModule.default || _ViewModule;
++const _isAndroidSwitchNativeValid =
++  typeof _NativeAndroidSwitch === 'function' ||
++  typeof _NativeAndroidSwitch === 'string';
++
++function AndroidSwitchJSFallback(props: $FlowFixMe): React.Node {
++  const {
++    on,
++    enabled,
++    style,
++    thumbTintColor,
++    trackTintColor,
++    trackColorForTrue,
++    trackColorForFalse,
++    onChange,
++    accessibilityState,
++    accessibilityRole,
++    ...rest
++  } = props;
++  const isOn = on === true;
++  const trackBg =
++    (isOn ? trackColorForTrue : trackColorForFalse) ?? trackTintColor ?? (isOn ? '#34C759' : '#787880');
++  const thumbBg = thumbTintColor ?? '#FFFFFF';
++  const handlePress = () => {
++    if (enabled === false) return;
++    if (typeof onChange === 'function') {
++      onChange({nativeEvent: {value: !isOn, target: 0}});
++    }
++  };
++  return (
++    <_Pressable
++      {...rest}
++      accessibilityRole={accessibilityRole ?? 'switch'}
++      accessibilityState={{...(accessibilityState ?? {}), checked: isOn, disabled: enabled === false}}
++      disabled={enabled === false}
++      onPress={handlePress}
++      style={[
++        {
++          width: 51,
++          height: 31,
++          borderRadius: 31 / 2,
++          padding: 2,
++          backgroundColor: trackBg,
++          opacity: enabled === false ? 0.5 : 1,
++          justifyContent: 'center',
++        },
++        style,
++      ]}>
++      <_SwitchView
++        style={{
++          width: 27,
++          height: 27,
++          borderRadius: 27 / 2,
++          backgroundColor: thumbBg,
++          alignSelf: isOn ? 'flex-end' : 'flex-start',
++        }}
++      />
++    </_Pressable>
++  );
++}
++
++const AndroidSwitchNativeComponent: $FlowFixMe =
++  Platform.OS === 'android' && !_isAndroidSwitchNativeValid
++    ? AndroidSwitchJSFallback
++    : _NativeAndroidSwitch;
++
+ export type SwitchPropsIOS = {
+   /**
+    * Background color when the switch is turned on.
+diff --git a/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js b/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
+index a668765..3d96b9c 100644
+--- a/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
++++ b/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
+@@ -25,6 +25,18 @@ const {useRef, useImperativeHandle} = React;
+ const isNativeComponentReady =
+   UIManager.hasViewManagerConfig('DebuggingOverlay');
+ 
++// PATCH (spinr driver-app):
++// RN 0.85.2's codegenNativeComponent returns a non-renderable object under
++// the New Architecture (Bridgeless) in Expo Go, throwing "Element type is
++// invalid... got: object" when DebuggingOverlay tries to render it.
++// Guard: only render the native component if it's actually a valid React
++// element type (function or string). DebuggingOverlay is dev-only so
++// skipping it has zero user impact.
++const isValidComponent =
++  typeof DebuggingOverlayNativeComponent === 'function' ||
++  typeof DebuggingOverlayNativeComponent === 'string';
++
++
+ type DebuggingOverlayHandle = {
+   highlightTraceUpdates(updates: ReadonlyArray<TraceUpdate>): void,
+   highlightElements(elements: ReadonlyArray<ElementRectangle>): void,
+@@ -82,7 +94,7 @@ function DebuggingOverlay({
+   > | null>(null);
+ 
+   return (
+-    isNativeComponentReady && (
++    isNativeComponentReady && isValidComponent && (
+       <View pointerEvents="none" style={styles.overlay}>
+         <DebuggingOverlayNativeComponent
+           ref={nativeComponentRef}
+diff --git a/node_modules/react-native/Libraries/Modal/Modal.js b/node_modules/react-native/Libraries/Modal/Modal.js
+index 28233e6..d2e2eac 100644
+--- a/node_modules/react-native/Libraries/Modal/Modal.js
++++ b/node_modules/react-native/Libraries/Modal/Modal.js
+@@ -17,10 +17,107 @@ import NativeEventEmitter from '../EventEmitter/NativeEventEmitter';
+ import {type ColorValue} from '../StyleSheet/StyleSheet';
+ import {type EventSubscription} from '../vendor/emitter/EventEmitter';
+ import NativeModalManager from './NativeModalManager';
+-import RCTModalHostView from './RCTModalHostViewNativeComponent';
++import _NativeRCTModalHostView from './RCTModalHostViewNativeComponent';
+ import VirtualizedLists from '@react-native/virtualized-lists';
++import BackHandler from '../Utilities/BackHandler';
+ import * as React from 'react';
+ 
++// PATCH (spinr rider-app/driver-app):
++// RN 0.85.2's RCTModalHostView is declared as
++// codegenNativeComponent('ModalHostView', { interfaceOnly: true,
++// paperComponentName: 'RCTModalHostView' }). Under the New Architecture
++// (Bridgeless), the runtime fallback `requireNativeComponent` returns a
++// non-renderable object, throwing "Element type is invalid... got: object"
++// at the moment Modal renders <RCTModalHostView>. This blocks every
++// callsite that uses Modal (CustomAlert and ~10 dialogs across both apps).
++//
++// Strategy: keep the native path for iOS (works correctly there). On
++// Android, render a JS-only View overlay that preserves the props that
++// matter to existing callsites:
++//   - visible / transparent / backdrop
++//   - onRequestClose for hardware back
++//   - onShow lifecycle
++//   - onStartShouldSetResponder touch isolation
++//   - testID for tests/accessibility
++// Trade-offs: skips fade/slide animation (CustomAlert does its own
++// animation; other callsites rarely rely on built-in fade); status bar
++// control delegates to whatever the calling screen does. The overlay uses
++// position:absolute + zIndex/elevation 99999 — sufficient for all current
++// callsites which render at screen level. When upstream RN fixes the
++// codegen issue this patch becomes a no-op and can be deleted with no
++// app-code changes.
++function AndroidJSModalFallback(props: $FlowFixMe): React.Node {
++  const {
++    children,
++    visible,
++    transparent,
++    backdropColor,
++    onRequestClose,
++    onShow,
++    onStartShouldSetResponder,
++    testID,
++  } = props;
++
++  React.useEffect(() => {
++    if (visible !== true) {
++      return;
++    }
++    if (typeof onShow === 'function') {
++      onShow();
++    }
++    if (typeof onRequestClose !== 'function') {
++      return;
++    }
++    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
++      onRequestClose();
++      return true;
++    });
++    return () => {
++      sub.remove();
++    };
++  }, [visible, onShow, onRequestClose]);
++
++  if (visible !== true) {
++    return null;
++  }
++
++  return (
++    <View
++      testID={testID}
++      collapsable={false}
++      pointerEvents="box-none"
++      onStartShouldSetResponder={onStartShouldSetResponder}
++      style={{
++        position: 'absolute',
++        top: 0,
++        left: 0,
++        right: 0,
++        bottom: 0,
++        zIndex: 99999,
++        elevation: 99999,
++        backgroundColor:
++          transparent === true ? 'transparent' : (backdropColor != null ? backdropColor : 'white'),
++      }}>
++      {children}
++    </View>
++  );
++}
++
++// `Platform` is declared via require() further down in this file (commonJS
++// style). To avoid a temporal-dead-zone reference here, we resolve the
++// platform branch lazily inside a forwardRef wrapper. The Android JS
++// fallback ignores `ref` (no native instance to measure); iOS forwards
++// the ref to the native RCTModalHostView so existing modalRef consumers
++// keep working.
++const RCTModalHostView: $FlowFixMe = React.forwardRef(
++  function RCTModalHostView(props: $FlowFixMe, ref: $FlowFixMe): React.Node {
++    if (Platform.OS === 'android') {
++      return <AndroidJSModalFallback {...props} />;
++    }
++    return <_NativeRCTModalHostView {...props} ref={ref} />;
++  },
++);
++
+ const ScrollView = require('../Components/ScrollView/ScrollView').default;
+ const View = require('../Components/View/View').default;
+ const AppContainer = require('../ReactNative/AppContainer').default;
+diff --git a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
+index da05855..c7eb322 100644
+--- a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
++++ b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
+@@ -15,6 +15,7 @@ import type {HostComponent} from '../../types/HostComponent';
+ import AndroidHorizontalScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/AndroidHorizontalScrollViewNativeComponent';
+ import ScrollContentViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollContentViewNativeComponent';
+ import ScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollViewNativeComponent';
++import View from '../../../../Libraries/Components/View/View';
+ import Platform from '../../../../Libraries/Utilities/Platform';
+ import AndroidHorizontalScrollContentViewNativeComponent from '../../specs_DEPRECATED/components/AndroidHorizontalScrollContentViewNativeComponent';
+ 
+diff --git a/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js b/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js
+index c640b5a..a6f35b1 100644
+--- a/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js
++++ b/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js
+@@ -18,46 +18,8 @@ import type {HostComponent} from '../../types/HostComponent';
+ 
+ import codegenNativeComponent from '../../../../Libraries/Utilities/codegenNativeComponent';
+ 
+-export type NativeModeChangeEvent = Readonly<{
+-  /**
+-   * Virtualization mode of the target view.
+-   *
+-   * - `0`: Target view is visible.
+-   * - `1`: Target view is hidden, but can be prerendered.
+-   * - `2`: Target view is hidden.
+-   *
+-   * WORKAROUND: As of this writing, codegen doesn't support enums, so we need
+-   * to convert `number` into an enum in `VirtualView`.
+-   */
+-  mode: Int32,
+-
+-  /**
+-   * Rect of the target view, relative to the nearest ancestor scroll container.
+-   */
+-  targetRect: Readonly<{
+-    x: Double,
+-    y: Double,
+-    width: Double,
+-    height: Double,
+-  }>,
+-
+-  /**
+-   * Rect of the threshold that determines the mode of the target view, relative
+-   * to the nearest ancestor scroll container.
+-   *
+-   * - `Visible`: Rect in which the target view is visible.
+-   * - `Prerender`: Rect in which the target view is prerendered.
+-   * - `Hidden`: Unused, without any guarantees.
+-   *
+-   * This can be used to determine whether and how much new content to render.
+-   */
+-  thresholdRect: Readonly<{
+-    x: Double,
+-    y: Double,
+-    width: Double,
+-    height: Double,
+-  }>,
+-}>;
++// PATCH (spinr driver-app):
++// Inline event struct — codegen cannot resolve type aliases for event types.
+ 
+ type VirtualViewExperimentalNativeProps = Readonly<{
+   ...ViewProps,
+@@ -85,10 +47,17 @@ type VirtualViewExperimentalNativeProps = Readonly<{
+    */
+   renderState: Int32,
+ 
+-  /**
+-   * See `NativeModeChangeEvent`.
+-   */
+-  onModeChange?: ?DirectEventHandler<NativeModeChangeEvent>,
++  onModeChange?: ?DirectEventHandler<$ReadOnly<{
++    mode: Int32,
++    targetRectX: Double,
++    targetRectY: Double,
++    targetRectWidth: Double,
++    targetRectHeight: Double,
++    thresholdRectX: Double,
++    thresholdRectY: Double,
++    thresholdRectWidth: Double,
++    thresholdRectHeight: Double,
++  }>>,
+ }>;
+ 
+ // TODO: Rename to eliminate "Experimental" suffix in the name.
+diff --git a/node_modules/react-native/src/private/components/virtualview/VirtualViewNativeComponent.js b/node_modules/react-native/src/private/components/virtualview/VirtualViewNativeComponent.js
+index 4ba5b68..a746a97 100644
+--- a/node_modules/react-native/src/private/components/virtualview/VirtualViewNativeComponent.js
++++ b/node_modules/react-native/src/private/components/virtualview/VirtualViewNativeComponent.js
+@@ -18,46 +18,12 @@ import type {HostComponent} from '../../types/HostComponent';
+ 
+ import codegenNativeComponent from '../../../../Libraries/Utilities/codegenNativeComponent';
+ 
+-export type NativeModeChangeEvent = Readonly<{
+-  /**
+-   * Virtualization mode of the target view.
+-   *
+-   * - `0`: Target view is visible.
+-   * - `1`: Target view is hidden, but can be prerendered.
+-   * - `2`: Target view is hidden.
+-   *
+-   * WORKAROUND: As of this writing, codegen doesn't support enums, so we need
+-   * to convert `number` into an enum in `VirtualView`.
+-   */
+-  mode: Int32,
+-
+-  /**
+-   * Rect of the target view, relative to the nearest ancestor scroll container.
+-   */
+-  targetRect: Readonly<{
+-    x: Double,
+-    y: Double,
+-    width: Double,
+-    height: Double,
+-  }>,
+-
+-  /**
+-   * Rect of the threshold that determines the mode of the target view, relative
+-   * to the nearest ancestor scroll container.
+-   *
+-   * - `Visible`: Rect in which the target view is visible.
+-   * - `Prerender`: Rect in which the target view is prerendered.
+-   * - `Hidden`: Unused, without any guarantees.
+-   *
+-   * This can be used to determine whether and how much new content to render.
+-   */
+-  thresholdRect: Readonly<{
+-    x: Double,
+-    y: Double,
+-    width: Double,
+-    height: Double,
+-  }>,
+-}>;
++// PATCH (spinr driver-app):
++// The @react-native/babel-plugin-codegen parser cannot resolve type aliases
++// for event types (throws "Unable to determine event arguments for onModeChange").
++// Inline the event struct directly in DirectEventHandler<> so codegen can parse it.
++// VirtualView is an internal RN component not used by the app — this just
++// prevents the build error.
+ 
+ type VirtualViewNativeProps = Readonly<{
+   ...ViewProps,
+@@ -85,10 +51,17 @@ type VirtualViewNativeProps = Readonly<{
+    */
+   renderState: Int32,
+ 
+-  /**
+-   * See `NativeModeChangeEvent`.
+-   */
+-  onModeChange?: ?DirectEventHandler<NativeModeChangeEvent>,
++  onModeChange?: ?DirectEventHandler<$ReadOnly<{
++    mode: Int32,
++    targetRectX: Double,
++    targetRectY: Double,
++    targetRectWidth: Double,
++    targetRectHeight: Double,
++    thresholdRectX: Double,
++    thresholdRectY: Double,
++    thresholdRectWidth: Double,
++    thresholdRectHeight: Double,
++  }>>,
+ }>;
+ 
+ export default codegenNativeComponent<VirtualViewNativeProps>('VirtualView', {

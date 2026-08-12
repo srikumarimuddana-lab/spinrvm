@@ -21,6 +21,10 @@ import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
 import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
+import { SafetyShield } from '@shared/components/SafetyShield';
+import { SafetyOverlay } from '@shared/components/SafetyOverlay';
+import { useDriverSafetyTrigger } from '../../../hooks/useDriverSafetyTrigger';
+import { useDriverDiscreetSosFlag } from '../../../hooks/useDriverDiscreetSosFlag';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
@@ -82,11 +86,19 @@ function DriverDashboard() {
     clearError,
     earnings,
     rateRider,
+    isLoading,
   } = useDriverStore();
 
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
   const [completionConfirmationVisible, setCompletionConfirmationVisible] = useState(false);
   const [completionConfirmationRideId, setCompletionConfirmationRideId] = useState<string | null>(null);
+
+  // Driver SOS discreet-hold-shield rollout (ACTION_ITEMS.md B16). Flag
+  // defaults false -> the SOSButton branch below is byte-for-byte today's
+  // shipped behavior except for the swallowed-error bug fix noted there.
+  const discreetSosEnabled = useDriverDiscreetSosFlag();
+  const { trigger: safetyTrigger } = useDriverSafetyTrigger();
+  const [safetyOverlayOpen, setSafetyOverlayOpen] = useState(false);
 
   const requestRideCompletion = async (confirmation?: OffRouteConfirmation) => {
     const rideId = confirmation ? completionConfirmationRideId : activeRide?.ride.id;
@@ -313,6 +325,37 @@ function DriverDashboard() {
     // don't re-run on every tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState]);
+
+  // Resync the offer countdown against wall-clock time when the app returns
+  // to the foreground. The interval above only decrements while JS is
+  // running — RN suspends timers while backgrounded, so after a background
+  // stretch the interval resumes ticking down from wherever it was paused
+  // instead of where the offer actually is, and the driver can see a stale
+  // (too-high) number for a beat after returning. The server remains
+  // authoritative here (the `ride_offer_expired` WS event and the 409 on a
+  // stale accept both already resolve correctly) — this only corrects the
+  // *displayed* countdown so a driver doesn't visually think they have more
+  // time left on the offer than they do.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      const { rideState: curRideState, incomingRide: curIncomingRide } = useDriverStore.getState();
+      if (curRideState !== 'ride_offered' || !curIncomingRide?.offer_expires_at) return;
+      const remaining = Math.max(
+        0,
+        Math.floor((new Date(curIncomingRide.offer_expires_at).getTime() - Date.now()) / 1000),
+      );
+      setCountdownState(remaining);
+      // Only push the terminal 0 back to the store, mirroring the interval's
+      // own convention above (it likewise leaves the store's countdownSeconds
+      // alone on intermediate ticks and only syncs at zero, which is what
+      // drives the store's own auto-decline-on-expiry side effect).
+      if (remaining <= 0) {
+        setCountdown(0);
+      }
+    });
+    return () => sub.remove();
+  }, [setCountdown]);
 
   // Clear route + ETA when ride state changes (new phase = new route).
   // Stable boolean: true when the store already holds a saved polyline for the
@@ -853,16 +896,45 @@ function DriverDashboard() {
       {/* Top Bar */}
       <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
 
-      {/* SOS Button — visible during active ride */}
+      {/* SOS / Safety — visible during active ride. Flag-gated (ACTION_ITEMS.md
+          B16): discreetSosEnabled off (default) renders the unmodified
+          SOSButton path (plus the swallowed-error bug fix below); on, renders
+          the new discreet-hold shield + Safety overlay pair instead. */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
-        <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
-          <SOSButton
-            rideId={activeRide.ride.id}
-            onTrigger={async (rideId, lat, lng) => {
-              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch (err) { console.error('[index]', err); }
-            }}
-          />
-        </View>
+        discreetSosEnabled ? (
+          <>
+            <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
+              <SafetyShield
+                rideId={activeRide.ride.id}
+                onTrigger={safetyTrigger}
+                onOpenOverlay={() => setSafetyOverlayOpen(true)}
+              />
+            </View>
+            <SafetyOverlay
+              visible={safetyOverlayOpen}
+              onClose={() => setSafetyOverlayOpen(false)}
+              rideId={activeRide.ride.id}
+              onTrigger={safetyTrigger}
+            />
+          </>
+        ) : (
+          <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
+            <SOSButton
+              rideId={activeRide.ride.id}
+              onTrigger={async (rideId, lat, lng) => {
+                // Bug fix (B16): rethrow instead of swallowing. Previously
+                // this try/catch+console.error meant SOSButton's own
+                // retry/FAILED state could never activate for drivers even
+                // on a real backend failure -- a genuine 503 always looked
+                // like silent success after one attempt. Pure improvement,
+                // no plausible regression on the happy path: the only
+                // behavior change flag-off drivers see.
+                await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
+              }}
+              t={t}
+            />
+          </View>
+        )
       )}
 
       {/* Map Controls */}
@@ -898,9 +970,9 @@ function DriverDashboard() {
                 })()
               : null
           }
-          isLoading={false}
+          isLoading={isLoading}
           onAccept={() => acceptRide(incomingRide.ride_id)}
-          onDecline={() => declineRide(incomingRide.ride_id)}
+          onDecline={(reason) => declineRide(incomingRide.ride_id, reason)}
         />
       )}
       {(rideState === 'navigating_to_pickup' ||

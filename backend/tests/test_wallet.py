@@ -131,7 +131,7 @@ class TestTopUp:
             patch("routes.wallet.db", mock_db),
             patch("routes.wallet.get_app_settings", AsyncMock(return_value=self._SETTINGS)),
             patch(
-                "routes.wallet.db_supabase.get_user_by_id",
+                "routes.payments.db_supabase.get_user_by_id",
                 AsyncMock(return_value={**self._USER, "stripe_customer_id": "cus_existing"}),
             ),
             patch("routes.wallet.stripe.EphemeralKey.create", return_value=mock_ephemeral),
@@ -165,7 +165,7 @@ class TestTopUp:
             patch("routes.wallet.db", mock_db),
             patch("routes.wallet.get_app_settings", AsyncMock(return_value=self._SETTINGS)),
             patch(
-                "routes.wallet.db_supabase.get_user_by_id",
+                "routes.payments.db_supabase.get_user_by_id",
                 AsyncMock(
                     side_effect=[
                         {**self._USER, "stripe_customer_id": None},
@@ -173,7 +173,7 @@ class TestTopUp:
                     ]
                 ),
             ),
-            patch("routes.wallet.db_supabase.update_one", AsyncMock()),
+            patch("routes.payments.db_supabase.update_one", AsyncMock()),
             patch("routes.wallet.stripe.Customer.create", return_value=mock_customer) as mock_cus_create,
             patch("routes.wallet.stripe.EphemeralKey.create", return_value=mock_ephemeral),
             patch("routes.wallet.stripe.PaymentIntent.create", return_value=mock_intent),
@@ -192,7 +192,7 @@ class TestTopUp:
             patch("routes.wallet.db", mock_db),
             patch("routes.wallet.get_app_settings", AsyncMock(return_value=self._SETTINGS)),
             patch(
-                "routes.wallet.db_supabase.get_user_by_id",
+                "routes.payments.db_supabase.get_user_by_id",
                 AsyncMock(return_value={**self._USER, "stripe_customer_id": "cus_existing"}),
             ),
             patch(

@@ -212,3 +212,75 @@ async def test_no_op_when_stripe_secret_missing():
         await run_autotopup_tick()
 
     m_list.assert_not_awaited()
+
+
+# ── E5 kill switch: corporate_billing_enabled ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_no_op_when_corporate_billing_disabled():
+    with (
+        patch(
+            "utils.corporate_autotopup.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test", "corporate_billing_enabled": False}),
+        ),
+        patch(
+            "utils.corporate_autotopup.list_wallets_needing_autotopup",
+            AsyncMock(),
+        ) as m_list,
+    ):
+        from utils.corporate_autotopup import run_autotopup_tick
+
+        await run_autotopup_tick()
+
+    m_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_proceeds_when_corporate_billing_key_missing():
+    """A settings dict with no corporate_billing_enabled key (legacy row)
+    must still proceed -- the flag defaults to enabled."""
+    with (
+        patch(
+            "utils.corporate_autotopup.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test"}),
+        ),
+        patch(
+            "utils.corporate_autotopup.list_wallets_needing_autotopup",
+            AsyncMock(return_value=[]),
+        ) as m_list,
+    ):
+        from utils.corporate_autotopup import run_autotopup_tick
+
+        await run_autotopup_tick()
+
+    m_list.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_loop_logs_exc_info_on_tick_failure():
+    """Corporate + admin portal review, gap #43: corporate_autotopup_loop's
+    top-level error handler logged only the exception's string form,
+    discarding the traceback — every other error-logging call in this
+    module (e.g. run_autotopup_tick's Stripe-error handler) already
+    passes exc_info=True. A DB error or a bug in tick logic outside
+    stripe.StripeError landed here with no way to find where it
+    actually happened."""
+    import asyncio
+
+    from utils import corporate_autotopup
+
+    with (
+        patch.object(
+            corporate_autotopup,
+            "run_autotopup_tick",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ),
+        patch("asyncio.sleep", AsyncMock(side_effect=asyncio.CancelledError())),
+        patch.object(corporate_autotopup.logger, "error") as mock_error,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await corporate_autotopup.corporate_autotopup_loop()
+
+    mock_error.assert_called_once()
+    assert mock_error.call_args.kwargs.get("exc_info") is True

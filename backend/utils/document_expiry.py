@@ -24,16 +24,24 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from ..socket_manager import manager
+    from .company_details import load_company_details
     from .datetime_utils import parse_iso_utc
     from .driver_presence import clear_presence
+    from .driver_status_notifications import ACCOUNT_PRIORITY
+    from .email_layout import render_email
+    from .email_notifications import EmailClass, resolve_recipient, send_lifecycle_email
     from .metrics import inc as _metric_inc
     from .metrics import set_gauge as _metric_gauge
 except ImportError:
     from db import db
     from features import send_push_notification
     from socket_manager import manager
+    from utils.company_details import load_company_details  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_presence import clear_presence
+    from utils.driver_status_notifications import ACCOUNT_PRIORITY
+    from utils.email_layout import render_email
+    from utils.email_notifications import EmailClass, resolve_recipient, send_lifecycle_email
     from utils.metrics import inc as _metric_inc
     from utils.metrics import set_gauge as _metric_gauge
 
@@ -41,6 +49,50 @@ logger = logging.getLogger(__name__)
 
 CHECK_INTERVAL_SECONDS = 43200  # 12 hours
 EXPIRY_WARNING_DAYS = 7
+
+
+async def _email_expiry_notice(
+    user_id: str,
+    driver_id: str,
+    subject: str,
+    body: str,
+    next_step: str,
+    email_type: str,
+) -> None:
+    """Mirror an expiry notice to email. Never raises.
+
+    Deliberately called from INSIDE the same claimed block as the push, so it
+    inherits that claim rather than needing one of its own — the suspension CAS
+    for the expired branch, the `doc_expiry_warned_at` CAS for the warning
+    branch. Adding a second claim would mean two replicas could each win one,
+    and the driver would get duplicate mail.
+
+    TRANSACTIONAL: a driver cannot opt out of being told their licence expired.
+    Expiring documents are a Saskatchewan eligibility requirement checked on
+    every go-online, not a marketing preference.
+    """
+    try:
+        company = await load_company_details()
+        user = await resolve_recipient(user_id)
+        first_name = ((user or {}).get("first_name") or "").strip()
+        await send_lifecycle_email(
+            user_id=user_id,
+            user=user,
+            subject=subject,
+            rendered=await render_email(
+                greeting=f"Hi {first_name}," if first_name else None,
+                heading=subject,
+                # `{app_name}` is a literal replace, not str.format: `body`
+                # can carry a document label an admin/config never vetted.
+                paragraphs=[body, next_step.replace("{app_name}", company.app_name)],
+                company=company,
+            ),
+            email_type=email_type,
+            email_class=EmailClass.TRANSACTIONAL,
+            context="document_expiry",
+        )
+    except Exception as e:
+        logger.warning(f"Doc expiry: email failed for driver {driver_id}: {e}")
 
 
 async def check_expiring_documents():
@@ -164,15 +216,34 @@ async def check_expiring_documents():
             except Exception as e:
                 logger.error(f"Doc expiry: clear_presence failed for {driver['id']}: {e}", exc_info=True)
             manager.disconnect(f"driver_{user_id}")
+            _suspend_title = "Account suspended — expired documents"
+            _suspend_body = f"Your account has been suspended: {doc_list}. Please renew to continue driving."
             try:
                 await send_push_notification(
                     user_id,
-                    "Account suspended — expired documents",
-                    f"Your account has been suspended: {doc_list}. Please renew to continue driving.",
+                    _suspend_title,
+                    _suspend_body,
                     data={"type": "document_expired_suspension", "driver_id": driver["id"]},
+                    # This driver can no longer earn. That is exactly what the
+                    # account tier exists for (see driver_status_notifications):
+                    # it bypasses the push opt-out and falls back to the retry
+                    # queue. On the default tier an opted-out driver got no
+                    # notice at all that they'd been taken offline.
+                    priority=ACCOUNT_PRIORITY,
+                    target_app="driver",
                 )
             except Exception as e:
                 logger.warning(f"Doc expiry: push failed for driver {driver['id']}: {e}")
+            # Inside the suspension claim — see _email_expiry_notice.
+            await _email_expiry_notice(
+                user_id,
+                driver["id"],
+                _suspend_title,
+                _suspend_body,
+                "Upload a current copy in the {app_name} driver app under Profile → Documents. "
+                "Your account is restored once an admin approves it.",
+                "document_expired_suspension",
+            )
             continue
 
         if not expiring_docs:
@@ -227,10 +298,26 @@ async def check_expiring_documents():
                 notif_title,
                 notif_body,
                 data={"type": notif_type, "driver_id": driver["id"]},
+                target_app="driver",
             )
             notified += 1
         except Exception as e:
             logger.warning(f"Doc expiry: failed to notify driver {driver['id']}: {e}")
+
+        # Inside the doc_expiry_warned_at claim — see _email_expiry_notice.
+        # Email matters more here than almost anywhere else in the product: a
+        # renewal needs the driver to find a document, photograph it and upload
+        # it, which is not something a notification that vanishes from the tray
+        # supports. It also survives an uninstalled app or a stale FCM token.
+        await _email_expiry_notice(
+            user_id,
+            driver["id"],
+            notif_title,
+            notif_body,
+            "Upload the renewed document in the {app_name} driver app under Profile → Documents. "
+            "You'll stay online as long as it's approved before the expiry date.",
+            notif_type,
+        )
 
     if notified > 0:
         logger.info(f"Doc expiry: notified {notified} drivers about expiring documents")

@@ -151,6 +151,17 @@ def test_rider_prompt_trusts_tapped_suggestion_coordinates():
     assert prompt.index("taps one of your location suggestions") < prompt.index("Bracketed coordinates count")
 
 
+def test_prompts_mirror_the_users_language():
+    # ACTION_ITEMS.md AI7: no prompt rule previously told the model to reply
+    # in the rider/driver's own language rather than defaulting to English.
+    rider = build_system_prompt({}, "rider")
+    assert "same language the rider is writing in" in rider
+    assert "never switch languages on your own" in rider
+    driver = build_system_prompt({}, "driver")
+    assert "same language the driver is writing in" in driver
+    assert "never switch languages on your own" in driver
+
+
 def _patch_last_ride(rows=None):
     return patch.object(tools_booking.db_supabase, "get_rows", AsyncMock(return_value=rows or []))
 
@@ -438,6 +449,104 @@ class TestFindPlace:
         cand = result["candidates"][0]
         assert cand["in_service_area"] is True
         assert cand["lat"] == 52.1708
+
+    @pytest.mark.anyio
+    async def test_out_of_area_street_address_is_marked_not_dropped(self):
+        # ACTION_ITEMS.md AI5: the in_service_area filter is deliberately
+        # skipped for street-address queries (a specific numbered address
+        # has no fallback candidate the way a named-place search does), but
+        # an out-of-area one must still be visibly flagged -- not silently
+        # returned as if it were bookable.
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(GEOCODE_OK),
+            _patch_area(area=None),
+            _patch_last_ride(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
+        assert ok
+        # still returned, not filtered out
+        assert result["candidates"]
+        assert result["candidates"][0]["in_service_area"] is False
+        assert result["out_of_service_area"] is True
+        assert "outside spinr's service area" in result["note"].lower()
+
+    @pytest.mark.anyio
+    async def test_in_area_street_address_is_not_flagged(self):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(GEOCODE_OK),
+            _patch_area(),
+            _patch_last_ride(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
+        assert ok
+        assert result["candidates"][0]["in_service_area"] is True
+        assert "out_of_service_area" not in result
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "https://maps.app.goo.gl/abc123",
+            "https://goo.gl/maps/xyz789",
+            "https://www.google.com/maps/place/somewhere",
+            "check this out https://maps.app.goo.gl/abc123 thanks",
+        ],
+    )
+    async def test_maps_url_is_rejected_without_an_api_call(self, query):
+        # ACTION_ITEMS.md AI6: a pasted Maps link has no usable place text —
+        # must not burn a paid Maps API call geocoding/text-searching it.
+        client = MagicMock()
+        client.get = AsyncMock()
+        client.post = AsyncMock()
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            patch("backend.ai.tools_booking.httpx.AsyncClient", return_value=ctx),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": query}, user=RIDER)
+        assert ok
+        assert result["candidates"] == []
+        assert "maps link" in result["note"].lower()
+        client.get.assert_not_awaited()
+        client.post.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_ordinary_query_is_not_treated_as_a_url(self):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(PLACES_OK),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "walmart"}, user=RIDER)
+        assert ok
+        assert result["candidates"]
+
+    @pytest.mark.anyio
+    async def test_out_of_area_named_place_is_still_filtered_out(self):
+        # A non-street query keeps the pre-existing hard filter -- AI5 only
+        # changes behavior for street-address-shaped queries.
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(PLACES_OK),
+            _patch_area(area=None),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "walmart"}, user=RIDER)
+        assert ok
+        assert result["candidates"] == []
 
     @pytest.mark.anyio
     async def test_biases_search_to_last_ride_pickup_when_no_near_args(self):
@@ -1687,11 +1796,37 @@ class TestScheduledTimeValidation:
         assert "_client_action" not in result
 
     @pytest.mark.anyio
-    async def test_time_inside_five_minute_window_rejected(self):
-        # 2 minutes out — inside the >=5-min lead required by both this
-        # proposal-time check and the Confirm-time validator it mirrors.
+    async def test_time_inside_min_lead_window_rejected(self):
+        # 2 minutes out — inside the minimum lead required by both this
+        # proposal-time check and the Confirm-time validator it mirrors
+        # (schemas.SCHEDULE_MIN_LEAD_MINUTES, imported by this module rather
+        # than hardcoded here — see the scheduled-rides gap review Finding #11).
         too_soon = (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat()
         args = dict(self.ARGS, scheduled_time=too_soon)
+        result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "error" in result
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_time_between_old_and_new_min_lead_rejected(self):
+        # 10 minutes out: accepted under the old 5-minute floor, correctly
+        # rejected now that the shared SCHEDULE_MIN_LEAD_MINUTES floor is 15
+        # (Finding #11 — this path previously hardcoded its own 5-minute
+        # constant, independently of the rider app's 15-minute UI rule).
+        ten_min_out = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        args = dict(self.ARGS, scheduled_time=ten_min_out)
+        result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        assert "error" in result
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_time_beyond_max_advance_window_rejected(self):
+        # Finding #02: previously nothing stopped the AI assistant from
+        # proposing a booking arbitrarily far in the future.
+        too_far = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        args = dict(self.ARGS, scheduled_time=too_far)
         result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
         assert "error" in result

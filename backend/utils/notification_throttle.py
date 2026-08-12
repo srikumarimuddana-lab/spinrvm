@@ -15,7 +15,7 @@ lookup in features.py and by _over_mcp_daily_cap in ai/mcp_server.py.
 
 Scope: quiet hours are a single global window (America/Regina), not a
 per-user preference — Spinr operates in one timezone today (Saskatchewan,
-no DST). See migration 275 for why this is deliberately not per-user yet.
+no DST). See migration 304 for why this is deliberately not per-user yet.
 """
 
 import logging

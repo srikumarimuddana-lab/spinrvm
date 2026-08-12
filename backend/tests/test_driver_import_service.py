@@ -5,6 +5,9 @@ These cover the DB-touching plan builder with an in-memory fake Supabase client
 path, and the web-flow (files_root=None) document rejection.
 """
 
+import pytest
+from unittest.mock import MagicMock
+
 from backend.services import driver_import_service as svc
 
 IMPORT_SOURCE = svc.IMPORT_SOURCE
@@ -255,3 +258,53 @@ def test_missing_required_column_errors(monkeypatch):
     del bad["vehicle_make"]
     plan = svc.build_plan([bad], [], None, SERVICE_AREA, "batch1")
     assert any(e.field == "vehicle_make" for e in plan.errors)
+
+
+# ---------------------------------------------------------------------------
+# storage_signed_url — response-shape handling
+# ---------------------------------------------------------------------------
+
+
+def test_storage_signed_url_handles_the_current_dict_response_shape(monkeypatch):
+    """supabase-py's create_signed_url returns a plain dict. The old local
+    implementation only read res.data (the legacy object shape), so it raised
+    on every call and took the whole bulk import down at commit time — the
+    same break documents.py had already been fixed for."""
+    fake = MagicMock()
+    fake.storage.from_.return_value.create_signed_url.return_value = {
+        "signedURL": "https://x.supabase.co/storage/v1/object/sign/driver-documents/k.pdf?token=t",
+        "signedUrl": "https://x.supabase.co/storage/v1/object/sign/driver-documents/k.pdf?token=t",
+    }
+    monkeypatch.setattr(svc, "supabase", fake)
+
+    assert svc.storage_signed_url("k.pdf").endswith("k.pdf?token=t")
+
+
+def test_storage_signed_url_still_handles_the_legacy_object_shape(monkeypatch):
+    legacy = MagicMock()
+    legacy.data = {"signedURL": "https://x/storage/v1/object/sign/driver-documents/k.pdf"}
+    fake = MagicMock()
+    fake.storage.from_.return_value.create_signed_url.return_value = legacy
+    monkeypatch.setattr(svc, "supabase", fake)
+
+    assert svc.storage_signed_url("k.pdf").endswith("k.pdf")
+
+
+def test_storage_signed_url_names_the_key_when_no_url_comes_back(monkeypatch):
+    fake = MagicMock()
+    fake.storage.from_.return_value.create_signed_url.return_value = {}
+    monkeypatch.setattr(svc, "supabase", fake)
+
+    with pytest.raises(RuntimeError, match="k.pdf"):
+        svc.storage_signed_url("k.pdf")
+
+
+def test_import_url_shape_round_trips_through_the_export_key_parser():
+    """The import writes document_url; the export parses it back to a storage
+    key. These two live in different modules and nothing else pins them
+    together — a mismatch exports the document as metadata with no file."""
+    from backend.documents import _extract_storage_key
+
+    storage_key = "saskatoon-import/batch1/d7/criminal_record_check/main-uuid.pdf"
+
+    assert _extract_storage_key(f"storage://driver-documents/{storage_key}") == storage_key

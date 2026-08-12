@@ -28,6 +28,13 @@ from ._deps import (  # noqa: F401
 
 router = APIRouter()
 
+# Case-insensitive substring match against the free-text cancellation_reason
+# column. Matches the driver-app preset "Service animal — could not
+# accommodate" (driver-app/components/CancelReasonSheet.tsx's
+# DRIVER_CANCEL_REASONS) regardless of an appended free-text note. Keep in
+# sync with that string.
+_SERVICE_ANIMAL_CANCEL_MARKER = "service animal"
+
 
 @router.post("/rides/{ride_id}/cancel")
 async def cancel_ride(
@@ -133,6 +140,36 @@ async def cancel_ride(
             detail="Ride can no longer be cancelled (it has started or already ended)",
         )
 
+    # Saskatchewan Regulatory / Accessibility: service animal accommodation
+    # is mandatory and a driver refusal is a tracked terms violation subject
+    # to account review (CLAUDE.md). Driver cancels don't otherwise write an
+    # audit_logs row (only cancellation_reason free text on the ride itself),
+    # so this specific reason gets a dedicated audit event to make it
+    # queryable/reportable for trust & safety, plus an info log tagged
+    # domain=safety per the Sentry-tag conventions for correlation. IDs
+    # only — no PII. Automated account-review enforcement on repeated
+    # refusals is a separate, deferred follow-up.
+    if reason and _SERVICE_ANIMAL_CANCEL_MARKER in reason.lower():
+        logger.info(
+            "[CANCEL] driver reported inability to accommodate a service animal",
+            extra={"domain": "safety", "surface": "backend", "ride_id": ride_id, "driver_id": driver["id"]},
+        )
+        try:
+            await db_supabase.insert_one(
+                "audit_logs",
+                {
+                    "id": str(uuid.uuid4()),
+                    "action": "ride_cancel_service_animal_refusal",
+                    "entity_type": "ride",
+                    "entity_id": ride_id,
+                    "actor_id": driver["id"],
+                    "details": {"driver_id": driver["id"]},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception as _exc:
+            logger.error(f"Could not log service animal refusal to audit_logs: {_exc}", exc_info=True)
+
     # WS-8 (finding 11): release the booking-time pre-auth hold so the
     # rider's card isn't blocked for up to 7 days after a driver cancel.
     _booking_pi = ride.get("payment_intent_id")
@@ -178,11 +215,17 @@ async def cancel_ride(
                 data={"type": "ride_cancelled", "ride_id": str(ride_id)},
             )
         )
+    # Surfaced to admins so a scheduled ride's driver-cancel (unconditionally
+    # terminal — no auto-requeue, for any ride type) can be told apart from
+    # an on-demand one: the rider planned around this specific pickup and has
+    # less slack to just re-hail (scheduled-rides gap review, Finding #12).
+    _was_scheduled = bool((ride or {}).get("is_scheduled"))
     await _deps.manager.broadcast_ride_status(
         ride_id,
         RideStatus.CANCELLED,
         rider_id=(ride or {}).get("rider_id"),
         reason="driver_cancelled",
+        is_scheduled=_was_scheduled,
     )
     # End the rider's live activity on driver cancellation.
     spawn(send_live_activity_update(ride or {"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
@@ -190,7 +233,12 @@ async def cancel_ride(
     # that switch on event name.
     try:
         await _deps.manager.broadcast_to_admins(
-            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"}
+            {
+                "type": "ride_cancelled",
+                "ride_id": ride_id,
+                "reason": "driver_cancelled",
+                "is_scheduled": _was_scheduled,
+            }
         )
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"driver cancel admin broadcast failed: {_exc}")
@@ -376,6 +424,11 @@ async def mark_rider_noshow(
                 data={"type": "ride_noshow", "ride_id": str(ride_id)},
             )
         )
+        # A charge the rider did not choose to make needs a written record they
+        # can find later and dispute against — the push says the amount once and
+        # then it is gone. total_fee stays a Decimal all the way to the email;
+        # the float() above is only for the WS payload's JSON encoding.
+        spawn(_deps.send_no_show_fee_email(rider_id, total_fee, ride=ride))
 
     await _deps.manager.broadcast_ride_status(
         ride_id,

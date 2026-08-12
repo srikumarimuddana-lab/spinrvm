@@ -16,6 +16,14 @@ export interface DriverImportReport {
     counts: { rows: number; users: number; drivers: number; updated: number; skipped_resume: number };
     warnings: DriverImportReportItem[];
     errors: DriverImportReportItem[];
+    // Proves a /validate call happened for this exact (batch, CSV bytes,
+    // admin) — /commit requires it back. See corporate + admin portal
+    // review, gap #45. Optional: the locally-reconstructed "commit was
+    // refused, here's why" report (built from DriverImportCommitResult
+    // when the backend re-validation fails) never carries one — that's
+    // fine, since the fix is always to re-validate anyway, which mints
+    // a fresh token.
+    validation_token?: string;
 }
 export interface DriverImportCommitResult {
     batch: string;
@@ -33,6 +41,9 @@ export interface DriverImportOptions {
     serviceAreaId?: string;
     serviceAreaName?: string;
     batch?: string;
+    // Required for /commit (gap #45) — pass report.validation_token from
+    // the preceding /validate call. Omitted for /validate itself.
+    validationToken?: string;
 }
 
 function driverImportFormData(file: File, opts?: DriverImportOptions): FormData {
@@ -41,6 +52,7 @@ function driverImportFormData(file: File, opts?: DriverImportOptions): FormData 
     if (opts?.serviceAreaId) fd.append("service_area_id", opts.serviceAreaId);
     if (opts?.serviceAreaName) fd.append("service_area_name", opts.serviceAreaName);
     if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.validationToken) fd.append("validation_token", opts.validationToken);
     return fd;
 }
 
@@ -217,6 +229,34 @@ function stripeImportFormData(file: File, kind: StripeImportKind, batch?: string
     return fd;
 }
 
+export interface StripeDiscoveryMatch {
+    driver_id: string;
+    stripe_account_id: string;
+    matched_on: "email";
+    account_country: string | null;
+    account_type: string | null;
+    details_submitted: boolean;
+    payouts_enabled: boolean;
+    was_retired: boolean;
+    phone: string;
+}
+
+export interface StripeDiscoveryReport {
+    matches: StripeDiscoveryMatch[];
+    ambiguous: { email_drivers: string[]; email_accounts: string[]; reason: string }[];
+    matched: number;
+    unmatched_drivers: number;
+    unmatched_accounts: number;
+    matches_without_phone: string[];
+    csv: string;
+}
+
+/** Read-only: match unlinked drivers to connected Stripe accounts by exact
+ * email and return proposals + a ready-to-import CSV. Writes nothing —
+ * the CSV goes through validate → commit below like any hand-built one. */
+export const adminDiscoverStripeDriverAccounts = () =>
+    request<StripeDiscoveryReport>("/api/admin/stripe/import/discover", { method: "POST" });
+
 /** Dry-run: parse, match, and live-validate the mapping CSV (no writes). */
 export const adminValidateStripeImport = (file: File, kind: StripeImportKind, batch?: string) =>
     request<StripeImportReport>("/api/admin/stripe/import/validate", {
@@ -271,7 +311,10 @@ export interface RiderImportReportItem {
 export interface RiderImportDuplicate {
     row: number;
     phone: string;
-    match_type: "rider" | "driver";
+    // "protected_skip" (P0-C, docs/audit/2026-08-11-driver-rider-migration-audit.md):
+    // the matched account is pending_deletion/deleted — no fields were
+    // modified, flagged here for manual review rather than auto-updated.
+    match_type: "rider" | "driver" | "protected_skip";
     is_driver: boolean;
     existing_user_id: string;
 }
@@ -284,6 +327,7 @@ export interface RiderImportReport {
         to_update: number;
         duplicates: number;
         duplicate_drivers: number;
+        protected_skips: number;
     };
     duplicates: RiderImportDuplicate[];
     warnings: RiderImportReportItem[];

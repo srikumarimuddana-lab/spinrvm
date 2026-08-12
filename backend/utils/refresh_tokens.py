@@ -168,9 +168,41 @@ async def issue_refresh_token(
                 {"$set": {"replaced_by": row_id, "revoked_at": now.isoformat()}},
             )
         except Exception as e:  # pragma: no cover
-            logger.error(f"Could not chain refresh token {replaces} → {row_id}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"Could not chain refresh token {replaces} → {row_id}: {e}")
 
     return raw, row_id, expires_at
+
+
+async def is_new_device(user_id: str, audience: str, user_agent: Optional[str]) -> bool:
+    """True when ``user_agent`` has never been seen before for this user+audience.
+
+    ``refresh_tokens.user_agent`` (captured at every ``issue_refresh_token`` call,
+    see above) is the only device signal we persist today — ``ip`` is too
+    unstable on mobile networks to use as a fingerprint. Call this BEFORE
+    ``issue_refresh_token`` for the current login; otherwise the row this
+    login is about to create would satisfy its own "have we seen this
+    before" check.
+
+    A blank/missing user_agent can't be fingerprinted at all, so it's
+    treated as "not new" (never alerts) rather than risking a false
+    positive on every login from a client that omits the header.
+
+    Fails quiet on a DB error — returns False (no alert). A missed device
+    alert is far cheaper than adding a hard dependency to the login path;
+    login must never block or slow down on this check.
+    """
+    ua = (user_agent or "").strip()
+    if not ua:
+        return False
+    try:
+        existing = await db.find_one(
+            "refresh_tokens",
+            {"user_id": user_id, "audience": audience, "user_agent": ua},
+        )
+    except Exception as e:
+        logger.error(f"is_new_device check failed for user {user_id}: {e}")
+        return False
+    return existing is None
 
 
 async def lookup_refresh_token(raw: str) -> Optional[dict]:
@@ -391,7 +423,7 @@ async def revoke_refresh_token(raw: str) -> bool:
     try:
         row = await db.find_one("refresh_tokens", {"token_hash": token_hash})
     except Exception as e:
-        logger.error(f"revoke_refresh_token lookup failed: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"revoke_refresh_token lookup failed: {e}")
         return False
     if not row or row.get("revoked_at"):
         return False
@@ -403,7 +435,7 @@ async def revoke_refresh_token(raw: str) -> bool:
         )
         return True
     except Exception as e:
-        logger.error(f"revoke_refresh_token update failed: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"revoke_refresh_token update failed: {e}")
         return False
 
 
@@ -424,7 +456,7 @@ async def revoke_all_for_user(user_id: str) -> int:
     try:
         rows = await db.get_rows("refresh_tokens", {"user_id": user_id}, limit=1000)
     except Exception as e:
-        logger.error(f"refresh_tokens scan failed for user {user_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"refresh_tokens scan failed for user {user_id}: {e}")
         return 0
     n = 0
     for row in rows or []:
@@ -438,5 +470,5 @@ async def revoke_all_for_user(user_id: str) -> int:
             )
             n += 1
         except Exception as e:  # pragma: no cover
-            logger.error(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}")
     return n

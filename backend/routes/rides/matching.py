@@ -1074,6 +1074,7 @@ async def _offer_timeout_handler(
                         f"You missed {miss_count} ride offers in a row. "
                         "Tap 'Go Online' when you're ready to drive again.",
                         data={"type": "auto_offline", "reason": "missed_offers"},
+                        target_app="driver",
                     )
                 else:
                     await _deps.manager.send_personal_message(
@@ -1349,6 +1350,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 "Ride Cancelled ❌",
                 "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
                 {"type": "ride_cancelled", "ride_id": r_id, "is_auto": "true"},
+                target_app="rider",
             )
             if current_ride.get("guest_booking"):
                 # Corporate guest customer (no app): tell them by SMS —

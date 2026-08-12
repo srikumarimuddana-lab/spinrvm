@@ -327,11 +327,89 @@ class TestAuditLogs:
         assert len(filters["$or"]) == 3
 
     @pytest.mark.asyncio
+    async def test_get_audit_logs_search_matches_entity_id_not_legacy_resource_id(self):
+        """SOC fix: every current writer (log_admin_action, log_user_action,
+        the PII-reveal endpoint) populates audit_logs.entity_id, not the
+        pre-migration-57 legacy resource_id column that nothing writes
+        anymore. Searching resource_id silently matched zero modern rows —
+        lock in entity_id so this doesn't regress."""
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+            await maint.get_audit_logs(limit=10, offset=0, action=None, entity_type=None, search="abc", _admin=ADMIN)
+        _, filters = mock.call_args.args
+        searched_fields = {list(clause.keys())[0] for clause in filters["$or"]}
+        assert searched_fields == {"actor_id", "entity_id", "details"}
+        assert "resource_id" not in searched_fields
+
+    @pytest.mark.asyncio
     async def test_get_audit_logs_blank_search_after_strip_ignored(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(limit=10, offset=0, action=None, entity_type=None, search="   ", _admin=ADMIN)
         _, filters = mock.call_args.args
         assert "$or" not in filters
+
+
+# ---------------------------------------------------------------------------
+# audit log top-actors rollup
+# ---------------------------------------------------------------------------
+
+
+class TestAuditLogTopActors:
+    """Corporate + admin portal review, round 2: "no 'who touched the most'
+    rollup views — every threat hunt needs raw SQL." """
+
+    @pytest.mark.asyncio
+    async def test_aggregates_by_actor_sorted_descending(self):
+        rows = [
+            {"actor_id": "admin-a", "action": "staff_updated"},
+            {"actor_id": "admin-a", "action": "staff_updated"},
+            {"actor_id": "admin-a", "action": "settings_updated"},
+            {"actor_id": "admin-b", "action": "staff_updated"},
+        ]
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
+        assert result["actors"][0]["actor_id"] == "admin-a"
+        assert result["actors"][0]["action_count"] == 3
+        assert result["actors"][1]["actor_id"] == "admin-b"
+        assert result["actors"][1]["action_count"] == 1
+        assert result["rows_scanned"] == 4
+        assert result["rows_scanned_capped"] is False
+
+    @pytest.mark.asyncio
+    async def test_top_actions_breakdown_per_actor(self):
+        rows = [
+            {"actor_id": "admin-a", "action": "staff_updated"},
+            {"actor_id": "admin-a", "action": "staff_updated"},
+            {"actor_id": "admin-a", "action": "settings_updated"},
+        ]
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
+        top_actions = result["actors"][0]["top_actions"]
+        assert top_actions[0] == {"action": "staff_updated", "count": 2}
+        assert {"action": "settings_updated", "count": 1} in top_actions
+
+    @pytest.mark.asyncio
+    async def test_missing_actor_or_action_falls_back_to_unknown(self):
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[{}])):
+            result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
+        assert result["actors"][0]["actor_id"] == "unknown"
+        assert result["actors"][0]["top_actions"] == [{"action": "unknown", "count": 1}]
+
+    @pytest.mark.asyncio
+    async def test_respects_limit_and_flags_row_cap(self):
+        rows = [{"actor_id": f"admin-{i}", "action": "x"} for i in range(5000)]
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result = await maint.get_audit_log_top_actors(days=7, limit=3, _admin=ADMIN)
+        assert len(result["actors"]) == 3
+        assert result["rows_scanned_capped"] is True
+
+    @pytest.mark.asyncio
+    async def test_days_window_passed_to_query(self):
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+            result = await maint.get_audit_log_top_actors(days=30, limit=20, _admin=ADMIN)
+        assert result["days"] == 30
+        _, filters = mock.call_args.args
+        assert "created_at" in filters
+        assert "$gte" in filters["created_at"]
 
 
 # ---------------------------------------------------------------------------

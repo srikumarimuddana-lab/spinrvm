@@ -1,7 +1,7 @@
-# B-P2-8: builder stage pinned to a specific Python minor version, matching
-# the runtime stage below. Previously this was `python:3.12-slim` (any 3.12.x),
-# which meant a Docker Hub re-tag of `3.12-slim` could change the build
-# environment between runs without any visible PR diff.
+# B-P2-8: base image pinned to a specific Python minor version. Previously
+# this was `python:3.12-slim` (any 3.12.x), which meant a Docker Hub re-tag
+# of `3.12-slim` could change the build environment between runs without
+# any visible PR diff.
 #
 # B-P2-8 half 2 — content-hash pin: the `@sha256:` suffix makes the base
 # image bit-for-bit reproducible. Any Docker Hub re-tag or compromised mirror
@@ -17,35 +17,22 @@
 # floating `python:3.12-slim` alias resolving to the same digest.
 # Refresh quarterly or on Trivy/Grype alert:
 # see `docs/runbooks/docker-image-pinning.md`.
-FROM python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
-
-WORKDIR /build
-
-# Apply OS security patches before installing anything else.
-# This ensures the builder layer starts from a patched base, reducing
-# the surface area reported by Trivy / Grype image scans.
-RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
-        gcc \
-        libpq-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir --upgrade pip setuptools
-
-# B-P1-10: install from the SHA-256 hash-pinned lockfile, not the floor-pin
-# source-of-truth. `--require-hashes` makes pip refuse any wheel/sdist whose
-# digest doesn't match the lockfile, so a compromised PyPI mirror or a
-# typosquat package can't slip into the container. Regenerate via
-# `cd backend && pip-compile --generate-hashes ... requirements.txt` —
-# see docs/runbooks/dependency-update.md.
-COPY requirements-locked.txt .
-RUN pip install --no-cache-dir --prefix=/install --require-hashes -r requirements-locked.txt
-
-
-# ── Runtime stage ─────────────────────────────────────────────────────────────
+#
+# CR-2026-003 (issue #3300): this file used to have a separate "builder"
+# stage here — installing to `--prefix=/install` with `gcc`/`libpq-dev`
+# present, intended to be copied into the runtime stage below via
+# `COPY --from=builder`. That copy was never added; nothing ever consumed
+# the builder's output. BuildKit does not build stages nothing depends on,
+# so it was skipped on every real build — confirmed against a CI build log
+# (no `libpq-dev`/`--prefix=/install` traces, and exactly the two
+# `pip install` calls the runtime stage below makes on its own). Removed
+# rather than wired up: wiring it up would have added a layer copy for no
+# speed gain (the stage was already free) and introduced real risk, since
+# `--prefix=/install` does not lay out identically to a normal
+# site-packages install.
 FROM python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
 
-# Apply OS security patches to the runtime image as well.
-# The builder's patched packages don't transfer to the runtime stage
-# (only /install is copied), so the runtime layer must be patched independently.
+# Apply OS security patches to the runtime image.
 RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --upgrade pip setuptools

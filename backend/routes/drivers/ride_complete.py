@@ -58,6 +58,11 @@ except ImportError:
     from utils.route_finalizer import mark_route_pending  # type: ignore
 
 try:
+    from ...repositories._base import _postgrest_or_value
+except ImportError:
+    from repositories._base import _postgrest_or_value  # type: ignore
+
+try:
     from ...utils.trip_distance import compute_trip_distances, load_ride_breadcrumbs
 except ImportError:
     from utils.trip_distance import compute_trip_distances, load_ride_breadcrumbs  # type: ignore
@@ -757,7 +762,11 @@ async def complete_ride(
             .eq("is_active", True)
         )
         if sa_id:
-            iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
+            # `sa_id` is routed through `_postgrest_or_value` per CLAUDE.md's
+            # "Query filters" convention — the layer owns escaping reserved
+            # `,()"\` characters so a malformed value can't silently corrupt
+            # or widen the or-clause.
+            iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{_postgrest_or_value(sa_id)}")
         else:
             iq = iq.is_("service_area_id", "null")
         inc_result = await db_supabase.run_sync(iq.execute)

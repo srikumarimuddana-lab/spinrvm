@@ -848,10 +848,7 @@ async def websocket_endpoint(
                             _app_cfg = await get_app_settings()
                             _maps_key_cache = (_app_cfg or {}).get("google_maps_api_key") or ""
                         except Exception:
-                            logger.debug(
-                                "Maps API key refresh failed; retaining stale key",
-                                exc_info=True,
-                            )
+                            logger.opt(exception=True).debug("Maps API key refresh failed; retaining stale key")
                         _maps_key_fetched_at = now_mono
 
                     location_update = {
@@ -903,9 +900,8 @@ async def websocket_endpoint(
                                             )
                                         )
                                 except Exception:
-                                    logger.debug(
-                                        "ETA fetch failed; omitting eta_seconds from location update",
-                                        exc_info=True,
+                                    logger.opt(exception=True).debug(
+                                        "ETA fetch failed; omitting eta_seconds from location update"
                                     )
 
                         # durable=False: 1 Hz location pings must not fill the
@@ -963,7 +959,7 @@ async def websocket_endpoint(
                     # Redis unavailable — fall back to allowing the request
                     # rather than blocking all batch uploads in degraded mode.
                     logger.warning(
-                        "ws:batch_rl Redis check failed for user %s; allowing batch",
+                        "ws:batch_rl Redis check failed for user {}; allowing batch",
                         user["id"],
                     )
                     _batch_total = 0
@@ -1088,9 +1084,8 @@ async def websocket_endpoint(
                                                     )
                                                 )
                                         except Exception:
-                                            logger.debug(
-                                                "ETA fetch failed for batch; omitting eta_seconds",
-                                                exc_info=True,
+                                            logger.opt(exception=True).debug(
+                                                "ETA fetch failed for batch; omitting eta_seconds"
                                             )
                                 # durable=False: same replay-outbox exemption
                                 # as the single-ping fan-out (F8).
@@ -1379,7 +1374,6 @@ async def websocket_endpoint(
             try:
                 await flush_driver_breadcrumbs(current_driver_id)
             except Exception:
-                logger.error(
-                    f"[WS] breadcrumb flush on disconnect failed for driver {current_driver_id}",
-                    exc_info=True,
+                logger.opt(exception=True).error(
+                    f"[WS] breadcrumb flush on disconnect failed for driver {current_driver_id}"
                 )

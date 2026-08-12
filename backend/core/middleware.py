@@ -10,6 +10,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import settings
+from utils.log_context import set_request_context
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
 # ── CSRF double-submit constants ─────────────────────────────────────
@@ -93,6 +94,11 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # with no App Check header. It is authorised instead by a short-TTL,
     # ride+driver-bound HMAC token in the query string (routes/offer_card.py).
     "/api/v1/offer-cards/",
+    # Email logo: mail clients (and Gmail's image proxy) fetch the branded-email
+    # header image with no App Check header. Unlike the offer card there is no
+    # token, because there is nothing to authorise — it is a single public brand
+    # asset with no PII and no per-user dimension (routes/branding.py).
+    "/api/v1/branding/",
     # Stripe embedded onboarding: the driver app loads these inside a WebView
     # (Stripe's connect.js page + its same-origin fetchClientSecret POST), which
     # cannot attach the app's X-Firebase-AppCheck header. Alternative auth holds:
@@ -130,6 +136,163 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     "/api/v1/auth/send-otp",
     "/api/v1/auth/verify-otp",
 )
+
+
+# ── Forced-upgrade gate (ACTION_ITEMS.md E3) ──────────────────────────
+# Old rider/driver binaries in the wild will eventually hit removed or
+# changed backend behaviour with no way to prompt the user to update. This
+# middleware compares the client-reported X-App-Version against an
+# admin-configured floor (app_settings.min_rider_app_version /
+# min_driver_app_version) and returns 426 Upgrade Required when the client
+# is below it.
+#
+# Deliberately soft-fails open: a missing/unparseable header, an unknown
+# X-App-Platform, or an unset (empty-string) minimum all pass the request
+# through unmodified. This is what makes the feature safe to ship dark —
+# today's binaries don't send the header yet, so enforcement has zero
+# effect until (a) both apps are updated to send it and (b) an admin
+# explicitly sets a non-empty minimum.
+_FORCED_UPGRADE_PATH_PREFIX = "/api/v1/"
+# Pre-auth / bootstrap endpoints a genuinely-too-old client still needs to
+# reach in order to *learn* it needs to update (fetch config, see the
+# update-required copy) rather than being locked out before it can render
+# anything.
+_FORCED_UPGRADE_EXEMPT_PREFIXES = (
+    "/api/v1/settings",
+    "/api/v1/auth/send-otp",
+    "/api/v1/auth/verify-otp",
+)
+
+# ── Active-ride carve-out (ACTION_ITEMS.md task #11) ──────────────────
+# A driver who is already mid-trip (driver_assigned through in_progress, see
+# CLAUDE.md's ride-state table) must never be locked out of the handful of
+# calls that move THEIR OWN, already-accepted ride to completion, or of
+# continuous location reporting / active-ride resync — otherwise a min
+# version bump landing mid-trip strands a passenger. Verified against the
+# driver-app's actual trip flow (driver-app/store/driverStore.ts,
+# driver-app/utils/tripLocationTransport.ts):
+#   POST /api/v1/drivers/rides/{ride_id}/arrive
+#   POST /api/v1/drivers/rides/{ride_id}/verify-otp
+#   POST /api/v1/drivers/rides/{ride_id}/start
+#   POST /api/v1/drivers/rides/{ride_id}/complete
+#   POST /api/v1/drivers/location-batch
+#   GET  /api/v1/drivers/rides/active   (WS-reconnect / app-foreground resync;
+#                                         without it a driver whose app was
+#                                         killed/backgrounded mid-trip can't
+#                                         even see they're still on a ride)
+#
+# Deliberately a path allowlist, NOT a per-request ride-state DB lookup:
+#   - location-batch is an explicit <150ms SLA (CLAUDE.md perf table); a DB
+#     read on every write would be exactly the anti-pattern that table warns
+#     against.
+#   - arrive/verify-otp/start/complete already re-validate the real ride
+#     state themselves via _require_ride_in_state() inside the handler — this
+#     gate only decides whether an old-but-functional client may *reach* the
+#     handler, it grants no additional authority. Ownership + auth (driver
+#     JWT) are unaffected and still enforced downstream.
+#   - GET rides/active is a read of the caller's own state; exempting it from
+#     the version floor carries no privilege escalation.
+# Net effect: an old driver build can always poll/advance its own ride's
+# lifecycle, active ride or not — that's the intended, narrow carve-out.
+#
+# Suffix (not prefix) matching for the per-ride actions is deliberate: the
+# ride_id sits in the middle of the path, and /rides/{id}/accept,
+# /rides/{id}/decline (new-offer intake) and /rides/{id}/cancel /
+# /rides/{id}/rate-rider must stay gated by the version floor — a driver
+# can't have two active rides at once (CLAUDE.md active_statuses invariant),
+# so accept/decline never fire while a trip is genuinely in progress, and
+# cancel is invalid after in_progress starts. A blanket "/api/v1/drivers/
+# rides/" prefix exemption would also exempt those, which is not the intent.
+_FORCED_UPGRADE_RIDE_CARVEOUT_PREFIX = "/api/v1/drivers/rides/"
+_FORCED_UPGRADE_RIDE_CARVEOUT_SUFFIXES = (
+    "/arrive",
+    "/verify-otp",
+    "/start",
+    "/complete",
+)
+_FORCED_UPGRADE_RIDE_CARVEOUT_EXACT = (
+    "/api/v1/drivers/location-batch",
+    "/api/v1/drivers/rides/active",
+)
+
+
+def _is_ride_carveout_path(path: str) -> bool:
+    """True for the completion-critical driver endpoints exempted from the
+    forced-upgrade gate so an already-accepted, in-progress trip is never
+    stranded. See the block comment above for the full rationale."""
+    if path in _FORCED_UPGRADE_RIDE_CARVEOUT_EXACT:
+        return True
+    if path.startswith(_FORCED_UPGRADE_RIDE_CARVEOUT_PREFIX) and any(
+        path.endswith(suffix) for suffix in _FORCED_UPGRADE_RIDE_CARVEOUT_SUFFIXES
+    ):
+        return True
+    return False
+
+
+def _parse_semver(value: str) -> tuple | None:
+    parts = value.strip().split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError:
+        return None
+
+
+class ForcedUpgradeMiddleware(BaseHTTPMiddleware):
+    """Reject requests from app builds older than the configured minimum."""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if not path.startswith(_FORCED_UPGRADE_PATH_PREFIX):
+            return await call_next(request)
+        if any(path.startswith(p) for p in _FORCED_UPGRADE_EXEMPT_PREFIXES):
+            return await call_next(request)
+        if _is_ride_carveout_path(path):
+            return await call_next(request)
+
+        platform = request.headers.get("X-App-Platform")
+        client_version_raw = request.headers.get("X-App-Version")
+        if platform not in ("rider", "driver") or not client_version_raw:
+            # Old binaries that don't send these headers yet — pass through.
+            return await call_next(request)
+
+        client_version = _parse_semver(client_version_raw)
+        if client_version is None:
+            return await call_next(request)
+
+        try:
+            from settings_loader import get_app_settings  # type: ignore
+
+            app_settings = await get_app_settings()
+        except Exception as exc:
+            # Settings lookup failing must never itself lock users out.
+            logger.warning("ForcedUpgrade: settings lookup failed, passing through: {}", exc)
+            return await call_next(request)
+
+        min_key = "min_rider_app_version" if platform == "rider" else "min_driver_app_version"
+        min_version_raw = app_settings.get(min_key, "") or ""
+        min_version = _parse_semver(min_version_raw)
+        if min_version is None:
+            return await call_next(request)
+
+        if client_version < min_version:
+            logger.info(
+                "ForcedUpgrade: blocking {} v{} (min v{}) on {}",
+                platform,
+                client_version_raw,
+                min_version_raw,
+                path,
+            )
+            return JSONResponse(
+                status_code=426,
+                content={
+                    "detail": "upgrade_required",
+                    "min_version": min_version_raw,
+                },
+            )
+
+        return await call_next(request)
 
 
 class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
@@ -237,6 +400,13 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         ctx = {"request_id": request_id}
         if user_id is not None:
             ctx["user_id"] = user_id
+        # utils/log_context.py's ContextVar-backed request_id, read by
+        # utils/audit_logger.py so audit_logs rows can be joined back to
+        # the Sentry event / log lines from the same request (both already
+        # carry request_id via logger.contextualize below). Task-scoped —
+        # asyncio ContextVars propagate through awaits within this request's
+        # own task without leaking across concurrent requests.
+        set_request_context(request_id, user_id or "")
         with logger.contextualize(**ctx):
             response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
@@ -389,7 +559,15 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         present_cookies = [c for c in present_cookies if c]
 
         if not present_cookies or not csrf_header:
-            logger.warning("CSRF token missing: %s %s", request.method, path)
+            # loguru formats with str.format ({}), not %-style — a "%s" here is
+            # emitted literally and the arguments are silently dropped.
+            logger.warning(
+                "CSRF token missing: {} {} header={} cookies={}",
+                request.method,
+                path,
+                "present" if csrf_header else "absent",
+                "present" if present_cookies else "absent",
+            )
             return JSONResponse(
                 status_code=403,
                 content={"detail": "CSRF token missing"},
@@ -401,11 +579,16 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         # compare against each; the attacker can read none of them.
         header_bytes = csrf_header.encode()
         if not any(_hmac.compare_digest(c.encode(), header_bytes) for c in present_cookies):
+            # `cookies` is the count of CSRF cookies presented, not their values
+            # — the tokens are session credentials and must never reach a log
+            # sink. The count distinguishes "no cookie at all" from "sent the
+            # wrong one of two", which is what actually needs diagnosing here.
             logger.warning(
-                "CSRF token mismatch: %s %s origin=%s",
+                "CSRF token mismatch: {} {} origin={} cookies={}",
                 request.method,
                 path,
                 request.headers.get("origin"),
+                len(present_cookies),
             )
             return JSONResponse(
                 status_code=403,
@@ -618,6 +801,8 @@ def init_middleware(app):
             "X-CSRF-Token",
             "X-Request-ID",
             "X-Deadline-Ms",
+            "X-App-Version",
+            "X-App-Platform",
         ],
     )
 
@@ -638,6 +823,11 @@ def init_middleware(app):
     # steps required before shipping to production.
     app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=is_production)
 
+    # Forced-upgrade gate — ships dark (see ForcedUpgradeMiddleware docstring);
+    # no ENV branch needed, it self-disables whenever the admin-configured
+    # minimum is unset.
+    app.add_middleware(ForcedUpgradeMiddleware)
+
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
     async def cors_exception_handler(request: Request, exc: Exception):
         origin = request.headers.get("origin")
@@ -646,7 +836,7 @@ def init_middleware(app):
         if hasattr(exc, "status_code") and hasattr(exc, "detail"):
             response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         else:
-            logger.error(f"Unhandled exception: {exc}", exc_info=True)
+            logger.opt(exception=True).error(f"Unhandled exception: {exc}")
             response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
         # Add CORS headers if origin is allowed

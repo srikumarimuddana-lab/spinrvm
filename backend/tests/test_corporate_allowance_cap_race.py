@@ -31,6 +31,17 @@ time this function is touched — not a substitute for a real concurrent-load
 integration test against Postgres, which remains an open gap (see the P1
 punch-list item this test partially closes in the 2026-07-28 corporate
 module SDLC audit).
+
+**2026-08-11 update:** this test's "not the real function" gap turned out to
+matter — migration 277 silently dropped the actual v_cap guard this test
+mocks a copy of, and this file kept passing the whole time, giving false
+assurance while the real per-employee cap was unenforced in production. The
+guard was restored in migration 297 (see its "REGRESSION FOUND AND FIXED"
+header section). `TestMigrationRideIdempotencyContract` in
+test_corporate_rpc_ride_idempotency.py now parses migration 297's actual SQL
+to confirm the guard is present in the real, currently-live function body —
+run alongside this file, not instead of it, since that test checks the guard
+*exists*, while this one checks the *algorithm* is race-safe.
 """
 
 from __future__ import annotations

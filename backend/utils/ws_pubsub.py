@@ -221,7 +221,7 @@ class _WSPubSub:
             await self._redis.publish(CHANNEL, body)
             return True
         except Exception as e:
-            logger.error(f"WS pub/sub: publish failed, falling back to local delivery: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"WS pub/sub: publish failed, falling back to local delivery: {e}")
             return False
 
     async def get_outbox(self, client_id: str) -> list:
@@ -255,7 +255,7 @@ class _WSPubSub:
             await self._redis.publish(CHANNEL, body)
             return True
         except Exception as e:
-            logger.error(f"WS pub/sub: broadcast publish failed, falling back to local: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"WS pub/sub: broadcast publish failed, falling back to local: {e}")
             return False
 
     async def publish_kick_user(
@@ -298,7 +298,7 @@ class _WSPubSub:
             await self._redis.publish(CHANNEL, body)
             return True
         except Exception as e:
-            logger.error(f"WS pub/sub: kick_user publish failed: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"WS pub/sub: kick_user publish failed: {e}")
             return False
 
     async def _reconnect(self) -> bool:
@@ -381,7 +381,7 @@ class _WSPubSub:
                                 reason=control.get("reason") or "token_revoked",
                             )
                         except Exception as e:
-                            logger.error(f"WS pub/sub: kick_user dispatch failed: {e}", exc_info=True)
+                            logger.opt(exception=True).error(f"WS pub/sub: kick_user dispatch failed: {e}")
                     else:
                         logger.warning(f"WS pub/sub: unknown control action ignored: {action}")
                     continue
@@ -401,7 +401,7 @@ class _WSPubSub:
                     try:
                         await self._manager._deliver_broadcast_local(prefix, payload)
                     except Exception as e:
-                        logger.error(f"WS pub/sub: local broadcast failed for {prefix}: {e}", exc_info=True)
+                        logger.opt(exception=True).error(f"WS pub/sub: local broadcast failed for {prefix}: {e}")
                     continue
 
                 client_id = data.get("client_id")
@@ -411,7 +411,7 @@ class _WSPubSub:
                     await self._manager._deliver_local(payload, client_id)
                 except Exception as e:
                     # One bad delivery must not kill the consumer.
-                    logger.error(f"WS pub/sub: local delivery failed for {client_id}: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"WS pub/sub: local delivery failed for {client_id}: {e}")
         except asyncio.CancelledError:
             logger.info("WS pub/sub consumer cancelled")
             raise
@@ -423,7 +423,7 @@ class _WSPubSub:
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):  # noqa: S110
-                logger.debug("ws_pubsub: stop: consumer task did not exit cleanly", exc_info=True)
+                logger.opt(exception=True).debug("ws_pubsub: stop: consumer task did not exit cleanly")
             self._task = None
 
         await self._safe_close_pubsub()
@@ -437,11 +437,11 @@ class _WSPubSub:
         try:
             await self._pubsub.unsubscribe(CHANNEL)
         except Exception:  # noqa: S110
-            logger.warning("ws_pubsub: _safe_close_pubsub: unsubscribe failed", exc_info=True)
+            logger.opt(exception=True).warning("ws_pubsub: _safe_close_pubsub: unsubscribe failed")
         try:
             await self._pubsub.close()
         except Exception:  # noqa: S110
-            logger.warning("ws_pubsub: _safe_close_pubsub: close failed", exc_info=True)
+            logger.opt(exception=True).warning("ws_pubsub: _safe_close_pubsub: close failed")
         self._pubsub = None
 
     async def _safe_close_redis(self) -> None:
@@ -450,7 +450,7 @@ class _WSPubSub:
         try:
             await self._redis.close()
         except Exception:  # noqa: S110
-            logger.warning("ws_pubsub: _safe_close_redis: close failed", exc_info=True)
+            logger.opt(exception=True).warning("ws_pubsub: _safe_close_redis: close failed")
         self._redis = None
 
 

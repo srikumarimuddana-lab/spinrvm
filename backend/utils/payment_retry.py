@@ -45,8 +45,9 @@ try:
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
-    from .money import dollars_to_cents
+    from .money import cents_to_dollars, dollars_to_cents
     from .redis_client import redis_set_nx
+    from .rider_emails import send_payment_blocked_email
 except ImportError:
     from db import db
     from features import send_push_notification
@@ -54,8 +55,9 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
-    from utils.money import dollars_to_cents
+    from utils.money import cents_to_dollars, dollars_to_cents
     from utils.redis_client import redis_set_nx
+    from utils.rider_emails import send_payment_blocked_email
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,40 @@ logger = logging.getLogger(__name__)
 # claim older than this is an abandoned invoice-creation attempt (the request
 # crashed before Stripe created the invoice), so an in-app retry is safe.
 _INVOICE_CLAIM_STALE_SECONDS = 300
+
+
+async def _resolve_driver_user_ids(driver_ids: set) -> dict:
+    """Batch-resolve drivers.id -> users.id for a set of driver ids (N3,
+    ACTION_ITEMS.md).
+
+    send_push_notification's first argument is a users.id — it does
+    `db.find_one("users", {"id": user_id})` and drops the push (logged, not
+    silent, but never delivered) if that lookup misses. `payouts.driver_id`
+    and `rides.driver_id` are both foreign keys into `drivers.id`, a distinct
+    id space from `users.id`, so passing either straight through has always
+    missed that lookup — every "Payout failed" / "Payment retry in progress"
+    push from this module was silently dropped at the device-delivery layer.
+
+    Batched via a single `$in` query rather than one lookup per row in the
+    caller's loop (CLAUDE.md: no N+1 Supabase reads in a loop). Best-effort:
+    a lookup failure here must not abort the caller's retry/payout-failure
+    processing, so it's caught and logged, leaving the map empty (each
+    caller then skips the push for any driver_id it can't resolve, rather
+    than raising).
+    """
+    if not driver_ids:
+        return {}
+    try:
+        driver_rows = await db.get_rows(
+            "drivers",
+            {"id": {"$in": list(driver_ids)}},
+            columns="id,user_id",
+            limit=len(driver_ids),
+        )
+    except Exception as e:
+        logger.error(f"payment_retry: failed to resolve driver user_ids for push delivery: {e}")
+        return {}
+    return {d["id"]: d["user_id"] for d in (driver_rows or []) if d.get("user_id")}
 
 
 async def _fire_purchase_conversion(ride_id: str) -> None:
@@ -115,11 +151,57 @@ def _invoice_claim_is_stale(sentinel: str) -> bool:
         return False
 
 
+async def _claim_exhausted_alert(ride_id: str) -> bool:
+    """Compare-and-swap the one-notice-per-ride flag. True if this caller won it.
+
+    Three paths reach payment exhaustion — the already-exhausted branch at the
+    top of the scan, the unexpected-intent-state branch, and the exception
+    branch — and only the first one used to claim before alerting. The other
+    two fire on the tick the counter *crosses* MAX_RETRIES, and the first then
+    fires again on the next tick, so every exhausted ride produced two admin
+    alerts five minutes apart.
+
+    That was tolerable while this only paged admins. It is not now that the
+    rider gets an email: two identical "you are blocked from booking" messages
+    is the kind of thing that trains people to ignore us. Gating every path on
+    the same claim also makes it replay-safe across the loop's replicas, which
+    the two unguarded paths never were.
+    """
+    claimed = await db.update_one(
+        "rides",
+        {"id": ride_id, "admin_alerted_payment_exhausted": False},
+        {
+            "$set": {
+                "admin_alerted_payment_exhausted": True,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+    return claimed is not None
+
+
 async def _alert_admins_payment_exhausted(ride: dict) -> None:
-    """Notify admins when a ride's payment retries are exhausted."""
+    """Notify admins — and the rider — when a ride's payment retries are exhausted.
+
+    The rider half was missing entirely: this fired an admin WS broadcast and an
+    admin push, and the rider whose account had just been blocked from booking
+    was told nothing. They then hit a booking failure with no explanation and
+    nothing to act on.
+    """
     ride_id = ride.get("id", "")
     rider_id = ride.get("rider_id", "")
     total_fare = ride.get("total_fare", 0)
+
+    # First, because it is the only notice that reaches the person actually
+    # affected. Guarded here rather than relying on the sender's own try/except:
+    # the admin alerts below are the operational signal that something needs
+    # human attention, and nothing about a rider email — a failed lookup, a
+    # provider outage, a future refactor of that module — may cost them.
+    if rider_id:
+        try:
+            await send_payment_blocked_email(rider_id, total_fare, ride=ride)
+        except Exception as exc:
+            logger.error(f"Rider payment-blocked email failed for ride {ride_id}: {exc}", exc_info=True)
 
     try:
         await manager.broadcast_to_admins(
@@ -178,10 +260,14 @@ async def update_payout_status(payout_id: str, status: str) -> None:
     )
 
 
-async def notify_driver_payout_failed(driver_id: str, payout_id: str) -> None:
+async def notify_driver_payout_failed(user_id: str, payout_id: str) -> None:
+    """user_id must be the driver's users.id (N3, ACTION_ITEMS.md) — NOT
+    drivers.id. send_push_notification looks the recipient up by
+    users.id; the caller is responsible for resolving drivers.id ->
+    users.id first (see _resolve_driver_user_ids)."""
     try:
         await send_push_notification(
-            driver_id,
+            user_id,
             "Payout failed",
             "We couldn't process your payout. Please contact support.",
             data={"type": "payout_failed", "payout_id": payout_id},
@@ -210,6 +296,15 @@ async def retry_stuck_payouts() -> None:
         logger.error(f"Payout retry: failed to fetch payouts: {e}")
         return
 
+    # N3 (ACTION_ITEMS.md): resolve every stuck payout's driver_id to its
+    # users.id up front, batched, before the loop below — see
+    # _resolve_driver_user_ids for why (payouts.driver_id references
+    # drivers.id, not users.id, and send_push_notification requires the
+    # latter).
+    driver_user_ids = await _resolve_driver_user_ids(
+        {payout["driver_id"] for payout in stuck_payouts if payout.get("driver_id")}
+    )
+
     for payout in stuck_payouts:
         payout_id = payout["id"]
         driver_id = payout.get("driver_id", "")
@@ -232,7 +327,13 @@ async def retry_stuck_payouts() -> None:
             )
             if claimed is None:
                 continue
-            await notify_driver_payout_failed(driver_id, payout_id)
+            driver_user_id = driver_user_ids.get(driver_id)
+            if driver_user_id:
+                await notify_driver_payout_failed(driver_user_id, payout_id)
+            else:
+                logger.warning(
+                    f"Payout {payout_id}: could not resolve a users.id for driver {driver_id} — push skipped"
+                )
             logger.error(f"Payout {payout_id} failed after {MAX_RETRIES} attempts")
             logger.error(
                 f"ADMIN ALERT: Payout {payout_id} for driver {driver_id} "
@@ -275,6 +376,12 @@ async def retry_failed_payments():
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
 
+    # N3 (ACTION_ITEMS.md): batch-resolve every ride's driver_id to its
+    # users.id up front — see _resolve_driver_user_ids. rides.driver_id is
+    # a drivers.id, not a users.id; send_push_notification requires the
+    # latter.
+    driver_user_ids = await _resolve_driver_user_ids({ride["driver_id"] for ride in rides if ride.get("driver_id")})
+
     for ride in rides:
         ride_id = ride["id"]
         retry_count = ride.get("payment_retry_count", 0)
@@ -301,19 +408,11 @@ async def retry_failed_payments():
             continue
 
         if retry_count >= MAX_RETRIES:
-            if not ride.get("admin_alerted_payment_exhausted"):
-                claimed = await db.update_one(
-                    "rides",
-                    {"id": ride_id, "admin_alerted_payment_exhausted": False},
-                    {
-                        "$set": {
-                            "admin_alerted_payment_exhausted": True,
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                        }
-                    },
-                )
-                if claimed is not None:
-                    await _alert_admins_payment_exhausted(ride)
+            # The pre-check spares a DB round-trip on every subsequent tick for
+            # a ride that has already been alerted; the claim below is what
+            # actually makes it exactly-once.
+            if not ride.get("admin_alerted_payment_exhausted") and await _claim_exhausted_alert(ride_id):
+                await _alert_admins_payment_exhausted(ride)
             continue
 
         # Skip rides older than 24 hours
@@ -406,11 +505,11 @@ async def retry_failed_payments():
                     },
                 )
                 logger.info(f"Payment retry: ride {ride_id} retry #{attempt} submitted")
-                driver_id = ride.get("driver_id")
-                if driver_id:
+                driver_user_id = driver_user_ids.get(ride.get("driver_id") or "")
+                if driver_user_id:
                     try:
                         await send_push_notification(
-                            driver_id,
+                            driver_user_id,
                             "Payment retry in progress",
                             f"Payment retry {attempt} of {MAX_RETRIES} in progress",
                             {
@@ -462,42 +561,40 @@ async def retry_failed_payments():
                     api_key=stripe_secret,
                     idempotency_key=f"ride-capture-{ride_id}-{capture_cents}",
                 )
-                # Ledger row BEFORE the ride update (same order as the normal
-                # settlement path) so a recovery record exists even if the
-                # paid-write below fails. record_payment_event never raises.
+                # ACTION_ITEMS B19: route through the same shared finalizer
+                # settle_card's two success paths use, instead of the old
+                # bare capture -> record_payment_event -> separate update_ride
+                # sequence. Picks up the atomic settle_ride_card_payment RPC
+                # (when enabled) — exactly one financial_events header even
+                # under the ambiguous-transport-error case — plus the
+                # automatic Sentry escalation on an unverifiable outcome, for
+                # free. tip_d here is the ride's OWN already-stored
+                # tip_amount (not a new tip), so _finalize_card_settlement's
+                # legacy-path _tip_ride_update always computes a zero delta
+                # and never touches driver_earnings — safe even though this
+                # loop's SELECT above omits that column. Do not pass a
+                # different tip value here without adding driver_earnings to
+                # the SELECT.
                 try:
-                    from ..services.payment_service import record_payment_event
+                    from ..services.payment_service import _finalize_card_settlement
                 except ImportError:
-                    from services.payment_service import record_payment_event
-                await record_payment_event(
-                    ride_id,
-                    ride.get("rider_id"),
-                    capture_cents,
-                    payment_intent_id,
+                    from services.payment_service import _finalize_card_settlement  # type: ignore
+                result = await _finalize_card_settlement(
                     ride=ride,
-                    tip_amount=tip_d,
+                    ride_id=ride_id,
+                    rider_id=ride.get("rider_id"),
+                    settled_amount=cents_to_dollars(capture_cents),
+                    payment_intent_id=payment_intent_id,
+                    tip_collected=tip_d,
+                    auth_status="captured",
                 )
-                try:
-                    await db.update_one(
-                        "rides",
-                        {"id": ride_id},
-                        {
-                            "$set": {
-                                "payment_status": "paid",
-                                "auth_status": "captured",
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            }
-                        },
-                    )
-                except Exception as db_err:
-                    # Money HAS moved — leave the row in 'processing' for the
-                    # stuck-processing reconciler; do NOT let the outer except
-                    # reset it to 'failed'.
-                    logger.error(
-                        f"Payment retry: captured hold for ride {ride_id} but paid-write failed — "
-                        f"leaving 'processing' for reconciler: {db_err}",
-                        exc_info=True,
-                    )
+                if not result.success:
+                    # Money HAS moved (the capture above already succeeded) —
+                    # _finalize_card_settlement already logged the specific
+                    # failure and left the ride in whichever state its own
+                    # contract requires (stuck 'processing' for the reconciler,
+                    # or an escalated Sentry page on an ambiguous atomic-RPC
+                    # outcome). Do NOT let the outer except reset it to 'failed'.
                     continue
                 logger.info(
                     f"Payment retry: captured stranded hold for ride {ride_id} "
@@ -540,7 +637,7 @@ async def retry_failed_payments():
                         }
                     },
                 )
-                if new_count >= MAX_RETRIES:
+                if new_count >= MAX_RETRIES and await _claim_exhausted_alert(ride_id):
                     await _alert_admins_payment_exhausted(ride)
                 continue
 
@@ -559,7 +656,7 @@ async def retry_failed_payments():
                     }
                 },
             )
-            if new_count >= MAX_RETRIES:
+            if new_count >= MAX_RETRIES and await _claim_exhausted_alert(ride_id):
                 await _alert_admins_payment_exhausted(ride)
                 rider_id = ride.get("rider_id")
                 if rider_id:
@@ -626,9 +723,27 @@ async def payment_retry_loop():
         # double-charge is prevented by the atomic DB claim (payment_status →
         # 'retrying') + the Stripe idempotency key (see module docstring). The
         # lock only reduces redundant work; it is never relied on for safety.
-        # TTL is 1.5× interval so a real lock expires before the next election.
-        lock_ttl = int(RETRY_INTERVAL_SECONDS * 1.5)
-        if not await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl):
+        # TTL must be SHORTER than the minimum possible sleep below (interval *
+        # 0.9, the worst-case jitter draw), or the pod that ran the last tick
+        # wakes to find its OWN key still alive, fails SET NX, and sleeps
+        # another full interval — halving the documented cadence. The old
+        # `interval * 1.5` got this backwards (comment claimed it "expires
+        # before the next election" — it does not, 1.5x > 0.9x). Matches
+        # ledger_projection.py's `_LOCK_TTL_SECONDS` formula (ACTION_ITEMS B21):
+        # 0.05 headroom under the 0.9 floor.
+        lock_ttl = int(RETRY_INTERVAL_SECONDS * 0.85)
+        try:
+            got_lock = await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl)
+        except Exception as lock_err:
+            # redis_set_nx now raises on a real (Redis-configured-but-
+            # unavailable) error instead of silently falling back per-replica
+            # (2026-08-11 P1 fix). As the comment above states, this lock is
+            # never the correctness guard (that's the atomic DB claim +
+            # Stripe idempotency key) — proceed with the tick rather than
+            # skip it.
+            logger.error(f"payment_retry: leader lock unavailable ({lock_err}), proceeding without it")
+            got_lock = True
+        if not got_lock:
             _record_heartbeat("payment_retry (5min)")
             await asyncio.sleep(RETRY_INTERVAL_SECONDS)
             continue

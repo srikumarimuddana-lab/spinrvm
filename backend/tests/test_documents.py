@@ -93,6 +93,92 @@ class TestDocumentRequirements:
         assert result is not None
 
 
+class TestDocumentRequirementAuditLogging:
+    """Corporate + admin portal review, gap #44: the 4 document-requirement
+    CRUD endpoints never resolved admin identity or called
+    log_admin_action, so creating/editing/deleting a requirement (which
+    governs what documents drivers must upload) left no audit trail.
+    Create/update/delete now take admin: Depends(get_admin_user) and log."""
+
+    @pytest.fixture
+    def documents_admin_override(self):
+        from backend.server import app
+        from dependencies import get_admin_user
+
+        app.dependency_overrides[get_admin_user] = lambda: {
+            "id": "admin_1",
+            "role": "admin",
+            "modules": ["documents"],
+        }
+        yield
+        app.dependency_overrides.pop(get_admin_user, None)
+
+    @pytest.fixture
+    def test_client(self):
+        from fastapi.testclient import TestClient
+
+        from backend.server import app
+
+        return TestClient(app)
+
+    def test_create_requirement_writes_audit_log(self, test_client, documents_admin_override):
+        with (
+            patch(
+                "routes.admin.documents.db_supabase.insert_one",
+                AsyncMock(return_value={"id": "req_new"}),
+            ),
+            patch("routes.admin.documents.log_admin_action", AsyncMock()) as mock_audit,
+        ):
+            resp = test_client.post(
+                "/api/admin/documents/requirements",
+                json={"name": "Background Check", "document_type": "background_check"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["requirement_id"] == "req_new"
+        mock_audit.assert_awaited_once()
+        args = mock_audit.await_args.args
+        assert args[1] == "document_requirement_created"
+        assert args[3] == "req_new"
+
+    def test_update_requirement_writes_audit_log(self, test_client, documents_admin_override):
+        with (
+            patch("routes.admin.documents.db_supabase.update_one", AsyncMock()),
+            patch("routes.admin.documents.log_admin_action", AsyncMock()) as mock_audit,
+        ):
+            resp = test_client.put(
+                "/api/admin/documents/requirements/req_1",
+                json={"is_required": False},
+            )
+        assert resp.status_code == 200, resp.text
+        mock_audit.assert_awaited_once()
+        args = mock_audit.await_args.args
+        assert args[1] == "document_requirement_updated"
+        assert args[3] == "req_1"
+        assert args[4] == {"is_required": False}
+
+    def test_update_requirement_empty_body_does_not_write_audit_log(self, test_client, documents_admin_override):
+        with (
+            patch("routes.admin.documents.db_supabase.update_one", AsyncMock()) as mock_update,
+            patch("routes.admin.documents.log_admin_action", AsyncMock()) as mock_audit,
+        ):
+            resp = test_client.put("/api/admin/documents/requirements/req_1", json={})
+        assert resp.status_code == 200, resp.text
+        mock_update.assert_not_awaited()
+        mock_audit.assert_not_awaited()
+
+    def test_delete_requirement_writes_audit_log(self, test_client, documents_admin_override):
+        with (
+            patch("routes.admin.documents.db_supabase.delete_one", AsyncMock()),
+            patch("routes.admin.documents.log_admin_action", AsyncMock()) as mock_audit,
+        ):
+            resp = test_client.delete("/api/admin/documents/requirements/req_1")
+        assert resp.status_code == 200, resp.text
+        mock_audit.assert_awaited_once()
+        args = mock_audit.await_args.args
+        assert args[1] == "document_requirement_deleted"
+        assert args[3] == "req_1"
+
+
 class TestDriverDocuments:
     """Tests for driver document management."""
 

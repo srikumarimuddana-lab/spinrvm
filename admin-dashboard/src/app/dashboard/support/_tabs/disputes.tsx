@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { HelpCircle, Search, CheckCircle, XCircle, Clock, Plus, Pencil, Trash2, RefreshCw, Eye } from "lucide-react";
+import { HelpCircle, Search, CheckCircle, XCircle, Clock, Plus, Pencil, Trash2, RefreshCw, Eye, ExternalLink } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getDisputes, createDispute, updateDispute, resolveDispute, deleteDispute } from "@/lib/api";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
@@ -87,6 +89,22 @@ export default function DisputesTab() {
 
     return (
         <div className="space-y-4">
+            {/* Corporate + admin portal review, round 2: "Disputes and FAQs
+                each exist as two live, unreconciled screens." Both views hit
+                the same getDisputes/resolveDispute API — no data-model split
+                — but the dedicated Disputes & Refunds page (linked from the
+                sidebar) is the fuller, actively-maintained screen. Light-touch
+                fix per product decision: point here, don't merge/remove. */}
+            <Alert>
+                <ExternalLink className="h-4 w-4" />
+                <AlertDescription className="flex items-center justify-between gap-3">
+                    <span>This is a condensed view. Manage disputes in full on the dedicated page.</span>
+                    <Link href="/dashboard/disputes" className="font-medium underline underline-offset-2 whitespace-nowrap">
+                        Open Disputes & Refunds
+                    </Link>
+                </AlertDescription>
+            </Alert>
+
             <div className="grid grid-cols-3 gap-3">
                 <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Clock className="h-4 w-4 text-amber-500" /><div><p className="text-[10px] text-muted-foreground">Pending</p><p className="text-xl font-bold">{stats.pending}</p></div></div></CardContent></Card>
                 <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-emerald-500" /><div><p className="text-[10px] text-muted-foreground">Resolved</p><p className="text-xl font-bold">{stats.resolved}</p></div></div></CardContent></Card>

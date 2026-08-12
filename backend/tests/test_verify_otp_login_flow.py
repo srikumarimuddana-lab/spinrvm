@@ -59,6 +59,7 @@ def _base_patches(
     user_lookup_side_effect=None,
     record_failure_mock=None,
     delete_otp_mock=None,
+    alert_new_device_mock=None,
 ):
     """The common set of mocks every verify_otp call needs, regardless of
     which downstream branch (existing/new user) the test targets."""
@@ -79,6 +80,7 @@ def _base_patches(
         patch("backend.routes.auth.db_supabase.get_user_by_phone", get_user_by_phone),
         patch("backend.routes.auth.redis_set", AsyncMock()),
         patch("backend.routes.auth._audit_log_user", AsyncMock()),
+        patch("backend.routes.auth._alert_if_new_device", alert_new_device_mock or AsyncMock()),
     ]
 
 
@@ -141,6 +143,40 @@ async def test_existing_user_login_returns_auth_response():
     assert result.is_new_user is False
     assert result.token
     assert result.refresh_token == "raw-refresh"
+
+
+@pytest.mark.asyncio
+async def test_existing_user_login_checks_for_new_device():
+    """ACTION_ITEMS.md N15/R8 — the existing-user branch must run the
+    new-device check before minting the login's own refresh token (see
+    is_new_device's docstring on why the ordering matters)."""
+    user = {
+        "id": "u1",
+        "phone": PHONE,
+        "role": "rider",
+        "is_rider": True,
+        "is_driver": False,
+        "token_version": 0,
+        "profile_complete": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    alert_mock = AsyncMock()
+    patches = _base_patches(
+        otp_record=_valid_otp_record(), user_lookup_result=dict(user), alert_new_device_mock=alert_mock
+    )
+    patches += [
+        patch("backend.routes.auth.db_supabase.update_one", AsyncMock(return_value=True)),
+        patch(
+            "backend.routes.auth.issue_refresh_token",
+            AsyncMock(return_value=("raw-refresh", "row-1", datetime.now(timezone.utc) + timedelta(days=30))),
+        ),
+    ]
+    await _call_verify_otp(patches)
+
+    alert_mock.assert_awaited_once()
+    called_user, called_ua = alert_mock.await_args.args
+    assert called_user["id"] == "u1"
+    assert called_ua == "pytest"  # from _call_verify_otp's request.headers stub
 
 
 @pytest.mark.asyncio

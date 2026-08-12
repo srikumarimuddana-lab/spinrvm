@@ -13,3 +13,6 @@ ADRs capture the context, decision, and consequences of significant technical ch
 | [ADR-005](005-jwt-firebase-dual-auth.md) | Dual auth: Firebase ID token + short-lived HS256 JWT | Accepted |
 | [ADR-006](006-railway-deployment.md) | Railway as the primary hosting platform | Accepted (amended by ADR-007) |
 | [ADR-007](007-fly-primary-railway-standby.md) | Fly.io primary with Railway as warm standby (DNS cutover) | Accepted |
+| [ADR-008](008-report-branding-fixed-vs-branded.md) | Two report modes — Spinr-branded vs. fixed regulator format | Accepted |
+| [ADR-009](009-data-transfer-background-export-and-unredacted-scope.md) | Data Transfer export runs as a background job, and is deliberately unredacted | Accepted |
+| [ADR-010](010-metrics-aggregation-and-alerting.md) | Cross-replica metrics aggregation and production alerting | Proposed |

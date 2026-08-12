@@ -35,9 +35,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from ..documents import _extract_signed_url
     from ..supabase_client import supabase
     from ..utils.driver_code import generate_driver_code
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
+    from documents import _extract_signed_url
     from supabase_client import supabase
     from utils.driver_code import generate_driver_code
 
@@ -150,6 +152,7 @@ def normalize_header(value: str) -> str:
         "pr": "permanent_resident",
         "citizen": "citizen",
         "decals_sent": "decals_sent",
+        "decal_number": "decal_number",
     }
     return aliases.get(value, value)
 
@@ -270,16 +273,23 @@ def canonical_requirement_key(value: str) -> str:
 
 
 def storage_signed_url(storage_key: str) -> str:
+    """Signed URL for a just-uploaded import document.
+
+    Delegates to documents._extract_signed_url rather than re-deriving the
+    response shape locally. The local version only read ``res.data``, the
+    LEGACY shape — current supabase-py returns a plain dict, which has no
+    ``.data``, so this raised "create_signed_url returned no URL" on every
+    call and took the whole bulk import down with it at commit time.
+    documents.py had already been fixed for exactly this (see its docstring
+    on Railway 500s after supabase-py flipped the return type); the fix was
+    never propagated here. One implementation now, so the next shape change
+    is a one-line fix instead of a hunt.
+    """
     res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600)
-    data = getattr(res, "data", None)
-    if isinstance(data, dict):
-        url = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
-        if url:
-            return url
-    url = getattr(data, "signed_url", None) or getattr(data, "signedURL", None)
-    if not url:
-        raise RuntimeError(f"create_signed_url returned no URL for {storage_key}")
-    return url
+    try:
+        return _extract_signed_url(res)
+    except RuntimeError as e:
+        raise RuntimeError(f"create_signed_url returned no URL for {storage_key}: {e}") from e
 
 
 def encrypt_pii(value: str | None) -> str | None:
@@ -496,7 +506,15 @@ def build_plan(
     planned_driver_ids: dict[str, str] = {}
     resumed_driver_ids: set[str] = set()
     existing_docs_cache: dict[str, set[tuple[str, str | None]]] = {}
-    document_old_ids = {r.get("old_driver_id") for r in document_rows if r.get("old_driver_id")}
+    # Only an APPROVED document counts toward `has_import_documents` below —
+    # a document row merely existing (pending or rejected) must not let a
+    # driver through as active/verified, bypassing the document-approval
+    # gate the rest of the system relies on.
+    document_old_ids = {
+        r.get("old_driver_id")
+        for r in document_rows
+        if r.get("old_driver_id") and (r.get("status") or "pending").strip().lower() == "approved"
+    }
 
     for row in driver_rows:
         old_id = row.get("old_driver_id") or "<missing>"

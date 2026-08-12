@@ -44,6 +44,15 @@ const DOC_TYPE_OPTIONS = [
     "work_authorization",
 ];
 
+const DOC_TYPE_LABELS: Record<string, string> = {
+    drivers_license: "Driver's Licence",
+    insurance: "Insurance",
+    vehicle_inspection: "Vehicle Inspection",
+    background_check: "Background / Criminal Record Check",
+    drivers_abstract: "Driver's Abstract",
+    work_authorization: "Work Authorization",
+};
+
 /** Resolve the current selection into concrete entity refs. For explicit
  * selections this is a straight map; for "select all matching filter" it
  * re-queries the search endpoint (capped at MAX_ENTITIES_PER_EXPORT) since
@@ -87,23 +96,39 @@ async function pollJobUntilDone(jobId: string): Promise<{ status: "completed" | 
 export function ExportTab({ selection }: { selection: EntitySelectionState }) {
     const { toast } = useToast();
     const [format, setFormat] = useState<DataTransferExportFormat>("zip");
-    // Background Check is the default-checked document type; everything else
-    // starts unchecked. An admin exporting a full profile for another
-    // environment usually wants a specific, deliberate document set rather
-    // than everything by default -- Background Check is the one most
-    // consistently needed for a regulator/insurer-facing transfer.
-    const [docTypes, setDocTypes] = useState<Set<string>>(new Set(["background_check"]));
+    // Every document type starts selected, metadata AND file, restoring the
+    // behavior PIA R-B specifies and its own implementation change-log
+    // recorded: "Both admin-dashboard Export-tab checkboxes default to
+    // checked (current full-fidelity behavior unchanged for anyone who
+    // doesn't touch them) ... opt-in-to-exclude, default unchanged."
+    //
+    // That default was silently inverted to unchecked by a56b59b -- a commit
+    // titled for an unrelated ADR-010 docs change, carrying no Change Impact
+    // entry -- which is why exports had been arriving with no scans in them
+    // and reading as a broken feature. This is a restoration of the approved
+    // design, not a loosening of it: the export is still opt-in-to-exclude,
+    // and the per-document grid below makes excluding far more precise than
+    // the single global toggle R-B originally shipped.
+    const [docTypes, setDocTypes] = useState<Set<string>>(new Set(DOC_TYPE_OPTIONS));
+    const [docFileTypes, setDocFileTypes] = useState<Set<string>>(new Set(DOC_TYPE_OPTIONS));
     const [reason, setReason] = useState("");
-    // Both default OFF (PIPEDA data-minimization) -- exact GPS traces and raw
-    // document bytes are the two most sensitive things this export can carry;
-    // an admin who genuinely needs them opts in deliberately per export
-    // rather than exporting them by default every time.
+    // Default OFF (PIPEDA data-minimization) -- exact GPS traces are among
+    // the most sensitive things this export can carry; an admin who
+    // genuinely needs them opts in deliberately per export.
     const [includeRideGps, setIncludeRideGps] = useState(false);
-    const [includeDocumentBytes, setIncludeDocumentBytes] = useState(false);
     const [loading, setLoading] = useState(false);
 
     const reasonValid = reason.trim().length >= REASON_MIN_LENGTH && reason.length <= REASON_MAX_LENGTH;
 
+    // Selecting document types but no files at all is the state that gets
+    // reported as a broken export: the ZIP builds, the documents are listed
+    // in documents.csv, and not one scan/image/PDF is in it. Files are opt-in
+    // (PIPEDA data minimization, PIA R-B) — but that is no longer silent.
+    const metadataOnlyDocuments = format === "zip" && docTypes.size > 0 && docFileTypes.size === 0;
+
+    /** Unchecking a document type must also drop its file request — a file
+     * for a type that isn't in the export would be silently ignored by the
+     * backend and leaves the UI claiming something it isn't sending. */
     const toggleDocType = (docType: string) => {
         setDocTypes((prev) => {
             const next = new Set(prev);
@@ -111,6 +136,34 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             else next.add(docType);
             return next;
         });
+        setDocFileTypes((prev) => {
+            if (!prev.has(docType)) return prev;
+            const next = new Set(prev);
+            next.delete(docType);
+            return next;
+        });
+    };
+
+    /** Requesting a file implies including the document — check both rather
+     * than leaving an unreachable "file but not included" state. */
+    const toggleDocFileType = (docType: string) => {
+        setDocFileTypes((prev) => {
+            const next = new Set(prev);
+            if (next.has(docType)) next.delete(docType);
+            else next.add(docType);
+            return next;
+        });
+        setDocTypes((prev) => (prev.has(docType) ? prev : new Set(prev).add(docType)));
+    };
+
+    const allFilesSelected = DOC_TYPE_OPTIONS.every((t) => docFileTypes.has(t));
+    const toggleAllFiles = () => {
+        if (allFilesSelected) {
+            setDocFileTypes(new Set());
+        } else {
+            setDocFileTypes(new Set(DOC_TYPE_OPTIONS));
+            setDocTypes(new Set(DOC_TYPE_OPTIONS));
+        }
     };
 
     const hasSelection = selection.selectAllMatching !== null || selection.selectedRefs.size > 0;
@@ -134,7 +187,10 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             const queued = await exportDataTransferEntities(refs, format, reason.trim(), {
                 docTypes: docTypeFilter,
                 includeRideGps,
-                includeDocumentBytes,
+                // Always send the explicit per-type list (even empty) so the
+                // backend uses the per-type path rather than falling back to
+                // its all-or-nothing include_document_bytes default of true.
+                docFileTypes: format === "zip" ? Array.from(docFileTypes) : [],
             });
 
             // ACTION_ITEMS.md B10 dual-approval gate: with the flag on, a
@@ -166,7 +222,16 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             }
 
             const { download_url } = await regenerateDataTransferJobDownload(queued.job_id);
-            toast({ title: "Export ready", description: "Download starting…" });
+            toast({
+                title: "Export ready",
+                // Repeated at download time, not just next to the checkbox —
+                // the ZIP lands minutes later and the admin has usually
+                // scrolled away by then; without this, "no files in the ZIP"
+                // reads as a failed export.
+                description: metadataOnlyDocuments
+                    ? "Download starting… Note: document metadata only — no files (see README.txt in the ZIP)."
+                    : "Download starting…",
+            });
             if (typeof window !== "undefined") {
                 window.open(download_url, "_blank");
             }
@@ -197,21 +262,79 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
             {format === "zip" && (
                 <div className="space-y-2">
                     <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-medium">Documents to include</span>
-                        <Hint text="Only Background Check is checked by default — check the specific document types you actually need for this export rather than everything." />
+                        <span className="text-sm font-medium">Documents to export</span>
+                        <Hint text="Everything is selected by default. Untick any document type you don't need, or untick just its File box to export the record without the uploaded scan — narrowing the export to what this transfer genuinely requires is the data-minimizing choice." />
                     </div>
-                    <div className="flex flex-wrap gap-4">
-                        {DOC_TYPE_OPTIONS.map((docType) => (
-                            <label key={docType} className="flex items-center gap-2 text-sm">
-                                <input
-                                    type="checkbox"
-                                    checked={docTypes.has(docType)}
-                                    onChange={() => toggleDocType(docType)}
-                                />
-                                {docType.replace(/_/g, " ")}
-                            </label>
-                        ))}
+
+                    <div className="overflow-x-auto rounded-md border">
+                        <table className="w-full text-sm">
+                            <thead className="bg-muted/50 text-xs text-muted-foreground">
+                                <tr>
+                                    <th className="px-3 py-2 text-left font-medium">Document</th>
+                                    <th className="w-32 px-3 py-2 text-center font-medium">
+                                        Metadata
+                                        <div className="font-normal">record only</div>
+                                    </th>
+                                    <th className="w-40 px-3 py-2 text-center font-medium">
+                                        File
+                                        <div className="font-normal">scan / image / PDF</div>
+                                        <button
+                                            type="button"
+                                            className="mt-0.5 font-normal underline underline-offset-2 hover:no-underline"
+                                            onClick={toggleAllFiles}
+                                        >
+                                            {allFilesSelected ? "clear all" : "select all"}
+                                        </button>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {DOC_TYPE_OPTIONS.map((docType) => (
+                                    <tr key={docType} className="border-t">
+                                        <td className="px-3 py-2">
+                                            {DOC_TYPE_LABELS[docType] ?? docType.replace(/_/g, " ")}
+                                        </td>
+                                        <td className="px-3 py-2 text-center">
+                                            <input
+                                                type="checkbox"
+                                                aria-label={`Include ${DOC_TYPE_LABELS[docType] ?? docType} metadata`}
+                                                checked={docTypes.has(docType)}
+                                                onChange={() => toggleDocType(docType)}
+                                            />
+                                        </td>
+                                        <td className="px-3 py-2 text-center">
+                                            <input
+                                                type="checkbox"
+                                                aria-label={`Include ${DOC_TYPE_LABELS[docType] ?? docType} file`}
+                                                checked={docFileTypes.has(docType)}
+                                                onChange={() => toggleDocFileType(docType)}
+                                            />
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
+
+                    {metadataOnlyDocuments && (
+                        <div
+                            role="status"
+                            className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
+                        >
+                            <span className="font-medium">
+                                This ZIP will contain document metadata only — no scans, images, or PDFs.
+                            </span>{" "}
+                            Tick a box in the <span className="font-medium">File</span> column for each document
+                            whose actual file you need.
+                        </div>
+                    )}
+                    {docFileTypes.size > 0 && (
+                        <div className="text-xs text-muted-foreground">
+                            Exporting the file for {docFileTypes.size} document type
+                            {docFileTypes.size === 1 ? "" : "s"}; the rest are metadata rows only. Files land in each
+                            driver&rsquo;s <code className="rounded bg-muted px-1">documents/</code> folder.
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -236,8 +359,8 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
 
             <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
-                    <span className="text-sm font-medium">Data to include</span>
-                    <Hint text="Both are off by default (PIPEDA data minimization) — turn one on only when this specific export genuinely needs it." />
+                    <span className="text-sm font-medium">Ride data to include</span>
+                    <Hint text="Off by default (PIPEDA data minimization) — turn it on only when this specific export genuinely needs exact coordinates. Document files are selected per document type above." />
                 </div>
                 <div className="flex flex-col gap-2">
                     <label className="flex items-center gap-2 text-sm">
@@ -248,18 +371,10 @@ export function ExportTab({ selection }: { selection: EntitySelectionState }) {
                         />
                         Exact pickup/dropoff GPS coordinates
                     </label>
-                    <label className="flex items-center gap-2 text-sm">
-                        <input
-                            type="checkbox"
-                            checked={includeDocumentBytes}
-                            onChange={(e) => setIncludeDocumentBytes(e.target.checked)}
-                        />
-                        Document file contents (not just metadata)
-                    </label>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                    Unchecking either reduces sensitivity for lower-risk exports (e.g. seeding a UI-only
-                    staging environment) — record counts stay the same, only these fields are dropped.
+                    Leaving this off reduces sensitivity for lower-risk exports (e.g. seeding a UI-only staging
+                    environment) — ride counts stay the same, only the coordinates are dropped.
                 </div>
             </div>
 

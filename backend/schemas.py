@@ -78,6 +78,19 @@ class UserProfile(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[str] = None
+    # N14 (ACTION_ITEMS.md): the rider-app verify-email flow (routes/users.py)
+    # flips these two columns on the users row, but until now UserProfile
+    # never declared them -- Pydantic silently drops any dict key passed to
+    # UserProfile(**user) that isn't a declared field, so /auth/me (and every
+    # other UserProfile(**row) call site) returned a profile with no
+    # verification status at all. The Account-screen badge worked around
+    # this by merging the confirm response's own email_verified: true into
+    # local state, but that merge doesn't survive a full app restart -- the
+    # next /auth/me refetch silently reverted it to "not verified". This is
+    # the actual fix; no call site needs to change, since they all already
+    # spread the full DB row into UserProfile(**...).
+    email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
     gender: Optional[str] = None
     profile_image: Optional[str] = None  # Base64 encoded image
     profile_image_status: Optional[str] = None  # pending_review | approved | rejected
@@ -143,6 +156,19 @@ class AppSettings(BaseModel):
     # cannot verify those — see construct_event dual-secret logic in
     # routes/webhooks.py.
     stripe_connect_webhook_secret: str = ""
+    # ── Stripe identity re-provisioning (test → live cutover) ─────────────
+    # Stripe object IDs are mode-scoped, so rotating stripe_secret_key across
+    # modes strands every stored customer/Connect-account ID: the new key
+    # answers `resource_missing` for all of them. With this on, the backend
+    # mints a replacement under the running key and archives the dead ID
+    # (migration 286) instead of failing the rider's cards screen or the
+    # driver's payout setup forever.
+    #
+    # Default True because the alternative is a permanently broken payment
+    # surface with no in-app recovery. This is the kill switch: turning it
+    # off stops all re-provisioning within the 60 s settings cache and needs
+    # no redeploy — the rollback path for this feature.
+    stripe_reprovision_stale_ids: bool = True
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""
@@ -191,6 +217,27 @@ class AppSettings(BaseModel):
     # return no driver positions at all. Riders still see availability counts
     # from /rides/estimate, which never carried coordinates.
     driver_map_show_locations: bool = True
+    # ── Double-entry ledger legs (migration 286) ─────────────────────────
+    # When on, every financial_events row also writes balanced debit/credit
+    # rows to financial_event_entries. Default OFF so the schema ships dark:
+    # flip it here (DB-backed app_settings, no redeploy) once the table is
+    # confirmed present in the target environment, and flip it back to stop
+    # all leg writes instantly if anything looks wrong.
+    #
+    # Turning it off is the rollback: financial_events — the tax record and
+    # the input to the daily Stripe reconciliation — is completely unaffected
+    # either way. Nothing reads the legs to make a money decision.
+    ledger_double_entry_enabled: bool = False
+    # ── Atomic card settlement (migration 288) ──────────────────────────
+    # When on, settle_card finalizes via the settle_ride_card_payment RPC:
+    # rides.payment_status flip + financial_events header in ONE Postgres
+    # transaction, closing the process-death window between them. Default
+    # OFF; requires migration 288 applied first (absent function → automatic
+    # fallback to the legacy two-write path, logged at warning). Flipping it
+    # back off is the rollback — rows written by either path are identical
+    # to every reader. Independent of ledger_double_entry_enabled: the RPC
+    # never writes legs and the projection never reads this flag.
+    ledger_atomic_settle_enabled: bool = False
     # Grid cell for coarsening, in metres. 500m keeps the map useful at city
     # zoom ("cars are around me, roughly there") while destroying the
     # resolution needed to follow one vehicle. 0 would mean exact — deliberately
@@ -245,6 +292,61 @@ class AppSettings(BaseModel):
     # the un-flagged behavior (fail open) was a bug. Flip to false only to
     # roll back without a redeploy. See routes/rides/booking.py.
     corporate_inactive_company_blocks_booking: bool = True
+    # Kill switch for the scheduled-ride dispatcher loop (utils/scheduled_rides.py).
+    # ACTION_ITEMS.md E5: scheduled dispatch was one of the risky background
+    # loops with no way to pause it short of a redeploy. Defaults to true
+    # (current, always-on behavior). Flip to false to stop the loop from
+    # claiming/dispatching or sending reminders for scheduled rides — already-
+    # scheduled rides stay parked in status='scheduled' and dispatch normally
+    # once this is flipped back on; nothing is lost or cancelled by disabling it.
+    scheduled_dispatch_enabled: bool = True
+    # Kill switch for the surge engine's automatic recompute loop
+    # (utils/surge_engine.py::surge_recalculation_loop, ACTION_ITEMS.md E5).
+    # Defaults to true (current, always-on behavior). Flip to false to stop
+    # the automatic recompute cycle for an incident (e.g. a bug producing
+    # bad multipliers) — this is independent of, and layered on top of, the
+    # existing per-service-area surge_source/surge_enabled controls, which
+    # stay in effect either way. Flipping this off freezes multipliers at
+    # their last computed value; it does NOT reset live pricing back to
+    # 1.0x — pair it with the existing per-area manual override
+    # (surge_source='manual') to actually reset a specific area's price.
+    surge_engine_enabled: bool = True
+    # Kill switch for promo code redemption (ACTION_ITEMS.md E5). Gates the
+    # single shared validation chokepoint both the rider self-service path
+    # (POST /promo/apply) and the admin apply-on-behalf-of-rider path
+    # (apply_promo_for_admin) already funnel through
+    # (routes/promotions.py::_validate_promo_for_user). Defaults to true.
+    # Flip to false to stop all promo redemption during an incident (e.g. a
+    # promo-abuse exploit) — promo *validation* (POST /promo/validate, used
+    # to show available promos before booking) is intentionally NOT gated,
+    # only the state-changing apply path.
+    promo_redemption_enabled: bool = True
+    # Kill switch for automatic corporate-billing money movement
+    # (ACTION_ITEMS.md E5): the ride-settlement saga
+    # (services/payment_service.py::settle_corporate) and the four
+    # corporate background loops (autotopup, low-balance nudge, allowance
+    # reset, KYB re-verification reminder). Defaults to true. Deliberately
+    # does NOT gate services/corporate_wallet_service.py's low-level
+    # apply_topup/apply_adjustment/apply_refund helpers directly — those are
+    # also how an admin manually corrects/refunds something during the very
+    # incident that caused this switch to be flipped off, and blocking that
+    # path would work against the person responding to the incident.
+    corporate_billing_enabled: bool = True
+    # New driver-facing behavior (scheduled-rides gap review, Finding #06):
+    # a best-effort heads-up push to already-online drivers near an upcoming
+    # scheduled pickup, ~60 minutes out. Unlike scheduled_dispatch_enabled
+    # above (a kill switch for existing always-on behavior), this gates a
+    # genuinely new notification type — ships dark until reviewed for
+    # notification-fatigue impact, then flip on from the admin dashboard.
+    scheduled_ride_driver_nudge_enabled: bool = False
+    # Notice-window cancellation fee for PRE-DISPATCH scheduled rides
+    # (Finding #01). Rider-only — no driver is ever assigned pre-dispatch,
+    # so unlike cancellation_fee_admin/_driver above nothing is disbursed.
+    # New pricing decision — ships dark until reviewed/approved, then flip
+    # on from the admin dashboard; no redeploy needed either way.
+    scheduled_ride_notice_window_fee_enabled: bool = False
+    scheduled_ride_notice_window_minutes: int = 60
+    scheduled_ride_notice_window_fee_amount: DecimalStr = Decimal("3.00")
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     # Public company / contact info. Exposed via GET /api/company-info (no
@@ -252,10 +354,24 @@ class AppSettings(BaseModel):
     # / Profile footers without each app hard-coding them. None of these
     # fields are sensitive — they're the same info on a business card.
     company_name: str = "Spinr"
+    # Product/brand name used in email BODY copy ("Open the {app_name} driver
+    # app", "your {app_name} wallet", "— The {app_name} Team"). Deliberately
+    # separate from company_name, which is the legal entity name
+    # ("Spinr Technologies Inc.") and reads badly inline ("Open the Spinr
+    # Technologies Inc. driver app"). See utils/company_details.py and
+    # ACTION_ITEMS.md N17.
+    company_app_name: str = "Spinr"
     company_address: str = ""
     company_phone: str = ""
     company_email: str = ""
     company_website: str = ""
+    # Logo rendered in transactional-email headers. Empty = use the bundled
+    # asset at backend/static/branding/spinr_logo.png, served by
+    # routes/branding.py — which is the correct default, not a placeholder.
+    # Must be an absolute http(s) URL: it lands in an <img src> inside mail
+    # read outside any origin, so a relative path cannot resolve and anything
+    # non-http(s) is rejected by utils/company_details._safe_logo_url.
+    company_logo_url: str = ""
     # Postal address parts for the CASL-required marketing footer (migration
     # 192). Public info, not masked. company_address holds the street line;
     # these complete it into a full, legally-valid mailing address.
@@ -274,6 +390,27 @@ class AppSettings(BaseModel):
     # Distribution list for safety-incident transactional emails. See
     # migration 95 + the _notify_safety_team helper in features.py.
     safety_alert_emails: str = ""
+    # ── Lifecycle-email kill switch ──────────────────────────────────────
+    # Single off switch for every email sent through
+    # utils/email_notifications.py (driver approval/rejection/suspension,
+    # document expiry, …). Push is unaffected — flipping this false leaves
+    # every existing notification path exactly as it was before those emails
+    # were added, without a redeploy. Receipts, statements, invoices, tax and
+    # DSAR mail do NOT route through that module and are not covered here.
+    lifecycle_emails_enabled: bool = True
+    # ── Branded receipt / invoice retrofit ────────────────────────────────
+    # The ride receipt and Spinr Pass invoice predate the shared email layout
+    # and shipped their own bespoke shell: legacy #ee2b2b, a text wordmark,
+    # a hardcoded company footer and no plain-text alternative. True renders
+    # them with the real logo, the documented brand red, and the company name
+    # and address from the Company Info card above.
+    #
+    # Defaults TRUE because the point of the retrofit is that a receipt should
+    # show the company details an admin actually configured. False restores the
+    # previous shell byte-for-byte, without a redeploy, if it renders badly in
+    # a real inbox. The fare rows, GST/PST line items and totals are outside
+    # this switch entirely — the flag only governs the wrapper.
+    branded_receipt_enabled: bool = True
     # ── SOS on-call paging (ACTION_ITEMS.md B15(b)) ───────────────────────
     # Real on-call paging for rider/driver SOS, on top of the admin WS
     # broadcast + safety_alert_emails above. Lives here (not .env) for the
@@ -291,10 +428,16 @@ class AppSettings(BaseModel):
     # a driver's is_online=false (utils/stale_intent_reconciler.py,
     # migration 146). Range 1-48 enforced by the admin API + DB CHECK.
     stale_intent_offline_hours: float = 4.0
+    # Kill switch for the stale in_progress ride alerter
+    # (utils/stale_in_progress_ride_alerter.py, P2 task #16). Alert-only —
+    # never mutates ride state or insurance periods — so this defaults True;
+    # flip off only to silence an alert-noise incident, not as a correctness
+    # control.
+    stale_in_progress_ride_alert_enabled: bool = True
     # ── Notification throttling (quiet hours + daily cap) ────────────────
     # Master kill switch. Defaults OFF: existing push/SMS/email delivery is
     # unchanged until an admin opts in after staging verification. Global for
-    # every rider/driver (no per-user override yet) — see migration 275.
+    # every rider/driver (no per-user override yet) — see migration 304.
     # Dispatch/safety/account-priority sends always bypass this.
     notification_throttling_enabled: bool = False
     notification_quiet_hours_start: str = "22:00"
@@ -363,6 +506,21 @@ class AppSettings(BaseModel):
     # admin-dashboard routes. Read by the frontend's useFeatureFlag() hook
     # via GET /api/admin/settings; effective within the 60s settings TTL.
     admin_theme_v2_enabled: bool = False
+    # ── Forced-upgrade gate (ACTION_ITEMS.md E3) ──────────────────────────
+    # Minimum app version each client must report via the X-App-Version
+    # header (see core/middleware.py::ForcedUpgradeMiddleware). Empty string
+    # = enforcement off for that app (the safe default — an unset minimum
+    # must never lock out every build). Semver "MAJOR.MINOR.PATCH" only.
+    min_rider_app_version: str = ""
+    min_driver_app_version: str = ""
+    # ── Driver SOS discreet-hold-shield UX (ACTION_ITEMS.md B16) ──────────
+    # Dark-launched rollout gate: with this off (default), driver-app keeps
+    # rendering the existing shared SOSButton unchanged. On, the driver
+    # dashboard swaps to the new SafetyShield/SafetyOverlay pair (silent 3s
+    # hold, tap-to-open Safety overlay). Rider-app is unaffected either way
+    # — this flag is read by driver-app only. Not a credential/destination
+    # field, no masking/super-admin gate needed.
+    driver_discreet_sos_enabled: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -410,6 +568,10 @@ class SavedAddress(BaseModel):
     lat: float
     lng: float
     icon: str = "location"
+    # B9 enhancement (ACTION_ITEMS.md): captured from the write-time
+    # geocode-verify check when a result was returned; None when
+    # verification failed open (no API key, budget exhausted, no match).
+    place_id: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -551,6 +713,15 @@ class RideRatingRequest(BaseModel):
     )
 
 
+# Scheduled-ride booking window. Single source of truth — the rider app's
+# date-picker constraints and the AI booking assistant's own proposal-time
+# check (backend/ai/tools_booking.py) both import these rather than hardcode
+# a second copy, so the three surfaces can't drift out of sync with each
+# other or with the confirm-time validator below.
+SCHEDULE_MIN_LEAD_MINUTES = 15
+SCHEDULE_MAX_ADVANCE_DAYS = 7
+
+
 class CreateRideRequest(BaseModel):
     vehicle_type_id: str
     pickup_address: str
@@ -630,12 +801,10 @@ class CreateRideRequest(BaseModel):
         if value is not None:
             from datetime import timedelta
 
-            # Normalise to UTC-aware for the "in the future" comparison, then
-            # strip tz for the DST-gap round-trip check which needs a naive wall time.
+            # Normalise to UTC-aware. If scheduled_timezone is present this
+            # gets REPLACED below with the true converted UTC instant — see
+            # that branch for why.
             v_utc = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-            if v_utc < datetime.now(timezone.utc) + timedelta(minutes=5):
-                raise ValueError("Scheduled time must be at least 5 minutes in the future")
-
             naive = v_utc.replace(tzinfo=None)
 
             tz_name: Optional[str] = info.data.get("scheduled_timezone")
@@ -647,6 +816,16 @@ class CreateRideRequest(BaseModel):
                 except (ImportError, KeyError) as exc:
                     raise ValueError(f"Unknown or unsupported timezone: {tz_name}") from exc
 
+                # scheduled_timezone changes the contract: `naive`'s digits
+                # are now read as the rider's intended LOCAL wall-clock
+                # pickup time in this zone (not a UTC instant) — this is the
+                # only way to detect a DST gap/ambiguity at all, since by
+                # the time you have a true UTC instant, a client-side Date
+                # construction has already silently resolved (or
+                # fabricated, for a gap time) which instant was meant, with
+                # no record of the choice. See rider-app/store/rideStore.ts
+                # for the client-side half of this contract.
+                #
                 # DST-gap guard: construct the wall-clock time in the named
                 # timezone (fold=0 = pre-transition assumption), convert to UTC,
                 # then convert back and verify the hour/minute round-trips.
@@ -654,11 +833,60 @@ class CreateRideRequest(BaseModel):
                 # skipped forward over it).
                 utc_tz = zoneinfo.ZoneInfo("UTC")
                 local = naive.replace(tzinfo=tz, fold=0)
-                back = local.astimezone(utc_tz).astimezone(tz)
+                converted_utc = local.astimezone(utc_tz)
+                back = converted_utc.astimezone(tz)
                 if back.hour != naive.hour or back.minute != naive.minute:
                     raise ValueError(
                         f"The time {naive.strftime('%H:%M')} does not exist in "
                         f"{tz_name} on that date (DST spring-forward gap). "
                         "Please choose a time after the clocks change."
                     )
+
+                # DST fall-back guard: the gap check above only catches a
+                # local time that doesn't exist (spring-forward). The
+                # opposite case — a local time that occurs TWICE (the
+                # repeated hour when clocks fall back) — round-trips fine
+                # under either interpretation, so it isn't caught by that
+                # check at all. Compare the UTC offset under fold=0 (first
+                # occurrence) vs fold=1 (second occurrence): equal offsets
+                # means the time is unambiguous; different offsets means
+                # this exact wall-clock time happens twice on this date, and
+                # naive.replace(tzinfo=tz, fold=0) above would have silently
+                # picked the first occurrence with no way for the rider (or
+                # the regulatory trip-log record) to know which one they meant.
+                fold0_offset = local.utcoffset()
+                fold1_offset = naive.replace(tzinfo=tz, fold=1).utcoffset()
+                if fold0_offset != fold1_offset:
+                    raise ValueError(
+                        f"The time {naive.strftime('%H:%M')} is ambiguous in {tz_name} on that "
+                        "date (DST fall-back — this local time occurs twice). Please choose a "
+                        "different time, or specify scheduled_time with an explicit UTC offset."
+                    )
+
+                # The wall-clock time is valid and unambiguous in this zone
+                # — `converted_utc` IS the true UTC instant it represents.
+                # Without this reassignment the validator would pass
+                # DST-safety but then hand back `naive`'s digits mislabeled
+                # as UTC (the pre-fix behavior) — dispatching the ride up to
+                # many hours off from the rider's actual intended local
+                # time. The window checks below must run against this
+                # corrected value too, not the mislabeled one.
+                v_utc = converted_utc
+
+            now_utc = datetime.now(timezone.utc)
+            if v_utc < now_utc + timedelta(minutes=SCHEDULE_MIN_LEAD_MINUTES):
+                raise ValueError(f"Scheduled time must be at least {SCHEDULE_MIN_LEAD_MINUTES} minutes in the future")
+            # Server-side ceiling matching the rider app's date-picker maxDate.
+            # Previously enforced client-only, so any other caller — a direct
+            # API request or the AI booking assistant — could schedule
+            # arbitrarily far ahead with nothing to reject it.
+            if v_utc > now_utc + timedelta(days=SCHEDULE_MAX_ADVANCE_DAYS):
+                raise ValueError(f"Scheduled time cannot be more than {SCHEDULE_MAX_ADVANCE_DAYS} days in the future")
+
+            # tz_name path: return the corrected true-UTC instant, not the
+            # original (local-digits-mislabeled-as-UTC) `value`. No-tz_name
+            # path: return `value` completely unchanged, exactly as before
+            # this fix — existing callers that already send a true UTC
+            # instant (rider-app's toISOString() today) are unaffected.
+            return v_utc if tz_name else value
         return value

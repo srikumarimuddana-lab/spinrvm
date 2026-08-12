@@ -31,6 +31,16 @@ module.exports = {
   moduleNameMapper: {
     // Redirect `require('react')` to the runtime package, not @types/react (which has no exports).
     '^react$': '<rootDir>/node_modules/react',
+    // Same class of bug as the 'react' override above, introduced by the SDK 57
+    // upgrade's tsconfig.base switching jsx mode to "react-jsx": tsconfig paths now
+    // also map "react/jsx-runtime"/"react/jsx-dev-runtime" -> "@types/react/..." (a
+    // .d.ts-only path, needed so tsc resolves the automatic jsx runtime for files in
+    // the sibling shared/ package). jest-expo converts those paths too, so
+    // require('react/jsx-runtime') from the actual automatic-jsx-transform output
+    // would resolve to a type declaration file with no runtime code. Override back to
+    // the real runtime modules for tests.
+    '^react/jsx-runtime$': '<rootDir>/node_modules/react/jsx-runtime',
+    '^react/jsx-dev-runtime$': '<rootDir>/node_modules/react/jsx-dev-runtime',
     // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
     // lazily via installGlobal — that require fails inside Jest's sandbox.
     // Mock the index so jest-expo's setup.js gets a no-op instead of the real runtime.

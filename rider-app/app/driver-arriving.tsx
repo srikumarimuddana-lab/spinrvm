@@ -37,6 +37,7 @@ import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useResponsive } from '@shared/utils/responsive';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
+import { useTranslation } from '../i18n';
 import { getRideMapCoords } from '../utils/rideMapCoords';
 
 function DriverArrivingScreenContent() {
@@ -58,6 +59,7 @@ function DriverArrivingScreenContent() {
     activeRideRouteCoords, activeDriverRouteCoords,
     setActiveRideRouteCoords, setActiveDriverRouteCoords, setLastEtaMin,
   } = useRideStore();
+  const { t } = useTranslation();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<any>(null);
   const snapPoints = useMemo(() => ['40%', '65%'], []);
@@ -426,7 +428,7 @@ function DriverArrivingScreenContent() {
           </View>
         )}
 
-        {!isSearching && <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />}
+        {!isSearching && <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} t={t} />}
       </View>
 
       {/* ═══ Bottom sheet ═══ */}

@@ -16,6 +16,7 @@ plumbing, not the aggregation logic.
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -102,7 +103,9 @@ def test_gst_pst_remittance_subtitle_is_period_label_and_totals_are_in_a_table_r
     ):
         resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
     assert resp.status_code == 200
-    subtitle_arg = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
+    subtitle_arg = (
+        new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
+    )
     assert isinstance(subtitle_arg, str)
     assert subtitle_arg.startswith("Period:") and " to " in subtitle_arg
 
@@ -165,7 +168,9 @@ def test_gst_pst_remittance_defaults_to_month_to_date(admin_client):
     ):
         resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
     assert resp.status_code == 200
-    subtitle_arg = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
+    subtitle_arg = (
+        new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs.get("subtitle")
+    )
     start_str, _, _end_str = subtitle_arg.partition(" to ")
     assert start_str.endswith("-01")  # 1st of the month
 
@@ -189,7 +194,9 @@ def test_gst_pst_remittance_gate_off_ignores_row_count(admin_client):
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
         patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
-        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": False})),
+        patch(
+            "routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": False})
+        ),
         patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
     ):
         resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
@@ -202,7 +209,9 @@ def test_gst_pst_remittance_gate_under_threshold_ignores_flag(admin_client):
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
         patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
-        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
+        patch(
+            "routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})
+        ),
     ):
         resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
     assert resp.status_code == 200
@@ -215,14 +224,12 @@ def test_gst_pst_remittance_gate_blocks_without_approval(admin_client):
     generating the file."""
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
-        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
+        patch(
+            "routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})
+        ),
         patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
-        patch(
-            "routes.admin.compliance.admin_export_approvals.find_approved_grant", AsyncMock(return_value=None)
-        ),
-        patch(
-            "routes.admin.compliance.admin_export_approvals.find_pending_request", AsyncMock(return_value=None)
-        ),
+        patch("routes.admin.compliance.admin_export_approvals.find_approved_grant", AsyncMock(return_value=None)),
+        patch("routes.admin.compliance.admin_export_approvals.find_pending_request", AsyncMock(return_value=None)),
         patch(
             "routes.admin.compliance.admin_export_approvals.create_request",
             AsyncMock(return_value={"id": "req-1", "status": "pending"}),
@@ -242,11 +249,11 @@ def test_gst_pst_remittance_gate_reuses_existing_pending_request(admin_client):
     duplicate pending row."""
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
-        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
-        patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
         patch(
-            "routes.admin.compliance.admin_export_approvals.find_approved_grant", AsyncMock(return_value=None)
+            "routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})
         ),
+        patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
+        patch("routes.admin.compliance.admin_export_approvals.find_approved_grant", AsyncMock(return_value=None)),
         patch(
             "routes.admin.compliance.admin_export_approvals.find_pending_request",
             AsyncMock(return_value={"id": "req-existing", "status": "pending"}),
@@ -265,7 +272,9 @@ def test_gst_pst_remittance_gate_consumes_approved_grant_and_proceeds(admin_clie
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
         patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
-        patch("routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})),
+        patch(
+            "routes.admin.compliance.get_app_settings", AsyncMock(return_value={"dual_approval_exports_enabled": True})
+        ),
         patch("routes.admin.compliance._APPROVAL_GATE_ROW_THRESHOLD", 0),
         patch(
             "routes.admin.compliance.admin_export_approvals.find_approved_grant",
@@ -326,7 +335,60 @@ def test_driver_roster_filters_by_status(admin_client):
     ):
         resp = admin_client.get("/api/admin/compliance/driver-roster?status=pending")
     assert resp.status_code == 200
-    assert captured["filters"] == {"status": "pending"}
+    # `deleted_at: None` compiles to PostgREST `is.null` — account deletion
+    # cannot change `drivers.status`, so a status filter alone does not exclude
+    # a driver who left.
+    assert captured["filters"] == {"status": "pending", "deleted_at": None}
+
+
+def test_driver_roster_excludes_deleted_accounts_by_default(admin_client):
+    captured = {}
+
+    async def get_rows_side(table, filters=None, **kw):
+        captured["filters"] = filters
+        return [_ROSTER_DRIVER_ROW]
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/driver-roster")
+    assert resp.status_code == 200
+    assert captured["filters"] == {"deleted_at": None}
+
+
+def test_driver_roster_include_deleted_drops_the_filter(admin_client):
+    captured = {}
+
+    async def get_rows_side(table, filters=None, **kw):
+        captured["filters"] = filters
+        return [_ROSTER_DRIVER_ROW]
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/driver-roster?include_deleted=true")
+    assert resp.status_code == 200
+    assert "deleted_at" not in captured["filters"]
+
+
+@pytest.mark.anyio
+async def test_driver_roster_renders_deleted_status_not_the_stale_one():
+    """A soft-deleted row keeps its pre-deletion status (usually 'active').
+    Rendering that verbatim on an insurer's roster would describe someone who
+    left as a working driver."""
+    from backend.routes.admin import compliance as _c
+
+    deleted_row = {**_ROSTER_DRIVER_ROW, "status": "active", "deleted_at": "2026-07-30T00:00:00Z"}
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(return_value=[deleted_row])),
+        patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+    ):
+        rows, _ = await _c._driver_roster_rows(None, include_deleted=True)
+    assert rows[0]["status"] == "deleted"
 
 
 def test_driver_roster_503_on_db_failure(admin_client):
@@ -423,8 +485,17 @@ def test_t4a_filer_handoff_never_includes_sin(admin_client):
     assert "Jane A. Doe" in body
     assert "123 Main St" in body
     assert "750.00" in body
-    # sin_on_file_at_stripe is a Yes/No flag, never the number itself.
-    assert "sin" not in body.lower().replace("sin_on_file", "").replace("sinstatus", "")
+    # Only readiness metadata may appear: a Yes/No flag and a collection
+    # timestamp. Never the number, and never any part of it — not even the
+    # last 4, which internal admin views do show but this export must not,
+    # because it leaves Spinr for a third-party filer.
+    allowed = {"sin_on_file", "sin_collected_at"}
+    header = body.splitlines()[0] if body.splitlines() else ""
+    sin_columns = {c for c in header.split(",") if "sin" in c.lower()}
+    assert sin_columns <= allowed, f"unexpected SIN column(s): {sin_columns - allowed}"
+    assert "last4" not in body.lower()
+    # And no 9-digit run anywhere in the payload, whatever it is called.
+    assert not re.search(r"(?<!\d)\d{9}(?!\d)", body)
 
 
 def test_t4a_filer_handoff_filters_by_500_threshold(admin_client):
@@ -465,8 +536,20 @@ def test_t4a_filer_handoff_503_on_db_failure(admin_client):
 
 # ── Insurance billing (SGI / Knight Archer, per-trip per-phase) ─────────────
 
-_PD_PERIOD_2 = {"driver_id": "d1", "period": 2, "ride_id": "r1", "distance_km": 1.5, "started_at": "2026-07-05T09:00:00Z"}
-_PD_PERIOD_3 = {"driver_id": "d1", "period": 3, "ride_id": "r1", "distance_km": 12.5, "started_at": "2026-07-05T09:10:00Z"}
+_PD_PERIOD_2 = {
+    "driver_id": "d1",
+    "period": 2,
+    "ride_id": "r1",
+    "distance_km": 1.5,
+    "started_at": "2026-07-05T09:00:00Z",
+}
+_PD_PERIOD_3 = {
+    "driver_id": "d1",
+    "period": 3,
+    "ride_id": "r1",
+    "distance_km": 12.5,
+    "started_at": "2026-07-05T09:10:00Z",
+}
 _PD_DRIVER = {"id": "d1", "name": "Jane Doe", "first_name": "Jane", "last_name": "Doe"}
 
 
@@ -565,6 +648,38 @@ def test_airport_trips_requires_admin_auth(test_client):
     assert resp.status_code in (401, 403)
 
 
+def test_airport_trips_rider_name_falls_back_when_null_not_none_none(admin_client):
+    """Regression: users.first_name/last_name are real columns that are
+    frequently NULL (not missing keys) — a plain `.get(k, "")` treated a
+    present-but-None value as if the key were absent and never fell back,
+    producing the literal string "None None" in the Rider Name column
+    instead of a usable value."""
+    ride_with_rider = {**_AIRPORT_RIDE, "rider_id": "u1"}
+
+    def get_rows_side(table, filters=None, **kw):
+        if table == "rides":
+            return [ride_with_rider]
+        if table == "drivers":
+            return [_AIRPORT_DRIVER]
+        if table == "users":
+            return [{"id": "u1", "first_name": None, "last_name": None, "phone": "+14375551234"}]
+        if table == "service_areas":
+            return [{"id": "sa1", "name": "Regina"}]
+        return []
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/airport-trips?format=csv")
+
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+    assert "None None" not in body
+    assert "1234" in body  # PIPEDA-safe phone-last-4 fallback, never the full number
+    assert "+14375551234" not in body
+
+
 def test_airport_trips_filters_out_non_airport_rides(admin_client):
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_airport_get_rows_side)),
@@ -578,6 +693,25 @@ def test_airport_trips_filters_out_non_airport_rides(admin_client):
     assert "18.2" in body or "18.20" in body
     assert "Black Toyota Camry — SGI-123" in body  # vehicle registration for the authority's invoice
     assert "456 Elm St" not in body  # non-airport ride excluded
+
+
+def test_airport_trips_has_leading_serial_number_column(admin_client):
+    """A report with no row numbers reads as an unfinished data dump —
+    every Compliance report gets a leading serial-number column, applied
+    once in _render_tabular_report so every report/format picks it up
+    uniformly. CSV headers are the raw fieldnames (csv.DictWriter writes
+    fieldnames verbatim, no title-casing) — "s_no", not "S No"."""
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_airport_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get("/api/admin/compliance/airport-trips?format=csv")
+    assert resp.status_code == 200
+    lines = resp.content.decode("utf-8-sig").splitlines()
+    header = lines[0].split(",")
+    assert header[0] == "s_no"
+    first_data_row = lines[1].split(",")
+    assert first_data_row[0] == "1"
 
 
 def test_airport_trips_503_on_db_failure(admin_client):

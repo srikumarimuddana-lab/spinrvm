@@ -87,12 +87,12 @@ function TimeWindowRow({
                 type="time"
                 value={w.end}
                 onChange={(e) => onChange({ ...w, end: e.target.value })}
-                className={`w-32 ${invalid ? "border-red-500" : ""}`}
+                className={`w-32 ${invalid ? "border-destructive" : ""}`}
             />
             {invalid && (
-                <span className="text-xs text-red-600">End must be after start</span>
+                <span className="text-xs text-destructive">End must be after start</span>
             )}
-            <Button size="sm" variant="ghost" className="text-red-600" onClick={onRemove}>
+            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive/80" onClick={onRemove}>
                 <Trash2 className="h-3.5 w-3.5" />
             </Button>
         </div>
@@ -346,12 +346,12 @@ export default function CompanyPolicyPage() {
                 </Button>
 
                 {success && (
-                    <span className="text-sm text-emerald-600 font-medium">
+                    <span className="text-sm text-emerald-700 dark:text-emerald-300 font-medium">
                         ✓ Policy saved
                     </span>
                 )}
                 {error && (
-                    <span className="text-sm text-red-600">{error}</span>
+                    <span className="text-sm text-destructive">{error}</span>
                 )}
             </div>
         </div>

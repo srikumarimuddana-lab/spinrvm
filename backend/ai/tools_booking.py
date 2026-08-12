@@ -38,6 +38,11 @@ except ImportError:
     from ai.tools import ToolSpec, register
 
 try:
+    from ..schemas import SCHEDULE_MAX_ADVANCE_DAYS, SCHEDULE_MIN_LEAD_MINUTES
+except ImportError:
+    from schemas import SCHEDULE_MAX_ADVANCE_DAYS, SCHEDULE_MIN_LEAD_MINUTES  # type: ignore[no-redef]
+
+try:
     from .. import db_supabase
     from ..settings_loader import get_app_settings
     from ..utils.google_places_new import (
@@ -98,6 +103,17 @@ _COORD_PROPS = {
 
 def _money(v) -> Decimal:
     return Decimal(str(v)).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+# ACTION_ITEMS.md AI6: a pasted Google Maps link carries no usable place text
+# — geocoding/text-searching the URL string itself wastes a paid Maps API
+# call and never resolves. The prompt tells the model not to pass one, but
+# this backstops that in case it does anyway.
+_URL_LIKE_RE = re.compile(r"https?://|\bgoo\.gl/|\bmaps\.app\.goo\.gl\b|\bgoogle\.[a-z.]+/maps\b", re.IGNORECASE)
+
+
+def _looks_like_a_url(query: str) -> bool:
+    return bool(_URL_LIKE_RE.search(query))
 
 
 def _looks_like_street_address(query: str) -> bool:
@@ -647,6 +663,16 @@ async def find_place(
     if error:
         return error
 
+    if _looks_like_a_url(query):
+        return {
+            "candidates": [],
+            "note": (
+                "That looks like a Maps link, not a place name or address — it cannot be searched "
+                "directly. Ask the rider for the address or place name, or call request_map_pin so "
+                "they can drop a pin instead."
+            ),
+        }
+
     # No explicit bias from the model → centre the search on the rider's
     # best-known location so "superstore" means THEIR superstore, not one
     # three provinces away.
@@ -718,6 +744,23 @@ async def find_place(
         )
         result["note"] = f"{result['note']} {imprecise}" if result.get("note") else imprecise
         result["imprecise_address"] = True
+
+    # ACTION_ITEMS.md AI5: the in_service_area filter above (line ~669) is
+    # deliberately skipped for street-address queries -- a rider who typed a
+    # specific numbered address should still see it even if it's just outside
+    # the service boundary, rather than getting a silent "no matches" (a
+    # named-place search has many alternatives to fall back to; a specific
+    # address usually doesn't). But leaving it unmarked meant the rider could
+    # pick it and only find out it's unbookable when propose_ride_booking
+    # later refuses. Surface it here instead so the assistant can tell the
+    # rider up front, before they invest another turn on it.
+    if _looks_like_street_address(query) and not best.get("in_service_area"):
+        out_of_area = (
+            "Warning: this address is outside Spinr's service area — do not propose a quote or "
+            "booking for it. Tell the rider it's outside the coverage area."
+        )
+        result["note"] = f"{result['note']} {out_of_area}" if result.get("note") else out_of_area
+        result["out_of_service_area"] = True
     return result
 
 
@@ -1367,10 +1410,13 @@ async def _reconcile_pickup(
 # confirmation card (AI4): the model can put essentially any <=80-char string
 # in this field, and until now it only failed at Confirm
 # (schemas.CreateRideRequest.validate_scheduled_time), after the rider had
-# already seen it rendered. This mirrors that rule's shape (ISO-8601 +
-# >=5-min lead) here, earlier — the Confirm-time check is unchanged and
-# still the authoritative guard (defense in depth).
-_MIN_SCHEDULE_LEAD_MINUTES = 5
+# already seen it rendered. This mirrors that rule's shape here, earlier —
+# the Confirm-time check is unchanged and still the authoritative guard
+# (defense in depth). Both bounds are imported from backend.schemas rather
+# than a local copy, so this path can't silently drift out of sync with the
+# Confirm-time validator the way it briefly did before this fix (this file
+# used to hardcode its own 5-minute floor while schemas.py used a different
+# one; both now read the same constants).
 
 
 def _validate_scheduled_time(value: str) -> tuple:
@@ -1391,10 +1437,16 @@ def _validate_scheduled_time(value: str) -> tuple:
         )
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    if parsed < datetime.now(timezone.utc) + timedelta(minutes=_MIN_SCHEDULE_LEAD_MINUTES):
+    now = datetime.now(timezone.utc)
+    if parsed < now + timedelta(minutes=SCHEDULE_MIN_LEAD_MINUTES):
         return None, (
             f"'{value}' is not far enough in the future — a scheduled pickup must be at "
-            f"least {_MIN_SCHEDULE_LEAD_MINUTES} minutes from now. Ask the rider for a later time."
+            f"least {SCHEDULE_MIN_LEAD_MINUTES} minutes from now. Ask the rider for a later time."
+        )
+    if parsed > now + timedelta(days=SCHEDULE_MAX_ADVANCE_DAYS):
+        return None, (
+            f"'{value}' is too far in the future — a scheduled pickup can be at most "
+            f"{SCHEDULE_MAX_ADVANCE_DAYS} days from now. Ask the rider for a nearer date."
         )
     return parsed, None
 

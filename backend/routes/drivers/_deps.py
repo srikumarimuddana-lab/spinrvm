@@ -75,12 +75,13 @@ try:
     from ...utils.metrics import inc as _metric_inc
     from ...utils.metrics import observe as _metric_observe
     from ...utils.money import dollars_to_cents, to_decimal
-    from ...utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
+    from ...utils.rate_limiter import dsar_export_limit, location_update_limit, tax_doc_email_limit
     from ...utils.referral_terms import (
         paid_referee_earnings,
         paid_referral_earnings,
         resolve_referral_terms,
     )
+    from ...utils.rider_emails import send_no_show_fee_email
     from ...utils.stripe_charge import cancel_authorization
     from ...utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
@@ -126,12 +127,13 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
-    from utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
+    from utils.rate_limiter import dsar_export_limit, location_update_limit, tax_doc_email_limit
     from utils.referral_terms import (  # type: ignore
         paid_referee_earnings,
         paid_referral_earnings,
         resolve_referral_terms,
     )
+    from utils.rider_emails import send_no_show_fee_email  # noqa: F401
     from utils.stripe_charge import cancel_authorization  # type: ignore
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 

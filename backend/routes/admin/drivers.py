@@ -1,17 +1,18 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
-    from ...routes.drivers._shared import _encrypt_driver_pii
+    from ...routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt
     from ...routes.users import store_profile_image
     from ...services import lms_service
     from ...utils.audit_logger import log_admin_action
@@ -20,14 +21,16 @@ try:
         action_message,
         notify_driver_status_change,
         status_message,
+        verification_message,
     )
+    from ...utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
     from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
-    from routes.drivers._shared import _encrypt_driver_pii  # type: ignore
+    from routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
@@ -36,9 +39,16 @@ except ImportError:
         action_message,
         notify_driver_status_change,
         status_message,
+        verification_message,
     )
+    from utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit  # noqa: F401
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
+
+try:
+    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -56,6 +66,91 @@ def _user_display_name(user: Optional[Dict]) -> str:
     fn = user.get("first_name") or ""
     ln = user.get("last_name") or ""
     return f"{fn} {ln}".strip() or user.get("email") or user.get("phone") or ""
+
+
+# ---------- Work authorization (single source of truth) ----------
+# `drivers.work_authorization_status` is the ONE field an operator picks. The
+# older `is_citizen` / `is_permanent_resident` booleans are kept as columns
+# (the bulk importer and the drivers export still read them) but they are now
+# strictly *derived* from the status — admins no longer set them independently,
+# which is what left every driver row showing three separate "Unknown"s.
+#
+# Categories are mutually exclusive, so exactly one of the derived flags can be
+# "yes"; the others report "not_applicable" rather than a misleading "no"/
+# "unknown". `unknown` status is the only case where the flags are genuinely
+# unknown.
+WORK_AUTHORIZATION_CHOICES: Dict[str, str] = {
+    "citizen": "Canadian citizen",
+    "permanent_resident": "Permanent resident",
+    "indefinite": "Work permit — no expiry",
+    "expiring": "Work permit — expires",
+    "unknown": "Unknown",
+}
+
+
+def normalize_work_authorization_status(value: Any) -> str:
+    """Coerce a stored/submitted status to a canonical key. Blank -> 'unknown'."""
+    key = str(value or "").strip().lower()
+    return key if key in WORK_AUTHORIZATION_CHOICES else "unknown"
+
+
+def derived_work_authorization_flags(status: str) -> Dict[str, Optional[bool]]:
+    """Map a canonical status onto the legacy boolean columns.
+
+    Returns ``None`` for both flags when the status is unknown so an unset
+    driver is not silently written as "not a citizen and not a PR".
+    """
+    status = normalize_work_authorization_status(status)
+    if status == "citizen":
+        return {"is_citizen": True, "is_permanent_resident": False}
+    if status == "permanent_resident":
+        return {"is_citizen": False, "is_permanent_resident": True}
+    if status in ("indefinite", "expiring"):
+        # On a work permit: neither flag applies.
+        return {"is_citizen": False, "is_permanent_resident": False}
+    return {"is_citizen": None, "is_permanent_resident": None}
+
+
+def work_authorization_view(driver: Dict[str, Any]) -> Dict[str, Any]:
+    """Admin-facing projection of a driver's work authorization.
+
+    One canonical status plus the derived flags rendered as
+    ``yes`` / ``not_applicable`` / ``unknown`` so the dashboard never has to
+    re-derive the relationship between the three columns.
+    """
+    status = normalize_work_authorization_status(driver.get("work_authorization_status"))
+    # Legacy rows imported before the status column existed only carry the
+    # booleans — promote them so those drivers do not read as "Unknown".
+    if status == "unknown":
+        if driver.get("is_citizen") is True:
+            status = "citizen"
+        elif driver.get("is_permanent_resident") is True:
+            status = "permanent_resident"
+    flags = derived_work_authorization_flags(status)
+
+    def _flag(value: Optional[bool]) -> str:
+        if value is None:
+            return "unknown"
+        return "yes" if value else "not_applicable"
+
+    return {
+        "status": status,
+        "label": WORK_AUTHORIZATION_CHOICES[status],
+        "citizen": _flag(flags["is_citizen"]),
+        "permanent_resident": _flag(flags["is_permanent_resident"]),
+        # Only an `expiring` permit has a meaningful end date.
+        "expires_at": driver.get("work_eligibility_expiry_date") if status == "expiring" else None,
+    }
+
+
+def _mask_license_number(plain: Optional[str]) -> Optional[str]:
+    """Last-4 mask for a decrypted licence number (never the full value)."""
+    if not plain:
+        return None
+    s = str(plain).strip()
+    if not s:
+        return None
+    return s[-4:] if len(s) > 4 else s
 
 
 async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
@@ -476,6 +571,15 @@ async def admin_get_drivers(
                 "subscription_status": _sub_status,
                 "subscription_plan": _sub_plan,
                 "subscription_expires_at": _sub_expires,
+                # Single consolidated work-authorization projection; the raw
+                # columns are still spread above for back-compat.
+                "work_authorization": work_authorization_view(d),
+                # Account deletion cannot change `status` (no 'deleted' value in
+                # the set), so a departed driver still reads as status='active'
+                # here. Deleted rows stay IN this list on purpose — an admin
+                # still has to find them to file the SGI removal — but they must
+                # be visibly distinct rather than silently indistinguishable.
+                "account_deleted": bool(d.get("deleted_at")),
             }
         )
     return out
@@ -565,6 +669,16 @@ async def admin_get_driver_stats(
         u = users_map.get(d.get("user_id"))
         driver_status = d.get("status", "pending")
 
+        # Account deletion soft-deletes the drivers row but cannot change
+        # `status` — there is no 'deleted' value in the status set — so a driver
+        # who left kept status='active' and went on being counted as an active
+        # driver on this page (and as online, for rows whose intent flags
+        # predate the deletion hardening in routes/users.py). Classify them into
+        # their own bucket instead. Derived for display/counting only; the
+        # stored `status` column is untouched.
+        if d.get("deleted_at"):
+            driver_status = "deleted"
+
         # Auto-detect needs_review for active drivers
         if driver_status == "active":
             for ef in expiry_fields:
@@ -589,12 +703,14 @@ async def admin_get_driver_stats(
 
     # ── Compute overall driver stats ──
     total = len(enriched_drivers)
-    online = sum(1 for d in enriched_drivers if d.get("is_online"))
+    # A deleted account is never "online", whatever its stale intent flag says.
+    online = sum(1 for d in enriched_drivers if d.get("is_online") and d.get("status") != "deleted")
     active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
     pending_count = sum(1 for d in enriched_drivers if d.get("status") == "pending")
     needs_review_count = sum(1 for d in enriched_drivers if d.get("status") == "needs_review")
     suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
+    deleted_count = sum(1 for d in enriched_drivers if d.get("status") == "deleted")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
     total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
     avg_rating = 0.0
@@ -705,6 +821,7 @@ async def admin_get_driver_stats(
             "needs_review": needs_review_count,
             "suspended": suspended_count,
             "banned": banned_count,
+            "deleted": deleted_count,
             "total_rides": total_rides_sum,
             "total_earnings": total_earnings_sum,
             "avg_rating": avg_rating,
@@ -1158,6 +1275,7 @@ async def admin_nudge_driver_expiry(
                 "driver_id": driver_id,
                 "doc_type": body.doc_type,
             },
+            target_app="driver",
         )
     except Exception as exc:
         logger.error(
@@ -1251,6 +1369,8 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         "is_citizen",
         "decals_sent",
         "decals_sent_at",
+        "decal_generated_at",
+        "decal_number",
     }
     allowed = user_fields | driver_fields
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -1283,21 +1403,26 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         new_last = driver_updates.get("last_name", existing.get("last_name")) or ""
         driver_updates["name"] = f"{new_first} {new_last}".strip()
 
-    # Keep import/compliance flags consistent when admins edit the normalized
-    # work authorization status manually. Explicit boolean updates still win,
-    # but choosing "citizen" or "permanent_resident" should not leave the
-    # separate flags stale.
+    # `work_authorization_status` is the single field an admin picks; the
+    # `is_citizen` / `is_permanent_resident` columns are strictly derived from
+    # it. They are still accepted on their own (bulk-import back-compat, and
+    # older clients), but whenever the status is present it WINS — previously
+    # this used setdefault, which let a stale explicit boolean contradict the
+    # status the operator had just chosen.
     if "work_authorization_status" in driver_updates:
-        status = str(driver_updates.get("work_authorization_status") or "").strip().lower()
-        if status == "citizen":
-            driver_updates.setdefault("is_citizen", True)
-            driver_updates.setdefault("is_permanent_resident", False)
-        elif status == "permanent_resident":
-            driver_updates.setdefault("is_permanent_resident", True)
-            driver_updates.setdefault("is_citizen", False)
-        elif status in {"expiring", "indefinite", "unknown", ""}:
-            driver_updates.setdefault("is_permanent_resident", False)
-            driver_updates.setdefault("is_citizen", False)
+        raw_status = driver_updates.get("work_authorization_status")
+        status = str(raw_status or "").strip().lower()
+        if status and status not in WORK_AUTHORIZATION_CHOICES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid work_authorization_status. Must be one of: "
+                    f"{', '.join(sorted(WORK_AUTHORIZATION_CHOICES))}"
+                ),
+            )
+        # Normalize "" / "unknown" to NULL so the column has one empty spelling.
+        driver_updates["work_authorization_status"] = None if status in ("", "unknown") else status
+        driver_updates.update(derived_work_authorization_flags(status))
 
     user_id = existing.get("user_id")
     # email/gender exist ONLY on `users`, so they cannot be persisted without a
@@ -1424,26 +1549,13 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: d
             status_code=500,
             detail="Failed to update driver.",
         ) from e
-    # G4: Notify the driver via push so they know their verification status
-    # changed without having to manually check the Documents screen.
-    try:
-        if existing_driver.get("user_id"):
-            if req.verified:
-                await send_push_notification(
-                    existing_driver["user_id"],
-                    "Account Verified! ✅",
-                    "Your driver account has been verified. You can now go online and start accepting rides!",
-                    {"type": "driver_verified"},
-                )
-            else:
-                await send_push_notification(
-                    existing_driver["user_id"],
-                    "Verification Update ⚠️",
-                    "Your driver verification status has been updated. Please check your documents.",
-                    {"type": "driver_unverified"},
-                )
-    except Exception as e:
-        logger.warning(f"[ADMIN] Push notification failed for driver {driver_id}: {e}")
+    # G4: Notify the driver so they know their verification status changed
+    # without having to manually check the Documents screen. Routed through the
+    # shared policy (copy unchanged) so it picks up the deleted_at recipient
+    # guard it was missing and now also reaches email — this endpoint used to
+    # send its own push directly, which is why it was the one documented
+    # exception in docs/driver-lifecycle-status-flow.md.
+    await notify_driver_status_change(existing_driver, verification_message(req.verified), f"verify:{req.verified}")
 
     # Meta DriverApproved. CAPI-only: approval happens in the admin dashboard,
     # never on the driver's device, so there is no client event to de-duplicate
@@ -1481,7 +1593,11 @@ async def admin_review_driver_photo(
     try:
         if req.action == "approve":
             await send_push_notification(
-                user_id, "Photo approved ✅", "Your profile photo is now visible to riders.", {"type": "photo_approved"}
+                user_id,
+                "Photo approved ✅",
+                "Your profile photo is now visible to riders.",
+                {"type": "photo_approved"},
+                target_app="driver",
             )
         else:
             await send_push_notification(
@@ -1489,6 +1605,7 @@ async def admin_review_driver_photo(
                 "Photo needs attention ⚠️",
                 "Your profile photo wasn't approved. Please upload a clear photo of yourself.",
                 {"type": "photo_rejected"},
+                target_app="driver",
             )
     except Exception as e:
         logger.warning(f"[ADMIN] photo-review push failed for driver {driver_id}: {e}")
@@ -1905,6 +2022,23 @@ async def admin_get_driver_live_stats(driver_id: str):
         user = await db_supabase.get_user_by_id(drv["user_id"])
         photo_url = (user or {}).get("profile_image")
 
+    # Licence number is Vault-encrypted at rest, so the bulk drivers list only
+    # ever carries the opaque token. Decrypt the single selected driver here and
+    # ship ONLY the last 4 — enough for an admin to confirm which licence is on
+    # file (and to see that one exists before editing it) without the full
+    # number crossing the wire. Same masking rule the drivers CSV export uses.
+    license_number_last4 = None
+    if drv and drv.get("license_number"):
+        token = str(drv["license_number"])
+        try:
+            plain = await _vault_decrypt(token, "license_admin_detail")
+        except Exception:
+            # _vault_decrypt already logs; a decrypt problem must not take down
+            # the whole stats card.
+            plain = None
+        # _vault_decrypt returns the raw token unchanged when it cannot decrypt.
+        license_number_last4 = _mask_license_number(plain) if plain and plain != token else None
+
     return {
         "total_rides": completed_count,
         "total_earnings": total_earnings,
@@ -1913,6 +2047,17 @@ async def admin_get_driver_live_stats(driver_id: str):
         "cancelled_by_driver": cancelled_by_driver,
         "total_assigned": total_assigned,
         "photo_url": photo_url,
+        "license_number_last4": license_number_last4,
+        "license_number_on_file": bool(drv and drv.get("license_number")),
+        # SIN needs no decrypt: `sin_last4` is stored in the clear precisely so
+        # T4A readiness is visible without one, and nothing in the application
+        # decrypts `drivers.sin` at all. An admin sees whether a number is on
+        # file, its last 4 to confirm which, and when it was given — never the
+        # number. Do not add a decrypt here; a SIN read path is a separate,
+        # audited, super_admin decision that has not been made.
+        "sin_last4": (drv or {}).get("sin_last4"),
+        "sin_on_file": bool(drv and drv.get("sin")),
+        "sin_collected_at": (drv or {}).get("sin_collected_at"),
     }
 
 
@@ -2488,9 +2633,13 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         raise HTTPException(status_code=404, detail="Driver not found")
 
     # ---- Aggregate from rides ----
+    # Legacy-imported rides and their 'legacy_import' offset payout are both
+    # excluded, matching routes/drivers/earnings.py — the driver's own screen
+    # and this tab must not disagree about what Spinr owes. See
+    # utils/legacy_rides for why dropping both halves leaves the math intact.
     rides = await db_supabase.get_rows(
         "rides",
-        {"driver_id": driver_id, "status": "completed"},
+        {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES},
         limit=10000,
     )
 
@@ -2500,11 +2649,42 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         except (InvalidOperation, ValueError):
             return Decimal("0")
 
-    lifetime_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
+    lifetime_ride_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
     lifetime_tips = sum((_dec(r.get("tip_amount")) for r in rides), Decimal("0"))
 
+    # How many of this driver's completed rides were EXCLUDED as previous-app
+    # imports. Without this the card reads "0 completed rides · $0.00" while
+    # the Rides tab beside it shows 15, and nothing on screen explains the
+    # contradiction — the operator is left assuming data loss. Counted, not
+    # fetched: a HEAD-style count keeps the payload small.
+    imported_rides_excluded = 0
+    try:
+        imported_rides_excluded = len(
+            await db_supabase.get_rows(
+                "rides",
+                {"driver_id": driver_id, "status": "completed", "legacy_import_metadata": {"$notnull": True}},
+                columns="id",
+                limit=10000,
+            )
+            or []
+        )
+    except Exception:
+        # Presentation-only context. Never fail the whole payouts tab over it,
+        # but do surface it — a silent zero here would itself be misleading.
+        logger.error("payouts-summary: imported-ride count failed for %s", driver_id, exc_info=True)
+        imported_rides_excluded = -1  # -1 = unknown, distinct from a real zero
+
+    # ---- Aggregate from driver_bonuses (quest/referral/adjustment) ----
+    bonus_rows = await db_supabase.get_rows(
+        "driver_bonuses",
+        {"driver_id": driver_id},
+        limit=10000,
+    )
+    total_bonuses = sum((_dec(b.get("amount") or 0) for b in bonus_rows), Decimal("0"))
+    lifetime_earnings = lifetime_ride_earnings + total_bonuses
+
     year_start = datetime(datetime.now(timezone.utc).year, 1, 1, tzinfo=timezone.utc).isoformat()
-    ytd_earnings = sum(
+    ytd_ride_earnings = sum(
         (
             _dec(r.get("driver_earnings"))
             for r in rides
@@ -2512,6 +2692,11 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         ),
         Decimal("0"),
     )
+    ytd_bonuses = sum(
+        (_dec(b.get("amount") or 0) for b in bonus_rows if (b.get("created_at") or "") >= year_start),
+        Decimal("0"),
+    )
+    ytd_earnings = ytd_ride_earnings + ytd_bonuses
 
     # Active days in last 30d — same definition the driver app's "Active
     # days" earnings metric uses (≥1 completed ride on that calendar date).
@@ -2524,29 +2709,78 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     active_days_30d = len([d for d in recent_dates if d])
 
     # ---- Aggregate from payouts ----
-    payouts = await db_supabase.get_rows(
-        "payouts",
-        {"driver_id": driver_id},
-        order="created_at",
-        desc=True,
-        limit=max(limit, 200),
+    # limit=5000 mirrors get_driver_balance (routes/drivers/earnings.py): the
+    # deduction below claims to be lifetime, so it must not be computed over a
+    # 200-row window — a driver with years of instant cash-outs would have
+    # their oldest payouts silently drop out of the math and pending_balance
+    # would overstate what is owed. The display list is still capped by
+    # `limit` at serialization.
+    payouts = drop_legacy_offset_payouts(
+        await db_supabase.get_rows(
+            "payouts",
+            {"driver_id": driver_id},
+            order="created_at",
+            desc=True,
+            limit=5000,
+        )
     )
 
     def _sum_by_status(*statuses: str) -> Decimal:
-        return sum(
-            (_dec(p.get("amount")) for p in payouts if p.get("status") in statuses),
-            Decimal("0"),
-        )
+        return sum((_dec(p.get("amount")) for p in payouts if p.get("status") in statuses), Decimal("0"))
 
-    total_paid_out = _sum_by_status("completed")
+    # Two DIFFERENT questions, and conflating them is what made "Total paid
+    # out" read $0.00 for migrated drivers right after a Stripe sync:
+    #
+    #   "What has this driver been paid?"   -> HISTORY. Includes 'stripe_sync':
+    #       those rows mirror real Stripe Transfers, real money that really
+    #       left the platform to this driver. Reporting $0 paid when Stripe
+    #       shows thousands is simply wrong.
+    #   "What does Spinr still owe them?"   -> BALANCE. Excludes 'stripe_sync':
+    #       those transfers settled earnings from the OLD app which are not in
+    #       this DB's rides, so counting them here would drive pending_balance
+    #       to zero for every migrated driver.
+    #
+    # Both sums otherwise mirror routes/drivers/earnings.py: only 'reversed'
+    # and 'failed' (money returned or never left) are excluded, so persistent
+    # intermediate statuses like 'reserved' and 'transfer_completed' (a stuck
+    # instant payout whose Transfer succeeded) still count. An unknown/new
+    # status defaults to counting as money-out: worst case the owed figure is
+    # understated (recoverable), never overstated into a double payment.
+    # ('legacy_import' offsets were dropped from `payouts` entirely above —
+    # they are synthetic, never a real transfer.)
+    _not_money_out = {"reversed", "failed"}
+
+    def _is_money_out(p: dict) -> bool:
+        return str(p.get("status") or "").lower() not in _not_money_out
+
+    gross_money_out = sum((_dec(p.get("amount")) for p in payouts if _is_money_out(p)), Decimal("0"))
+    balance_money_out = sum(
+        (_dec(p.get("amount")) for p in payouts if _is_money_out(p) and p.get("payout_type") != "stripe_sync"),
+        Decimal("0"),
+    )
+    # stripe_sync rows are always 'completed', so they never land in flight.
     pending_in_flight = _sum_by_status("pending", "processing")
+    # Everything actually sent — completed, transfer_completed, reserved, and
+    # any future status — minus what is still only queued.
+    total_paid_out = gross_money_out - pending_in_flight
     on_hold = _sum_by_status("failed")
 
+    # The slice of total_paid_out that came from synced Stripe transfer
+    # history — an "of which" breakdown, NOT a separate bucket. Shown so an
+    # operator can tell previous-app money from Spinr-era payouts.
+    legacy_stripe_transfers = sum(
+        (
+            _dec(p.get("amount"))
+            for p in payouts
+            if p.get("payout_type") == "stripe_sync" and p.get("status") == "completed"
+        ),
+        Decimal("0"),
+    )
+
     # Amount owed to the driver that hasn't been queued for payout yet.
-    # Negative would mean we've paid out more than they earned — guard
-    # by clamping at zero so the UI never shows a confusing negative
-    # owed balance (admins resolve that via a separate clawback flow).
-    pending_balance = max(lifetime_earnings - total_paid_out - pending_in_flight, Decimal("0"))
+    # Ride earnings + bonuses - balance-affecting money out, matching the
+    # driver-facing balance in routes/drivers/earnings.py.
+    pending_balance = max(lifetime_earnings - balance_money_out, Decimal("0"))
 
     last_completed = next((p for p in payouts if p.get("status") == "completed"), None)
     last_failed = next((p for p in payouts if p.get("status") == "failed"), None)
@@ -2582,6 +2816,12 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         "business_type": driver.get("stripe_business_type"),
         "id_number_provided": bool(driver.get("stripe_id_number_provided")),
         "id_number_last4": driver.get("stripe_id_number_last4"),
+        # OUR Vault-encrypted copy — the one /reveal-sin decrypts and the T4A
+        # reads. Distinct from id_number_provided above, which only says
+        # Stripe holds *a* number it will never return. The dashboard gates
+        # the Reveal button on these, not on Stripe's flag.
+        "sin_on_file": bool(driver.get("sin")),
+        "sin_last4": driver.get("sin_last4"),
         # Canonical column is gst_bn (migration 58). API field name stays
         # gst_hst_number for clarity in the admin UI; the column-level
         # gst_hst_number we briefly added was dropped from migration 92.
@@ -2597,13 +2837,19 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     return {
         "summary": {
             "lifetime_earnings": float(lifetime_earnings),
+            "lifetime_ride_earnings": float(lifetime_ride_earnings),
+            "lifetime_bonuses": float(total_bonuses),
             "lifetime_tips": float(lifetime_tips),
             "ytd_earnings": float(ytd_earnings),
             "total_paid_out": float(total_paid_out),
+            "legacy_stripe_transfers": float(legacy_stripe_transfers),
             "pending_in_flight": float(pending_in_flight),
             "pending_balance": float(pending_balance),
             "on_hold": float(on_hold),
             "rides_count": len(rides),
+            # Completed rides imported from the previous app and therefore NOT
+            # counted in lifetime_earnings (-1 = count unavailable).
+            "imported_rides_excluded": imported_rides_excluded,
             "active_days_30d": active_days_30d,
             "last_payout": (
                 {
@@ -2634,6 +2880,8 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
                 "id": p.get("id"),
                 "amount": float(_dec(p.get("amount"))),
                 "status": p.get("status"),
+                "payout_type": p.get("payout_type"),
+                "stripe_transfer_id": p.get("stripe_transfer_id"),
                 "stripe_payout_id": p.get("stripe_payout_id"),
                 "bank_name": p.get("bank_name"),
                 "account_last4": p.get("account_last4"),
@@ -2642,6 +2890,16 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
                 "processed_at": p.get("processed_at"),
             }
             for p in payouts[:limit]
+        ],
+        "bonuses": [
+            {
+                "id": b.get("id"),
+                "amount": float(_dec(b.get("amount") or 0)),
+                "kind": b.get("kind"),
+                "description": b.get("description"),
+                "created_at": b.get("created_at"),
+            }
+            for b in sorted(bonus_rows, key=lambda x: x.get("created_at") or "", reverse=True)
         ],
     }
 
@@ -2663,85 +2921,750 @@ async def admin_refresh_driver_kyc(driver_id: str, admin: dict = Depends(get_adm
     except ImportError:
         from services.stripe_kyc_sync import refresh_driver_kyc  # type: ignore
 
-    result = await refresh_driver_kyc(driver)
+    # Opt in to retiring an account the running key cannot see: this button
+    # is the operator's repair path for exactly that case.
+    result = await refresh_driver_kyc(driver, retire_if_unreachable=True)
+    status = result.get("status")
     await log_admin_action(
         admin,
         "stripe_kyc_refresh",
         "drivers",
         driver_id,
-        {"status": result.get("status")},
+        {"status": status},
     )
-    return result
+
+    # Every outcome used to return a bare 200 with the raw status dict, so an
+    # operator clicking "Refresh from Stripe" got an identical success response
+    # whether the sync worked, the key was missing, or Stripe errored — and the
+    # dashboard toasted "Synced from Stripe" regardless. A failure that reports
+    # success is the error-swallowing CLAUDE.md forbids, so the genuine
+    # failures now carry a status code the client cannot mistake.
+    if status == "stripe_not_configured":
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured — set stripe_secret_key in Settings before refreshing.",
+        )
+    if status == "stripe_error":
+        raise HTTPException(
+            status_code=502,
+            detail="Stripe could not be reached. Nothing was changed — try again shortly.",
+        )
+
+    # The remaining outcomes are all real answers, not failures — but each one
+    # means something different, so say which. The dashboard shows `message`.
+    messages = {
+        "ok": "Verification status synced from Stripe.",
+        "no_stripe_account": (
+            "This driver has no Stripe account on file, so there was nothing to refresh. "
+            "They need to complete 'Set up payouts' in the driver app."
+        ),
+        "account_not_on_key": (
+            "The driver's Stripe account is not reachable on the current API key "
+            "(typically a test/live key change). It has been detached and their payout "
+            "details cleared — they must set up payouts again in the driver app."
+        ),
+    }
+    return {
+        **result,
+        # `synced` is the flag the UI should branch on: only "ok" actually
+        # pulled fresh state from Stripe.
+        "synced": status == "ok",
+        "message": messages.get(status, f"Unexpected sync status: {status}"),
+    }
+
+
+@router.post("/drivers/{driver_id}/refresh-stripe-payouts")
+async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depends(get_admin_user)):
+    """Sync ALL financial data from Stripe for a single driver.
+
+    Pulls Stripe Transfers (platform -> connected account) via the payout sync
+    service and materializes any missing ones as ``payouts`` rows. Also triggers
+    the connect-ledger sync to pull bank payouts and balance transactions from
+    the driver's connected account.
+
+    Returns the full set of synced transfer records with timestamps so the
+    admin dashboard can display every payment Stripe knows about for this
+    driver, supporting earnings review and T4A generation.
+
+    super_admin only: this writes payout history via the same commit_plan /
+    sync_connect_ledger the dedicated /admin/stripe/* sync routes gate behind
+    super_admin ("writing payouts history is above module grants") — a
+    per-driver entry point must not be a privilege loophole around that.
+    """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super_admin")
+
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    # Current OR superseded account: a driver retired by a key-mode change
+    # keeps only stripe_account_id_superseded until they re-onboard, and
+    # their transfer history is exactly what this refresh must preserve
+    # (see stripe_payout_sync_service module docstring).
+    stripe_account_id = (driver.get("stripe_account_id") or "").strip()
+    superseded_account_id = (driver.get("stripe_account_id_superseded") or "").strip()
+    if not stripe_account_id and not superseded_account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Driver has no Stripe Connect account on file. They must complete payout setup first.",
+        )
+
+    try:
+        from ...services import stripe_payout_sync_service as sync_svc
+        from ...services.stripe_connect_ledger_service import sync_connect_ledger
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from services import stripe_payout_sync_service as sync_svc  # type: ignore
+        from services.stripe_connect_ledger_service import sync_connect_ledger  # type: ignore
+        from settings_loader import get_app_settings  # type: ignore
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured — set stripe_secret_key in Settings.",
+        )
+
+    batch = f"admin-refresh-{driver_id[:8]}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+
+    # 1. Sync Stripe Transfers -> payouts table
+    plan = await sync_svc.build_plan(
+        stripe_secret,
+        batch,
+        driver_ids=[driver_id],
+    )
+
+    # A plan error means Stripe could not be fully listed for this driver —
+    # committing or reporting success would under-report their history (and
+    # eventually their T4A). Fail loudly, matching the KYC refresh above and
+    # the CLAUDE.md rule against softening payment errors.
+    if plan.errors:
+        logger.error(
+            "[STRIPE-REFRESH] plan has errors for driver %s: %s",
+            driver_id,
+            [(e.field, e.message) for e in plan.errors],
+        )
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh",
+            "drivers",
+            driver_id,
+            {"status": "plan_errors", "errors": len(plan.errors)},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Stripe could not be fully read for this driver — nothing was written. Try again shortly.",
+        )
+
+    try:
+        commit_result = await asyncio.to_thread(sync_svc.commit_plan, plan)
+        transfers_inserted = commit_result.get("inserted", 0)
+        transfers_skipped = commit_result.get("skipped_existing", 0)
+    except Exception:
+        logger.error("[STRIPE-REFRESH] commit failed for driver %s", driver_id, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to write synced transfers to the database. Try again.",
+        )
+
+    # 2. Sync connected-account bank payouts + balance transactions. Wrapped
+    # so a failure here still audits the transfers already committed in
+    # step 1 — a money-affecting write must never be left without a trail.
+    try:
+        ledger_result = await sync_connect_ledger(
+            stripe_secret,
+            driver_ids=[driver_id],
+        )
+    except Exception:
+        logger.error("[STRIPE-REFRESH] connect-ledger sync failed for driver %s", driver_id, exc_info=True)
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh",
+            "drivers",
+            driver_id,
+            {
+                "status": "ledger_sync_failed",
+                "transfers_inserted": transfers_inserted,
+                "transfers_skipped": transfers_skipped,
+                "sum_planned": plan.stats.get("sum_planned"),
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger "
+                "sync failed. Re-run the refresh — it is safe to repeat."
+            ),
+        )
+
+    if ledger_result.errors:
+        logger.error(
+            "[STRIPE-REFRESH] connect-ledger reported errors for driver %s: %s",
+            driver_id,
+            [(e.field, e.message) for e in ledger_result.errors],
+        )
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh",
+            "drivers",
+            driver_id,
+            {
+                "status": "ledger_errors",
+                "transfers_inserted": transfers_inserted,
+                "transfers_skipped": transfers_skipped,
+                "sum_planned": plan.stats.get("sum_planned"),
+                "ledger_errors": len(ledger_result.errors),
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Transfers synced ({transfers_inserted} new), but Stripe's bank-payout/ledger "
+                "data could not be fully read. Re-run the refresh — it is safe to repeat."
+            ),
+        )
+
+    await log_admin_action(
+        admin,
+        "stripe_payout_refresh",
+        "drivers",
+        driver_id,
+        {
+            "status": "ok",
+            "transfers_inserted": transfers_inserted,
+            "transfers_skipped": transfers_skipped,
+            # Dollar total introduced into payout history, matching the audit
+            # detail the bulk /admin/stripe/payout-sync/commit endpoint logs.
+            "sum_planned": plan.stats.get("sum_planned"),
+            "payouts_upserted": ledger_result.payouts_upserted,
+            "ledger_upserted": ledger_result.ledger_upserted,
+        },
+    )
+
+    # 3. Read back the full payout history for this driver
+    all_payouts = await db_supabase.get_rows(
+        "payouts",
+        {"driver_id": driver_id},
+        order="created_at",
+        desc=True,
+        limit=500,
+    )
+
+    # 4. Read back synced bank payouts (connected-account -> bank)
+    bank_payouts = await db_supabase.get_rows(
+        "driver_stripe_payouts",
+        {"driver_id": driver_id},
+        order="created_at",
+        desc=True,
+        limit=500,
+    )
+
+    def _dec(x: Any) -> Decimal:
+        try:
+            return Decimal(str(x or 0))
+        except (InvalidOperation, ValueError):
+            return Decimal("0")
+
+    return {
+        "synced": True,
+        "message": (
+            f"Synced from Stripe: {transfers_inserted} new transfer(s), "
+            f"{transfers_skipped} already tracked. "
+            f"{ledger_result.payouts_upserted} bank payout(s), "
+            f"{ledger_result.ledger_upserted} ledger entries."
+        ),
+        "transfers_inserted": transfers_inserted,
+        "transfers_skipped": transfers_skipped,
+        "bank_payouts_synced": ledger_result.payouts_upserted,
+        "ledger_entries_synced": ledger_result.ledger_upserted,
+        # Errors never reach here — they raise 502 above. Warnings (e.g. a
+        # superseded account not on this key, a partial reversal) are real
+        # answers the operator should still see.
+        "plan_warnings": [{"field": w.field, "message": w.message} for w in plan.warnings],
+        "ledger_warnings": [{"field": w.field, "message": w.message} for w in ledger_result.warnings],
+        "payouts": [
+            {
+                "id": p.get("id"),
+                "amount": float(_dec(p.get("amount"))),
+                "status": p.get("status"),
+                "payout_type": p.get("payout_type"),
+                "stripe_transfer_id": p.get("stripe_transfer_id"),
+                "stripe_payout_id": p.get("stripe_payout_id"),
+                "bank_name": p.get("bank_name"),
+                "account_last4": p.get("account_last4"),
+                "error_message": p.get("error_message"),
+                "created_at": p.get("created_at"),
+                "processed_at": p.get("processed_at"),
+            }
+            for p in all_payouts
+        ],
+        "bank_payouts": [
+            {
+                "id": bp.get("id"),
+                "amount": float(_dec(bp.get("amount"))),
+                "currency": bp.get("currency"),
+                "status": bp.get("status"),
+                "method": bp.get("method"),
+                "arrival_date": bp.get("arrival_date"),
+                "bank_last4": bp.get("bank_last4"),
+                "failure_code": bp.get("failure_code"),
+                "failure_message": bp.get("failure_message"),
+                "created_at": bp.get("created_at"),
+                "synced_at": bp.get("synced_at"),
+            }
+            for bp in bank_payouts
+        ],
+    }
+
+
+class RefreshAllPayoutsRequest(BaseModel):
+    """Scope for the fleet-wide Stripe payout refresh. Empty body = every
+    driver with a Stripe account, full history."""
+
+    model_config = {"extra": "forbid"}
+
+    driver_ids: Optional[List[str]] = Field(None, max_length=500)
+
+
+@router.post("/drivers/refresh-stripe-payouts")
+async def admin_refresh_all_driver_stripe_payouts(
+    body: RefreshAllPayoutsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-click Stripe payout sync across the fleet.
+
+    Same two syncs the per-driver button runs — Stripe Transfers into
+    ``payouts``, then the connected-account bank-payout/balance ledger — with
+    ``driver_ids=None`` meaning every mapped driver (the sync services already
+    fan out with bounded concurrency).
+
+    Unlike the per-driver endpoint this does NOT fail the whole request on a
+    per-driver Stripe error: across a fleet, one retired or unreachable
+    account must not block everyone else's history from being materialized.
+    Errors are returned per driver so nothing is silently dropped, and the
+    response says plainly that a re-run is safe.
+
+    super_admin only — it writes payout history, the same bar as the
+    per-driver button and the dedicated /admin/stripe/* sync routes.
+    """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super_admin")
+
+    try:
+        from ...services import stripe_payout_sync_service as sync_svc
+        from ...services.stripe_connect_ledger_service import sync_connect_ledger
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from services import stripe_payout_sync_service as sync_svc  # type: ignore
+        from services.stripe_connect_ledger_service import sync_connect_ledger  # type: ignore
+        from settings_loader import get_app_settings  # type: ignore
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured — set stripe_secret_key in Settings.",
+        )
+
+    batch = f"admin-refresh-all-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    plan = await sync_svc.build_plan(stripe_secret, batch, driver_ids=body.driver_ids)
+
+    transfers_inserted = 0
+    transfers_skipped = 0
+    plan_errors = [{"row_ref": e.row_ref, "field": e.field, "message": e.message} for e in plan.errors]
+
+    # commit_plan refuses a plan carrying errors — that all-or-nothing rule is
+    # right for the per-driver button but would let one unreachable account
+    # block the entire fleet here. Commit the drivers that listed cleanly and
+    # report the rest, rather than writing nothing and calling it a success.
+    clean_rows = [r for r in plan.payouts_to_insert if r["driver_id"] not in {e.row_ref for e in plan.errors}]
+    if clean_rows:
+        committable = sync_svc.StripePayoutSyncPlan(batch=batch)
+        committable.payouts_to_insert = clean_rows
+        try:
+            commit_result = await asyncio.to_thread(sync_svc.commit_plan, committable)
+            transfers_inserted = commit_result.get("inserted", 0)
+            transfers_skipped = commit_result.get("skipped_existing", 0)
+        except Exception:
+            logger.error("[STRIPE-REFRESH-ALL] commit failed for batch %s", batch, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to write synced transfers to the database. Nothing partial was reported — re-run.",
+            )
+
+    try:
+        ledger_result = await sync_connect_ledger(stripe_secret, driver_ids=body.driver_ids)
+    except Exception:
+        logger.error("[STRIPE-REFRESH-ALL] connect-ledger sync failed for batch %s", batch, exc_info=True)
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh_all",
+            "drivers",
+            "*",
+            {"status": "ledger_sync_failed", "transfers_inserted": transfers_inserted, "batch": batch},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger sync failed. "
+                "Re-run — it is safe to repeat."
+            ),
+        )
+
+    await log_admin_action(
+        admin,
+        "stripe_payout_refresh_all",
+        "drivers",
+        "*",
+        {
+            "batch": batch,
+            "drivers_scanned": plan.stats.get("drivers_scanned"),
+            "transfers_inserted": transfers_inserted,
+            "transfers_skipped": transfers_skipped,
+            "sum_planned": plan.stats.get("sum_planned"),
+            "payouts_upserted": ledger_result.payouts_upserted,
+            "ledger_upserted": ledger_result.ledger_upserted,
+            "driver_errors": len(plan_errors),
+        },
+    )
+
+    return {
+        # False when any driver could not be read, so the dashboard cannot
+        # toast an unqualified success over a partial sync.
+        "synced": not plan_errors and not ledger_result.errors,
+        "message": (
+            f"Synced {transfers_inserted} new transfer(s) across "
+            f"{plan.stats.get('drivers_scanned', 0)} driver(s); {transfers_skipped} already tracked. "
+            f"{ledger_result.payouts_upserted} bank payout(s), {ledger_result.ledger_upserted} ledger entries."
+            + (
+                f" {len(plan_errors)} driver(s) could not be read — re-run, it is safe to repeat."
+                if plan_errors
+                else ""
+            )
+        ),
+        "drivers_scanned": plan.stats.get("drivers_scanned", 0),
+        "transfers_inserted": transfers_inserted,
+        "transfers_skipped": transfers_skipped,
+        "bank_payouts_synced": ledger_result.payouts_upserted,
+        "ledger_entries_synced": ledger_result.ledger_upserted,
+        "plan_warnings": [{"row_ref": w.row_ref, "field": w.field, "message": w.message} for w in plan.warnings],
+        "plan_errors": plan_errors,
+        "ledger_errors": [{"row_ref": e.row_ref, "field": e.field, "message": e.message} for e in ledger_result.errors],
+    }
+
+
+class RefreshAllKycRequest(BaseModel):
+    """Scope for the bulk KYC refresh. Empty body = every driver with a
+    Stripe account. `retire_unreachable` is opt-in because retiring detaches
+    payout destinations in bulk — the single-driver button stays the
+    deliberate way to do that one account at a time."""
+
+    model_config = {"extra": "forbid"}
+
+    driver_ids: Optional[List[str]] = None
+    retire_unreachable: bool = False
+
+
+@router.post("/drivers/refresh-stripe-kyc")
+async def admin_refresh_all_driver_kyc(body: RefreshAllKycRequest, admin: dict = Depends(get_admin_user)):
+    """One-click KYC refresh across the fleet ("is there any single button").
+
+    Pulls live Stripe Connect state for every driver that has an account and
+    mirrors it onto their row — the same per-driver sync the slideout button
+    runs, fanned out with bounded concurrency. Returns a per-status breakdown
+    so the operator sees exactly what happened instead of a blind 200:
+
+        {"total": 42, "ok": 38, "no_stripe_account": 0,
+         "account_not_on_key": 3, "stripe_error": 1, "drivers": {...}}
+
+    `account_not_on_key` counts drivers whose account the current key cannot
+    see (the test→live signature). With the default retire_unreachable=false
+    they are only REPORTED — nothing is detached — so this endpoint is safe to
+    click first and read; re-run with retire_unreachable=true to also repair.
+    """
+    import asyncio as _asyncio
+
+    if (admin or {}).get("role") != "super_admin":
+        # Fleet-wide Stripe reads (and optionally fleet-wide retires) are a
+        # bigger hammer than the per-driver button; keep it super_admin.
+        raise HTTPException(status_code=403, detail="Bulk KYC refresh requires super_admin")
+
+    try:
+        from ..services.stripe_kyc_sync import refresh_driver_kyc
+    except ImportError:
+        from services.stripe_kyc_sync import refresh_driver_kyc  # type: ignore
+
+    if body.driver_ids:
+        drivers = [d for did in body.driver_ids if (d := await db_supabase.get_driver_by_id(did))]
+    else:
+        # $notnull, NOT {"$ne": None} — $ne compiles to SQL `<> NULL`, which
+        # never matches anything (see repositories/_base.py's $notnull note).
+        drivers = await db_supabase.get_rows("drivers", {"stripe_account_id": {"$notnull": True}}, limit=2000)
+
+    counts: Dict[str, int] = {}
+    per_driver: Dict[str, str] = {}
+    sem = _asyncio.Semaphore(8)  # stay well under Stripe's rate limit
+
+    async def one(driver: dict) -> None:
+        async with sem:
+            try:
+                res = await refresh_driver_kyc(driver, retire_if_unreachable=body.retire_unreachable)
+                status = res.get("status", "unknown")
+            except Exception:
+                logger.error("bulk kyc refresh failed for driver %s", driver.get("id"), exc_info=True)
+                status = "stripe_error"
+        per_driver[driver["id"]] = status
+
+    results = await _asyncio.gather(*(one(d) for d in drivers), return_exceptions=True)
+    for driver, outcome in zip(drivers, results, strict=True):
+        if isinstance(outcome, BaseException):  # belt-and-braces; one() already catches
+            per_driver[driver["id"]] = "stripe_error"
+    for status in per_driver.values():
+        counts[status] = counts.get(status, 0) + 1
+
+    await log_admin_action(
+        admin,
+        "stripe_kyc_refresh_bulk",
+        "drivers",
+        f"count:{len(drivers)}",
+        {"counts": counts, "retire_unreachable": body.retire_unreachable},
+    )
+    return {
+        "total": len(drivers),
+        **counts,
+        "drivers": per_driver,
+        "note": (
+            "account_not_on_key drivers were only reported, not detached"
+            if not body.retire_unreachable
+            else "account_not_on_key drivers were retired and must re-onboard payouts"
+        ),
+    }
 
 
 @router.post("/drivers/{driver_id}/reveal-sin")
-async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admin_user)):
-    """One-shot retrieval of the driver SIN from Stripe for tax filing.
+@admin_sin_reveal_limit
+async def admin_reveal_driver_sin(request: Request, driver_id: str, admin: dict = Depends(get_admin_user)):
+    """One-shot retrieval of a driver's SIN for T4A filing.
 
-    The SIN is held by Stripe Connect Express (never persisted on our
-    side). This endpoint:
-      1. Calls Stripe Account.retrieve with expand=["individual.id_number"]
-         — Stripe surfaces the SIN to the platform owner once per call
-      2. Writes an audit_log row capturing admin, driver, timestamp,
-         IP/user-agent (caller supplies)
-      3. Returns the plaintext SIN to the caller exactly once
-      4. NEVER stores the SIN in our database
+    **This is the only place in the codebase that decrypts `drivers.sin`.**
+    Everywhere else — the driver's own slip, the driver CSV, the admin driver
+    panel, the filer-handoff export — shows the last 4 and nothing more. Keep
+    it that way: the value of encrypting at rest is proportional to how few
+    paths can undo it.
 
-    Restricted to super_admin to keep the reveal surface narrow — every
-    other admin role sees only the last 4 from the cache columns.
-    Each successful reveal generates an audit_log row that ops + the
-    privacy officer can review.
+    It used to ask Stripe, which cannot work — `individual.id_number` is
+    write-only on Connect, so the call was refused every time and no T4A could
+    be filed. Migration 289 gave Spinr its own Vault-encrypted copy and this
+    now reads that.
+
+    The guarantees, in order:
+      1. super_admin only — every other role sees `sin_last4`.
+      2. An audit_log row is written BEFORE the decrypt, so an attempt that
+         fails still leaves a record of the intent.
+      3. The plaintext is returned exactly once, in this response.
+      4. It is never written back to our database, logged, or cached.
     """
-    # Hard-gated to super_admin only. Regular admins (role="admin") see
-    # only the last-4 from the cache columns — that's enough to confirm
-    # SIN is on file at Stripe but doesn't expose the regulated value.
-    # Every successful reveal already writes an audit_log row, but the
-    # additional role check is defence-in-depth: even if an admin token
-    # is somehow leaked, the reveal path stays closed.
+    # Hard-gated to super_admin. Defence in depth alongside the audit row: even
+    # with a leaked admin token, the reveal path stays closed.
     if (admin.get("role") or "").lower() != "super_admin":
         raise HTTPException(status_code=403, detail="reveal_sin requires super_admin role")
 
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
-    if not driver.get("stripe_account_id"):
-        raise HTTPException(status_code=400, detail="Driver has no Stripe Connect account")
-    if not driver.get("stripe_id_number_provided"):
-        raise HTTPException(status_code=400, detail="No SIN on file at Stripe yet")
+    # Gated on OUR record, not `stripe_id_number_provided`. That flag means
+    # Stripe holds a number Stripe will never return, so treating it as
+    # "revealable" is what made this endpoint look functional when it wasn't.
+    if not driver.get("sin"):
+        raise HTTPException(
+            status_code=400,
+            detail="No SIN on file. The driver supplies it in the app under Payouts; it cannot be recovered from Stripe.",
+        )
 
-    try:
-        from ..services.stripe_kyc_sync import reveal_sin_from_stripe
-    except ImportError:
-        from services.stripe_kyc_sync import reveal_sin_from_stripe  # type: ignore
-
-    # Audit log BEFORE the reveal, so a Stripe failure still leaves a
-    # trail of the intent. metadata never carries the SIN itself.
+    # Audit BEFORE the decrypt, so a failure still leaves a trail of the
+    # intent. Metadata carries the last 4 only — never the number.
     audit_id = await log_admin_action(
         admin,
         "driver_sin_reveal",
         "drivers",
         driver_id,
         {
-            "stripe_account_id_last6": driver["stripe_account_id"][-6:],
-            "sin_last4": driver.get("stripe_id_number_last4"),
+            "sin_last4": driver.get("sin_last4"),
+            "sin_collected_at": driver.get("sin_collected_at"),
         },
     )
 
-    sin = await reveal_sin_from_stripe(driver)
-    if not sin:
+    token = str(driver["sin"])
+    plain = await _vault_decrypt(token, "sin_admin_reveal")
+    # _vault_decrypt returns the token unchanged when it cannot decrypt — it
+    # degrades rather than raising, so an undetected failure would hand the
+    # caller a UUID and call it a SIN.
+    if not plain or plain == token:
         raise HTTPException(
             status_code=502,
-            detail="Could not retrieve SIN from Stripe. Try again or check Stripe Dashboard.",
+            detail="Could not decrypt the stored SIN. The Vault key or RPC is unavailable — do not re-key; escalate.",
+        )
+    plain = plain.strip()
+    if not (len(plain) == 9 and plain.isdigit()):
+        # Never echo the value, even here: this lands in logs and Sentry.
+        logger.error(
+            "[SIN-REVEAL] decrypted value is not a canonical 9-digit SIN",
+            extra={"driver_id": driver_id, "audit_log_id": audit_id},
+        )
+        raise HTTPException(status_code=502, detail="Stored SIN is malformed; escalate rather than re-collecting.")
+
+    return {
+        "sin": plain,
+        "sin_last4": plain[-4:],
+        "audit_log_id": audit_id,
+        "warning": "Shown once and not stored by the browser. Every reveal is audit-logged.",
+    }
+
+
+class AdminUpdateSinRequest(BaseModel):
+    sin: str
+    # A change to a filed tax identifier without a recorded reason is
+    # indistinguishable from tampering in an audit. Mandatory, and stored in
+    # the audit row — never the number itself.
+    reason: str = Field(..., min_length=5, max_length=500)
+
+
+@router.post("/drivers/{driver_id}/update-sin")
+@admin_sin_update_limit
+async def admin_update_driver_sin(
+    request: Request, driver_id: str, body: AdminUpdateSinRequest, admin: dict = Depends(get_admin_user)
+):
+    """Admin-approved SIN correction — the only way to change a SIN once set.
+
+    Drivers enter their SIN exactly once; `PUT /drivers/me` rejects any
+    second write (403). When the number on file is wrong — a typo caught at
+    T4A time, or a support ticket with the CRA document in hand — a
+    super_admin corrects it here. The same validation, encryption, and
+    never-in-a-response rules as the driver path apply, plus:
+
+      1. super_admin only, same posture as reveal-sin.
+      2. A mandatory `reason`, stored in the audit row.
+      3. Audit BEFORE the write — metadata carries old/new last-4 only.
+      4. Best-effort re-push to Stripe (Account.modify) so Stripe's copy
+         doesn't keep the wrong number; the outcome is reported in the
+         response, never silently dropped.
+    """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="update_sin requires super_admin role")
+
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    try:
+        from ...utils.sin import sin_last4, validate_sin
+    except ImportError:  # pragma: no cover - dual-import pattern
+        from utils.sin import sin_last4, validate_sin  # type: ignore
+
+    try:
+        validated = validate_sin(body.sin)
+    except ValueError as exc:
+        # validate_sin messages never echo the digits, so this is safe to
+        # return (and to let FastAPI log).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Audit BEFORE the write, same as reveal: a failed attempt still leaves a
+    # record of the intent. Last-4 only on both sides of the change.
+    audit_id = await log_admin_action(
+        admin,
+        "driver_sin_update",
+        "drivers",
+        driver_id,
+        {
+            "old_sin_last4": driver.get("sin_last4"),
+            "new_sin_last4": sin_last4(validated),
+            "had_sin_on_file": bool(driver.get("sin")),
+            "reason": body.reason,
+        },
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    updates = {
+        "sin": validated,
+        "sin_last4": sin_last4(validated),
+        "sin_collected_at": now,
+        "updated_at": now,
+    }
+    # _encrypt_driver_pii is fail-closed: Vault down -> 503, never plaintext.
+    result = await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(updates))
+    if result is None:
+        # 0 rows matched: the driver row vanished between the read above and
+        # this write (deleted, or id reassigned). Returning success here would
+        # leave an audit row claiming a correction that never landed — and
+        # push the new SIN to Stripe against a stale account. Fail loudly;
+        # the audit row correctly records the *attempt*.
+        logger.error(
+            "[SIN-UPDATE] driver row gone mid-update; SIN not changed",
+            extra={"driver_id": driver_id, "audit_log_id": audit_id},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Driver record changed or was removed mid-update — the SIN was NOT changed. Reload and retry.",
         )
 
-    # Surface ONLY in the immediate response. Frontend is responsible for
-    # showing it for a short window and never sending it back to any other
-    # service.
+    # Push the correction to Stripe so its copy doesn't keep the wrong
+    # number. Unlike the onboarding prefill this must FORCE the write —
+    # id_number_provided is True precisely because the old (wrong) value is
+    # there — so it calls Account.modify directly rather than reusing
+    # prefill_sin_to_stripe. Best-effort: our record is already corrected
+    # (that is what the T4A reads); a Stripe failure is reported to the
+    # operator, not hidden and not fatal.
+    stripe_push = "skipped_no_account"
+    account_id = driver.get("stripe_account_id")
+    if account_id:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings()
+        stripe_secret = settings.get("stripe_secret_key", "")
+        if not stripe_secret:
+            stripe_push = "skipped_stripe_not_configured"
+        else:
+            import asyncio
+
+            import stripe
+
+            try:
+                await asyncio.to_thread(
+                    stripe.Account.modify,
+                    account_id,
+                    individual={"id_number": validated},
+                    api_key=stripe_secret,
+                )
+                stripe_push = "updated"
+            except Exception:
+                # Loud but not fatal; the exc carries Stripe's error, never
+                # the SIN (we never put it in a message).
+                logger.error(
+                    "[SIN-UPDATE] could not push corrected SIN to Stripe",
+                    exc_info=True,
+                    extra={"driver_id": driver_id, "stripe_account_id": account_id, "audit_log_id": audit_id},
+                )
+                stripe_push = "failed"
+
     return {
-        "sin": sin,
-        "sin_last4": sin[-4:],
+        "success": True,
+        "sin_last4": sin_last4(validated),
+        "stripe_push": stripe_push,
         "audit_log_id": audit_id,
-        "warning": "This value is not stored. Audit log records every reveal.",
+        "message": (
+            "SIN updated and re-encrypted."
+            + {
+                "updated": " Stripe's copy was updated too.",
+                "failed": " WARNING: Stripe still holds the old number — retry from the Payouts tab.",
+                "skipped_stripe_not_configured": " Stripe was not updated (no key configured).",
+                "skipped_no_account": " No Stripe account on file, nothing to push.",
+            }[stripe_push]
+        ),
     }
 
 
@@ -2857,3 +3780,63 @@ async def admin_driver_daily_activity(
     report["date"] = d.isoformat()
     report["tz"] = "America/Regina"
     return report
+
+
+# ── Welcome Letter PDF generation ──────────────────────────────────
+
+
+class DecalGenerateRequest(BaseModel):
+    driver_ids: List[str] = Field(..., min_length=1, max_length=200)
+
+
+@router.post("/drivers/decals/generate-pdf")
+async def generate_decal_pdf_endpoint(
+    body: DecalGenerateRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    from fastapi.responses import Response as FastAPIResponse
+
+    try:
+        from ...utils.decal_pdf import generate_decal_pdf
+    except ImportError:
+        from utils.decal_pdf import generate_decal_pdf  # type: ignore[no-redef]
+
+    drivers = []
+    for driver_id in body.driver_ids:
+        row = await db_supabase.get_driver_by_id(driver_id)
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+        drivers.append(row)
+
+    now = datetime.now(timezone.utc).isoformat()
+    for driver in drivers:
+        updates: Dict[str, Any] = {}
+        if not driver.get("decal_generated_at"):
+            updates["decal_generated_at"] = now
+        if not driver.get("decal_number"):
+            seq = str(uuid.uuid4().int % 100000).zfill(5)
+            updates["decal_number"] = f"SPR-{datetime.now(timezone.utc).year}-{seq}"
+        if updates:
+            await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
+            driver.update(updates)
+
+    pdf_bytes = generate_decal_pdf(drivers)
+
+    await log_admin_action(
+        admin,
+        "welcome_letter_generated",
+        "drivers",
+        ",".join(body.driver_ids),
+        {"driver_count": len(drivers)},
+    )
+
+    filename = (
+        f"welcome_letter_{drivers[0].get('decal_number', 'unknown')}.pdf"
+        if len(drivers) == 1
+        else f"welcome_letters_{len(drivers)}_drivers.pdf"
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

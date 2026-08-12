@@ -14,6 +14,7 @@ tool execution are patched). Pins:
   names + usage
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -183,6 +184,24 @@ class TestHappyPaths:
         assert assistant_call.args[1] == "assistant"
         assert "[PHONE]" in assistant_call.args[2]
         assert "306-555-1234" not in assistant_call.args[2]
+
+    @pytest.mark.asyncio
+    async def test_assistant_text_has_tool_leakage_filtered_before_persistence(self):
+        # AI13 regression: a prompt rule alone doesn't stop the model from
+        # printing a tool name; the persisted/replayed copy must have it
+        # filtered, same convention as the AI2 PII scrub above.
+        adapter = FakeAdapter(
+            [[_text("Let me run "), _text("find_place to check that address for you."), _end()]]
+        )
+        frames, mocks = await _run(adapter)
+        # the client still sees the raw text streamed this turn — only the
+        # persisted copy changes.
+        tokens = "".join(p["text"] for n, p in frames if n == "token")
+        assert "find_place" in tokens
+        assistant_call = mocks["append"].await_args_list[1]
+        assert assistant_call.args[1] == "assistant"
+        assert "[internal]" in assistant_call.args[2]
+        assert "find_place" not in assistant_call.args[2]
 
 
 # Rule 6c in the system prompt mentions the block by name, so the test
@@ -505,3 +524,133 @@ class TestFaqCacheScoping:
         with patch.object(orch, "response_cache", rc):
             await _run(adapter, settings=self.CACHE_SETTINGS, tool_result=tr)
         rc.store_cached.assert_awaited_once()
+
+
+class _BlockingAdapter:
+    """Like FakeAdapter, but stalls mid-turn until `gate` is set, and flags
+    `started` right before stalling so a test can deterministically wait for
+    the in-flight turn to have progressed past lock acquisition."""
+
+    provider = "fake"
+    model = "fake-model"
+
+    def __init__(self, gate: asyncio.Event, started: asyncio.Event):
+        self.gate = gate
+        self.started = started
+
+    async def stream_turn(self, *, system, messages, tools):
+        yield _text("partial")
+        self.started.set()
+        await self.gate.wait()
+        yield _end()
+
+
+class TestConversationLock:
+    """AI10: two turns on the same conversation_id must not run concurrently
+    -- each turn's LLM call is built from its own load_history() snapshot at
+    turn start, so an overlapping second turn wouldn't see the first's
+    messages yet, and their append_message writes could interleave."""
+
+    @pytest.mark.anyio
+    async def test_second_concurrent_turn_on_same_conversation_is_rejected(self):
+        gate = asyncio.Event()
+        started = asyncio.Event()
+        adapter = _BlockingAdapter(gate, started)
+        patches, mocks = _patches(adapter)
+
+        async def _collect(msg):
+            frames = []
+            async for frame in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message=msg):
+                frames.append(frame)
+            return frames
+
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+        ):
+            first_task = asyncio.create_task(_collect("first"))
+            await started.wait()  # first turn has acquired the lock and is mid-stream
+
+            second_frames = await _collect("second")
+
+            gate.set()
+            first_frames = await first_task
+
+        assert [n for n, _ in second_frames] == ["error"]
+        assert second_frames[0][1]["code"] == "conversation_busy"
+        assert [n for n, _ in first_frames][-1] == "done"
+
+    @pytest.mark.anyio
+    async def test_sequential_turns_on_same_conversation_both_succeed(self):
+        """The lock must be released after a turn completes -- a second,
+        non-overlapping turn on the same conversation_id must not be
+        permanently blocked by a stale lock."""
+        adapter1 = FakeAdapter([[_text("first reply"), _end()]])
+        frames1, _ = await _run(adapter1)
+        assert [n for n, _ in frames1][-1] == "done"
+
+        adapter2 = FakeAdapter([[_text("second reply"), _end()]])
+        frames2, _ = await _run(adapter2)
+        assert [n for n, _ in frames2][-1] == "done"
+
+    @pytest.mark.anyio
+    async def test_conversation_lock_error_fails_open(self):
+        """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+        instead of silently falling back per-replica. The conversation lock
+        must fail OPEN with a loud log (mirrors _over_daily_cap's own
+        documented policy) -- blocking every AI conversation on a Redis
+        blip is worse than occasionally racing two concurrent turns on the
+        same conversation (the AI10 bug this lock guards against, a
+        data-quality edge case, not a safety one)."""
+        adapter = FakeAdapter([[_text("hi"), _end()]])
+        patches, mocks = _patches(adapter)
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patch.object(orch, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down"))),
+            patch.object(orch, "redis_delete", AsyncMock()),
+        ):
+            frames = []
+            async for frame in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message="hi"):
+                frames.append(frame)
+        names = [n for n, _ in frames]
+        assert "conversation_busy" not in [p.get("code") for n, p in frames if n == "error"]
+        assert names[-1] == "done"
+
+    @pytest.mark.anyio
+    async def test_new_conversation_skips_the_lock(self):
+        """conversation_id=None (brand-new conversation) has no shared id for
+        another request to race against -- must not even attempt a lock."""
+        adapter = FakeAdapter([[_text("hi"), _end()]])
+        patches, mocks = _patches(adapter, conv={**CONV, "id": "new-conv"})
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patch.object(orch, "redis_set_nx", AsyncMock()) as set_nx,
+        ):
+            frames = []
+            async for frame in orch.run_chat_turn(user=USER, conversation_id=None, user_message="hi"):
+                frames.append(frame)
+        set_nx.assert_not_awaited()
+        assert [n for n, _ in frames][-1] == "done"

@@ -281,6 +281,7 @@ def _render_tabular_report(
     pdf_landscape: bool = False,
     pdf_col_widths: list[float] | None = None,
     grouped_xlsx: list[tuple[dict, list[dict]]] | None = None,
+    serial_numbers: bool = True,
 ) -> Response:
     """Shared branded-report rendering for any (fieldnames, rows) tabular
     report — used by most Compliance report endpoints so format handling
@@ -302,7 +303,28 @@ def _render_tabular_report(
     with Excel's native collapsible row grouping (report_branding.
     write_branded_grouped_table) instead of the flat write_branded_table.
     PDF/CSV/Word ignore this entirely and always render `rows` flat — none
-    of those formats has a collapse mechanism."""
+    of those formats has a collapse mechanism.
+
+    serial_numbers: prepends a "S No" column, defaulting on for every
+    report (a plain data dump with no row numbers reads as unfinished —
+    user feedback on the first design pass). For a grouped (trip/phase)
+    report, only the parent "All phases" row gets a number — its child
+    phase rows leave the cell blank — in the xlsx grouped view, since
+    numbering every phase row would look broken once a trip is expanded;
+    the flat CSV/PDF/DOCX fallback for the same report numbers every row
+    sequentially instead, since those formats have no parent/child
+    distinction to preserve."""
+    if serial_numbers:
+        fieldnames = ["s_no", *fieldnames]
+        rows = [{"s_no": i, **row} for i, row in enumerate(rows, start=1)]
+        if grouped_xlsx is not None:
+            grouped_xlsx = [
+                ({"s_no": i, **parent}, [{"s_no": "", **child} for child in children])
+                for i, (parent, children) in enumerate(grouped_xlsx, start=1)
+            ]
+        if pdf_col_widths is not None:
+            pdf_col_widths = [0.6, *pdf_col_widths]
+
     if format == "csv":
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames)
@@ -448,22 +470,37 @@ _PERIOD_LABELS = {
 }
 
 
-async def _driver_roster_rows(status: Optional[str]) -> tuple[list[dict], bool]:
+async def _driver_roster_rows(status: Optional[str], include_deleted: bool = False) -> tuple[list[dict], bool]:
     """Pull every onboarded driver's license/status info. Deliberately
     covers every driver status, not just active — Knight Archer's original
     ask was for "driver onboarded, driver license, with all status", i.e.
     the full roster regardless of where a driver currently sits in the
     pipeline (pending/needs_review/active/suspended/banned); the optional
     `status` filter narrows to just "active" for a consumer that only
-    wants that slice."""
+    wants that slice.
+
+    Drivers who deleted their account are excluded by default. Account
+    deletion cannot change `drivers.status` — there is no 'deleted' value in
+    the status set — so a driver who left kept status='active' and went on
+    appearing on the roster this report sends to an insurer/regulator as a
+    currently-onboarded driver. This roster answers "who is on the road now";
+    telling the regulator someone has stopped driving is the SGI D00032/D00033
+    'remove' form's job, not a silent omission from a status column.
+
+    `include_deleted=True` restores the old behavior for an operator auditing
+    historical roster membership, and tags each row so the two are never
+    confused on the page.
+    """
     filters: dict = {}
     if status:
         filters["status"] = status
+    if not include_deleted:
+        filters["deleted_at"] = None  # compiles to PostgREST `is.null`
 
     drivers = await db_supabase.get_rows(
         "drivers",
         filters,
-        columns="id,name,first_name,last_name,license_number,license_class,status,created_at",
+        columns="id,name,first_name,last_name,license_number,license_class,status,created_at,deleted_at",
         order="created_at",
         desc=True,
         limit=_ROW_LIMIT,
@@ -482,7 +519,10 @@ async def _driver_roster_rows(status: Optional[str]) -> tuple[list[dict], bool]:
             "driver_name": d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"],
             "license_number": d.get("license_number") or "",
             "license_class": d.get("license_class") or "",
-            "status": d.get("status") or "",
+            # A soft-deleted row still carries its pre-deletion status (usually
+            # 'active'), which would read as a working driver. Only reachable
+            # when include_deleted=True.
+            "status": "deleted" if d.get("deleted_at") else (d.get("status") or ""),
             "onboarded_at": report_branding.format_report_timestamp(d.get("created_at")),
         }
         for d in drivers
@@ -495,6 +535,10 @@ async def _driver_roster_rows(status: Optional[str]) -> tuple[list[dict], bool]:
 async def get_driver_roster(
     request: Request,
     status: Optional[str] = Query(None, description="Exact match on drivers.status; omit to include every status"),
+    include_deleted: bool = Query(
+        False,
+        description="Include drivers who deleted their account (excluded by default; they are not on the road)",
+    ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     admin: dict = Depends(get_admin_user),
 ):
@@ -503,9 +547,13 @@ async def get_driver_roster(
     to one status). Original use case: keeping Knight Archer Insurance (the
     broker) current on active drivers, monthly cadence — content is
     generic enough for other roster-review consumers too. Spinr-branded,
-    not a fixed regulator form (see module docstring)."""
+    not a fixed regulator form (see module docstring).
+
+    Drivers who deleted their account are excluded unless `include_deleted`
+    is set — see `_driver_roster_rows` for why a status filter alone does not
+    catch them."""
     try:
-        rows, truncated = await _driver_roster_rows(status)
+        rows, truncated = await _driver_roster_rows(status, include_deleted=include_deleted)
     except Exception as e:
         logger.error(f"Failed to build driver roster export: {e}", exc_info=True)
         _capture_export_failure("driver_roster", e)
@@ -517,6 +565,9 @@ async def get_driver_roster(
 
     fieldnames = ["driver_name", "license_number", "license_class", "status", "onboarded_at"]
     subtitle = f"Status: {status}" if status else "All statuses"
+    # State the exclusion on the page itself — an insurer reading this needs to
+    # know whether departed drivers are in or out of the count they are seeing.
+    subtitle += " — including deleted accounts" if include_deleted else " — excluding deleted accounts"
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow with the status filter"
 
@@ -608,7 +659,7 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
             await db_supabase.get_rows(
                 "drivers",
                 {"id": {"$in": batch}},
-                columns="id,name,first_name,last_name,stripe_account_id,stripe_id_number_provided",
+                columns="id,name,first_name,last_name,stripe_account_id,sin,sin_collected_at",
                 limit=len(batch),
             )
         )
@@ -636,7 +687,18 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
                 "country": stripe_info.get("country") or "",
                 "total_trips": trips_by_driver.get(driver_id, 0),
                 "total_earnings": f"{earnings_by_driver[driver_id]:.2f}",
-                "sin_on_file_at_stripe": "Yes" if d.get("stripe_id_number_provided") else "No",
+                # OUR record, not Stripe's. `stripe_id_number_provided` used to
+                # fill this column, which was worse than useless for filing: it
+                # said Stripe held a number Stripe will never hand back
+                # (individual.id_number is write-only on Connect), so a "Yes"
+                # read as "ready to file" when nothing was.
+                "sin_on_file": "Yes" if d.get("sin") else "NO - CANNOT FILE",
+                # Deliberately NOT sin_last4. This export leaves Spinr for a
+                # third-party filer, and no part of the number is needed to
+                # answer the only question it asks: can this driver be filed?
+                # The full SIN comes later, per driver, through the audited
+                # reveal. Internal admin views may show last 4; this may not.
+                "sin_collected_at": d.get("sin_collected_at") or "",
             }
         )
     return rows, truncated, len(qualifying_ids)
@@ -688,11 +750,14 @@ async def get_t4a_filer_handoff(
         "country",
         "total_trips",
         "total_earnings",
-        "sin_on_file_at_stripe",
+        "sin_on_file",
+        "sin_collected_at",
     ]
     subtitle = (
         f"Tax year {year} — {qualifying_count} driver(s) at or above the ${_T4A_THRESHOLD} CRA threshold. "
-        "SIN not included — retrieve per-driver via the audited reveal-sin admin endpoint when filing."
+        "Full SINs are deliberately absent — retrieve them per driver via the audited, "
+        "super_admin-only reveal-sin endpoint at filing time, so every disclosure is logged. "
+        "Any row marked 'NO - CANNOT FILE' has no SIN on record and must be chased before the deadline."
     )
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the query"
@@ -771,15 +836,30 @@ async def _insurance_billing_detail_rows(
 
     driver_ids = sorted({d["driver_id"] for d in distances if d.get("driver_id")})
     driver_names: dict[str, str] = {}
+    driver_licenses: dict[str, str] = {}
+    driver_vehicles: dict[str, str] = {}
     for i in range(0, len(driver_ids), 200):
         batch = driver_ids[i : i + 200]
         driver_rows = await db_supabase.get_rows(
-            "drivers", {"id": {"$in": batch}}, columns="id,name,first_name,last_name", limit=len(batch)
+            "drivers",
+            {"id": {"$in": batch}},
+            columns="id,name,first_name,last_name,license_number,license_plate,vehicle_make,vehicle_model,vehicle_color",
+            limit=len(batch),
         )
+        # license_number is vault-encrypted at rest — same decrypt helper
+        # Driver Roster/T4A use, since either insurer may need it to match
+        # this report's driver against their own on-file roster.
+        driver_rows = [await _decrypt_driver_pii(d) for d in driver_rows]
         for d in driver_rows:
             driver_names[d["id"]] = (
                 d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
             )
+            driver_licenses[d["id"]] = d.get("license_number") or ""
+            vehicle_desc = " ".join(
+                part for part in (d.get("vehicle_color"), d.get("vehicle_make"), d.get("vehicle_model")) if part
+            )
+            plate = d.get("license_plate") or ""
+            driver_vehicles[d["id"]] = f"{vehicle_desc} — {plate}".strip(" —") if vehicle_desc or plate else ""
 
     grand_total_km = Decimal("0")
     rows: list[dict] = []
@@ -793,6 +873,8 @@ async def _insurance_billing_detail_rows(
         grand_total_km += km
         amount = (km * rate_per_km).quantize(Decimal("0.01"))
         driver_name = driver_names.get(d.get("driver_id"), d.get("driver_id") or "")
+        driver_license = driver_licenses.get(d.get("driver_id"), "")
+        driver_vehicle = driver_vehicles.get(d.get("driver_id"), "")
         trip_date = report_branding.format_report_timestamp(d.get("started_at"))
         row = {
             # driver_id/ride_id intentionally excluded from the rendered
@@ -800,6 +882,8 @@ async def _insurance_billing_detail_rows(
             # period-audit report) — driver_name + trip_date already
             # identify the row.
             "driver_name": driver_name,
+            "license_number": driver_license,
+            "vehicle": driver_vehicle,
             "trip_date": trip_date,
             "phase": _PERIOD_LABELS.get(d.get("period"), str(d.get("period"))),
             "phase_km": f"{km:.3f}",
@@ -810,7 +894,14 @@ async def _insurance_billing_detail_rows(
 
         trip_key = d.get("ride_id") or f"_no_ride_id_{len(trip_order)}"
         if trip_key not in trips:
-            trips[trip_key] = {"driver_name": driver_name, "trip_date": trip_date, "km": Decimal("0"), "children": []}
+            trips[trip_key] = {
+                "driver_name": driver_name,
+                "license_number": driver_license,
+                "vehicle": driver_vehicle,
+                "trip_date": trip_date,
+                "km": Decimal("0"),
+                "children": [],
+            }
             trip_order.append(trip_key)
         trip = trips[trip_key]
         trip["km"] += km
@@ -822,6 +913,8 @@ async def _insurance_billing_detail_rows(
         trip_amount = (trip["km"] * rate_per_km).quantize(Decimal("0.01"))
         parent = {
             "driver_name": trip["driver_name"],
+            "license_number": trip["license_number"],
+            "vehicle": trip["vehicle"],
             "trip_date": trip["trip_date"],
             "phase": "All phases",
             "phase_km": f"{trip['km']:.3f}",
@@ -866,7 +959,16 @@ async def _render_insurance_billing_report(
     if gate_response is not None:
         return gate_response
 
-    fieldnames = ["driver_name", "trip_date", "phase", "phase_km", "rate_per_km", "amount"]
+    fieldnames = [
+        "driver_name",
+        "license_number",
+        "vehicle",
+        "trip_date",
+        "phase",
+        "phase_km",
+        "rate_per_km",
+        "amount",
+    ]
     total_amount = (grand_total_km * rate_per_km).quantize(Decimal("0.01"))
     subtitle = [
         f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — {insurer_label} — Periods 2+3 only",
@@ -886,7 +988,7 @@ async def _render_insurance_billing_report(
         subtitle=subtitle,
         format=format,
         pdf_landscape=True,
-        pdf_col_widths=[2.2, 1.8, 2.6, 1.4, 1.4, 1.4],
+        pdf_col_widths=[2.0, 1.6, 2.0, 1.8, 2.6, 1.4, 1.4, 1.4],
         grouped_xlsx=groups,
     )
     return resp
@@ -1003,10 +1105,21 @@ async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple
     for i in range(0, len(rider_ids), 200):
         batch = rider_ids[i : i + 200]
         rider_rows = await db_supabase.get_rows(
-            "users", {"id": {"$in": batch}}, columns="id,first_name,last_name", limit=len(batch)
+            "users", {"id": {"$in": batch}}, columns="id,first_name,last_name,phone", limit=len(batch)
         )
         for u in rider_rows:
-            rider_names[u["id"]] = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or u["id"]
+            # dict.get(key, default)'s default only fires when the key is
+            # missing — first_name/last_name are real columns that are
+            # frequently NULL (not missing), so a plain `.get(k, "")` here
+            # produced the literal string "None None" instead of falling
+            # back. Use `or ""` so a None value is treated the same as a
+            # missing one, then fall back further to a PIPEDA-safe
+            # phone-last-4 (never the full number) before the raw id.
+            name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip()
+            if not name:
+                phone = u.get("phone") or ""
+                name = f"Rider •{phone[-4:]}" if len(phone) >= 4 else u["id"]
+            rider_names[u["id"]] = name
 
     area_ids = sorted({r["service_area_id"] for r in airport_rides if r.get("service_area_id")})
     area_names: dict[str, str] = {}

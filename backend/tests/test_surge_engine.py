@@ -447,6 +447,74 @@ async def test_recalculate_service_areas_db_failure_returns_empty():
 
 
 @pytest.mark.asyncio
+async def test_recalculate_kill_switch_off_skips_entirely():
+    """E5: surge_engine_enabled=False must skip the recompute cycle before
+    the service_areas read even fires -- no DB read, no multiplier write."""
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=[{"id": "a1"}])
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        patch(
+            "utils.surge_engine.get_app_settings",
+            AsyncMock(return_value={"surge_engine_enabled": False}),
+        ),
+    ):
+        from utils.surge_engine import recalculate_all_surges
+
+        results = await recalculate_all_surges()
+
+    assert results == []
+    db_mock.get_rows.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recalculate_kill_switch_defaults_on_when_unset():
+    """A settings dict with no surge_engine_enabled key (legacy row) must
+    still proceed -- the flag defaults to enabled, not disabled."""
+    areas = [{"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+    db_mock.insert_one = AsyncMock(return_value={"id": "row1"})
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        patch("utils.surge_engine.get_app_settings", AsyncMock(return_value={})),
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=0)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=10)),
+    ):
+        from utils.surge_engine import recalculate_all_surges
+
+        await recalculate_all_surges()
+
+    db_mock.get_rows.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recalculate_kill_switch_fails_open_on_settings_error():
+    """A settings-lookup error must never itself act as a kill switch --
+    the tick proceeds as if the flag were enabled."""
+    areas = [{"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+    db_mock.insert_one = AsyncMock(return_value={"id": "row1"})
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        patch("utils.surge_engine.get_app_settings", AsyncMock(side_effect=RuntimeError("settings down"))),
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=0)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=10)),
+    ):
+        from utils.surge_engine import recalculate_all_surges
+
+        await recalculate_all_surges()
+
+    db_mock.get_rows.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_recalculate_inserts_surge_pricing_history_row():
     """Every processed area gets a surge_pricing history row inserted."""
     areas = [{"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}]

@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 try:
@@ -19,11 +20,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 try:
     from ... import db_supabase
+    from ...core.config import settings as _core_settings
     from ...dependencies import get_admin_user
     from ...settings_loader import get_app_settings
     from ...supabase_client import supabase  # noqa: F401
 except ImportError:
     import db_supabase
+    from core.config import settings as _core_settings
     from dependencies import get_admin_user
     from settings_loader import get_app_settings
     from supabase_client import supabase  # noqa: F401
@@ -106,6 +109,19 @@ _CREDENTIAL_FIELDS = frozenset(
 # utils/safety_paging.py's PIPEDA note) to a destination they control, plus
 # backend SSRF via the outbound POST. Changing either half of the pair
 # requires the same privilege as revealing the routing key.
+#
+# Corporate + admin portal review, High #4: the live payment/messaging
+# credentials were the one class of field where WRITE was still only gated
+# by the "settings" module — reveal (read) already required super_admin, but
+# a settings-module admin could silently repoint stripe_secret_key,
+# stripe_webhook_secret, stripe_connect_webhook_secret, or
+# twilio_auth_token to an attacker-controlled Stripe/Twilio account, or swap
+# aws_ses_secret_access_key/resend_api_key to redirect outbound email —
+# with no way for anyone to even read back the current value and notice it
+# changed (that also requires super_admin). This is the same "destination
+# credential a lower-privileged admin could silently repoint" shape as the
+# LMS/Meta/SOS-paging fields above; changing any of these six now requires
+# the same privilege as revealing them.
 _SUPER_ADMIN_ONLY_FIELDS = frozenset(
     {
         "lms_api_base_url",
@@ -115,6 +131,12 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
         "meta_capi_access_token",
         "sos_paging_webhook_url",
         "sos_paging_routing_key",
+        "stripe_secret_key",
+        "stripe_webhook_secret",
+        "stripe_connect_webhook_secret",
+        "twilio_auth_token",
+        "aws_ses_secret_access_key",
+        "resend_api_key",
     }
 )
 
@@ -159,6 +181,10 @@ class SettingsUpdateRequest(BaseModel):
     stripe_webhook_secret: Optional[str] = None
     # Connected-accounts endpoint signing secret (account.updated, payout.*).
     stripe_connect_webhook_secret: Optional[str] = None
+    # Kill switch for re-provisioning Stripe identities stranded by a
+    # test→live key rotation (see AppSettings for the full rationale).
+    # Settable here so it can be turned off without a redeploy.
+    stripe_reprovision_stale_ids: Optional[bool] = None
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_from_number: Optional[str] = None
@@ -182,10 +208,24 @@ class SettingsUpdateRequest(BaseModel):
     # Company info shown on rider receipts + driver T4A slips + the
     # admin dashboard footer. Edited via the Settings page → Company tab.
     company_name: Optional[str] = None
+    # Product/brand name for email BODY copy, independent of the legal-entity
+    # company_name above. See schemas.AppSettings.company_app_name and
+    # ACTION_ITEMS.md N17.
+    company_app_name: Optional[str] = None
     company_address: Optional[str] = None
     company_phone: Optional[str] = None
     company_email: Optional[str] = None
     company_website: Optional[str] = None
+    # Logo for transactional-email headers. Empty = the bundled Spinr asset
+    # served at /api/v1/branding/spinr-logo.png, which is the normal setting.
+    # Validated at render time by utils/company_details._safe_logo_url, which
+    # falls back to the bundled asset for anything that is not an absolute
+    # http(s) URL. Does NOT affect report PDF/Excel/Word headers.
+    company_logo_url: Optional[str] = None
+    # Renders the ride receipt and Spinr Pass invoice with the shared branded
+    # shell and the company details above. Presentation only — never the fare
+    # rows, GST/PST line items or totals. See migration 288.
+    branded_receipt_enabled: Optional[bool] = None
     # Locks the rider's quoted fare at booking time so the receipt can't
     # drift if Maps changes the route mid-trip. Toggle on the Settings page.
     fare_lock_enabled: Optional[bool] = None
@@ -234,7 +274,7 @@ class SettingsUpdateRequest(BaseModel):
     # utils/stripe_reconcile._maybe_heal_stuck_processing. Money-moving — enable
     # only after staging validation.
     stripe_auto_heal_processing: Optional[bool] = None
-    # Notification throttling (quiet hours + daily cap) — see migration 275.
+    # Notification throttling (quiet hours + daily cap) — see migration 304.
     # Defaults OFF; ship dark, verify in staging, then flip on. Global for
     # every rider/driver — no per-user override yet.
     notification_throttling_enabled: Optional[bool] = None
@@ -294,6 +334,59 @@ class SettingsUpdateRequest(BaseModel):
     # the shared shell/typography/radius restyle. Not a credential, no
     # special masking/super-admin gate needed.
     admin_theme_v2_enabled: Optional[bool] = None
+    # Driver SOS discreet-hold-shield rollout gate (ACTION_ITEMS.md B16) —
+    # dark-launched, driver-app only. Not a credential, no masking/
+    # super-admin gate needed.
+    driver_discreet_sos_enabled: Optional[bool] = None
+    # Kill switches (ACTION_ITEMS.md E5). scheduled_dispatch_enabled already
+    # existed in AppSettings/gated the loop (2026-08-02) but was never added
+    # here — there was previously no way to set it via the admin API at all,
+    # only a direct DB update. All four are plain booleans, no credential
+    # masking/super-admin gate needed.
+    scheduled_dispatch_enabled: Optional[bool] = None
+    surge_engine_enabled: Optional[bool] = None
+    promo_redemption_enabled: Optional[bool] = None
+    corporate_billing_enabled: Optional[bool] = None
+    # Dual-approval gate for large PII-bearing exports (migration 268,
+    # routes/admin/compliance.py, routes/admin/data_transfer_export.py) —
+    # requires a second super_admin to approve before a large driver/rider
+    # export or a >1,000-row compliance report actually runs. The column
+    # and the enforcement code already existed; this was the only field
+    # missing from this model, so there was no way to turn the gate on
+    # without a direct SQL update. Corporate + admin portal review, High #5.
+    # Not a credential — plain boolean, no masking/super-admin gate needed
+    # to CHANGE it (the gate itself is already super_admin-only to approve,
+    # per export_approvals.py's router-level require_super_admin).
+    dual_approval_exports_enabled: Optional[bool] = None
+    # Daily cumulative cap on one admin's corporate wallet /adjust calls
+    # (routes/corporate_wallet.py::manual_adjust). That endpoint accepts up
+    # to $100,000 per call with no limit on repeated calls — a compromised
+    # or malicious admin session could move an unbounded amount in minutes.
+    # Corporate + admin portal review, "$100k/minute" finding. Plain numeric
+    # cap, no masking/super-admin gate needed to change it (same posture as
+    # dual_approval_exports_enabled above — a process control, not a secret).
+    corporate_wallet_admin_adjust_daily_cap: Optional[Decimal] = Field(default=None, gt=0, decimal_places=2)
+    # Ships dark (default false / unset): gates POST
+    # /admin/corporate-accounts/{id}/subscription (routes/corporate_subscriptions.py),
+    # which starts a real recurring Stripe charge against a company. Flip on
+    # only after verifying the flow in staging with a real Stripe test-mode
+    # account — corporate + admin portal review round 2, flat SaaS
+    # subscription billing. Cancelling an existing subscription is never
+    # gated behind this flag.
+    corporate_subscription_billing_enabled: Optional[bool] = None
+    # Kill switch (default true) + threshold for the KYB re-verification
+    # staleness reminder loop (utils/kyb_reverification.py) — corporate +
+    # admin portal review round 2. Visibility only: flips no company's
+    # status, just a log line + metric an admin can act on manually.
+    corporate_kyb_reverification_enabled: Optional[bool] = None
+    corporate_kyb_reverify_after_months: Optional[int] = Field(default=None, ge=1, le=60)
+    # Forced-upgrade gate (ACTION_ITEMS.md E3) — core/middleware.py's
+    # ForcedUpgradeMiddleware rejects any request whose X-App-Version header
+    # is below this with 426. Empty string (default) = enforcement off for
+    # that app. Semver only — free text here would silently disable the
+    # comparison for every client.
+    min_rider_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
+    min_driver_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
 
     @field_validator("lms_api_base_url")
     @classmethod
@@ -322,6 +415,28 @@ class SettingsUpdateRequest(BaseModel):
         if v.startswith(("http://localhost", "http://127.0.0.1")):
             return v
         raise ValueError("sos_paging_webhook_url must use https:// (http:// is allowed only for localhost)")
+
+    @field_validator("stripe_secret_key")
+    @classmethod
+    def _stripe_secret_key_matches_environment(cls, v: Optional[str]) -> Optional[str]:
+        """Corporate + admin portal review, High #4: a key with the wrong
+        live/test prefix for the current environment is either a copy-paste
+        mistake (accidentally shipping a test key to production, silently
+        breaking real payment capture) or an attacker downgrading production
+        to an attacker-controlled test key — reject outright rather than
+        silently accepting whatever string is submitted. A masked preview
+        value round-tripped from GET (see the mask-roundtrip guard in
+        admin_update_settings) already starts with the real key's own
+        prefix, so it passes this check unchanged."""
+        if not v:
+            return v
+        if _core_settings.ENV.lower() == "production":
+            if not v.startswith("sk_live_"):
+                raise ValueError("stripe_secret_key must start with sk_live_ in production")
+        else:
+            if not v.startswith("sk_test_"):
+                raise ValueError("stripe_secret_key must start with sk_test_ outside production")
+        return v
 
 
 @router.get("/settings")
@@ -379,7 +494,13 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
     )
 
     # Only persist fields the caller actually set (None = leave unchanged).
-    update_fields = settings.model_dump(exclude_none=True)
+    # Decimal -> float only at this DB write boundary (supabase-py can't
+    # serialize Decimal) -- same pattern as corporate_wallet.py's
+    # WalletConfigPatch. Values are 2-dp clean by Pydantic validation, so
+    # the conversion is exact.
+    update_fields = {
+        k: float(v) if isinstance(v, Decimal) else v for k, v in settings.model_dump(exclude_none=True).items()
+    }
 
     # Mask-roundtrip guard. _mask_credentials returns `v[:8] + "*****"` on
     # GET so the admin UI never sees the plaintext secret. The frontend

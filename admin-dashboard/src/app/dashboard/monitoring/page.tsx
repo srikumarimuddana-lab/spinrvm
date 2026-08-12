@@ -194,7 +194,16 @@ export default function MonitoringPage() {
         ridesMapRef.current.delete(event.ride_id);
         mapHandlesRef.current?.removeRideMarkers(event.ride_id);
         refreshCounts();
-        pushAlert({ icon: "ride_cancelled", message: "Ride cancelled", ride_id: event.ride_id });
+        // A scheduled ride's cancellation is unconditionally terminal (no
+        // auto-requeue, same as any ride) — but the rider planned around
+        // this pickup time and has less slack to just re-hail, so flag it
+        // distinctly in the feed rather than let it read the same as a
+        // routine on-demand cancellation.
+        pushAlert({
+          icon: "ride_cancelled",
+          message: event.is_scheduled ? "⚠ Scheduled ride cancelled — rider needs follow-up" : "Ride cancelled",
+          ride_id: event.ride_id,
+        });
         if (selected?.type === "ride" && selected.id === event.ride_id) {
           setSelected(null);
           setSelectedRide(null);

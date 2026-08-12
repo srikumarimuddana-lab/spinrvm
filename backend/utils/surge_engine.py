@@ -27,6 +27,7 @@ except ImportError:
 try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
+    from settings_loader import get_app_settings
     from utils.driver_presence import present_driver_ids
     from utils.metrics import inc as _metric_inc
     from utils.redis_client import redis_set_nx
@@ -109,7 +110,7 @@ async def _count_demand_in_area(area_id: str) -> int:
         }
         return sum(1 for r in rides if r.get("status") in active_statuses)
     except Exception as e:
-        logger.error(f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Surge: failed to count demand for area {area_id}: {e}")
         return 0
 
 
@@ -154,8 +155,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
             return await _count_supply_spatial(poly)
         except Exception as exc:
             logger.warning(
-                f"Surge: spatial supply count failed for area {area.get('id')}, falling back to Python scan: {exc}",
-                exc_info=False,
+                f"Surge: spatial supply count failed for area {area.get('id')}, falling back to Python scan: {exc}"
             )
 
     try:
@@ -195,10 +195,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
                     count += 1
         return count
     except Exception as e:
-        logger.error(
-            f"Surge: failed to count supply for area {area.get('id')}: {e}",
-            exc_info=True,
-        )
+        logger.opt(exception=True).error(f"Surge: failed to count supply for area {area.get('id')}: {e}")
         return 0
 
 
@@ -237,6 +234,18 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     (Supabase egress).
     """
     results = []
+
+    # Kill switch (ACTION_ITEMS.md E5): pauses the automatic recompute cycle
+    # for an incident. Independent of the per-area surge_source/surge_enabled
+    # controls below, which stay in effect either way. Fail-open on a
+    # settings-read error -- a transient lookup hiccup must never itself act
+    # as a kill switch.
+    try:
+        settings = await get_app_settings()
+        if not settings.get("surge_engine_enabled", True):
+            return results
+    except Exception as settings_err:
+        logger.warning(f"Surge: app_settings lookup failed ({settings_err}), proceeding as enabled")
 
     try:
         areas = await db.get_rows("service_areas", {"is_active": True, "surge_enabled": True}, limit=100)
@@ -304,7 +313,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
 
             results.append(metrics)
         except Exception as e:
-            logger.error(f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"Surge: failed to update area {area.get('id')}: {e}")
 
     return results
 

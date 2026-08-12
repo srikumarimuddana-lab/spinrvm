@@ -194,7 +194,7 @@ export default function VenuesPage() {
           {loading ? (
             <div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>
           ) : error ? (
-            <div className="py-12 text-center text-sm text-red-600">{error}</div>
+            <div className="py-12 text-center text-sm text-destructive">{error}</div>
           ) : venues.length === 0 ? (
             <div className="py-12 text-center text-sm text-muted-foreground">No venues yet. Add one to curate its pickup points.</div>
           ) : (

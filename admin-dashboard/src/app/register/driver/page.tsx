@@ -374,7 +374,7 @@ export default function DriverRegistrationPage() {
                         <Check className="h-10 w-10 text-green-600" />
                     </div>
                     <h2 className="text-2xl font-bold">Application Submitted!</h2>
-                    <p className="text-gray-500 max-w-md mx-auto">
+                    <p className="text-muted-foreground max-w-md mx-auto">
                         Your application is now under review. We will notify you once your documents have been verified.
                     </p>
                     <Button onClick={() => router.push("/login")}>Go to Login</Button>
@@ -384,7 +384,7 @@ export default function DriverRegistrationPage() {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="min-h-screen bg-muted flex items-center justify-center p-4">
             <Card className="w-full max-w-2xl">
                 <CardHeader>
                     <CardTitle className="text-xl">Become a Driver</CardTitle>

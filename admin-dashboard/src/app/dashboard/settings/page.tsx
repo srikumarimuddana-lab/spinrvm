@@ -832,6 +832,80 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Kill Switches (ACTION_ITEMS.md E5) */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Kill Switches</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Pause a risky automatic subsystem in seconds, no deploy required. All default on —
+                                flipping one off stops new work only; it never cancels or reverses anything already
+                                in flight.
+                            </p>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>Scheduled dispatch</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses the loop that promotes scheduled rides to searching at their dispatch
+                                        time. Already-scheduled rides stay parked, not lost — they dispatch normally
+                                        once this is back on.
+                                    </p>
+                                </div>
+                                <Switch
+                                    aria-label="Scheduled dispatch enabled"
+                                    checked={!!settings.scheduled_dispatch_enabled}
+                                    onCheckedChange={(v) => update("scheduled_dispatch_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>Surge engine</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses the automatic surge recompute cycle. Multipliers freeze at their last
+                                        value — this does not reset current pricing. To reset a specific area's
+                                        price immediately, use its per-area manual override instead.
+                                    </p>
+                                </div>
+                                <Switch
+                                    aria-label="Surge engine enabled"
+                                    checked={!!settings.surge_engine_enabled}
+                                    onCheckedChange={(v) => update("surge_engine_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>Promo redemption</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses promo code application (rider self-service and admin apply-on-behalf-of-
+                                        rider). Existing promo codes are unaffected — this only blocks new redemptions.
+                                    </p>
+                                </div>
+                                <Switch
+                                    aria-label="Promo redemption enabled"
+                                    checked={!!settings.promo_redemption_enabled}
+                                    onCheckedChange={(v) => update("promo_redemption_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>Corporate billing</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses automatic corporate money movement: ride settlement, auto-top-up,
+                                        low-balance nudges, allowance reset, and KYB re-verification reminders. Does
+                                        not block manual admin wallet corrections/refunds.
+                                    </p>
+                                </div>
+                                <Switch
+                                    aria-label="Corporate billing enabled"
+                                    checked={!!settings.corporate_billing_enabled}
+                                    onCheckedChange={(v) => update("corporate_billing_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Heat Map Configuration */}
                     <Card className="border-border/50">
                         <CardHeader>
@@ -987,6 +1061,27 @@ export default function SettingsPage() {
                                     onChange={(e) => update("company_name", e.target.value)}
                                     placeholder="Spinr"
                                 />
+                                <p className="text-xs text-muted-foreground">
+                                    Legal entity name — used in the email footer, mailing
+                                    address, and logo alt text. For the product name that
+                                    appears inline in email copy (&quot;Open the ... app&quot;),
+                                    use App Name below instead.
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>App Name</Label>
+                                <Input
+                                    value={settings.company_app_name || ""}
+                                    onChange={(e) => update("company_app_name", e.target.value)}
+                                    placeholder="Spinr"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Product/brand name used in email body copy (&quot;Open the
+                                    {" "}{settings.company_app_name || "Spinr"} driver app&quot;,
+                                    &quot;your {settings.company_app_name || "Spinr"} wallet&quot;).
+                                    Independent of Company Name above — rebrand the product
+                                    without touching the legal entity name.
+                                </p>
                             </div>
                             <div className="space-y-2">
                                 <Label>Phone</Label>
@@ -1021,6 +1116,43 @@ export default function SettingsPage() {
                                     placeholder="123 Example St, Saskatoon, SK S7K 1A1"
                                     className="min-h-[70px]"
                                 />
+                                <p className="text-xs text-muted-foreground">
+                                    Name and address above also appear in the footer of every
+                                    transactional email (welcome, receipts, account notices).
+                                </p>
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
+                                <Label>Email logo URL</Label>
+                                <Input
+                                    value={settings.company_logo_url || ""}
+                                    onChange={(e) => update("company_logo_url", e.target.value)}
+                                    placeholder="Leave blank to use the built-in Spinr logo"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Shown in the header of transactional emails. Leave blank to use
+                                    the built-in Spinr logo — that is the normal setting, not a
+                                    placeholder. Must be a full https:// link to a publicly
+                                    reachable image; anything else falls back to the built-in logo.
+                                    Does not affect report PDFs.
+                                </p>
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
+                                <div className="flex items-center justify-between gap-4">
+                                    <Label htmlFor="branded_receipt_enabled">
+                                        Branded receipts &amp; invoices
+                                    </Label>
+                                    <Switch
+                                        id="branded_receipt_enabled"
+                                        checked={settings.branded_receipt_enabled !== false}
+                                        onCheckedChange={(v) => update("branded_receipt_enabled", v)}
+                                    />
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Renders ride receipts and Spinr Pass invoices with the logo and
+                                    company details above. Turn off to go back to the older plain
+                                    layout if something looks wrong in a real inbox — fare lines,
+                                    GST/PST and totals are unaffected either way.
+                                </p>
                             </div>
                         </CardContent>
                     </Card>
@@ -1231,6 +1363,76 @@ export default function SettingsPage() {
                     {!mfaAvailable && (
                         <p className="text-sm text-muted-foreground">Two-factor authentication is not available on this deployment.</p>
                     )}
+                    {/* Corporate + admin portal review, High #5: the dual-approval
+                        gate for large PII-bearing exports (driver/rider bulk
+                        exports, compliance reports over 1,000 rows) already exists
+                        in the backend but had no settings field or UI to turn it
+                        on — it could previously only be flipped via a direct SQL
+                        update. Off by default (same posture as the appearance
+                        beta flag above); requires a second super_admin's approval
+                        on each gated export once enabled, per the existing
+                        Export Approvals queue. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Data Export Approvals</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="dual_approval_exports_enabled">
+                                        Require a second super admin to approve large PII exports
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        When on, large driver/rider bulk exports and compliance reports over
+                                        1,000 rows need a second super admin&apos;s sign-off before they run —
+                                        see the Export Approvals queue under Records. Off by default.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="dual_approval_exports_enabled"
+                                    checked={settings.dual_approval_exports_enabled ?? false}
+                                    onCheckedChange={(v) => update("dual_approval_exports_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+                    {/* Corporate + admin portal review, "$100k/minute" finding: the
+                        wallet /adjust endpoint accepted up to $100,000 per call with
+                        no limit on repeated calls by the same admin. A daily
+                        cumulative cap now blocks the total, but had no settings
+                        field — the backend fell back to a $50,000 default with no
+                        way to see or change it short of a direct SQL update. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Corporate Wallet Safeguards</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="corporate_wallet_admin_adjust_daily_cap">
+                                    Daily admin wallet-adjustment cap (CAD, per admin)
+                                </Label>
+                                <p className="text-xs text-muted-foreground">
+                                    Caps how much any one admin can move via manual corporate wallet
+                                    adjustments in a single UTC day, across all companies combined.
+                                    Defaults to $50,000 if left blank.
+                                </p>
+                                <Input
+                                    id="corporate_wallet_admin_adjust_daily_cap"
+                                    type="number" min={1} step={100}
+                                    value={settings.corporate_wallet_admin_adjust_daily_cap ?? ""}
+                                    placeholder="50000"
+                                    onChange={(e) =>
+                                        update(
+                                            "corporate_wallet_admin_adjust_daily_cap",
+                                            e.target.value === "" ? null : parseFloat(e.target.value),
+                                        )
+                                    }
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
                 </TabsContent>
                 </Tabs>
             )}

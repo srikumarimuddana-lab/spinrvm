@@ -183,6 +183,75 @@ class TestSlowapi429ResponseShape:
         assert response.headers["RateLimit-Remaining"] == "0"
         assert response.headers["RateLimit-Reset"] == "3600"
 
+    @pytest.mark.asyncio
+    async def test_429_emits_rate_limit_violation_metric(self):
+        """Corporate + admin portal review, SOC gap #46: every 429 through
+        this handler must increment spinr_rate_limit_violation_total,
+        labeled by path, so violations are visible on the infra
+        monitoring page without grepping logs.
+
+        The label is the route TEMPLATE, not the live URL (changed 2026-08-08).
+        `request.url.path` embeds ride UUIDs, and metrics.py has no eviction, so
+        raw paths grew the counter map without bound — fastest during exactly
+        the burst the metric exists to diagnose. See
+        `utils.rate_limiter._metric_path_label` and
+        tests/test_rate_limit_metric_cardinality.py.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from fastapi import Request
+        from limits import parse as parse_limit
+
+        from utils.rate_limiter import rate_limit_exceeded_handler
+
+        rl_item = parse_limit("5 per 1 minute")
+        fake_exc = RateLimitExceeded(MagicMock(limit=rl_item))
+
+        request = MagicMock(spec=Request)
+        request.url.path = "/api/v1/rides"
+        request.method = "POST"
+        request.client = MagicMock(host="127.0.0.1")
+        request.headers = {}
+        # Starlette puts the matched route on the scope; its .path is the template.
+        request.scope = {"route": SimpleNamespace(path="/api/v1/rides")}
+
+        with patch("utils.rate_limiter._metric_inc") as mock_inc:
+            response = await rate_limit_exceeded_handler(request, fake_exc)
+
+        assert response.status_code == 429
+        mock_inc.assert_called_once_with("spinr_rate_limit_violation_total", {"path": "/api/v1/rides"})
+
+    @pytest.mark.anyio
+    async def test_429_metric_label_collapses_ride_ids(self):
+        """The cardinality guarantee, asserted through the real handler rather
+        than the helper: two different rides on the same route must produce the
+        SAME label, or the counter map grows one row per ride forever."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from fastapi import Request
+        from limits import parse as parse_limit
+
+        from utils.rate_limiter import rate_limit_exceeded_handler
+
+        rl_item = parse_limit("5 per 1 minute")
+        labels = []
+
+        for ride_id in ("8f14e45f-ceea-467a", "b3d9c1a2-77fe-4c10"):
+            request = MagicMock(spec=Request)
+            request.url.path = f"/api/v1/rides/{ride_id}/cancel"
+            request.method = "POST"
+            request.client = MagicMock(host="127.0.0.1")
+            request.headers = {}
+            request.scope = {"route": SimpleNamespace(path="/api/v1/rides/{ride_id}/cancel")}
+
+            with patch("utils.rate_limiter._metric_inc") as mock_inc:
+                await rate_limit_exceeded_handler(request, RateLimitExceeded(MagicMock(limit=rl_item)))
+            labels.append(mock_inc.call_args[0][1]["path"])
+
+        assert labels[0] == labels[1] == "/api/v1/rides/{ride_id}/cancel"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OTP lockout 429 — separate handler, must mirror the same shape

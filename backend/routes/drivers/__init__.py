@@ -252,8 +252,7 @@ from .tax_exports import (  # noqa: F401
     _EXPORT_REDACT_RIDE,
     _build_and_email_data_export,
     _build_export_email_html,
-    _build_export_link_email_html,
-    _build_export_link_email_text,
+    _build_export_link_email,
     _build_export_readme,
     _build_export_zip,
     _csv_cell,
@@ -270,6 +269,7 @@ from .tax_exports import (  # noqa: F401
     export_driver_data,
     export_earnings,
     get_t4a_summary,
+    get_t4a_years,
 )
 
 api_router = APIRouter(tags=["Drivers"])
@@ -352,8 +352,7 @@ __all__ = [
     "_attempt_transfer_reversal",
     "_build_and_email_data_export",
     "_build_export_email_html",
-    "_build_export_link_email_html",
-    "_build_export_link_email_text",
+    "_build_export_link_email",
     "_build_export_readme",
     "_build_export_zip",
     "_cancel_stripe_subscription",
@@ -454,6 +453,7 @@ __all__ = [
     "get_subscription_payment_history",
     "get_subscription_plans",
     "get_t4a_summary",
+    "get_t4a_years",
     "hashlib",
     "hmac",
     "idempotent_endpoint",

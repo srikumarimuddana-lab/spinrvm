@@ -135,7 +135,13 @@ class TestCancellationAuditLogLevel:
         for i, line in enumerate(lines):
             if "audit_log write failed" in line:
                 context = "\n".join(lines[max(0, i - 3) : i + 1])
-                assert "logger.error" in context, "audit_log failure must use logger.error, not logger.warning"
+                # Match the level, not one exact spelling of the receiver:
+                # `logger.opt(exception=True).error(...)` is still ERROR level
+                # (loguru ignores the stdlib `exc_info` kwarg, so opt() is how
+                # a traceback is actually attached). What this guard is for is
+                # ERROR-vs-WARNING, per CLAUDE.md's rule on DB errors.
+                assert ".error(" in context, "audit_log failure must log at ERROR, not WARNING"
+                assert "logger.warning" not in context
                 return
         pytest.fail("audit_log failure log line not found")
 

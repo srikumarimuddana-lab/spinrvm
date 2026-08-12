@@ -21,6 +21,7 @@ try:
     from ...features import send_push_notification
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
+    from ...utils.driver_status_notifications import notify_driver_status_change, status_message
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
@@ -34,6 +35,10 @@ except ImportError:
     from features import send_push_notification  # noqa: F401
     from supabase_client import supabase  # noqa: F401
     from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.driver_status_notifications import (  # noqa: F401
+        notify_driver_status_change,
+        status_message,
+    )
 
 from .drivers import _log_driver_activity
 
@@ -128,6 +133,7 @@ async def admin_get_document_requirements():
 @router.post("/documents/requirements")
 async def admin_create_document_requirement(
     requirement: DocumentRequirementCreateRequest,
+    admin: dict = Depends(get_admin_user),
 ):
     """Create a new document requirement."""
     doc = {
@@ -139,11 +145,23 @@ async def admin_create_document_requirement(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("document_requirements", doc)
-    return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    requirement_id = str(row.get("id") if row and isinstance(row, dict) else "")
+    await log_admin_action(
+        admin,
+        "document_requirement_created",
+        "document_requirements",
+        requirement_id,
+        {"name": requirement.name, "document_type": requirement.document_type},
+    )
+    return {"requirement_id": requirement_id}
 
 
 @router.put("/documents/requirements/{requirement_id}")
-async def admin_update_document_requirement(requirement_id: str, requirement: DocumentRequirementUpdateRequest):
+async def admin_update_document_requirement(
+    requirement_id: str,
+    requirement: DocumentRequirementUpdateRequest,
+    admin: dict = Depends(get_admin_user),
+):
     """Update a document requirement."""
     updates: Dict[str, Any] = {}
     if requirement.name is not None:
@@ -160,13 +178,27 @@ async def admin_update_document_requirement(requirement_id: str, requirement: Do
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("document_requirements", {"id": requirement_id}, updates)
+        await log_admin_action(
+            admin,
+            "document_requirement_updated",
+            "document_requirements",
+            requirement_id,
+            {k: v for k, v in updates.items() if k != "updated_at"},
+        )
     return {"message": "Document requirement updated"}
 
 
 @router.delete("/documents/requirements/{requirement_id}")
-async def admin_delete_document_requirement(requirement_id: str):
+async def admin_delete_document_requirement(requirement_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a document requirement."""
     await db_supabase.delete_one("document_requirements", {"id": requirement_id})
+    await log_admin_action(
+        admin,
+        "document_requirement_deleted",
+        "document_requirements",
+        requirement_id,
+        {},
+    )
     return {"message": "Document requirement deleted"}
 
 
@@ -405,8 +437,24 @@ async def admin_review_driver_document(
                             {"id": driver_id},
                             {"status": "active", "is_verified": True},
                         )
-                except Exception as _exc:
-                    logger.debug(f"Could not reset driver {driver_id} status to active: {_exc}")
+                        # Tell them. This transition was silent: the rejection
+                        # path below notified, the approval path did not, so a
+                        # driver re-activated by an admin learned it only by
+                        # discovering the Go-online toggle worked again.
+                        # Routed through the shared policy so it gets the same
+                        # copy, the deleted_at recipient guard, and now email.
+                        await notify_driver_status_change(drv, status_message("active"), "document_approved")
+                except Exception:
+                    # A DB failure here leaves the driver stranded in
+                    # needs_review, unable to work, with nothing surfacing it —
+                    # error, not debug (CLAUDE.md: never swallow DB errors).
+                    # Still non-fatal: the document approval itself is committed
+                    # and the audit trail below records it regardless.
+                    logger.error(
+                        "Could not reset driver %s status to active after document approval",
+                        driver_id,
+                        exc_info=True,
+                    )
 
     # Log to activity timeline
     doc_type = existing.get("document_type", "Document")
@@ -465,6 +513,7 @@ async def admin_review_driver_document(
                             "document_id": document_id,
                             "document_type": doc_type,
                         },
+                        target_app="driver",
                     )
             except Exception:
                 logger.warning(

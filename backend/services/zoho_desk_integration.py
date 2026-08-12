@@ -307,7 +307,10 @@ async def create_support_ticket(
     first, last = _split_name(name or "Customer")
     msg = (message or "").strip()
     subject = (msg.splitlines()[0][:70] if msg else "") or "Support request"
-    description = msg or "(no message)"
+    # "(no message)" is only accurate when there's truly nothing to show —
+    # a blank rider message with an attached transcript should lead with
+    # the transcript, not a misleading placeholder line.
+    description = msg or ("" if transcript else "(no message)")
     if transcript:
         description += f"\n\n--- Chat transcript ---\n{transcript}"
 

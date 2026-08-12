@@ -5,7 +5,6 @@ This module implements CRUD operations for corporate accounts that can be used
 for business rides and expense management.
 """
 
-import asyncio
 import logging
 from decimal import Decimal
 from typing import List, Optional
@@ -22,7 +21,6 @@ from db_supabase import (  # noqa: E402
     get_corporate_wallet_by_company,
     get_rows,
     insert_corporate_account,
-    update_corporate_stripe_customer_id,
     update_corporate_wallet_config,
 )
 from db_supabase import (  # noqa: E402
@@ -38,6 +36,10 @@ from schemas.corporate import (  # noqa: E402
 from schemas.corporate import (  # noqa: E402
     CorporateAccountResponse as CorporateAccountDetailResponse,
 )
+from services.corporate_stripe_identity import (  # noqa: E402
+    corporate_customer_is_stale,
+    get_or_create_corporate_customer,
+)
 from settings_loader import get_app_settings  # noqa: E402
 from validators import (
     sanitize_string,
@@ -52,6 +54,11 @@ try:
     from ..utils.audit_logger import log_admin_action
 except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore[no-redef]
+
+try:
+    from ..utils.corporate_statement_pdf import generate_corporate_statement_pdf
+except ImportError:
+    from utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore[no-redef]
 
 try:
     from ..services.corporate_membership_service import bootstrap_owner
@@ -131,6 +138,19 @@ class CorporateAccountCreatedResponse(CorporateAccountDetailResponse):
     owner_invite_url: Optional[str] = None
     owner_member_id: Optional[str] = None
     owner_bootstrap_error: bool = False
+
+
+class KYBReviewResponse(CorporateAccountDetailResponse):
+    """kyb-review response = the account + provisioning outcome. Approval is
+    a DB-status -> wallet -> Stripe-customer sequence with no compensating
+    rollback; same partial-success shape as CorporateAccountCreatedResponse's
+    owner_bootstrap_error, so a step failing after the status has already
+    flipped to 'active' is surfaced explicitly instead of raising a 503 that
+    hides the fact the status change already committed. Corporate + admin
+    portal review, gap #40."""
+
+    wallet_provisioning_error: bool = False
+    stripe_customer_creation_error: bool = False
 
 
 class CorporateAccountUpdate(BaseModel):
@@ -230,6 +250,44 @@ async def get_corporate_accounts(
         ) from e
 
 
+@router.get("/kyb-reverification-due")
+async def get_kyb_reverification_due(current_admin: dict = Depends(get_current_admin)):
+    """Companies whose KYB approval predates the configured staleness
+    threshold (corporate + admin portal review round 2, "automated KYB
+    re-verification" — visibility only, never auto-changes status).
+
+    Computes live from kyb_reviewed_at using the exact same threshold
+    resolution the background loop (utils/kyb_reverification.py) uses —
+    shared helper, not a re-derived definition — so this list and what
+    the loop flags can never silently disagree. Registered before the
+    single-segment `/{account_id}` route below so it isn't swallowed by
+    it (same static-before-dynamic ordering as GET "" above).
+    """
+    from db_supabase import list_companies_needing_kyb_reverification
+    from settings_loader import get_app_settings
+    from utils.kyb_reverification import kyb_reverify_cutoff_iso, resolve_kyb_reverify_threshold_months
+
+    settings = await get_app_settings()
+    threshold_months = resolve_kyb_reverify_threshold_months(settings)
+    companies = await list_companies_needing_kyb_reverification(
+        reviewed_before_iso=kyb_reverify_cutoff_iso(threshold_months)
+    )
+    return {
+        "threshold_months": threshold_months,
+        "count": len(companies),
+        "companies": [
+            {
+                "id": c["id"],
+                "name": c.get("name"),
+                "legal_name": c.get("legal_name"),
+                "kyb_reviewed_at": c.get("kyb_reviewed_at"),
+                "kyb_reviewed_by": c.get("kyb_reviewed_by"),
+            }
+            for c in companies
+        ],
+    }
+
+
 _ALLOWED_KYB_CONTENT = {"application/pdf", "image/png", "image/jpeg"}
 
 
@@ -305,7 +363,7 @@ async def kyb_document_confirm(
     return {"success": True, "submitted_at": row.get("kyb_submitted_at")}
 
 
-@router.post("/{company_id}/kyb-review", response_model=CorporateAccountDetailResponse)
+@router.post("/{company_id}/kyb-review", response_model=KYBReviewResponse)
 async def kyb_review(
     company_id: str,
     decision: KYBReviewDecision,
@@ -316,6 +374,16 @@ async def kyb_review(
 
     Approve → status='active'. Reject → status='suspended' so the company
     can re-upload and be re-reviewed from the queue.
+
+    Approval is a DB-status -> wallet -> Stripe-customer sequence with no
+    compensating rollback for the status flip. Corporate + admin portal
+    review, gap #40: this used to raise a 503 from the wallet step, which
+    hid the fact that record_kyb_decision had already committed
+    status='active' — the admin saw a scary error for a company that was,
+    in fact, already approved. Same partial-success shape as
+    create_corporate_account's owner_bootstrap_error: each provisioning
+    step is independently caught, logged loudly (ops follow-up), and
+    surfaced as a boolean on the response instead of raised.
     """
     _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
 
@@ -330,31 +398,38 @@ async def kyb_review(
     if not row:
         raise HTTPException(status_code=404, detail="Corporate account not found")
 
+    wallet_provisioning_error = False
+    stripe_customer_creation_error = False
     if decision.approve:
         try:
             await ensure_corporate_wallet(company_id=normalized_id)
-        except Exception as wallet_err:
-            logger.error(f"[KYB] Wallet creation failed for company {normalized_id}: {wallet_err}")
-            raise HTTPException(
-                status_code=503,
-                detail="KYB approved but wallet provisioning failed — please retry",
-            ) from wallet_err
-        if not row.get("stripe_customer_id"):
+        except Exception:
+            logger.error(
+                "[KYB] Wallet creation failed for company %s — status is already 'active' with no "
+                "wallet; needs manual follow-up (re-run kyb-review or provision the wallet directly).",
+                normalized_id,
+                exc_info=True,
+            )
+            wallet_provisioning_error = True
+        try:
             settings = await get_app_settings()
             stripe_secret = settings.get("stripe_secret_key", "")
-            if stripe_secret:
-                import stripe
-
-                customer = await asyncio.to_thread(
-                    lambda: stripe.Customer.create(
-                        email=row.get("billing_email"),
-                        name=row.get("legal_name") or row.get("name"),
-                        metadata={"corporate_account_id": normalized_id},
-                        api_key=stripe_secret,
-                        idempotency_key=f"cus-create-corp-{normalized_id}",
-                    )
-                )
-                await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
+            # Covers two cases with one call: no customer yet (the original
+            # reason this block existed), and a customer stranded by a test→live
+            # key rotation — approving KYB against an id the running key cannot
+            # see would leave the company un-billable from day one. Admin is
+            # present, so re-provisioning is safe here. A healthy customer costs
+            # nothing: the helper returns it without touching Stripe.
+            if stripe_secret and (not row.get("stripe_customer_id") or corporate_customer_is_stale(row, stripe_secret)):
+                await get_or_create_corporate_customer(row, stripe_secret)
+        except Exception:
+            logger.error(
+                "[KYB] Stripe customer creation failed for company %s — status is already 'active' "
+                "with no Stripe customer; needs manual follow-up before the first billing event.",
+                normalized_id,
+                exc_info=True,
+            )
+            stripe_customer_creation_error = True
 
     # M2.3: notify the company of the decision — best-effort; the portal's
     # verification page (derived state + review note) is the durable signal.
@@ -378,10 +453,17 @@ async def kyb_review(
                     + (f"\n\nReviewer note: {decision.note}" if decision.note else "")
                     + "\n\nSign in to the business portal to view the details and resubmit."
                 )
+            try:
+                from ..utils.email_layout import render_from_text
+            except ImportError:
+                from utils.email_layout import render_from_text  # type: ignore
+
+            _kyb_rendered = await render_from_text(heading=subject, body=text)
             await send_transactional_email(
                 to=notify_to,
                 subject=subject,
-                text=text,
+                text=_kyb_rendered.text,
+                html=_kyb_rendered.html,
                 log_id=str(normalized_id),
                 email_type="corporate_kyb_decision",
             )
@@ -398,6 +480,8 @@ async def kyb_review(
                 "decision": "approved" if decision.approve else "rejected",
                 "reviewer_id": current_admin["id"],
                 "note": decision.note,
+                "wallet_provisioning_error": wallet_provisioning_error,
+                "stripe_customer_creation_error": stripe_customer_creation_error,
             },
         )
     except Exception as _ae:
@@ -406,7 +490,11 @@ async def kyb_review(
             exc_info=True,
         )
 
-    return row
+    return {
+        **row,
+        "wallet_provisioning_error": wallet_provisioning_error,
+        "stripe_customer_creation_error": stripe_customer_creation_error,
+    }
 
 
 @router.get("/{company_id}/kyb/view")
@@ -452,6 +540,57 @@ async def admin_view_kyb_document(
 
     content_type, _ = mimetypes.guess_type(storage_key)
     return Response(content=data, media_type=content_type or "application/octet-stream")
+
+
+@router.get("/{company_id}/billing/statements/{month}/pdf")
+async def admin_download_corporate_statement_pdf(
+    company_id: str,
+    month: str,
+    current_admin: dict = Depends(get_current_admin),
+):
+    """Internal-admin mirror of the company-portal PDF invoice download
+    (routes/corporate_company.py::billing_statement_pdf). Corporate +
+    admin portal review round 2, business decision: downloadable PDF
+    invoice per statement period, "available to company admins in the
+    portal and internal admins." Reuses the exact same aggregation
+    (build_full_month_statement) and renderer (generate_corporate_statement_pdf)
+    so a Spinr admin and the company's own admin see byte-identical
+    documents — no separate admin-side computation to drift from it.
+    """
+    try:
+        from .corporate_company import build_full_month_statement
+    except ImportError:
+        from routes.corporate_company import build_full_month_statement  # type: ignore[no-redef]
+
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    company = await get_corporate_account_by_id(normalized_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Corporate account not found")
+
+    statement = await build_full_month_statement(normalized_id, month)
+    pdf_bytes = generate_corporate_statement_pdf(company, statement)
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="corporate_statement_pdf_download",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={"month": month},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_statement_pdf_download company=%s",
+            normalized_id,
+            exc_info=True,
+        )
+
+    filename = f"spinr-corporate-statement-{normalized_id[:8]}-{month}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("", response_model=CorporateAccountCreatedResponse, status_code=status.HTTP_201_CREATED)
@@ -766,7 +905,11 @@ async def change_company_status(
                     stripe_customer_id=row.get("stripe_customer_id"),
                     actor_user_id=str(current_admin.get("id") or ""),
                 )
-                if winddown_result.get("stripe_error") or winddown_result.get("unrefundable_amount", "0.00") != "0.00":
+                if (
+                    winddown_result.get("stripe_error")
+                    or winddown_result.get("unrefundable_amount", "0.00") != "0.00"
+                    or winddown_result.get("ledger_write_failed")
+                ):
                     logger.error(
                         "Corporate wallet close wind-down incomplete for company %s: %s",
                         normalized_id,

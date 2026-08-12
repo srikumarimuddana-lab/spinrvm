@@ -30,6 +30,9 @@
       "react-native-reanimated/*": [
         "./node_modules/react-native-reanimated/*"
       ],
+      "react-native-svg": [
+        "./node_modules/react-native-svg"
+      ],
       "expo-clipboard": [
         "./node_modules/expo-clipboard"
       ],
@@ -44,6 +47,12 @@
       ],
       "react": [
         "./node_modules/@types/react"
+      ],
+      "react/jsx-runtime": [
+        "./node_modules/@types/react/jsx-runtime"
+      ],
+      "react/jsx-dev-runtime": [
+        "./node_modules/@types/react/jsx-dev-runtime"
       ],
       "react-native-safe-area-context": [
         "./node_modules/react-native-safe-area-context"

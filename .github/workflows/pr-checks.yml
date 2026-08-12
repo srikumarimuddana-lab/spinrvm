@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Apply path-based labels
-        uses: actions/labeler@v7
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7
         with:
           configuration-path: .github/labeler.yml
           sync-labels: true
@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Post size advisory if large
-        uses: actions/github-script@v9
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         with:
           script: |
             const FILE_LIMIT = 15;
@@ -105,7 +105,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Verify template placeholders are filled
-        uses: actions/github-script@v9
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         with:
           script: |
             // Blocking check. Fails (red) if required fields are empty or still
@@ -275,7 +275,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -303,7 +303,7 @@ jobs:
 
       - name: Post advisory + apply label
         if: steps.scan.outputs.has_merges == 'true'
-        uses: actions/github-script@v9
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         env:
           MERGES: ${{ steps.scan.outputs.merges }}
         with:
@@ -365,15 +365,28 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Append Tier 5–7 subsections when diff warrants
-        uses: actions/github-script@v9
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         with:
           script: |
             // Appends per-area subsection templates to the PR body based on
             // which files changed. Each section carries an idempotency
             // marker so this step never double-appends.
-
+            //
+            // #2672: this job used to read pr.body straight off
+            // context.payload.pull_request, which is a snapshot taken when
+            // the triggering webhook fired. When a body edit lands right
+            // before this job runs (e.g. the author fills in Tier 5/7 by
+            // hand), that snapshot can already be stale relative to what's
+            // actually on GitHub by the time this step checks for a marker
+            // — every marker check below then runs against old content and
+            // re-appends a second, blank copy on top of what the author
+            // just filled in. Fetching the PR fresh here closes that race:
+            // this step always sees whatever body is live right now.
             const pr = context.payload.pull_request;
             const { owner, repo } = context.repo;
+            const fresh = (await github.rest.pulls.get({
+              owner, repo, pull_number: pr.number,
+            })).data;
 
             // ---- Detect diff shape --------------------------------------
             const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -399,7 +412,7 @@ jobs:
             const hasSafety = touched(SAFETY_RE);
 
             // ---- Detect type/risk from body ----------------------------
-            const body = pr.body || '';
+            const body = fresh.body || '';
             const typeLine = body.match(/\*\*Type\*\*[^\n]*/i)?.[0] || '';
             const typeMatch = typeLine.match(/:\s*`?([a-z]+)`?/i);
             const type = typeMatch ? typeMatch[1].toLowerCase() : null;
@@ -555,7 +568,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Post/update PR auto-summary
-        uses: actions/github-script@v9
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         with:
           script: |
             // Posts a single comment that summarises:

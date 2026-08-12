@@ -953,6 +953,49 @@ async def _record_subscription_payment(
             )
 
 
+# ── Pre-retrofit invoice shell ──────────────────────────────────────────────
+# Kept verbatim so `branded_receipt_enabled = false` restores exactly what
+# drivers were receiving. Delete once the retrofit has been seen in real
+# inboxes and the flag is retired.
+_LEGACY_INVOICE_HEADER = (
+    '<tr><td style="background:#ee2b2b;padding:28px 32px;">\n'
+    '    <h1 style="color:#fff;margin:0;font-size:28px;font-weight:800;letter-spacing:-0.5px;">Spinr</h1>\n'
+    '    <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:13px;">Subscription Invoice</p>\n'
+    "  </td></tr>"
+)
+_LEGACY_INVOICE_FOOTER = (
+    '<tr><td style="padding:16px 32px 24px;border-top:1px solid #f0f0f0;text-align:center;">\n'
+    '    <p style="color:#bbb;font-size:11px;margin:0;">Spinr Technologies Inc. · Saskatoon, SK, Canada</p>\n'
+    '    <p style="color:#bbb;font-size:11px;margin:4px 0 0;">support@spinr.ca · www.spinr.ca</p>\n'
+    "  </td></tr>"
+)
+
+
+async def _branded_invoice_company():
+    """Resolved company identity, or None to keep the pre-retrofit shell.
+
+    Shares `branded_receipt_enabled` with the ride receipt deliberately: the two
+    are the same retrofit, and an operator turning one off because it renders
+    badly means both.
+
+    Never raises — an invoice with the old-looking shell beats no invoice.
+    """
+    try:
+        from ...settings_loader import get_app_settings
+        from ...utils.company_details import load_company_details
+    except ImportError:  # pragma: no cover - direct module imports in tests
+        from settings_loader import get_app_settings  # type: ignore
+        from utils.company_details import load_company_details  # type: ignore
+    try:
+        settings = await get_app_settings()
+        if not bool(settings.get("branded_receipt_enabled", True)):
+            return None
+        return await load_company_details()
+    except Exception as exc:
+        logger.warning("invoice branding: falling back to the legacy shell: %s", exc)
+        return None
+
+
 async def _send_subscription_invoice_email(
     *,
     driver_id: str,
@@ -1022,16 +1065,35 @@ async def _send_subscription_invoice_email(
             else ""
         )
 
+        # Shell only — the line items, tax rows and total are identical either
+        # way. An invoice is a tax document a driver may file, so its content
+        # must not depend on a presentation switch. See migration 288.
+        try:
+            from ...utils.email_layout import BRAND_RED as _LAYOUT_BRAND_RED
+            from ...utils.email_layout import footer_html as _layout_footer_html
+            from ...utils.email_layout import header_html as _layout_header_html
+        except ImportError:  # pragma: no cover - direct module imports in tests
+            from utils.email_layout import BRAND_RED as _LAYOUT_BRAND_RED  # type: ignore
+            from utils.email_layout import footer_html as _layout_footer_html  # type: ignore
+            from utils.email_layout import header_html as _layout_header_html  # type: ignore
+
+        _inv_company = await _branded_invoice_company()
+        if _inv_company is not None:
+            _inv_header = _layout_header_html(_inv_company, "Subscription Invoice")
+            _inv_footer = _layout_footer_html(_inv_company)
+            _inv_accent = _LAYOUT_BRAND_RED
+        else:
+            _inv_header = _LEGACY_INVOICE_HEADER
+            _inv_footer = _LEGACY_INVOICE_FOOTER
+            _inv_accent = "#ee2b2b"
+
         html = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
 <body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:24px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.08);">
   <!-- Header -->
-  <tr><td style="background:#ee2b2b;padding:28px 32px;">
-    <h1 style="color:#fff;margin:0;font-size:28px;font-weight:800;letter-spacing:-0.5px;">Spinr</h1>
-    <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:13px;">Subscription Invoice</p>
-  </td></tr>
+  {_inv_header}
 
   <!-- Greeting -->
   <tr><td style="padding:28px 32px 0;">
@@ -1044,7 +1106,7 @@ async def _send_subscription_invoice_email(
   <!-- Amount callout -->
   <tr><td style="padding:20px 32px;">
     <div style="background:#fef2f2;border-radius:12px;padding:20px;text-align:center;">
-      <p style="color:#ee2b2b;font-size:40px;font-weight:800;margin:0;">${total:.2f} CAD</p>
+      <p style="color:{_inv_accent};font-size:40px;font-weight:800;margin:0;">${total:.2f} CAD</p>
       <p style="color:#999;font-size:12px;margin:6px 0 0;">{payment_date} · {billing_label}</p>
       <p style="color:#999;font-size:11px;margin:4px 0 0;letter-spacing:0.4px;">Invoice <strong style="color:#1a1a1a">{inv_number}</strong></p>
     </div>
@@ -1074,10 +1136,7 @@ async def _send_subscription_invoice_email(
   </td></tr>
 
   <!-- Footer -->
-  <tr><td style="padding:16px 32px 24px;border-top:1px solid #f0f0f0;text-align:center;">
-    <p style="color:#bbb;font-size:11px;margin:0;">Spinr Technologies Inc. · Saskatoon, SK, Canada</p>
-    <p style="color:#bbb;font-size:11px;margin:4px 0 0;">support@spinr.ca · www.spinr.ca</p>
-  </td></tr>
+  {_inv_footer}
 </table>
 </body></html>"""
 
@@ -1090,6 +1149,10 @@ async def _send_subscription_invoice_email(
                 from utils.subscription_invoice_pdf import generate_subscription_invoice_pdf  # type: ignore
 
             pdf_bytes = generate_subscription_invoice_pdf(
+                # Same identity as the email body; a PDF naming a different
+                # company than the mail it arrived in is worse than either
+                # being stale alone.
+                company=_inv_company,
                 invoice_number=inv_number,
                 payment_date=payment_date,
                 driver_name=driver_name,
@@ -1581,11 +1644,22 @@ async def check_expiring_subscriptions():
         # the expiry check per 6-hour window. Prevents N offline-kick push
         # notifications being sent to the same driver on multi-replica deploys.
         if _redis_set_nx is not None:
-            lock_acquired = await _redis_set_nx(
-                "spinr:subscription:expiry:lock",
-                f"{socket.gethostname()}:{os.getpid()}",
-                6 * 3600 + 300,  # 6h + 5 min grace
-            )
+            try:
+                lock_acquired = await _redis_set_nx(
+                    "spinr:subscription:expiry:lock",
+                    f"{socket.gethostname()}:{os.getpid()}",
+                    6 * 3600 + 300,  # 6h + 5 min grace
+                )
+            except Exception as _lock_err:
+                # redis_set_nx now raises on a real (Redis-configured-but-
+                # unavailable) error instead of silently falling back
+                # per-replica (2026-08-11 P1 fix). This lock only prevents
+                # redundant duplicate notifications, not an unsafe state —
+                # proceed with the tick (every replica may notify once, an
+                # over-notification, not an under-enforcement) rather than
+                # go dark on subscription expiry enforcement for 6h.
+                logger.error("[SUB-EXPIRY] leader lock unavailable (%s), proceeding without it", _lock_err)
+                lock_acquired = True
         else:
             lock_acquired = True  # no Redis in dev → run on all replicas
         if not lock_acquired:

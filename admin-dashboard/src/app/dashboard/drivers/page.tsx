@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshDriverStripePayouts, refreshAllDriverStripeKyc, refreshAllDriverStripePayouts, recomputeStatementTotals, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2 } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
@@ -69,11 +69,13 @@ function matchesRequirement(
 export default function DriversPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
-    // SIN reveal is gated to super_admin only — matches the backend
-    // check in admin_reveal_driver_sin. Plain `admin` users see only
-    // the last-4 from the cache columns.
+    // SIN reveal and the Stripe payout sync are both gated to super_admin
+    // server-side (admin_reveal_driver_sin / admin_refresh_driver_stripe_payouts)
+    // — gate the UI the same way so lower roles never see a button that can
+    // only 403. Plain `admin` users see only the last-4 from cache columns.
     const currentUserRole = useAuthStore((s) => s.user?.role);
-    const canRevealSin = (currentUserRole || "").toLowerCase() === "super_admin";
+    const isSuperAdmin = (currentUserRole || "").toLowerCase() === "super_admin";
+    const canRevealSin = isSuperAdmin;
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -138,6 +140,7 @@ export default function DriversPage() {
     const [payoutLoading, setPayoutLoading] = useState(false);
     const [retryingPayoutId, setRetryingPayoutId] = useState<string | null>(null);
     const [refreshingKyc, setRefreshingKyc] = useState(false);
+    const [refreshingPayouts, setRefreshingPayouts] = useState(false);
     // The revealed SIN is held briefly in memory then cleared. Never
     // logged, never persisted, never written to any other state path.
     const [revealedSin, setRevealedSin] = useState<{ sin: string; expiresAt: number } | null>(null);
@@ -457,16 +460,22 @@ export default function DriversPage() {
             license_plate: selected.license_plate || "",
             vehicle_vin: selected.vehicle_vin || "",
             date_of_birth: dateInputValue(selected.date_of_birth),
+            // Starts blank on purpose: the value on `selected` is the Vault
+            // ciphertext, not the licence number, so it can never be prefilled.
+            // Blank is treated as "leave unchanged" in saveEdits.
+            license_number: "",
             license_class: selected.license_class || "",
             regulatory_authority: selected.regulatory_authority || (selected.sgi_approved != null ? "SGI" : ""),
             regulatory_region: selected.regulatory_region || "",
             regulatory_authority_approved: boolInputValue(selected.regulatory_authority_approved ?? selected.sgi_approved),
             regulatory_authority_approved_at: datetimeLocalValue(selected.regulatory_authority_approved_at || selected.sgi_approved_at),
-            work_authorization_status: selected.work_authorization_status || "",
-            is_permanent_resident: boolInputValue(selected.is_permanent_resident),
-            is_citizen: boolInputValue(selected.is_citizen),
+            // Single source of truth — is_permanent_resident / is_citizen are
+            // derived from this by the backend and are no longer edited here.
+            work_authorization_status: workAuth(selected).status === "unknown" ? "" : workAuth(selected).status,
             decals_sent: boolInputValue(selected.decals_sent),
             decals_sent_at: datetimeLocalValue(selected.decals_sent_at),
+            decal_generated_at: datetimeLocalValue(selected.decal_generated_at),
+            decal_number: selected.decal_number || "",
         });
         setEditing(true);
     };
@@ -474,11 +483,15 @@ export default function DriversPage() {
     const saveEdits = async () => {
         if (!selected) return;
         const changes: Record<string, any> = {};
-        const boolFields = new Set(["regulatory_authority_approved", "is_permanent_resident", "is_citizen", "decals_sent"]);
+        const boolFields = new Set(["regulatory_authority_approved", "decals_sent"]);
         const dateFields = new Set(["date_of_birth"]);
-        const datetimeFields = new Set(["regulatory_authority_approved_at", "decals_sent_at"]);
+        const datetimeFields = new Set(["regulatory_authority_approved_at", "decals_sent_at", "decal_generated_at"]);
+        // Write-only: the driver row holds the Vault ciphertext, so there is no
+        // current value to diff against. Blank means "leave unchanged".
+        const writeOnlyFields = new Set(["license_number"]);
         const normalized: Record<string, any> = {};
         for (const [k, v] of Object.entries(editForm)) {
+            if (writeOnlyFields.has(k)) continue;
             if (boolFields.has(k)) normalized[k] = fromBoolInput(v);
             else if (dateFields.has(k)) normalized[k] = v || null;
             else normalized[k] = v === "" ? null : v;
@@ -493,9 +506,37 @@ export default function DriversPage() {
                         : (selected[k] ?? null);
             if (v !== current) changes[k] = v;
         }
+        for (const k of writeOnlyFields) {
+            const v = String(editForm[k] ?? "").trim();
+            if (v) changes[k] = v;
+        }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
-        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
+        try {
+            await updateDriver(selected.id, changes);
+            // The backend derives is_citizen / is_permanent_resident from the
+            // status, so mirror that here rather than leaving the old booleans
+            // (and the consolidated projection) stale until the next refetch.
+            const derived: Record<string, any> = {};
+            if ("work_authorization_status" in changes) {
+                const wa = workAuthLocal({ work_authorization_status: changes.work_authorization_status });
+                derived.is_citizen = wa.status === "unknown" ? null : wa.status === "citizen";
+                derived.is_permanent_resident = wa.status === "unknown" ? null : wa.status === "permanent_resident";
+            }
+            const patch = { ...changes, ...derived };
+            // Never keep the plaintext licence number in client state — the row
+            // otherwise stores ciphertext, and the panel only ever shows last-4.
+            delete (patch as any).license_number;
+            const merge = (d: any) => { const next = { ...d, ...patch }; next.work_authorization = workAuthLocal(next); return next; };
+            const updated = merge(selected);
+            setSelected(updated);
+            setDrivers(prev => prev.map(d => d.id === selected.id ? merge(d) : d));
+            if ("license_number" in changes) {
+                const last4 = String(changes.license_number).slice(-4);
+                setLiveStats(prev => prev ? { ...prev, license_number_last4: last4, license_number_on_file: true } : prev);
+            }
+            setEditing(false);
+        } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const [photoReviewing, setPhotoReviewing] = useState(false);
@@ -562,6 +603,105 @@ export default function DriversPage() {
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
+    const [bulkKycRunning, setBulkKycRunning] = useState(false);
+    const handleBulkKycRefresh = async () => {
+        // Report-only by design: account_not_on_key drivers are counted but
+        // NOT detached. Retiring in bulk stays a deliberate per-driver action
+        // (the slideout button), never one click across the fleet.
+        if (!window.confirm(
+            "Refresh Stripe verification for ALL drivers with a Stripe account?\n\n" +
+            "This reads live state from Stripe and updates each driver's row. " +
+            "Nothing is detached or changed on Stripe."
+        )) return;
+        setBulkKycRunning(true);
+        try {
+            const res = await refreshAllDriverStripeKyc();
+            const parts = [
+                `${res.ok ?? 0} synced`,
+                res.account_not_on_key ? `${res.account_not_on_key} not on this Stripe key (need re-onboarding)` : null,
+                res.no_stripe_account ? `${res.no_stripe_account} without a Stripe account` : null,
+                res.stripe_error ? `${res.stripe_error} failed (retry)` : null,
+            ].filter(Boolean).join(" · ");
+            toast({
+                title: `KYC refresh: ${res.total} driver${res.total === 1 ? "" : "s"}`,
+                description: parts || "No drivers with a Stripe account.",
+                ...(res.stripe_error || res.account_not_on_key ? { variant: "destructive" as const } : {}),
+            });
+            loadDrivers(); // re-pull the table so mirrored columns show fresh state
+        } catch (e: any) {
+            toast({ title: "Bulk refresh failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkKycRunning(false);
+        }
+    };
+
+    const [bulkPayoutsRunning, setBulkPayoutsRunning] = useState(false);
+    const handleBulkPayoutRefresh = async () => {
+        if (!window.confirm(
+            "Sync Stripe payout history for ALL drivers?\n\n" +
+            "Reads every mapped driver's Stripe Transfers, bank payouts and balance " +
+            "transactions and materializes anything missing. Nothing is changed on " +
+            "Stripe, and re-running is safe."
+        )) return;
+        setBulkPayoutsRunning(true);
+        try {
+            const res = await refreshAllDriverStripePayouts();
+            toast({
+                title: res.synced ? "Stripe payouts synced" : "Synced with errors",
+                description: res.message,
+                ...(res.synced ? {} : { variant: "destructive" as const }),
+            });
+            loadDrivers();
+        } catch (e: any) {
+            toast({ title: "Payout sync failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkPayoutsRunning(false);
+        }
+    };
+
+    const [bulkTotalsRunning, setBulkTotalsRunning] = useState(false);
+    const handleRecomputeStatementTotals = async () => {
+        // Preview FIRST, always. This rewrites stored money figures on a
+        // driver-facing audit surface, so the operator sees the exact count
+        // and net movement before anything is written.
+        setBulkTotalsRunning(true);
+        try {
+            const preview = await recomputeStatementTotals({ apply: false });
+            if (preview.corrected === 0) {
+                toast({
+                    title: "Nothing to correct",
+                    description: `${preview.scanned} statement${preview.scanned === 1 ? "" : "s"} checked — all totals already match a live recompute.`,
+                });
+                return;
+            }
+            const sample = preview.changes.slice(0, 3).map(c =>
+                `${c.period_type} ${String(c.period_start).slice(0, 10)}: paid out ${c.before.payouts_total} → ${c.after.payouts_total}`
+            ).join("\n");
+            if (!window.confirm(
+                `Rewrite stored totals for ${preview.corrected} of ${preview.scanned} statement(s)?\n\n` +
+                `Net movement — earnings ${preview.delta_earnings >= 0 ? "+" : ""}${preview.delta_earnings.toFixed(2)}, ` +
+                `paid out ${preview.delta_payouts >= 0 ? "+" : ""}${preview.delta_payouts.toFixed(2)}\n\n` +
+                `Examples:\n${sample}\n\n` +
+                "Previous figures are kept for rollback. Only the totals shown in the " +
+                "statements list change — what was emailed to drivers is untouched." +
+                (preview.has_more ? "\n\nMore statements remain beyond this batch — run again after this one." : "")
+            )) return;
+
+            const applied = await recomputeStatementTotals({ apply: true });
+            toast({
+                title: "Statement totals updated",
+                description:
+                    `${applied.corrected} corrected, ${applied.unchanged} already correct` +
+                    (applied.has_more ? " · more remain, run again" : "") +
+                    (applied.skipped.length ? ` · ${applied.skipped.length} skipped` : ""),
+            });
+        } catch (e: any) {
+            toast({ title: "Recompute failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkTotalsRunning(false);
+        }
+    };
+
     const handleExport = async () => {
         try {
             const res = await exportDrivers();
@@ -569,7 +709,7 @@ export default function DriversPage() {
                 { key: "id", label: "ID" }, { key: "driver_code", label: "Driver Code" },
                 { key: "name", label: "Name" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" },
                 { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
-                { key: "status", label: "Status" }, { key: "is_verified", label: "Verified" },
+                { key: "status", label: "Status" }, { key: "is_verified", label: "Spinr Approved" },
                 { key: "is_online", label: "Online" }, { key: "is_available", label: "Available" },
                 { key: "service_area", label: "Service Area" }, { key: "city", label: "City" },
                 { key: "regulatory_region", label: "Region" },
@@ -590,11 +730,13 @@ export default function DriversPage() {
                 { key: "sgi_approved", label: "SGI Approved" }, { key: "sgi_approved_at", label: "SGI Approved At" },
                 { key: "work_authorization_status", label: "Work Authorization" },
                 { key: "is_permanent_resident", label: "Permanent Resident" }, { key: "is_citizen", label: "Citizen" },
-                { key: "decals_sent", label: "Decals Sent" }, { key: "decals_sent_at", label: "Decals Sent At" },
+                { key: "decal_number", label: "Welcome Letter Ref #" }, { key: "decal_generated_at", label: "Welcome Letter Generated" },
+                { key: "decals_sent", label: "Welcome Letter Sent" }, { key: "decals_sent_at", label: "Welcome Letter Sent At" },
                 { key: "subscription_status", label: "Subscription Status" },
                 { key: "subscription_plan", label: "Subscription Plan" },
                 { key: "subscription_expires_at", label: "Subscription Expires" },
-                { key: "joined_at", label: "Joined" }, { key: "approved_at", label: "Approved As Driver" },
+                { key: "joined_at", label: "Joined" }, { key: "approved_at", label: "Spinr Approved At" },
+                { key: "deleted_at", label: "Account Deleted At" },
                 { key: "last_status_changed_at", label: "Last Status Change" }, { key: "updated_at", label: "Updated At" },
             ]);
             toast({ title: "Export complete", description: `${res.count ?? res.drivers?.length ?? 0} drivers exported.` });
@@ -606,6 +748,8 @@ export default function DriversPage() {
     // Client-side sort for the subscription-payments table (separate sort
     // state from the main drivers list above, which uses its own sort logic).
     const { sorted: sortedSubPayments, sort: subPaymentsSort, toggle: toggleSubPaymentsSort } = useTableSort(driverSubPayments);
+    const [subPage, setSubPage] = useState(0);
+    const [subPageSize, setSubPageSize] = useState<number>(25);
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
@@ -707,6 +851,22 @@ export default function DriversPage() {
                     </div>
                     {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
+                    {/* Fleet-wide money tools are super_admin server-side —
+                        hide them for lower roles instead of surfacing buttons
+                        that can only 403. */}
+                    {isSuperAdmin && (
+                        <>
+                            <Button variant="outline" size="sm" onClick={handleBulkKycRefresh} disabled={bulkKycRunning} title="Pull live Stripe verification state for every driver with a Stripe account (super admin)">
+                                {bulkKycRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh Stripe KYC
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={handleBulkPayoutRefresh} disabled={bulkPayoutsRunning} title="Sync Stripe Transfers, bank payouts and balance transactions for every mapped driver (super admin). Safe to re-run.">
+                                {bulkPayoutsRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Sync All Payouts
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={handleRecomputeStatementTotals} disabled={bulkTotalsRunning} title="Recompute the stored totals shown in every driver's statements list. Previews the diff before writing (super admin).">
+                                {bulkTotalsRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Fix Statement Totals
+                            </Button>
+                        </>
+                    )}
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={sorted.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
             </div>
@@ -787,12 +947,15 @@ export default function DriversPage() {
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-1.5 items-start">
-                                                {driver.status === "active" ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
+                                                {/* account_deleted wins over status: deletion cannot change
+                                                    drivers.status, so a departed driver still carries "active". */}
+                                                {driver.account_deleted ? <Badge variant="default" className="bg-zinc-200 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 text-[10px] px-1.5 py-0 border-zinc-300 dark:border-zinc-700"><Trash2 className="h-3 w-3 mr-1" />Deleted</Badge>
+                                                : driver.status === "active" ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
                                                 : driver.status === "needs_review" ? <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge>
                                                 : driver.status === "suspended" ? <Badge variant="default" className="bg-orange-100 text-orange-700 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 text-[10px] px-1.5 py-0 border-orange-200 dark:border-orange-800"><Pause className="h-3 w-3 mr-1" />Suspended</Badge>
                                                 : driver.status === "banned" ? <Badge variant="default" className="bg-red-200 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-300 dark:border-red-800"><Ban className="h-3 w-3 mr-1" />Banned</Badge>
                                                 : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
-                                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online ? "Online" : "Offline"}</Badge>
+                                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online && !driver.account_deleted ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online && !driver.account_deleted ? "Online" : "Offline"}</Badge>
                                             </div>
                                         </TableCell>
                                         <TableCell>
@@ -924,13 +1087,14 @@ export default function DriversPage() {
                                                 <div className="mt-2 text-xs text-red-600 dark:text-red-400">Profile photo rejected — driver must re-upload.</div>
                                             )}
                                             <div className="flex items-center gap-2 mt-2">
-                                                {selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
+                                                {selected.account_deleted ? <Badge className="bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><Trash2 className="h-3 w-3" /> Deleted</Badge>
+                                                : selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
                                                 : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
                                                 : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
                                                 : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
                                                 : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
-                                                <Badge variant="outline" className={selected.is_online ? "border-emerald-300 text-emerald-600" : ""}>
-                                                    {selected.is_online ? "Online" : "Offline"}
+                                                <Badge variant="outline" className={selected.is_online && !selected.account_deleted ? "border-emerald-300 text-emerald-600" : ""}>
+                                                    {selected.is_online && !selected.account_deleted ? "Online" : "Offline"}
                                                     {selected.last_status_changed_at && (
                                                         <span className="ml-1.5 text-[10px] opacity-70">
                                                             since {new Date(selected.last_status_changed_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
@@ -1142,42 +1306,76 @@ export default function DriversPage() {
                                         {editing ? (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                 <EditField label="Date of Birth" value={ef("date_of_birth")} onChange={v => setEf("date_of_birth", v)} type="date" />
+                                                <EditField
+                                                    label="License Number"
+                                                    value={ef("license_number")}
+                                                    onChange={v => setEf("license_number", v)}
+                                                    placeholder={liveStats?.license_number_last4 ? `•••• ${liveStats.license_number_last4}` : "Not on file"}
+                                                    hint="Leave blank to keep the number on file. Stored encrypted; only the last 4 are ever displayed."
+                                                />
                                                 <EditField label="License Class" value={ef("license_class")} onChange={v => setEf("license_class", v)} />
                                                 <EditField label="Regulatory Authority" value={ef("regulatory_authority")} onChange={v => setEf("regulatory_authority", v)} />
                                                 <EditField label="Regulatory Region" value={ef("regulatory_region")} onChange={v => setEf("regulatory_region", v)} />
                                                 <EditBooleanField label="Authority Approved" value={ef("regulatory_authority_approved")} onChange={v => setEf("regulatory_authority_approved", v)} />
                                                 <EditField label="Authority Approved At" value={ef("regulatory_authority_approved_at")} onChange={v => setEf("regulatory_authority_approved_at", v)} type="datetime-local" />
-                                                <div>
-                                                    <label className="text-[11px] text-muted-foreground mb-1 block">Work Authorization Status</label>
+                                                <div className="sm:col-span-2">
+                                                    <label className="text-[11px] text-muted-foreground mb-1 block">Work Authorization</label>
                                                     <Select value={ef("work_authorization_status") || "unknown"} onValueChange={v => setEf("work_authorization_status", v === "unknown" ? "" : v)}>
                                                         <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                                                         <SelectContent>
-                                                            <SelectItem value="unknown">Unknown</SelectItem>
-                                                            <SelectItem value="expiring">Expiring</SelectItem>
-                                                            <SelectItem value="indefinite">Indefinite</SelectItem>
-                                                            <SelectItem value="permanent_resident">Permanent resident</SelectItem>
-                                                            <SelectItem value="citizen">Citizen</SelectItem>
+                                                            {Object.entries(WORK_AUTH_LABELS).map(([value, label]) => (
+                                                                <SelectItem key={value} value={value}>{label}</SelectItem>
+                                                            ))}
                                                         </SelectContent>
                                                     </Select>
+                                                    <p className="text-[10px] text-muted-foreground mt-1">
+                                                        Citizen / permanent resident / work permit are mutually exclusive — picking one marks the others not applicable.
+                                                    </p>
                                                 </div>
-                                                <EditBooleanField label="Permanent Resident" value={ef("is_permanent_resident")} onChange={v => setEf("is_permanent_resident", v)} />
-                                                <EditBooleanField label="Citizen" value={ef("is_citizen")} onChange={v => setEf("is_citizen", v)} />
-                                                <EditBooleanField label="Decals Sent" value={ef("decals_sent")} onChange={v => setEf("decals_sent", v)} />
-                                                <EditField label="Decals Sent At" value={ef("decals_sent_at")} onChange={v => setEf("decals_sent_at", v)} type="datetime-local" />
+                                                <EditField label="Welcome Letter Ref #" value={ef("decal_number")} onChange={v => setEf("decal_number", v)} />
+                                                <EditField label="Welcome Letter Generated" value={ef("decal_generated_at")} onChange={v => setEf("decal_generated_at", v)} type="datetime-local" />
+                                                <EditBooleanField label="Welcome Letter Sent" value={ef("decals_sent")} onChange={v => setEf("decals_sent", v)} />
+                                                <EditField label="Welcome Letter Sent At" value={ef("decals_sent_at")} onChange={v => setEf("decals_sent_at", v)} type="datetime-local" />
                                             </div>
                                         ) : (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                                                 <DetailField icon={CalendarRange} label="Date of Birth" value={selected.date_of_birth ? fmtDate(selected.date_of_birth) : "—"} />
+                                                <DetailField
+                                                    icon={FileText}
+                                                    label="License Number"
+                                                    value={liveStats?.license_number_last4 ? `•••• ${liveStats.license_number_last4}` : liveStats?.license_number_on_file ? "On file (unreadable)" : "—"}
+                                                    mono
+                                                />
+                                                <DetailField
+                                                    icon={ShieldCheck}
+                                                    label="SIN (T4A)"
+                                                    // Masked always. The full number comes only from the
+                                                    // audited super_admin reveal, never from this panel.
+                                                    // "Missing" is called out because a driver without one
+                                                    // cannot be filed for at year end.
+                                                    value={liveStats?.sin_last4 ? `•••• ${liveStats.sin_last4}` : liveStats?.sin_on_file ? "On file" : "Missing — cannot file T4A"}
+                                                    mono
+                                                />
                                                 <DetailField icon={FileText} label="License Class" value={selected.license_class || "—"} />
                                                 <DetailField icon={ShieldCheck} label="Regulatory Authority" value={selected.regulatory_authority || (selected.sgi_approved != null ? "SGI" : "—")} />
                                                 <DetailField icon={MapPin} label="Regulatory Region" value={selected.regulatory_region || "—"} />
                                                 <DetailField icon={ShieldCheck} label="Authority Approved" value={(selected.regulatory_authority_approved ?? selected.sgi_approved) === true ? "Yes" : (selected.regulatory_authority_approved ?? selected.sgi_approved) === false ? "No" : "Unknown"} />
                                                 <DetailField icon={Clock} label="Authority Approved At" value={(selected.regulatory_authority_approved_at || selected.sgi_approved_at) ? new Date(selected.regulatory_authority_approved_at || selected.sgi_approved_at).toLocaleString("en-CA") : "—"} />
-                                                <DetailField icon={FileText} label="Work Authorization" value={selected.work_authorization_status ? selected.work_authorization_status.replace(/_/g, " ") : "Unknown"} />
-                                                <DetailField icon={Shield} label="Permanent Resident" value={selected.is_permanent_resident === true ? "Yes" : selected.is_permanent_resident === false ? "No" : "Unknown"} />
-                                                <DetailField icon={Shield} label="Citizen" value={selected.is_citizen === true ? "Yes" : selected.is_citizen === false ? "No" : "Unknown"} />
-                                                <DetailField icon={CheckCircle} label="Decals Sent" value={selected.decals_sent === true ? "Yes" : selected.decals_sent === false ? "No" : "Unknown"} />
-                                                <DetailField icon={Clock} label="Decals Sent At" value={selected.decals_sent_at ? new Date(selected.decals_sent_at).toLocaleString("en-CA") : "—"} />
+                                                <DetailField icon={ShieldCheck} label="Spinr Approved" value={selected.is_verified === true ? "Yes" : selected.is_verified === false ? "No" : "Unknown"} />
+                                                <DetailField icon={Clock} label="Spinr Approved At" value={selected.verified_at ? new Date(selected.verified_at).toLocaleString("en-CA") : "—"} />
+                                                <DetailField
+                                                    icon={FileText}
+                                                    label="Work Authorization"
+                                                    value={workAuth(selected).expires_at
+                                                        ? `${workAuth(selected).label} ${fmtDate(workAuth(selected).expires_at!)}`
+                                                        : workAuth(selected).label}
+                                                />
+                                                <DetailField icon={Shield} label="Permanent Resident" value={WORK_AUTH_FLAG_LABELS[workAuth(selected).permanent_resident] || "Unknown"} />
+                                                <DetailField icon={Shield} label="Citizen" value={WORK_AUTH_FLAG_LABELS[workAuth(selected).citizen] || "Unknown"} />
+                                                <DetailField icon={FileText} label="Welcome Letter Ref #" value={selected.decal_number || "—"} mono />
+                                                <DetailField icon={Clock} label="Welcome Letter Generated" value={selected.decal_generated_at ? new Date(selected.decal_generated_at).toLocaleString("en-CA") : "—"} />
+                                                <DetailField icon={CheckCircle} label="Welcome Letter Sent" value={selected.decals_sent === true ? "Yes" : selected.decals_sent === false ? "No" : "Unknown"} />
+                                                <DetailField icon={Clock} label="Welcome Letter Sent At" value={selected.decals_sent_at ? new Date(selected.decals_sent_at).toLocaleString("en-CA") : "—"} />
                                             </div>
                                         )}
                                     </DetailSection>
@@ -1251,6 +1449,9 @@ export default function DriversPage() {
                                     <div className="grid grid-cols-2 gap-2.5">
                                         <DetailField icon={CalendarRange} label="Joined" value={fmtDate(selected.created_at)} />
                                         <DetailField icon={Clock} label="Last Updated" value={fmtDate(selected.updated_at)} />
+                                        {selected.account_deleted && (
+                                            <DetailField icon={Trash2} label="Account Deleted" value={selected.deleted_at ? new Date(selected.deleted_at).toLocaleString("en-CA") : "Yes"} />
+                                        )}
                                     </div>
                                 </TabsContent>
 
@@ -1290,8 +1491,10 @@ export default function DriversPage() {
                                         notify={toast}
                                         retryingPayoutId={retryingPayoutId}
                                         refreshingKyc={refreshingKyc}
+                                        refreshingPayouts={refreshingPayouts}
                                         revealedSin={revealedSin}
                                         canRevealSin={canRevealSin}
+                                        canRefreshPayouts={isSuperAdmin}
                                         onRetry={async (payoutId) => {
                                             setRetryingPayoutId(payoutId);
                                             try {
@@ -1308,20 +1511,44 @@ export default function DriversPage() {
                                         onRefreshKyc={async () => {
                                             setRefreshingKyc(true);
                                             try {
-                                                await refreshDriverStripeKyc(selected.id);
+                                                const res = await refreshDriverStripeKyc(selected.id);
                                                 const fresh = await getDriverPayoutsSummary(selected.id);
                                                 setPayoutSummary(fresh);
-                                                toast({ title: "Synced from Stripe" });
+                                                toast({
+                                                    title: res.synced ? "Synced from Stripe" : "Not synced",
+                                                    description: res.message,
+                                                    ...(res.synced ? {} : { variant: "destructive" as const }),
+                                                });
                                             } catch (e: any) {
                                                 toast({ title: "Refresh failed", description: e?.message || "Unknown error", variant: "destructive" });
                                             } finally {
                                                 setRefreshingKyc(false);
                                             }
                                         }}
+                                        onRefreshPayouts={async () => {
+                                            setRefreshingPayouts(true);
+                                            try {
+                                                // Failures raise non-2xx (handled in catch); still
+                                                // branch on `synced` like onRefreshKyc so a future
+                                                // partial-success response can't toast as success.
+                                                const res = await refreshDriverStripePayouts(selected.id);
+                                                const fresh = await getDriverPayoutsSummary(selected.id);
+                                                setPayoutSummary(fresh);
+                                                toast({
+                                                    title: res.synced ? "Payouts synced from Stripe" : "Not synced",
+                                                    description: res.message,
+                                                    ...(res.synced ? {} : { variant: "destructive" as const }),
+                                                });
+                                            } catch (e: any) {
+                                                toast({ title: "Payout sync failed", description: e?.message || "Unknown error", variant: "destructive" });
+                                            } finally {
+                                                setRefreshingPayouts(false);
+                                            }
+                                        }}
                                         onRevealSin={async () => {
                                             // Confirm before triggering — every reveal writes an
                                             // audit_log row and admins should not click it idly.
-                                            if (!window.confirm("Reveal SIN from Stripe?\n\nThis call is recorded in the audit log with your admin ID and a timestamp. The value will be shown for 30 seconds then hidden.")) return;
+                                            if (!window.confirm("Reveal this driver's SIN?\n\nThis decrypts Spinr's encrypted copy. The call is recorded in the audit log with your admin ID and a timestamp. The value will be shown for 30 seconds then hidden.")) return;
                                             try {
                                                 const res = await revealDriverSin(selected.id);
                                                 setRevealedSin({ sin: res.sin, expiresAt: Date.now() + 30_000 });
@@ -1404,7 +1631,7 @@ export default function DriversPage() {
                                                             {expiryMissing && counts.pending === 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">Approved · expiry not recorded</Badge>}
                                                             {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Re-upload needed</Badge>}
                                                         </div>
-                                                        {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
+                                                        {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                         : <div className="bg-muted/20 border border-dashed rounded-xl p-6 text-center text-muted-foreground"><Image className="h-8 w-8 mx-auto mb-2 opacity-20" /><p className="text-sm">No {reqDoc.label} uploaded yet</p></div>}
                                                     </div>
                                                 );
@@ -1422,7 +1649,7 @@ export default function DriversPage() {
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">Other Documents</h4>
                                                             <Badge variant="outline" className="text-[10px]">{unmatched.length} uploaded</Badge>
                                                         </div>
-                                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                     </div>
                                                 );
                                             })()}
@@ -1431,7 +1658,7 @@ export default function DriversPage() {
                                         <div className="space-y-3">
                                             <p className="text-xs text-muted-foreground">No service area configured — showing all uploaded documents</p>
                                             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                                                {activeDocs.map(d => <DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}
+                                                {activeDocs.map(d => <DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}
                                             </div>
                                         </div>
                                     ) : (
@@ -1485,6 +1712,7 @@ export default function DriversPage() {
                                     ) : driverSubPayments.length === 0 ? (
                                         <div className="py-12 text-center text-sm text-muted-foreground">No subscription payments found for this driver.</div>
                                     ) : (
+                                        <>
                                         <Table>
                                             <TableHeader>
                                                 <TableRow>
@@ -1499,7 +1727,7 @@ export default function DriversPage() {
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
-                                                {sortedSubPayments.map((p) => (
+                                                {sortedSubPayments.slice(subPage * subPageSize, (subPage + 1) * subPageSize).map((p) => (
                                                     <TableRow key={p.id}>
                                                         <TableCell className="text-xs whitespace-nowrap">
                                                             {p.created_at ? new Date(p.created_at).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" }) : "—"}
@@ -1519,6 +1747,32 @@ export default function DriversPage() {
                                                 ))}
                                             </TableBody>
                                         </Table>
+                                        <div className="flex items-center justify-between gap-3 flex-wrap mt-3">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-xs text-muted-foreground">Show</span>
+                                                <Select value={String(subPageSize)} onValueChange={(v) => { setSubPageSize(Number(v)); setSubPage(0); }}>
+                                                    <SelectTrigger className="h-8 text-xs w-[70px]">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {[25, 50, 100].map(n => (
+                                                            <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                                <span className="text-xs text-muted-foreground">per page</span>
+                                            </div>
+                                            {sortedSubPayments.length > subPageSize && (
+                                                <Pagination
+                                                    page={subPage}
+                                                    pageSize={subPageSize}
+                                                    hasNextPage={sortedSubPayments.length > (subPage + 1) * subPageSize}
+                                                    totalCount={sortedSubPayments.length}
+                                                    onPageChange={setSubPage}
+                                                />
+                                            )}
+                                        </div>
+                                        </>
                                     )}
                                 </TabsContent>
                             </div>
@@ -1731,7 +1985,7 @@ function VerificationSummaryCard({
     );
 }
 
-const DRIVER_RIDES_PAGE_SIZE = 25;
+const DRIVER_RIDES_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 type RidesSortKey = "created_at" | "rider_name" | "status" | "distance_km" | "duration_seconds" | "total_fare" | "tip_amount";
 
@@ -1758,7 +2012,7 @@ function PayoutMetric({ label, value, tone, sub }: { label: string; value: strin
     );
 }
 
-function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRevealSin, refreshingKyc, revealedSin, canRevealSin, notify }: {
+function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRefreshPayouts, onRevealSin, refreshingKyc, refreshingPayouts, revealedSin, canRevealSin, canRefreshPayouts, notify }: {
     data: DriverPayoutSummary | null;
     loading: boolean;
     driverId: string;
@@ -1766,10 +2020,13 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
     retryingPayoutId: string | null;
     onRetry: (payoutId: string) => Promise<void>;
     onRefreshKyc: () => Promise<void>;
+    onRefreshPayouts: () => Promise<void>;
     onRevealSin: () => Promise<void>;
     refreshingKyc: boolean;
+    refreshingPayouts: boolean;
     revealedSin: { sin: string; expiresAt: number } | null;
     canRevealSin: boolean;
+    canRefreshPayouts: boolean;
     notify: (opts: { title: string; description?: string; variant?: "destructive" }) => void;
 }) {
     const fmtDateTime = (iso?: string | null) => {
@@ -1785,6 +2042,9 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
     // returns so the hook order stays stable; reads payouts off the nullable
     // data and falls back to an empty list when not yet loaded.
     const { sorted: sortedPayouts, sort: payoutsSort, toggle: togglePayoutsSort } = useTableSort(data?.payouts ?? []);
+    const [payoutPage, setPayoutPage] = useState(0);
+    const [payoutPageSize, setPayoutPageSize] = useState<number>(25);
+    useEffect(() => { setPayoutPage(0); }, [payoutsSort]);
 
     if (loading && !data) return (
         <div className="space-y-4 animate-pulse">
@@ -1804,9 +2064,47 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
     );
 
     const { summary, payment_method: pm, payouts } = data;
+    const bonuses = data.bonuses ?? [];
+    const hasBonuses = (summary.lifetime_bonuses ?? 0) > 0;
 
     return (
         <div className="space-y-5">
+            {/* Refresh Payouts from Stripe — super_admin only, matching the
+                backend gate; lower roles never see a button that can only 403. */}
+            {canRefreshPayouts && (
+                <div className="flex items-center justify-end">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={refreshingPayouts}
+                        onClick={onRefreshPayouts}
+                        title="Pull all Transfers, bank payouts, and balance transactions from Stripe for this driver"
+                    >
+                        {refreshingPayouts ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                        Refresh Payouts from Stripe
+                    </Button>
+                </div>
+            )}
+
+            {/* Migrated-driver context. One sentence up front beats four
+                cards that each look wrong for a different reason: without
+                this, "$0.00 lifetime" sits beside a Rides tab showing
+                previous-app trips and a paid-out card full of previous-app
+                transfers, and every number invites a support escalation. */}
+            {((summary.imported_rides_excluded ?? 0) > 0 || (summary.legacy_stripe_transfers ?? 0) > 0) && (
+                <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/10 p-3 flex items-start gap-3">
+                    <Clock className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-blue-700 dark:text-blue-300">
+                        <span className="font-semibold">Migrated from the previous app.</span>{" "}
+                        {(summary.imported_rides_excluded ?? 0) > 0 && `${summary.imported_rides_excluded} imported ride${(summary.imported_rides_excluded ?? 0) === 1 ? "" : "s"}`}
+                        {(summary.imported_rides_excluded ?? 0) > 0 && (summary.legacy_stripe_transfers ?? 0) > 0 && " and "}
+                        {(summary.legacy_stripe_transfers ?? 0) > 0 && `${fmtMoney(summary.legacy_stripe_transfers ?? 0)} in previous-app payouts`}
+                        {" "}are kept for history and tax, but are not counted in Spinr earnings or the owed balance below.
+                    </p>
+                </div>
+            )}
+
             {/* Top 4 metric cards: Pending / Paid out / Lifetime / YTD */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <PayoutMetric
@@ -1819,12 +2117,28 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     label="Total paid out"
                     value={fmtMoney(summary.total_paid_out)}
                     tone="emerald"
-                    sub={`${payouts.filter(p => p.status === "completed").length} completed payouts`}
+                    // legacy_stripe_transfers is a slice OF this total, not an
+                    // addition to it — say "incl.", never "+". When the whole
+                    // total is previous-app money, say THAT: "incl. $327.02"
+                    // under a $327.02 headline reads like double-speak.
+                    sub={(summary.legacy_stripe_transfers ?? 0) > 0
+                        ? ((summary.legacy_stripe_transfers ?? 0) >= summary.total_paid_out
+                            ? `${payouts.filter(p => p.status === "completed").length} payouts · all paid by the previous app`
+                            : `${payouts.filter(p => p.status === "completed").length} payouts · incl. ${fmtMoney(summary.legacy_stripe_transfers ?? 0)} from the previous app`)
+                        : `${payouts.filter(p => p.status === "completed").length} completed payouts`}
                 />
                 <PayoutMetric
                     label="Lifetime earnings"
                     value={fmtMoney(summary.lifetime_earnings)}
-                    sub={`${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`}
+                    // Spell out imported rides. Otherwise this reads "0
+                    // completed rides · $0.00" next to a Rides tab showing 15,
+                    // and nothing explains why — which looks like data loss.
+                    sub={(summary.imported_rides_excluded ?? 0) > 0
+                        ? `${summary.rides_count.toLocaleString()} Spinr rides · ${summary.imported_rides_excluded} imported from previous app (not counted)`
+                        : hasBonuses
+                            ? `${fmtMoney(summary.lifetime_ride_earnings ?? 0)} rides + ${fmtMoney(summary.lifetime_bonuses ?? 0)} bonuses · ${fmtMoney(summary.lifetime_tips)} tips`
+                            : `${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`
+                    }
                 />
                 <PayoutMetric
                     label="Year to date"
@@ -1942,13 +2256,20 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                 <div className="px-4 py-3 space-y-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">SIN (held by Stripe)</p>
-                            {data.kyc.id_number_provided ? (
+                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">SIN</p>
+                            {/* Gate on OUR Vault-encrypted copy (sin_on_file), not Stripe's
+                                id_number_provided mirror: the reveal endpoint decrypts our
+                                column (Stripe's is write-only), and the SIN-before-Stripe
+                                flow means drivers now have a SIN on file long before Stripe
+                                does. Gating on Stripe's flag hid the Reveal button for
+                                exactly those drivers — and showed it for legacy drivers
+                                whose reveal call can only 400. */}
+                            {data.kyc.sin_on_file ? (
                                 <div className="flex items-center gap-2 mt-0.5">
                                     {revealedSin ? (
                                         <p className="text-sm font-medium font-mono">{revealedSin.sin}</p>
                                     ) : (
-                                        <p className="text-sm font-medium font-mono">•••-•••-{data.kyc.id_number_last4 || "•••"}</p>
+                                        <p className="text-sm font-medium font-mono">•••-•••-{data.kyc.sin_last4 || "•••"}</p>
                                     )}
                                     {canRevealSin ? (
                                         <Button
@@ -1957,7 +2278,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                             className="h-6 text-[10px] px-2"
                                             onClick={onRevealSin}
                                             disabled={!!revealedSin}
-                                            title="One-shot reveal from Stripe. Every reveal writes an audit log entry."
+                                            title="One-shot decrypt of Spinr's encrypted copy. Every reveal writes an audit log entry."
                                         >
                                             {revealedSin ? <CheckCircle className="h-3 w-3 mr-1" /> : <Eye className="h-3 w-3 mr-1" />}
                                             {revealedSin ? "Shown" : "Reveal"}
@@ -1968,6 +2289,13 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                         </span>
                                     )}
                                 </div>
+                            ) : data.kyc.id_number_provided ? (
+                                <p
+                                    className="text-sm text-muted-foreground mt-0.5"
+                                    title="This driver entered their SIN into Stripe's own form before Spinr collected SINs in-app. Stripe never returns it (write-only), so it cannot be revealed here — use the tax-ID import or ask the driver via support to get a copy on file for the T4A."
+                                >
+                                    Held by Stripe only — not revealable
+                                </p>
                             ) : (
                                 <p className="text-sm text-muted-foreground mt-0.5">Not provided yet</p>
                             )}
@@ -2060,6 +2388,39 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                 </div>
             )}
 
+            {/* Bonuses (quest/referral/adjustment) */}
+            {bonuses.length > 0 && (
+                <div className="rounded-xl border border-border overflow-x-auto">
+                    <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+                        <DollarSign className="h-4 w-4 text-muted-foreground" />
+                        <h4 className="text-sm font-semibold">Bonuses &amp; Adjustments</h4>
+                        <Badge variant="outline" className="text-[10px] ml-auto">{bonuses.length} entries</Badge>
+                    </div>
+                    <Table>
+                        <TableHeader>
+                            <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Date</TableHead>
+                                <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right">Amount</TableHead>
+                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Type</TableHead>
+                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Description</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {bonuses.map((b) => (
+                                <TableRow key={b.id} className="hover:bg-muted/20">
+                                    <TableCell className="text-xs whitespace-nowrap">{fmtDateTime(b.created_at)}</TableCell>
+                                    <TableCell className="text-sm font-semibold text-right tabular-nums">{fmtMoney(b.amount)}</TableCell>
+                                    <TableCell>
+                                        <Badge variant="outline" className="text-[10px]">{b.kind}</Badge>
+                                    </TableCell>
+                                    <TableCell className="text-xs text-muted-foreground">{b.description || "—"}</TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            )}
+
             {/* Earnings statements — date-filtered download / email to driver */}
             <DriverStatementsPanel driverId={driverId} driverName={driverName} notify={notify} />
 
@@ -2071,6 +2432,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                             <SortableHead column="processed_at" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Date</SortableHead>
                             <SortableHead column="amount" sort={payoutsSort} onSort={togglePayoutsSort} align="right" className="h-9 text-[11px] uppercase tracking-wider">Amount</SortableHead>
                             <SortableHead column="status" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Status</SortableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Type</TableHead>
                             <SortableHead column="bank_name" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Destination</SortableHead>
                             <SortableHead column="stripe_payout_id" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Stripe Ref</SortableHead>
                             <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right">Action</TableHead>
@@ -2079,14 +2441,20 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     <TableBody>
                         {payouts.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                                <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
                                     <p className="text-sm">No payouts yet.</p>
                                     <p className="text-xs mt-1">When {driverName} requests a withdrawal it will appear here.</p>
                                 </TableCell>
                             </TableRow>
-                        ) : sortedPayouts.map((p) => {
+                        ) : sortedPayouts.slice(payoutPage * payoutPageSize, (payoutPage + 1) * payoutPageSize).map((p) => {
                             const style = PAYOUT_STATUS_STYLE[p.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: p.status };
                             const isRetrying = retryingPayoutId === p.id;
+                            const typeLabel =
+                                p.payout_type === "stripe_sync" ? "Stripe Transfer"
+                                : p.payout_type === "instant" ? "Instant"
+                                : p.payout_type === "legacy_import" ? "Legacy import"
+                                : !p.payout_type || p.payout_type === "standard" ? "Standard"
+                                : p.payout_type;
                             return (
                                 <TableRow key={p.id} className="hover:bg-muted/20">
                                     <TableCell className="text-xs whitespace-nowrap">
@@ -2105,6 +2473,9 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                             )}
                                         </div>
                                     </TableCell>
+                                    <TableCell>
+                                        <Badge variant="outline" className="text-[10px]">{typeLabel}</Badge>
+                                    </TableCell>
                                     <TableCell className="text-xs">
                                         {p.bank_name ? (
                                             <>
@@ -2114,14 +2485,14 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                         ) : "—"}
                                     </TableCell>
                                     <TableCell>
-                                        {p.stripe_payout_id ? (
+                                        {(p.stripe_transfer_id || p.stripe_payout_id) ? (
                                             <button
                                                 type="button"
-                                                onClick={() => navigator.clipboard.writeText(p.stripe_payout_id!)}
-                                                title={`Copy ${p.stripe_payout_id}`}
+                                                onClick={() => navigator.clipboard.writeText(p.stripe_transfer_id || p.stripe_payout_id || "")}
+                                                title={`Copy ${p.stripe_transfer_id || p.stripe_payout_id}`}
                                                 className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
                                             >
-                                                {p.stripe_payout_id.slice(0, 12)}…
+                                                {(p.stripe_transfer_id || p.stripe_payout_id || "").slice(0, 12)}...
                                                 <Copy className="h-2.5 w-2.5" />
                                             </button>
                                         ) : (
@@ -2150,6 +2521,33 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                     </TableBody>
                 </Table>
             </div>
+            {payouts.length > 0 && (
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Show</span>
+                        <Select value={String(payoutPageSize)} onValueChange={(v) => { setPayoutPageSize(Number(v)); setPayoutPage(0); }}>
+                            <SelectTrigger className="h-8 text-xs w-[70px]">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {[25, 50, 100].map(n => (
+                                    <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">per page</span>
+                    </div>
+                    {sortedPayouts.length > payoutPageSize && (
+                        <Pagination
+                            page={payoutPage}
+                            pageSize={payoutPageSize}
+                            hasNextPage={sortedPayouts.length > (payoutPage + 1) * payoutPageSize}
+                            totalCount={sortedPayouts.length}
+                            onPageChange={setPayoutPage}
+                        />
+                    )}
+                </div>
+            )}
         </div>
     );
 }
@@ -2159,6 +2557,9 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
     loading: boolean;
     fmtDate: (d: string) => string;
 }) {
+    const [refPage, setRefPage] = useState(0);
+    const [refPageSize, setRefPageSize] = useState<number>(25);
+
     if (loading) {
         return <div className="text-sm text-muted-foreground py-10 text-center">Loading referrals…</div>;
     }
@@ -2166,6 +2567,7 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
         return <div className="text-sm text-muted-foreground py-10 text-center">No referral data.</div>;
     }
     const referees = data.referees || [];
+    const pagedReferees = referees.slice(refPage * refPageSize, (refPage + 1) * refPageSize);
     return (
         <div className="space-y-5">
             {/* Summary */}
@@ -2200,8 +2602,9 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
             {referees.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-6 text-center">No one has signed up with this driver&apos;s code yet.</p>
             ) : (
+                <>
                 <div className="space-y-2">
-                    {referees.map((r, i) => {
+                    {pagedReferees.map((r, i) => {
                         const pct = Math.min(100, Math.round(((r.completed_rides || 0) / (r.rides_required || 1)) * 100));
                         return (
                             <div key={i} className="rounded-xl border border-border/50 p-3 flex items-center gap-3">
@@ -2232,6 +2635,32 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                         );
                     })}
                 </div>
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Show</span>
+                        <Select value={String(refPageSize)} onValueChange={(v) => { setRefPageSize(Number(v)); setRefPage(0); }}>
+                            <SelectTrigger className="h-8 text-xs w-[70px]">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {[25, 50, 100].map(n => (
+                                    <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">per page</span>
+                    </div>
+                    {referees.length > refPageSize && (
+                        <Pagination
+                            page={refPage}
+                            pageSize={refPageSize}
+                            hasNextPage={referees.length > (refPage + 1) * refPageSize}
+                            totalCount={referees.length}
+                            onPageChange={setRefPage}
+                        />
+                    )}
+                </div>
+                </>
             )}
         </div>
     );
@@ -2437,8 +2866,11 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     const [sortKey, setSortKey] = useState<RidesSortKey>("created_at");
     const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [page, setPage] = useState(0);
+    const [pageSize, setPageSize] = useState<number>(25);
+    const [dateFrom, setDateFrom] = useState("");
+    const [dateTo, setDateTo] = useState("");
 
-    useEffect(() => { setPage(0); }, [statusFilter, search, sortKey, sortDir]);
+    useEffect(() => { setPage(0); }, [statusFilter, search, sortKey, sortDir, dateFrom, dateTo, pageSize]);
 
     const fmtDuration = (s?: number) => {
         if (!s) return "—";
@@ -2478,6 +2910,16 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
         const q = search.trim().toLowerCase();
         let out = rides;
         if (statusFilter !== "all") out = out.filter(r => r.status === statusFilter);
+        if (dateFrom) {
+            const from = new Date(dateFrom);
+            from.setHours(0, 0, 0, 0);
+            out = out.filter(r => r.created_at && new Date(r.created_at) >= from);
+        }
+        if (dateTo) {
+            const to = new Date(dateTo);
+            to.setHours(23, 59, 59, 999);
+            out = out.filter(r => r.created_at && new Date(r.created_at) <= to);
+        }
         if (q) out = out.filter(r => {
             const haystack = `${riderDisplay(r)} ${r.id || ""} ${r.pickup_address || ""} ${r.dropoff_address || ""}`.toLowerCase();
             return haystack.includes(q);
@@ -2496,10 +2938,10 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
             return 0;
         });
         return sorted;
-    }, [rides, statusFilter, search, sortKey, sortDir]);
+    }, [rides, statusFilter, search, sortKey, sortDir, dateFrom, dateTo]);
 
-    const paged = processed.slice(page * DRIVER_RIDES_PAGE_SIZE, (page + 1) * DRIVER_RIDES_PAGE_SIZE);
-    const hasNextPage = processed.length > (page + 1) * DRIVER_RIDES_PAGE_SIZE;
+    const paged = processed.slice(page * pageSize, (page + 1) * pageSize);
+    const hasNextPage = processed.length > (page + 1) * pageSize;
 
     const handleSort = (k: RidesSortKey) => {
         if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -2507,6 +2949,25 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
             setSortKey(k);
             setSortDir(k === "rider_name" ? "asc" : "desc");
         }
+    };
+
+    const handleExportRides = () => {
+        if (processed.length === 0) return;
+        const cols = [
+            { key: "ride_code", label: "Ride Code" },
+            { label: "Date", value: (r: any) => r.created_at ? new Date(r.created_at).toLocaleString() : "" },
+            { label: "Rider", value: (r: any) => riderDisplay(r) },
+            { label: "Driver", value: () => driverName },
+            { key: "pickup_address", label: "Pickup" },
+            { key: "dropoff_address", label: "Dropoff" },
+            { key: "status", label: "Status" },
+            { label: "Distance (km)", value: (r: any) => r.distance_km != null ? Number(r.distance_km).toFixed(1) : "" },
+            { label: "Duration (min)", value: (r: any) => r.duration_seconds ? Math.round(r.duration_seconds / 60) : "" },
+            { label: "Tip", value: (r: any) => r.tip_amount != null && Number(r.tip_amount) > 0 ? Number(r.tip_amount).toFixed(2) : "" },
+            { label: "Fare", value: (r: any) => { const f = r.total_fare ?? r.fare_amount ?? r.base_fare; return f != null ? Number(f).toFixed(2) : ""; } },
+        ];
+        const safeName = driverName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+        exportToCsv(`driver_rides_${safeName}`, processed, cols);
     };
 
     const SortIcon = ({ col }: { col: RidesSortKey }) => {
@@ -2555,9 +3016,19 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
                         ))}
                     </SelectContent>
                 </Select>
+                <div className="flex items-center gap-1.5">
+                    <CalendarRange className="h-4 w-4 text-muted-foreground" />
+                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-8 text-xs w-[130px]" />
+                    <span className="text-xs text-muted-foreground">to</span>
+                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-8 text-xs w-[130px]" />
+                </div>
                 <span className="ml-auto text-xs text-muted-foreground tabular-nums">
                     {processed.length} of {rides.length}
                 </span>
+                <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handleExportRides} disabled={processed.length === 0}>
+                    <Download className="h-3.5 w-3.5" />
+                    Export CSV
+                </Button>
             </div>
 
             <div className="rounded-xl border border-border overflow-x-auto">
@@ -2669,15 +3140,31 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
                 </Table>
             </div>
 
-            {processed.length > DRIVER_RIDES_PAGE_SIZE && (
-                <Pagination
-                    page={page}
-                    pageSize={DRIVER_RIDES_PAGE_SIZE}
-                    hasNextPage={hasNextPage}
-                    totalCount={processed.length}
-                    onPageChange={setPage}
-                />
-            )}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Show</span>
+                    <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                        <SelectTrigger className="h-8 text-xs w-[70px]">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {DRIVER_RIDES_PAGE_SIZE_OPTIONS.map(n => (
+                                <SelectItem key={n} value={String(n)} className="text-xs">{n}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <span className="text-xs text-muted-foreground">per page</span>
+                </div>
+                {processed.length > pageSize && (
+                    <Pagination
+                        page={page}
+                        pageSize={pageSize}
+                        hasNextPage={hasNextPage}
+                        totalCount={processed.length}
+                        onPageChange={setPage}
+                    />
+                )}
+            </div>
         </div>
     );
 }
@@ -2709,6 +3196,46 @@ function DetailSection({ title, icon: Icon, children }: { title: string; icon: a
         </div>
     );
 }
+
+/* ── Work authorization ───────────────────────────────────────────────
+ * One canonical status. `is_permanent_resident` / `is_citizen` are derived
+ * columns, not independently editable fields — they used to render as three
+ * separate "Unknown" rows that could disagree with each other.
+ * Mirrors routes/admin/drivers.py::work_authorization_view; the backend ships
+ * the same projection as `work_authorization` on every driver row and this
+ * local copy only recomputes it after an optimistic post-save merge. */
+const WORK_AUTH_LABELS: Record<string, string> = {
+    citizen: "Canadian citizen",
+    permanent_resident: "Permanent resident",
+    indefinite: "Work permit — no expiry",
+    expiring: "Work permit — expires",
+    unknown: "Unknown",
+};
+type WorkAuthView = { status: string; label: string; citizen: string; permanent_resident: string; expires_at: string | null };
+
+function workAuthLocal(driver: any): WorkAuthView {
+    const raw = String(driver?.work_authorization_status || "").toLowerCase();
+    let status = WORK_AUTH_LABELS[raw] ? raw : "unknown";
+    // Legacy rows imported before the status column existed carry only the
+    // booleans — promote them so those drivers do not read as "Unknown".
+    if (status === "unknown") {
+        if (driver?.is_citizen === true) status = "citizen";
+        else if (driver?.is_permanent_resident === true) status = "permanent_resident";
+    }
+    const flag = (matches: boolean) => (status === "unknown" ? "unknown" : matches ? "yes" : "not_applicable");
+    return {
+        status,
+        label: WORK_AUTH_LABELS[status],
+        citizen: flag(status === "citizen"),
+        permanent_resident: flag(status === "permanent_resident"),
+        expires_at: status === "expiring" ? (driver?.work_eligibility_expiry_date ?? null) : null,
+    };
+}
+
+/** Backend projection when present, local mirror otherwise. */
+const workAuth = (driver: any): WorkAuthView => (driver?.work_authorization as WorkAuthView) || workAuthLocal(driver);
+
+const WORK_AUTH_FLAG_LABELS: Record<string, string> = { yes: "Yes", not_applicable: "Not applicable", unknown: "Unknown" };
 
 function DetailField({ icon: Icon, label, value, mono }: { icon: any; label: string; value: string; mono?: boolean }) {
     return (
@@ -2752,8 +3279,14 @@ function CopyableField({ icon: Icon, label, value }: { icon: any; label: string;
     );
 }
 
-function EditField({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (v: string) => void; type?: string }) {
-    return <div><label className="text-[11px] text-muted-foreground mb-1 block">{label}</label><Input type={type} value={value} onChange={e => onChange(e.target.value)} className="h-9 text-sm" /></div>;
+function EditField({ label, value, onChange, type = "text", placeholder, hint }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string }) {
+    return (
+        <div>
+            <label className="text-[11px] text-muted-foreground mb-1 block">{label}</label>
+            <Input type={type} value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} className="h-9 text-sm" />
+            {hint && <p className="text-[10px] text-muted-foreground mt-1">{hint}</p>}
+        </div>
+    );
 }
 
 function EditBooleanField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
@@ -2845,7 +3378,23 @@ function DocExpirySummaryCard({ label, summary }: { label: string; summary: DocS
     );
 }
 
-function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string | null; onPreview: (url: string) => void; onReview: (id: string, action: "approved" | "rejected") => void }) {
+function DocCard({ d, docBusy, driverName, onPreview, onReview }: { d: any; docBusy: string | null; driverName: string; onPreview: (url: string) => void; onReview: (id: string, action: "approved" | "rejected") => void }) {
+    const { toast } = useToast();
+    const [downloading, setDownloading] = useState(false);
+
+    const onDownload = async () => {
+        setDownloading(true);
+        try {
+            await downloadDriverDocument(d.id, driverName, d.document_type || "document");
+        } catch (e: any) {
+            // Surfaced, not swallowed: a document that won't download is the
+            // difference between filing a regulator submission and not.
+            toast({ title: "Download failed", description: e?.message ?? "Unknown error", variant: "destructive" });
+        } finally {
+            setDownloading(false);
+        }
+    };
+
     const exp = d.expiry_date || d.expires_at;
     const expired = exp && new Date(exp) < new Date();
     const isImage = d.document_url && /\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)/i.test(d.document_url);
@@ -2867,9 +3416,16 @@ function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string 
                 </div>
                 {d.rejection_reason && <p className="text-[11px] text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1"><AlertTriangle className="h-3 w-3 inline mr-1" />{d.rejection_reason}</p>}
                 <div className="flex items-center gap-1.5 pt-1">
-                    <Button variant="outline" size="xs" className="flex-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
-                    <Button variant="outline" size="xs" className="flex-1 text-red-600 border-red-200 hover:bg-red-50" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
+                    <Button variant="outline" size="xs" className="flex-1 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
+                    <Button variant="outline" size="xs" className="flex-1 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
                 </div>
+                {/* Saving the file to disk had no affordance at all — the card
+                    could only preview, approve, or reject. Admins need the
+                    actual file to attach to a regulator email (e.g. sending a
+                    criminal record check to SGI). */}
+                <Button variant="outline" size="xs" className="w-full" disabled={!d.document_url || downloading} onClick={onDownload}>
+                    {downloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} Download file
+                </Button>
             </div>
         </div>
     );

@@ -85,7 +85,7 @@ jobs:
         id: codecov_upload
         if: always()
         continue-on-error: true
-        uses: codecov/codecov-action@f2274c2c340e0c81c8f7dc407b2a477b8935f171 # v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           file: ./backend/coverage.xml
           flags: backend
@@ -175,7 +175,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@f2274c2c340e0c81c8f7dc407b2a477b8935f171 # v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           file: ./frontend/coverage/coverage-final.json
           flags: frontend
@@ -228,7 +228,7 @@ jobs:
         id: codecov_upload
         if: always()
         continue-on-error: true
-        uses: codecov/codecov-action@f2274c2c340e0c81c8f7dc407b2a477b8935f171 # v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           file: ./driver-app/coverage/coverage-final.json
           flags: driver-app
@@ -292,7 +292,7 @@ jobs:
         id: codecov_upload
         if: always()
         continue-on-error: true
-        uses: codecov/codecov-action@f2274c2c340e0c81c8f7dc407b2a477b8935f171 # v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           file: ./rider-app/coverage/coverage-final.json
           flags: rider-app

@@ -10,6 +10,10 @@
  * Code under test: rider-app/store/rideStore.ts::triggerEmergency (~line 501)
  */
 
+import { useRideStore } from '../rideStore';
+import api from '@shared/api/client';
+import { Alert, Linking } from 'react-native';
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
   Alert: { alert: jest.fn() },
@@ -36,10 +40,6 @@ jest.mock('@shared/store/authStore', () => ({
   registerLogoutCallback: jest.fn(),
   useAuthStore: { getState: jest.fn(() => ({ user: null, token: null })) },
 }));
-
-import { useRideStore } from '../rideStore';
-import api from '@shared/api/client';
-import { Alert, Linking } from 'react-native';
 
 const mockPost = api.post as jest.Mock;
 const mockAlert = Alert.alert as jest.Mock;

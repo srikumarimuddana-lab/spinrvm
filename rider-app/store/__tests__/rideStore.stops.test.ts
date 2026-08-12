@@ -13,6 +13,8 @@
  * Code under test: rider-app/store/rideStore.ts addStop / removeStop / updateStop
  */
 
+import { useRideStore } from '../rideStore';
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
   getItem: jest.fn(() => Promise.resolve(null)),
@@ -32,8 +34,6 @@ jest.mock('@shared/store/authStore', () => ({
 jest.mock('expo-router', () => ({
   router: { push: jest.fn(), replace: jest.fn() },
 }));
-
-import { useRideStore } from '../rideStore';
 
 const makeLocation = (address: string, lat = 52.13, lng = -106.67) => ({
   address,

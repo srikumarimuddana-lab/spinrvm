@@ -12,6 +12,12 @@
 
 // ── Module mocks (before any import) ──────────────────────────────────────
 
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+import { renderHook, act } from '@testing-library/react-native';
+import { useRiderSocket } from '../useRiderSocket';
+import { useRideStore } from '../../store/rideStore';
+
 jest.mock('@shared/api/client', () => ({
   ensureFreshToken: jest.fn().mockResolvedValue(undefined),
 }));
@@ -71,12 +77,6 @@ class MockWebSocket {
 
 const instances: MockWebSocket[] = [];
 (global as any).WebSocket = MockWebSocket;
-
-// ── Tests ──────────────────────────────────────────────────────────────────
-
-import { renderHook, act } from '@testing-library/react-native';
-import { useRiderSocket } from '../useRiderSocket';
-import { useRideStore } from '../../store/rideStore';
 
 beforeEach(() => {
   instances.length = 0;

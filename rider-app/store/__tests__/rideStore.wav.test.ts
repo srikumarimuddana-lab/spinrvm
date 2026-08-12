@@ -11,6 +11,8 @@
 
 import { useRideStore } from '../rideStore';
 
+import api from '@shared/api/client';
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
   getItem: jest.fn(() => Promise.resolve(null)),
@@ -32,8 +34,6 @@ jest.mock('@shared/store/authStore', () => ({
   useAuthStore: { getState: () => ({ user: { id: 'user-test' } }) },
 }));
 jest.mock('@shared/services/errorReporting', () => ({ recordNonFatal: jest.fn() }));
-
-import api from '@shared/api/client';
 
 const mockApi = api as jest.Mocked<typeof api>;
 

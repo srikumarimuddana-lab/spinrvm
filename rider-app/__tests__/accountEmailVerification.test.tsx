@@ -22,6 +22,9 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { create } from 'zustand';
 
+import AccountScreen from '../app/(tabs)/account';
+import { useAuthStore } from '@shared/store/authStore';
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 
 const mockPush = jest.fn();
@@ -94,9 +97,6 @@ jest.mock('@shared/store/authStore', () => {
   const useAuthStore = createStore(() => ({ user: mockDefaultUser, logout: jest.fn() }));
   return { useAuthStore };
 });
-
-import AccountScreen from '../app/(tabs)/account';
-import { useAuthStore } from '@shared/store/authStore';
 
 let mountedRenderer: TestRenderer.ReactTestRenderer | null = null;
 

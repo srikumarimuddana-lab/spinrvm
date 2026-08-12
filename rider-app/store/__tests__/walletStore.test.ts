@@ -4,6 +4,9 @@
  * All network calls are mocked — no real HTTP occurs.
  */
 
+import { useWalletStore } from '../walletStore';
+import api from '@shared/api/client';
+
 jest.mock('@shared/api/client', () => ({
   ...jest.requireActual('@shared/api/client'),
   __esModule: true,
@@ -15,9 +18,6 @@ jest.mock('@shared/api/client', () => ({
     delete: jest.fn(),
   },
 }));
-
-import { useWalletStore } from '../walletStore';
-import api from '@shared/api/client';
 
 const mockApi = api as jest.Mocked<typeof api>;
 

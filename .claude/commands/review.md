@@ -2,7 +2,7 @@
 
 Route the current diff to the specialist subagent(s) that actually cover it,
 run a lightweight generic code-quality pass yourself, and present one
-consolidated report. This command does not reinvent domain rules — the 16
+consolidated report. This command does not reinvent domain rules — the 19
 `spinr-*` subagents already encode them in more depth than any inline
 checklist here could; this command's job is dispatch, not duplication.
 
@@ -51,6 +51,9 @@ different failure mode over the same lines.
 | New/changed Sentry captures, metric emission, log statements, or background loops | `spinr-observability-reviewer` |
 | `rider-app/`, `driver-app/`, `admin-dashboard/` UI-surface files | `spinr-accessibility-reviewer` |
 | A diff adding a ride-state transition, fare-calc branch, auth/RLS policy, or Stripe webhook type; or touching a module with a stated coverage minimum | `spinr-test-coverage-reviewer` |
+| `rider-app/`, `driver-app/`, `admin-dashboard/` UI-surface files (brand/theme/loading-empty-error-state completeness — pairs with `spinr-accessibility-reviewer`, different lens) | `spinr-design-consistency-reviewer` |
+| Corporate report/export code (`routes/corporate_company_bookings.py`, admin-dashboard corporate report views, any `*export*`/`*report*` file touching `corporate_*`) | `spinr-corporate-reporting-reviewer` |
+| A multi-step user-facing flow (booking, payment, document upload) spanning network round-trips, a `shared/` contract change, or code reading client-supplied timestamps | `spinr-edge-case-reviewer` |
 
 `spinr-regulatory-compliance-checker` explicitly isn't path-scoped in its own
 definition ("compliance issues can appear anywhere") — if the diff touches
@@ -64,7 +67,7 @@ force an irrelevant subagent to run just to have output.
 
 ## 3 · Generic code-quality pass (inline, not delegated)
 
-None of the 16 subagents cover this — it's intentionally generic, not
+None of the 19 subagents cover this — it's intentionally generic, not
 Spinr-specific, so keep it here rather than inventing another subagent for it:
 
 - Python: type hints present, no bare `except:` clauses

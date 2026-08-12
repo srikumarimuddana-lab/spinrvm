@@ -264,6 +264,44 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     }
     if ride.get("requires_wav"):
         _dispatch_filter["is_wav"] = True
+    # ── Cross-service-area ride guard ─────────────────────────────
+    # A driver approved for Saskatoon must never receive a Regina ride offer
+    # just because they happen to be physically within the search radius.
+    # Build the set of service area IDs whose drivers may serve this ride:
+    #   • the ride's own area
+    #   • its parent (so parent-area drivers serve sub-area rides)
+    #   • direct children (so sub-area drivers serve parent-area rides)
+    # Drivers whose service_area_id is NULL (unapproved) are also excluded.
+    _compatible_area_ids: Optional[list] = None
+    if ride.get("service_area_id"):
+        _compatible_set: set = {ride["service_area_id"]}
+        try:
+            _sa_row = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
+            if _sa_row and _sa_row.get("parent_service_area_id"):
+                _compatible_set.add(_sa_row["parent_service_area_id"])
+            _child_areas = await _deps.db_supabase.get_rows(
+                "service_areas",
+                {"parent_service_area_id": ride["service_area_id"], "is_active": True},
+                columns="id",
+                limit=50,
+            )
+            for _ca in _child_areas or []:
+                _compatible_set.add(_ca["id"])
+        except Exception:
+            logger.error(
+                "[DISPATCH] service-area guard lookup failed for area=%s — failing open",
+                ride["service_area_id"],
+                exc_info=True,
+            )
+            _compatible_set = None  # type: ignore[assignment]
+        if _compatible_set is not None:
+            _compatible_area_ids = list(_compatible_set)
+            _dispatch_filter["service_area_id"] = {"$in": _compatible_area_ids}
+            logger.info(
+                "[DISPATCH] service-area guard: ride area=%s, compatible driver areas=%s",
+                ride["service_area_id"],
+                _compatible_area_ids,
+            )
     # A transient Supabase failure here is NOT "no drivers" — it raises to the
     # match_driver_to_ride recovery shell, which re-arms the retry chain with
     # backoff instead of letting the ride strand until the sweeper cancels it.
@@ -274,7 +312,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # carries encrypted PII (address, licence, vehicle details) that this hot
         # path (up to 500 rows every dispatch + retry, every replica) never needs;
         # the offer payload is built from the post-claim get_driver_by_id re-read.
-        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
+        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
         limit=500,
     )
 
@@ -540,10 +578,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 }
                 if ride.get("requires_wav"):
                     _casc_filter["is_wav"] = True
+                if _compatible_area_ids is not None:
+                    _casc_filter["service_area_id"] = {"$in": _compatible_area_ids}
                 _casc_pool = await _deps.db_supabase.get_rows(
                     "drivers",
                     _casc_filter,
-                    columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
+                    columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
                     limit=500,
                 )
                 # Fix 4: Presence filter using _checked variant so a Redis outage

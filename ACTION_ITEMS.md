@@ -5639,7 +5639,8 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   C17/C19 lesson). Then a device smoke: gestures (bottom sheets, map pan,
   hold-to-confirm SOS), safe-area insets, offline banner, driver onboarding
   date picker, and confirm EAS Observe app-start metrics resume (the
-  `ObserveRoot` fix in `driver-app/app/_layout.tsx`).
+  `ObserveRoot` fix in BOTH apps' `app/_layout.tsx` — rider's duplicated
+  instance was caught in the 2026-08-12 pre-merge review).
 - [ ] **Try removing `ios.buildReactNativeFromSource: true`** (both
   app.config.ts): the expo-dev-launcher header mismatch it worked around was
   fixed upstream in SDK 56. One EAS iOS build with it off; if green, also

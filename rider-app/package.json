@@ -149,7 +149,6 @@
         "react-native",
         "react-native-reanimated",
         "react-native-worklets",
-        "react-native-gesture-handler",
         "react-native-webview",
         "react-native-screens",
         "@react-navigation/native",

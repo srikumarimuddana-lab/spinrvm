@@ -89,10 +89,10 @@ pyjwt==2.12.1             # via -r requirements.in, firebase-admin, supabase-aut
 pyotp==2.9.0              # via -r requirements.in
 pyparsing==3.3.2          # via httplib2, pyiceberg
 pyroaring==1.1.0          # via pyiceberg
-pytest==9.0.3             # via -r requirements.in, pytest-asyncio, pytest-cov, pytest-env
-pytest-asyncio==1.3.0     # via -r requirements.in
+pytest==9.1.1             # via -r requirements.in, pytest-asyncio, pytest-cov, pytest-env
+pytest-asyncio==1.4.0     # via -r requirements.in
 pytest-cov==7.1.0         # via -r requirements.in
-pytest-env==1.6.0         # via -r requirements.in
+pytest-env==1.7.0         # via -r requirements.in
 python-dateutil==2.9.0.post0  # via -r requirements.in, botocore, pandas, strictyaml
 python-dotenv==1.2.2      # via -r requirements.in, pydantic-settings, pytest-env, uvicorn
 python-multipart==0.0.27  # via -r requirements.in

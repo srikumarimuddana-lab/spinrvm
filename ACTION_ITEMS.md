@@ -7,7 +7,21 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-12 — B8 CLOSED (Regina/Saskatoon only, stopgap): applied
+_Last updated: 2026-08-12 — C21 ADDED (open): two PRs (#3719, #3728, the
+notification-throttling feature) merged via GitHub's native per-PR
+auto-merge before/without their full check set completing — #3719 merged
+while `CI/CD Pipeline`/`CI Guard Rails`/`Security Gates` were still
+`queued`/`in_progress` and one check had already failed; #3728 merged with
+2 pre-existing, unrelated `yarn audit` failures still red. Ruled out
+`dependabot-auto-merge.yml` (hard-gated to `dependabot[bot]`, neither PR
+qualifies) — points to `main`'s required-status-checks branch-protection
+list being stale relative to the ~57 checks that now run per PR. Same
+root-cause shape as C13 and the still-open mobile-bundle-smoke
+required-checks ask, and compounds with E8 (CODEOWNERS non-functional) —
+together, a PR can currently merge to `main` with zero human review and no
+guarantee the full check suite finished green. Not resolvable from an
+engineering session (needs repo-admin access to Settings → Branches and
+Settings → General). Prior same-day: B8 CLOSED (Regina/Saskatoon only, stopgap): applied
 the 1.4×/1.8× multiplier proposal against production to fix identical fares
 across vehicle tiers, but only after catching that live data had drifted
 since the original 2026-08-11 investigation (Regina's Economy rate was
@@ -6014,6 +6028,153 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `docs/android-build-strategy.md` runtime section). Converge on one major
   (likely 3.x) next time either app cuts a binary, and re-test the Android 16
   hang before any re-enable.
+
+### C21. Two PRs merged via GitHub's native auto-merge before/without their full check set completing — `main`'s required-status-checks list looks stale relative to the ~57 checks that actually run
+
+- [ ] **Status:** open — found 2026-08-12, watching PRs #3719 and #3728 (the
+  notification-throttling feature) end to end.
+- **How found:** both PRs were opened as drafts by the same account
+  (`ittalenthireca-sketch`), watched live via `subscribe_pr_activity`, then
+  taken out of draft and merged — both actions by that same account, not by
+  a human reviewer, and not by anything I (this session) triggered.
+  - **#3719:** merged at the instant it left draft, while `CI/CD Pipeline`,
+    `CI Guard Rails`, and `Security Gates` were all still `queued`/
+    `in_progress` — none had reported a result yet. One check
+    (`.github/workflows/maestro-e2e.yml`) had already **failed** before the
+    merge. Only `Migration Safety Check` had actually completed (success).
+  - **#3728:** merged with all 57 check runs accounted for, but 2 of them
+    (`G4b · yarn audit (JS deps)` for rider-app and driver-app) were
+    `failure` at merge time — pre-existing, unrelated to that PR's
+    backend-only diff, but still red on the PR at the moment of merge.
+- **Ruled out:** `.github/workflows/dependabot-auto-merge.yml` — the only
+  auto-merge logic anywhere in this repo's workflows — is hard-gated
+  `if: github.actor == 'dependabot[bot]'`. Neither PR was authored by that
+  actor, so this workflow could not have fired either merge. Grepped all of
+  `.github/workflows/` for any other `gh pr merge`/auto-merge invocation —
+  none exists. This points to **GitHub's native per-PR auto-merge toggle**
+  (`gh pr merge --auto`), which only waits for whatever branch protection
+  lists as *required* — not for every check that happens to run.
+- **Why it matters — same root-cause shape as three already-tracked items,
+  now demonstrated concretely on two real merges rather than described
+  abstractly for one check:**
+  - **C13** (workflows sometimes never firing at all on a PR) already
+    documents the same "gate isn't actually gating" theme for a different
+    mechanism (webhook/Actions-policy). This item is the complementary
+    case: checks *do* run, but merge doesn't wait for the ones that matter.
+  - **The unnamed mobile-bundle-smoke item** (P1 section, "Follow-up not yet
+    done: this check should be added to the repo's required-status-checks
+    branch-protection list for `main`... needs a repo admin") already
+    called out the exact mechanism suspected here, for one specific check.
+    This item generalizes it: with 57 check runs now firing per PR, it's
+    very likely only a small, possibly stale subset is actually in the
+    required list.
+  - **E8** (CODEOWNERS) separately confirms there is currently no
+    functioning human-review gate either — placeholder team handles GitHub
+    can't resolve, and "Require review from Code Owners" was never enabled
+    in branch protection (same "needs repo-admin access no session has had"
+    blocker). Combined with this item: a PR can go from open to merged on
+    `main` with **zero** human involvement and **zero** guarantee that
+    Security Gates / CI Guard Rails / the full test suite actually finished
+    green — which directly contradicts root `CLAUDE.md`'s "Pre-merge
+    release gates (mandatory while live app testing is active)" section.
+  - In both observed cases the actual diffs were fine (subtask 1-2 config
+    additive/inert; subtask 3-5's one real CI failure was caught, fixed, and
+    confirmed green in a follow-up commit before the second merge) — this is
+    a **process** near-miss, not a report of bad code reaching `main`. The
+    risk is the *next* PR that merges this way without a fix already pushed
+    in time.
+- **Not resolvable from an engineering session** — no repo-admin access to
+  read or change **Settings → Branches → main → required status checks**
+  (to compare the required list against the ~57 checks that actually run
+  and identify which ones — likely `CI Guard Rails`, `Security Gates` as a
+  whole, `maestro-e2e.yml`, `G4b/G4c` audits — are missing from it), or
+  **Settings → General → Allow auto-merge** (to confirm it's enabled
+  repo-wide, which the Dependabot workflow's own header comment already
+  states is a prerequisite for *that* workflow, but which also enables the
+  native per-PR toggle observed here for non-Dependabot actors).
+- **Acceptance:** a repo admin (1) reviews `main`'s required-status-checks
+  list against the full set of checks that actually run and adds the ones
+  that should block merge (at minimum: `CI Guard Rails`, `Security Gates`
+  summary, `backend-test`/`admin-test`/`rider-app-test`/`driver-app-test`,
+  `maestro-e2e.yml` once B25 gives it real coverage) — cross-reference the
+  mobile-bundle-smoke item's identical ask so both get fixed in one settings
+  pass, not two; (2) decides whether native per-PR auto-merge should stay
+  available to non-Dependabot actors at all, given there is currently no
+  functioning code-review gate (E8) to catch anything the required-checks
+  list itself misses; (3) once real GitHub team handles exist, files them
+  into `.github/CODEOWNERS` and enables "Require review from Code Owners"
+  per E8's existing acceptance criteria — the two fixes together are what
+  actually closes this gap, not required-checks alone.
+- **Files:** none — this is a GitHub repo-settings issue, not a workflow
+  YAML or application-code defect. No `.github/workflows/*.yml` change is
+  implicated.
+
+### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR)
+- [ ] **Status:** open — found 2026-08-03 while verifying PR #3382 (full-suite
+  pass at that time: backend pytest 8742 passed/0 failed, rider-app jest
+  434/434, driver-app jest 337/337, admin-dashboard vitest 157/157 — all
+  green). Running a bare `npx tsc --noEmit` per surface afterward surfaced
+  errors in all three, none in any file that PR (or any recent PR) touched —
+  confirmed by diffing each error's file path against the PR's
+  changed-files list.
+- **What's wrong, two distinct causes:**
+  1. **rider-app (7 errors) + driver-app (4 errors):** every error is
+     `Cannot find module 'expo-router/react-navigation' or its corresponding
+     type declarations'`, e.g. `app/(tabs)/account.tsx`,
+     `hooks/useBottomSheetGuard.ts` (rider-app),
+     `components/activity/ActivityView.tsx` (driver-app). The same subpath
+     also fails to resolve under Jest (`Cannot find module
+     'expo-router/react-navigation'`) in exactly one test suite per app —
+     `hooks/__tests__/useBottomSheetGuard.test.tsx` (rider-app),
+     `__tests__/components/ActivityView.test.tsx` (driver-app) — both
+     already-known pre-existing failures, not new. The module exists and is
+     imported successfully at runtime (Expo's Metro bundler resolves it
+     fine); it's specifically `tsc`'s and Jest's module resolution that
+     can't find its type declarations/CommonJS shape in this environment.
+  2. **admin-dashboard (26 errors), all confined to `*.test.ts(x)` files:**
+     missing `@testing-library/jest-dom` matcher types (`toBeInTheDocument`,
+     `toBeDisabled` — `driver-statements-panel.test.tsx`) and missing Vitest
+     global types (`describe`/`it`/`expect` — `route-segments.test.ts`).
+     `admin-dashboard`'s `tsconfig.json` doesn't register Vitest's ambient
+     types for a standalone `tsc` run; `vitest run` itself passed 157/157
+     clean because Vitest's own transform/type-layer already has these
+     globals, so this is a `tsc`-only artifact, not a real build or runtime
+     issue.
+- **Why it matters:** neither of these fails today's actual gates (`yarn
+  jest --ci`, `vitest run`, and whatever CI runs are what's authoritative),
+  but a bare `tsc --noEmit` is a normal thing to run when verifying a PR
+  (as this session was asked to do) or to add as a CI check later — right
+  now it produces guaranteed false-positive noise on every run regardless of
+  what changed, which trains reviewers to ignore `tsc` output entirely and
+  would mask a real new type error introduced in the same file.
+- **Fix, per cause:**
+  1. Track down why `expo-router/react-navigation`'s type declarations
+     aren't resolving — likely a missing/stale `@types` entry, an
+     `expo-router` version whose subpath exports changed, or a
+     `moduleResolution`/`paths` config gap in `rider-app/tsconfig.json` and
+     `driver-app/tsconfig.json`. Fix should make both `tsc --noEmit` and the
+     one Jest suite per app (`useBottomSheetGuard.test.tsx`,
+     `ActivityView.test.tsx`) pass.
+  2. Add `vitest/globals` (or explicit `import { describe, it, expect } from
+     'vitest'`) and `@testing-library/jest-dom`'s type augmentation to
+     `admin-dashboard/tsconfig.json`'s `types` array (or an included
+     `vitest-setup.d.ts`), matching whatever the project's `vitest.config.ts`
+     `setupFiles` already registers at runtime.
+- **Risk if left undone:** low today (doesn't block any real gate), but
+  compounds — every new file that imports `expo-router/react-navigation` or
+  every new admin-dashboard test file adds more permanent noise, and it's a
+  standing trap for anyone who later wires `tsc --noEmit` into CI as an
+  actual gate (it would be red from day one for reasons unrelated to their
+  diff).
+- **Risk of implementing:** low — type-declaration/tsconfig-only fix, no
+  runtime behavior change in any of the three apps.
+- **Verification once implemented:** `npx tsc --noEmit` clean (0 errors) in
+  all three surfaces; `yarn jest --ci` (rider-app, driver-app) and `vitest
+  run` (admin-dashboard) still fully green, including the two previously-
+  failing-to-load Jest suites now loading successfully.
+- **Files:** `rider-app/tsconfig.json`, `driver-app/tsconfig.json`,
+  `admin-dashboard/tsconfig.json` (+ possibly a new `vitest-setup.d.ts` in
+  admin-dashboard); no application code.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

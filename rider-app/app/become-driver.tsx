@@ -16,11 +16,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuthStore } from '@shared/store/authStore';
-// eslint-disable-next-line import/no-named-as-default -- keep the default
-// import: many test files jest.mock('@shared/config/spinr.config', () => ({
-// default: {...} })) without a matching named 'SpinrConfig' export, so
-// switching to a named import breaks those mocks (confirmed via
-// utils/__tests__/aiChat.test.ts when the same change was tried there).
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed via utils/__tests__/aiChat.test.ts when
+// the same change was tried there).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 import { showToast } from '../store/toastStore';

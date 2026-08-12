@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Pressable,
   ScrollView, Animated, Dimensions,
@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
@@ -35,8 +36,8 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
   // ─── Animations ───────────────────────────────────────────────────────────
   // Always mounted — no conditional rendering. Fabric crashes when you insert
   // children into an absoluteFill view after mount. We animate instead.
-  const slideAnim = useRef(new Animated.Value(SCREEN_H)).current;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useAnimatedValue(SCREEN_H);
+  const fadeAnim = useAnimatedValue(0);
 
   useEffect(() => {
     Animated.parallel([

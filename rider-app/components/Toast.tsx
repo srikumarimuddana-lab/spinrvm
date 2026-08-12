@@ -9,6 +9,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useToastStore, type ToastVariant } from '../store/toastStore';
+import { useAnimatedValue, useStableRef } from '../hooks/useAnimatedValue';
 
 const VARIANT_CONFIG: Record<ToastVariant, { bg: string; icon: string }> = {
   info: { bg: '#1a73e8', icon: 'information-circle' },
@@ -24,11 +25,24 @@ export default function Toast() {
   const current = useToastStore((s) => s.current);
   const dismiss = useToastStore((s) => s.dismiss);
 
-  const translateY = useRef(new Animated.Value(-120)).current;
-  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useAnimatedValue(-120);
+  const opacity = useAnimatedValue(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const panResponder = useRef(
+  const hide = () => {
+    if (timer.current) clearTimeout(timer.current);
+    Animated.parallel([
+      Animated.timing(translateY, { toValue: -120, duration: 200, useNativeDriver: true }),
+      Animated.timing(opacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => dismiss());
+  };
+
+  // Stable gesture responder — created once, never reassigned. Handlers
+  // close over `translateY` (a stable Animated.Value) and `hide` (a stable
+  // function reference for this component), so the closure stays valid for
+  // the component's lifetime. Declared after `hide` so nothing here reads
+  // it before its declaration.
+  const panResponder = useStableRef(() =>
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) => g.dy < -5,
       onPanResponderMove: (_, g) => {
@@ -45,15 +59,7 @@ export default function Toast() {
         }
       },
     }),
-  ).current;
-
-  const hide = () => {
-    if (timer.current) clearTimeout(timer.current);
-    Animated.parallel([
-      Animated.timing(translateY, { toValue: -120, duration: 200, useNativeDriver: true }),
-      Animated.timing(opacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => dismiss());
-  };
+  );
 
   // Enter animation — runs only when a NEW toast appears (id changes). A
   // deduped repeat keeps the same id, so the banner does not slide back off

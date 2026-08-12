@@ -39,6 +39,7 @@ import { useResponsive } from '@shared/utils/responsive';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { Analytics } from '@shared/analytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
 import { selectDefaultCardId } from '../utils/selectDefaultCard';
 
@@ -218,7 +219,7 @@ function RideOptionsScreenContent() {
   const mapRef = useRef<MapView>(null);
   const sheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['40%', '68%'], []);
-  const fareChevronAnim = useRef(new Animated.Value(0)).current;
+  const fareChevronAnim = useAnimatedValue(0);
   const { scheduleReminder } = useScheduledRideReminder();
 
   // Service area boundary polygons — fetched once per mount and shown as a
@@ -1290,13 +1291,13 @@ function AnimatedVehicleCard({
   estimate: any; index: number; isSelected: boolean; isAvailable: boolean;
   onPress: (i: number) => void; styles: any; colors: any; appliedPromo: any;
 }) {
-  const scaleAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
+  const scaleAnim = useAnimatedValue(isSelected ? 1 : 0);
   // Car-image emphasis. Driven by a native SCALE transform (below) inside a
   // fixed-size container, so it rides the native driver like scaleAnim — the
   // old version animated width/height (useNativeDriver:false), which ran on the
   // JS thread AND changed the row height, reflowing the whole list on every
   // selection switch (the "shaking").
-  const imageSizeAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
+  const imageSizeAnim = useAnimatedValue(isSelected ? 1 : 0);
 
   useEffect(() => {
     Animated.spring(scaleAnim, {

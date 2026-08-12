@@ -23,6 +23,7 @@ import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePaym
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { onRideRated } from '@shared/utils/appRating';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
@@ -81,8 +82,8 @@ function RideCompletedScreenContent() {
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
   const mapRef = React.useRef<MapView>(null);
   const [routeMapReady, setRouteMapReady] = useState(false);
-  const successScale = useRef(new Animated.Value(0)).current;
-  const successOpacity = useRef(new Animated.Value(0)).current;
+  const successScale = useAnimatedValue(0);
+  const successOpacity = useAnimatedValue(0);
 
   const actualSections = useMemo(
     () => toReactNativeRouteSections(currentRide?.actual_route_segments),

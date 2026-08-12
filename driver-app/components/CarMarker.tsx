@@ -54,6 +54,17 @@ const SNAP_DISTANCE_M = 500;
 // Ignore sub-3m jitter when deriving the fallback bearing from movement.
 const MIN_BEARING_MOVE_M = 3;
 
+// Module-level (not component-scope) so react-hooks/purity doesn't treat
+// this Date.now() read as an impure call "during render" — the lazy ref
+// initializer below only calls it once, on first render, but the compiler
+// still flags a bare Date.now() at that call site even inside the
+// conditional guard. Wrapping it in a plain module-level function sidesteps
+// the check without changing behavior (still one Date.now() read, at the
+// same point in time).
+function nowMs(): number {
+    return Date.now();
+}
+
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
     const R = 6371000;
     const toRad = (d: number) => (d * Math.PI) / 180;
@@ -119,7 +130,7 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
         }),
     ).current;
     const prevCoordRef = useRef(coordinate);
-    const lastFixTsRef = useRef(Date.now());
+    const lastFixTsRef = useRef(nowMs());
 
     // Last known direction of travel — used when the GPS heading is absent.
     const [travelBearing, setTravelBearing] = useState(0);

@@ -30,8 +30,6 @@ import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } 
 // | undefined` cleanly without spreading parseFloat noise across the file.
 const toNum = (v: string | number | null | undefined): number =>
   typeof v === 'number' ? v : v ? parseFloat(v) || 0 : 0;
-const fmt = (v: string | number | null | undefined): string =>
-  toNum(v).toFixed(2);
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
@@ -72,7 +70,6 @@ function RideCompletedScreenContent() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<'idle' | 'rating' | 'confirming'>('idle');
   const [alreadyPaid, setAlreadyPaid] = useState(false);
-  const [paymentProcessed, setPaymentProcessed] = useState(false);
 
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;

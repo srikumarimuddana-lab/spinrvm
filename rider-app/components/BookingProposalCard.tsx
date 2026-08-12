@@ -113,6 +113,12 @@ export default function BookingProposalCard({ proposal }: Props) {
   const estimate = pickEstimate(estimates, proposal);
 
   useEffect(() => {
+    // One-directional state-machine transition (quoting → ready, never
+    // back): phase IS a dep here, but the guard `phase === 'quoting'`
+    // means once it flips to 'ready' this branch can never fire again for
+    // the same mount — checked every setPhase call site in this file (186,
+    // 190, 207, 211, 216) and none transitions back to 'quoting'.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (phase === 'quoting' && estimate) setPhase('ready');
   }, [phase, estimate]);
 

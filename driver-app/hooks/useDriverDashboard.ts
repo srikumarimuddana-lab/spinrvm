@@ -388,6 +388,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       slideUpAnim.setValue(height);
       fadeAnim.setValue(0);
     }
+    // slideUpAnim/fadeAnim intentionally excluded — the same verified-safe
+    // stable useRef(...).current animation-driver idiom used throughout
+    // this app (created once at line 344-346, never reassigned). Listing a
+    // ref-derived value in a dependency array is itself a render-time ref
+    // read under react-hooks/refs (confirmed this round in otp.tsx's
+    // dotAnims — adding it there was tested and traded one violation for
+    // another). Their identity never changes, so excluding them doesn't
+    // change when this ActiveRidePanel show/hide animation fires — the only
+    // real trigger, rideState, is unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState]);
 
   // ─── Refresh user + driver profile on mount and on foreground ────
@@ -978,7 +988,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         console.warn('[WS] Unknown message type received:', data.type);
         break;
     }
-  }, [setIncomingRide, resetRideState, offerSound]);
+    // fetchEarnings is a stable driverStore action; foregroundLocationTransport
+    // is useCallback([]) (empty deps, closes over nothing reactive — just
+    // calls api.post) — both genuinely stable, safe to add directly. Also
+    // moot for connectWebSocket's own stability either way: the ref
+    // indirection below already decouples it from handleWSMessage's identity.
+  }, [setIncomingRide, resetRideState, offerSound, fetchEarnings, foregroundLocationTransport]);
 
   // Stable ref to the message handler so connectWebSocket's identity
   // doesn't flip every time the handler closure changes.
@@ -1206,7 +1221,19 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         setConnectionState('disconnected');
       }
     };
-  }, []);
+    // fetchActiveRide is a driverStore *action* (defined once inside
+    // create(), never redefined by any subsequent set() call — zustand's
+    // set() shallow-merges, so an action absent from a partial update keeps
+    // its original reference forever), NOT reactive *state* like `user`.
+    // The comment above (userRef/isOnlineRef/handleWSMessageRef) explains
+    // why this callback deliberately avoids closing over reactive STATE
+    // values directly — doing so would recreate this callback on every
+    // store update and tear down the socket. An action's identity never
+    // changes, so it carries none of that risk; verified against zustand's
+    // merge semantics (grepped driverStore.ts for any full-state
+    // reassignment that could redefine fetchActiveRide — none exists, only
+    // shallow set({...partial}) calls throughout).
+  }, [fetchActiveRide]);
 
   useEffect(() => {
     if (!isOnline || !user) {
@@ -1530,7 +1557,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       if (next === 'active') consumePendingOffer();
     });
     return () => sub.remove();
-  }, [user, consumePendingOffer]);
+    // hydrateDriverRideState/fetchActiveRide are stable driverStore actions
+    // (same verified-stable-action reasoning as connectWebSocket's
+    // fetchActiveRide fix above); adding them doesn't change when this
+    // mount/foreground-resume effect fires — that's still driven entirely
+    // by `user` and the AppState listener, both unchanged.
+  }, [user, consumePendingOffer, hydrateDriverRideState, fetchActiveRide]);
 
   // ─── Hydrate the online flag from the authoritative profile (once) ──
   // isOnline is seeded at mount from driverData, which is frequently null on a
@@ -1575,7 +1607,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (isOnline) {
       fetchEarnings('today');
     }
-  }, [isOnline]);
+    // fetchEarnings is a stable driverStore action; adding it doesn't
+    // change when this effect fires.
+  }, [isOnline, fetchEarnings]);
 
   // ─── Foreground FCM Message Handler ──────────────────────────────
   // FCM token registration + permissions live in app/_layout.tsx via
@@ -1689,7 +1723,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [isOnline, user, setIncomingRide, resetRideState]);
+    // offerSound is now a stable object (useRideOfferSound was fixed to
+    // memoize its returned { play, stop } — see that file's comment) so
+    // it's safe to add here. Before that fix it was a fresh object every
+    // render; naively adding it here would have re-subscribed
+    // onForegroundMessage on every render, risking a missed FCM message in
+    // the brief unsubscribe/resubscribe gap on this ride-offer delivery
+    // path — fixed at the root instead of masked with a suppression.
+  }, [isOnline, user, setIncomingRide, resetRideState, offerSound]);
 
   return {
     // State

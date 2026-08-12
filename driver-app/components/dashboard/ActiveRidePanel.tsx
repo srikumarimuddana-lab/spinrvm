@@ -210,8 +210,10 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // Hydrate the driver's saved navigation-app choice once so the
   // navigate buttons launch the right app even on a cold start.
   useEffect(() => {
+    // loadNavApp is a stable navStore action; adding it doesn't change
+    // this mount-only effect's firing.
     loadNavApp();
-  }, []);
+  }, [loadNavApp]);
 
   // Phase changes always re-open the sheet — the PIN keypad or the new
   // action buttons must never appear while the sheet is collapsed.

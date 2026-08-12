@@ -161,7 +161,11 @@ function ProfileScreenInner() {
 
       refreshProfile();
       return () => { cancelled = true; };
-    }, [])
+      // refetchDriverMe is TanStack Query's memoized refetch for this query
+      // (stable unless the query key changes); adding it just ensures a
+      // fresh reference is used if that ever happens, instead of a
+      // permanently stale closure from first mount.
+    }, [refetchDriverMe])
   );
 
   const handlePickPhoto = () => {

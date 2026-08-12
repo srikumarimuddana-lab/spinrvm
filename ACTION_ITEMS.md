@@ -6634,6 +6634,145 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       `hooks/__tests__/useDriverDashboard.chat.test.ts` (8/8).
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier3-driver-app.md`.
+  - **Round 4 (2026-08-12, driver-app only, branch
+    `claude/c20-lint-tier4-driver-app`)**: closed the last deferred
+    driver-app category — `react-hooks/exhaustive-deps` — the category
+    flagged from round 1 onward as the highest-risk one and deliberately
+    saved for last, needing the smallest batches and most scrutiny of any
+    C20 category (unlike the earlier, more mechanical categories, this
+    one can hide a genuine stale-closure bug on one side and a genuine
+    "adding the dep re-fires something unwanted" regression on the
+    other). rider-app's exhaustive-deps round is out of scope here,
+    handled in parallel by a sibling session in a separate worktree.
+    - Fresh `npx eslint . --format json` at branch start: 38
+      `react-hooks/exhaustive-deps` findings across 20 files (confirmed
+      against the actual branch-start commit, matching the task brief
+      exactly — not stale). End of round: **0**. Every one of the 38 got
+      individual review (full effect/callback body read, referenced
+      value's definition read, stability traced) — no bulk/batch pass.
+      Total driver-app lint problems: 57 (8 errors, 49 warnings) → 19 (8
+      errors, 11 warnings) — the unchanged 8 errors are all pre-existing
+      `react-hooks/purity`/`refs`/`immutability` findings untouched by
+      this round (see below); the remaining 11 warnings are pre-existing
+      `@typescript-eslint/no-require-imports` in `__tests__/` files,
+      also untouched.
+    - Categorization of the 38 (per the task's a/b/c/d scheme):
+      - **(a) safe to add directly — 21/38**: the missing value was
+        already stable — a Zustand store action/setter (verified each
+        one is defined once inside that store's `create()` call and never
+        redefined by a later `set()`, since `set()` shallow-merges and
+        actions are never part of any partial-update payload — e.g.
+        `initializeAuth`/`initializeLocation`, `clearError`,
+        `fetchPayoutHistory`, `loadNavApp`, `fetchEarnings`,
+        `fetchActiveRide`, `hydrateDriverRideState`, `setChatMessages`,
+        `loadLanguage`/`loadNavApp`/`loadAlertPrefs`), a `useRef` object
+        itself (not its `.current`-extracted value — `mapRef`), a route
+        param that's immutable for the mounted screen's lifetime
+        (`phoneNumber`), `router` (already an established stable/safe dep
+        pattern elsewhere in this codebase), or a pure derivation of an
+        already-listed dep (`CHAT_STORAGE_KEY` from `rideId`). Two were
+        cleanup rather than additions: extracting an inline
+        `useDriverStore.getState().error` / `navigationRef.isReady()` /
+        `driverMe?.is_wav` expression the linter flagged as
+        unstatically-checkable into a plain variable first (same value,
+        same re-run trigger, just satisfies the rule honestly), and
+        removing a module-level `StyleSheet.create()` constant
+        (`styles`) from a `useCallback`'s deps per the linter's own
+        "outer scope values aren't valid dependencies" guidance.
+      - **(b) real fix, stabilized safely — 7/38**: an unstable
+        function/value was wrapped in `useCallback`/fixed at its root so
+        it could be added without extra re-runs — `become-driver.tsx`'s
+        `fetchVehicleTypes`/`saveDraft`, `vehicle-info.tsx`'s
+        `fetchVehicleTypes`, `ride-detail.tsx`'s `loadRide` (all
+        `useCallback`'d on their one genuinely-reactive input, already an
+        existing dep), `profile.tsx`'s `useFocusEffect` closing over
+        TanStack Query's `refetchDriverMe` with an empty dep array
+        (permanently-stale-closure risk if that reference ever changed),
+        `destination-mode.tsx`'s `fetchDestination`. The most significant
+        of the 7: `hooks/useRideOfferSound.ts` returned a **fresh
+        `{ play, stop }` object literal every render** even though
+        `play`/`stop` themselves were already permanently stable
+        (`useCallback` with stable deps) — fixed by memoizing the
+        returned object (`useMemo(() => ({ play, stop }), [play, stop])`).
+        This was the one finding in the set that was a genuine
+        dispatch-adjacent risk: `useDriverDashboard.ts`'s FCM
+        foreground-ride-offer-message effect could not safely add
+        `offerSound` before this fix — doing so would have unsubscribed
+        + re-subscribed `onForegroundMessage` on every render, risking a
+        missed ride-offer FCM message in that gap. Fixed at the hook's
+        root (single consumer, verified via grep) instead of masked with
+        a suppression downstream.
+      - **(c) intentional exclusion, narrow suppression — 10/38**: 5 were
+        the "don't clobber an already-user-picked value" mount-only-fetch
+        guard pattern (`become-driver.tsx`/`profile-setup.tsx`'s
+        `serviceAreaId`, `payout.tsx`'s `loadData` and its 4
+        Promise.all'd functions — verified zero reactive closures across
+        all 4 before leaving as a suppression rather than a
+        useCallback-cascade on a money screen). 5 were the stable
+        `useRef(new Animated.Value(x)).current` animation-driver idiom
+        (`otp.tsx`'s `dotAnims`, `DriverIdlePanel.tsx`'s `goAnim`,
+        `DriverTopBar.tsx`'s `bannerHeight`, `RideOfferPanel.tsx`'s
+        `slideAnim`+`progressAnim`, `useDriverDashboard.ts`'s
+        `fadeAnim`+`slideUpAnim`) — **a genuinely new discovery this
+        round**: naively adding one of these (`otp.tsx`'s `dotAnims`) was
+        actually tested, and it traded one lint violation for a
+        different, worse one — a dependency array is evaluated during
+        render, so listing a ref-derived `.current` value there counts as
+        a render-time ref read under `react-hooks/refs` (which flagged
+        "Cannot access refs during render" at that exact line once
+        added). Every other instance of this idiom in the finding set was
+        left excluded for the same confirmed reason rather than
+        individually re-tested. One more: `profile-setup.tsx`'s
+        profile-already-complete-check effect deliberately excludes
+        `token`/`user` — that effect calls
+        `useAuthStore.setState({ user: fresh })` inside its own body, so
+        adding `user` as a dep would create a real (if likely benign)
+        feedback-loop risk this investigation could not fully verify
+        `router.replace()`'s idempotency against; excluded rather than
+        guessed into the deps array.
+      - **(d) needs a human decision — 0/38**: none. Every finding
+        resolved to (a), (b), or (c) with a traceable, documented reason;
+        none was left unfixed as ambiguous.
+    - Dispatch/insurance-period/earnings-adjacent files got dedicated,
+      isolated commits per CLAUDE.md's risk posture, each with the
+      specific behavioral trace in its own commit message:
+      `driver/(tabs)/index.tsx` (dashboard), `driver/payout.tsx` (money),
+      `app/index.tsx` + `profile-setup.tsx` (auth routing),
+      `RideOfferPanel.tsx` (ride-offer countdown), `ActiveRidePanel.tsx`
+      (active-ride bottom sheet), and `hooks/useDriverDashboard.ts` (WS +
+      dispatch-offer ingestion + online-flag), the last one split into 2
+      commits so the one real behavioral fix (`useRideOfferSound.ts`) is
+      independently revertable from the 5 mechanical additions. None of
+      the 38 findings touched a ride-state-machine transition, a
+      dispatch-offer accept/decline call, an insurance-period write, or a
+      wallet/fare write path directly — every fix is local UI-effect
+      wiring, a store-action dependency addition, or (for `offerSound`)
+      an object-identity stabilization one layer removed from the actual
+      WS/FCM message-handling logic, which is unchanged.
+    - **Discrepancy flagged, not silently absorbed**: `hooks/useDriverDashboard.ts`
+      still carries 6 pre-existing errors (1 `react-hooks/purity`, 4
+      `react-hooks/refs`, 1 `react-hooks/immutability`) and
+      `driver/(tabs)/index.tsx` carries the 2 already-documented
+      `react-hooks/refs` findings from round 2 — all 8 confirmed present
+      in the branch-start commit (unrelated to this round's changes) via
+      diff against `origin/main`. ACTION_ITEMS.md's round-2/3 bullets
+      describe `purity`/`immutability`/read-during-render `refs` as
+      closed to (near-)zero for driver-app; this file's residual 6 is a
+      discrepancy worth a human look, not something this round's
+      exhaustive-deps-only scope covers fixing.
+    - Verification: `yarn tsc --noEmit` clean before and after every
+      commit; full `yarn jest` at the end — **379/379 passing, 53/53
+      suites** (the previously-known `androidAutoDistribution.test.ts`
+      flake is confirmed fixed at its root per this round's task brief —
+      no failures of any kind, not excused as a known flake). Targeted
+      re-runs after touching risk-posture files:
+      `__tests__/components/ActiveRidePanel.test.tsx` (11/11),
+      `__tests__/components/RideOfferPanel.test.tsx` (17/17, twice — once
+      after the ref-suppression commit, once after the `offerSound`
+      root-cause fix), `hooks/__tests__/useDriverDashboard.chat.test.ts`
+      (8/8, twice, same reason).
+    - Full Change Impact Log:
+      `docs/change-log/2026-08-12-c20-lint-tier4-driver-app.md`.
 - [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
   ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
   SDK across the fleet, both still gated OFF on Android (hidden-API hang, see

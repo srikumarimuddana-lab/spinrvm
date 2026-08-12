@@ -46,6 +46,10 @@ export default function Index() {
   // the driver stuck on this screen with no way forward.
   useEffect(() => {
     if (!sessionRecoverable) {
+      // Reset the attempt counter once the session is no longer
+      // recoverable. Doesn't feed back into sessionRecoverable, and React
+      // bails out of a no-op re-render when this is already 0.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAttempts(0);
       return;
     }

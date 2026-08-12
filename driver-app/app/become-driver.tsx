@@ -216,12 +216,20 @@ export default function BecomeDriverScreen() {
   };
 
   useEffect(() => {
+    // Mount-only fetch + local-draft restore; both are async functions that
+    // set state after their own await, not synchronously at the top of the
+    // effect. Empty deps, runs once — no re-render loop risk.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRequirements();
     loadDraft();
   }, []);
 
   useEffect(() => {
     if (serviceAreaId) {
+      // Refetch + reset the selected vehicle type when the driver picks a
+      // different service area. setVehicleType('') doesn't feed back into
+      // serviceAreaId, so this can't loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchVehicleTypes(serviceAreaId);
       setVehicleType('');
     } else {

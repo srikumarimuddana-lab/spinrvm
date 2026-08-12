@@ -91,6 +91,9 @@ export default function AddressesScreen() {
     };
 
     useEffect(() => {
+        // Mount-only fetch; fetchAddresses sets state after its own await,
+        // not synchronously at the top of the effect. Empty deps, runs once.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchAddresses();
     }, []);
 

@@ -132,13 +132,19 @@ function PayoutScreen() {
     };
 
     useEffect(() => {
+        // Mount-only fetch; loadData sets state after its own await (via the
+        // 5 functions it Promise.all's), not synchronously at the top of the
+        // effect. Empty deps, runs once.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         loadData();
     }, []);
 
     // Seed the GST input from the cached driver row whenever it changes.
     // The hook has its own cache + background refetch, so this replaces
-    // the legacy `loadGstNumber()` round-trip entirely.
+    // the legacy `loadGstNumber()` round-trip entirely. One-way sync: local
+    // edits to gstNumber aren't fed back into driverMe, so this can't loop.
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (driverMe) setGstNumber(driverMe.gst_bn || '');
     }, [driverMe]);
 

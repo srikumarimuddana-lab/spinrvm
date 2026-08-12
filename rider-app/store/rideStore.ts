@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { Linking } from 'react-native';
 import { showToast } from './toastStore';
 import api, { SpinrApiError, hasAuthToken, getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';

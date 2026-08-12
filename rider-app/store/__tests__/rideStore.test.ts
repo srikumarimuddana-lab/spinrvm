@@ -321,9 +321,8 @@ describe('rideStore — hydrateActiveRide', () => {
       JSON.stringify({ currentRide: storedRide, currentDriver: null })
     );
 
-    let result: any;
     await act(async () => {
-      result = await useRideStore.getState().hydrateActiveRide?.();
+      await useRideStore.getState().hydrateActiveRide?.();
     });
 
     // hydrateActiveRide may not exist yet — verify the store has the method or skip

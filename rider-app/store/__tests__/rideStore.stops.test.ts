@@ -144,7 +144,6 @@ describe('rideStore — addStop / removeStop / updateStop (P1-9 / R11)', () => {
 
   describe('stops in fetchEstimates payload', () => {
     it('sends stops to backend on fetchEstimates', async () => {
-      const mockGet = jest.fn().mockResolvedValue({ data: [] });
       const mockPost = jest.fn().mockResolvedValue({ data: [] });
       const api = require('@shared/api/client').default;
       api.post = mockPost;

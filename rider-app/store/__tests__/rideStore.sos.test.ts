@@ -12,7 +12,7 @@
 
 import { useRideStore } from '../rideStore';
 import api from '@shared/api/client';
-import { Alert, Linking } from 'react-native';
+import { Alert } from 'react-native';
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
@@ -43,7 +43,6 @@ jest.mock('@shared/store/authStore', () => ({
 
 const mockPost = api.post as jest.Mock;
 const mockAlert = Alert.alert as jest.Mock;
-const mockOpenURL = Linking.openURL as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();

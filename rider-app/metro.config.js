@@ -59,6 +59,11 @@ config.resolver.extraNodeModules = {
 // Falling back to legacy main-field resolution loads Sentry's CJS build
 // (build/cjs/*) instead. Verified via bundle diff that @sentry/core is the ONLY
 // package whose resolution changes, so this is safe. See expo/expo#36589.
+// RE-TEST RECIPE (SDK 57 alignment pass, 2026-08-11): @sentry/react-native now
+// resolves ≥7.11, which may have fixed the frozen-ESM-namespace issue — but the
+// crash was RELEASE-BUILD-ONLY under Hermes, so flipping this flag requires a
+// release-build device test plus the same bundle-diff check, not just tsc/jest.
+// Deliberately left disabled; tracked in ACTION_ITEMS.
 config.resolver.unstable_enablePackageExports = false;
 
 // ── Web build: stub native-only packages ──────────────────────────────────
@@ -73,8 +78,10 @@ const WEB_STUBS = {
   '@stripe/stripe-react-native': path.resolve(__dirname, 'web/stubs/stripe-react-native.js'),
 };
 
-// RN 0.85 moved NativeComponent specs into src/private/ using types that
-// Expo 54's Babel codegen plugin can't parse. Stub them out — the native
+// RN keeps NativeComponent specs in src/private/ using codegen types the Expo
+// Babel plugin can't parse (introduced in RN 0.85; still true on SDK 57 /
+// RN 0.86.2 — the companion patches/react-native+0.86.2.patch works around the
+// same codegen breakage at the component layer). Stub them out — the native
 // bridge is compiled into the binary at build time, so this doesn't affect
 // OTA updates.
 const NATIVE_COMPONENT_STUB = path.resolve(__dirname, '__stubs__/emptyNativeComponent.js');
@@ -85,22 +92,6 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   // from @types/react-test-renderer → @types/react.
   if (moduleName.startsWith('@types/')) {
     return { type: 'empty' };
-  }
-
-  // react-native-gesture-handler ≤2.31 (src/RNRenderer.ts) imports the
-  // old-architecture renderer shim, which react-native 0.86 no longer ships
-  // (verified against the published 0.86.2 tarball: shims/ contains only the
-  // Fabric variants). Without this redirect every native bundle of this app
-  // fails to resolve — `expo export`, `eas build`, and `eas update` alike.
-  // This app runs the New Architecture (runtimeVersion 2.0.0), where
-  // ReactFabric is the live renderer and exposes the same
-  // findHostInstance_DEPRECATED surface RNGH reads off RNRenderer.
-  if (moduleName === 'react-native/Libraries/Renderer/shims/ReactNative') {
-    return context.resolveRequest(
-      context,
-      'react-native/Libraries/Renderer/shims/ReactFabric',
-      platform
-    );
   }
 
   if (platform === 'web') {
@@ -121,8 +112,9 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
 
   // Stub the entire VirtualView directory — RN 0.85 added an experimental
   // VirtualViewExperimentalNativeComponent whose codegen spec uses nested
-  // Readonly<{}> inside DirectEventHandler that Expo 55 can't parse. VirtualView.js
-  // also uses Flow `component` syntax unsupported by the Babel preset here.
+  // Readonly<{}> inside DirectEventHandler that the Expo Babel plugin can't
+  // parse (still true on SDK 57 / RN 0.86.2). VirtualView.js also uses Flow
+  // `component` syntax unsupported by the Babel preset here.
   // The whole feature is behind unstable_VirtualView and unused by Expo apps.
   if (
     moduleName.includes('VirtualViewExperimentalNativeComponent') ||
@@ -133,7 +125,8 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   }
 
   // Stub ONLY specs_DEPRECATED NativeComponent files — the Babel codegen plugin
-  // (Expo SDK 55) can't parse their Flow type syntax. Don't stub anything else
+  // can't parse their Flow type syntax (observed on SDK 55, unchanged on
+  // SDK 57 / RN 0.86.2). Don't stub anything else
   // in src/private/ (ScrollView wrappers, SafeAreaView, NativeComponentRegistry)
   // — those are plain JS the dev client needs at runtime.
   const isSpecsDeprecated = moduleName.includes('specs_DEPRECATED');

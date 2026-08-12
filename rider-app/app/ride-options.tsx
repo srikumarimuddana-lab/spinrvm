@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router/react-navigation';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Circle, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
@@ -153,7 +153,6 @@ function RideOptionsScreenContent() {
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [mapReady, setMapReady] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [tempDate, setTempDate] = useState(new Date(Date.now() + 30 * 60000));
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
   // Promo sheet is a real @gorhom/bottom-sheet instance (same lib as the main
@@ -557,7 +556,6 @@ function RideOptionsScreenContent() {
       setConfirmSheet({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
       return;
     }
-    setTempDate(date);
     setScheduledTime(date);
   };
 

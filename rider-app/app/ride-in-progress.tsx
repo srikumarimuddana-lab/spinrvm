@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef, useContext } from 'react';
+import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -9,7 +9,6 @@ import {
   ScrollView,
   useWindowDimensions,
   Share,
-  Linking,
   Platform,
   ActivityIndicator,
   BackHandler,
@@ -57,7 +56,7 @@ function RideInProgressScreenContent() {
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
-    currentRide, currentDriver, fetchRide, cancelRide, clearRide,
+    currentRide, currentDriver, fetchRide,
     triggerEmergency, isLoading, error, wsConnected,
     activeRideRouteCoords, lastEtaMin,
     setActiveRideRouteCoords, setLastEtaMin,
@@ -291,28 +290,6 @@ function RideInProgressScreenContent() {
     });
     return () => sub.remove();
   }, [currentRide?.status]);
-
-  const handleSafety = () => {
-    setConfirmSheet({
-      visible: true,
-      title: 'Emergency',
-      message: 'Are you sure you want to contact emergency services?',
-      variant: 'danger',
-      buttons: [
-        {
-          text: 'Call 911',
-          style: 'destructive',
-          onPress: () => {
-            if (rideId) void triggerEmergency(rideId as string).catch(() => {
-              showToast('Alert Not Sent', "We couldn't reach Spinr's emergency service. Please call 911 directly.", 'danger');
-            });
-            Linking.openURL('tel:911');
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    });
-  };
 
   const handleShareTrip = async () => {
     // Public tracking URL base is served by GET /settings → app_settings.track_base_url

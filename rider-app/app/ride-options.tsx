@@ -39,10 +39,27 @@ import { useResponsive } from '@shared/utils/responsive';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { Analytics } from '@shared/analytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
 import { selectDefaultCardId } from '../utils/selectDefaultCard';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+// Deterministic per-driver fallback heading (0-359deg) for markers whose
+// backend record has no real `heading` yet. A pure function of the driver's
+// own id, so it's stable across re-renders (same driver -> same fallback
+// rotation) instead of the previous `Math.random() * 360`, which produced a
+// FRESH random rotation on every render — visibly jittering the car icon's
+// orientation on any re-render (e.g. every driver-location poll), not just
+// varying it once. No real heading data is lost either way; this only
+// changes what stand-in value is shown until the backend reports a real one.
+function fallbackHeading(driverId: string): number {
+  let hash = 0;
+  for (let i = 0; i < driverId.length; i++) {
+    hash = (hash * 31 + driverId.charCodeAt(i)) >>> 0;
+  }
+  return hash % 360;
+}
 
 interface SavedCard {
   id: string;
@@ -153,6 +170,17 @@ function RideOptionsScreenContent() {
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [mapReady, setMapReady] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
+  // Bounds for the schedule picker, refreshed to "now" at the moment the
+  // sheet opens (in the onPress handler below) rather than recomputed with
+  // `Date.now()` on every render — the latter is what react-hooks/purity
+  // flags (an impure call reachable from render), and computing it in the
+  // handler is strictly more correct anyway: it reflects "now" as of when
+  // the rider actually opens the picker, not whatever render happened to
+  // run last.
+  const [scheduleBounds, setScheduleBounds] = useState(() => ({
+    min: new Date(Date.now() + 15 * 60000),
+    max: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  }));
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
   // Promo sheet is a real @gorhom/bottom-sheet instance (same lib as the main
@@ -218,7 +246,7 @@ function RideOptionsScreenContent() {
   const mapRef = useRef<MapView>(null);
   const sheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['40%', '68%'], []);
-  const fareChevronAnim = useRef(new Animated.Value(0)).current;
+  const fareChevronAnim = useAnimatedValue(0);
   const { scheduleReminder } = useScheduledRideReminder();
 
   // Service area boundary polygons — fetched once per mount and shown as a
@@ -436,6 +464,9 @@ function RideOptionsScreenContent() {
       return;
     }
     if (scheduledTime) {
+      // Not a render-time call: handleBookRide only runs from the Book
+      // button's onPress, never during render.
+      // eslint-disable-next-line react-hooks/purity
       const minTime = new Date(Date.now() + 15 * 60000);
       if (scheduledTime < minTime) {
         showToast('Invalid Time', 'Scheduled time must be at least 15 minutes from now.', 'warning');
@@ -657,7 +688,7 @@ function RideOptionsScreenContent() {
             return (
               <CarMarker key={driver.id} identifier={driver.id}
                 coordinate={{ latitude: driver.lat, longitude: driver.lng }}
-                heading={(driver as any).heading ?? Math.random() * 360}
+                heading={(driver as any).heading ?? fallbackHeading(driver.id)}
                 imageUri={vt?.marker_image_url}
                 variant={resolveMarkerVariant(
                   vt?.marker_variant ?? driver.marker_variant,
@@ -943,7 +974,17 @@ function RideOptionsScreenContent() {
               {/* Schedule row */}
               <TouchableOpacity
                 style={styles.actionRow}
-                onPress={() => scheduledTime ? setScheduledTime(null) : setShowScheduleModal(true)}
+                onPress={() => {
+                  if (scheduledTime) {
+                    setScheduledTime(null);
+                    return;
+                  }
+                  setScheduleBounds({
+                    min: new Date(Date.now() + 15 * 60000),
+                    max: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+                  });
+                  setShowScheduleModal(true);
+                }}
                 activeOpacity={0.7}
               >
                 <View style={styles.actionRowIcon}>
@@ -1263,8 +1304,8 @@ function RideOptionsScreenContent() {
         visible={showScheduleModal}
         onClose={() => setShowScheduleModal(false)}
         onConfirm={handleScheduleConfirm}
-        minDate={new Date(Date.now() + 15 * 60000)}
-        maxDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+        minDate={scheduleBounds.min}
+        maxDate={scheduleBounds.max}
       />
 
       <ConfirmSheet
@@ -1290,13 +1331,13 @@ function AnimatedVehicleCard({
   estimate: any; index: number; isSelected: boolean; isAvailable: boolean;
   onPress: (i: number) => void; styles: any; colors: any; appliedPromo: any;
 }) {
-  const scaleAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
+  const scaleAnim = useAnimatedValue(isSelected ? 1 : 0);
   // Car-image emphasis. Driven by a native SCALE transform (below) inside a
   // fixed-size container, so it rides the native driver like scaleAnim — the
   // old version animated width/height (useNativeDriver:false), which ran on the
   // JS thread AND changed the row height, reflowing the whole list on every
   // selection switch (the "shaking").
-  const imageSizeAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
+  const imageSizeAnim = useAnimatedValue(isSelected ? 1 : 0);
 
   useEffect(() => {
     Animated.spring(scaleAnim, {

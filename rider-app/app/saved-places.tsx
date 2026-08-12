@@ -61,15 +61,15 @@ export default function SavedPlacesScreen() {
     buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   const loadData = async () => {
     setLoading(true);
     await fetchSavedAddresses();
     setLoading(false);
   };
+
+  useEffect(() => {
+    loadData();
+  }, []);
 
   const searchPlaces = (query: string) => {
     setSearchText(query);

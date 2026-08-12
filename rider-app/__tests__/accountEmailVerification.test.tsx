@@ -20,7 +20,6 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { create } from 'zustand';
 
 import AccountScreen from '../app/(tabs)/account';
 import { useAuthStore } from '@shared/store/authStore';

@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover - direct module import in tests
     from services import zoho_ticket_service_area as ticket_area
     from services.zoho_desk_service import ZohoDeskError
     from utils.audit_logger import log_admin_action
+    from utils.company_details import CompanyDetails, load_company_details
     from utils.rate_limiter import admin_ai_suggest_limit
 
 logger = logging.getLogger(__name__)

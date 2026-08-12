@@ -2939,6 +2939,54 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     existing (already-shipped) behavior, per CLAUDE.md's "live-tested
     surface" documentation requirement.
 
+### A29. `spinr-regulatory-compliance-checker` follow-ups from the SK PST enablement (A27/#3723) — not previously filed
+- **Correction note:** PR #3723's body said these 3 findings were "filed as
+  `ACTION_ITEMS.md` follow-ups, not blocking this PR" — they were not
+  actually added at the time. Filing them now (2026-08-12) to make that
+  claim true.
+- **No audit trail on the tax-rate admin endpoints themselves.** Two
+  separate `PUT /areas/{area_id}/tax` endpoints exist
+  (`features.py:722-744`'s `pricing_router` and
+  `routes/admin/service_areas.py:841-856`), and neither writes an
+  `audit_logs` row or requires a justification string for a tax-rate
+  change — unlike the analogous surge-cap endpoint in `features.py`, which
+  documents "no written-justification field... must not be a path to
+  exceed the cap" and routes above-cap changes to an audited path. A
+  tax-rate change carries real regulatory/financial weight (every rider's
+  charge, CRA/SK remittance obligations) with zero admin-action audit
+  trail today. Compounded in the actual 2026-08-11 PST-enablement event:
+  the change was applied via direct Supabase access, bypassing both
+  endpoints entirely — mitigated after the fact with 4 retroactive
+  `audit_logs` rows (see A27/P1-B), but the underlying endpoints still
+  have no audit requirement for the *next* tax-rate change made through
+  the normal admin UI.
+  - [ ] **Status:** open. Fix direction: add an `audit_logs` write (with a
+    required justification field, mirroring the surge-cap pattern) to both
+    tax endpoints before the next tax-rate change ships.
+- **`corporate_statement_pdf.py` GST/PST fallback risk.** Falls back to a
+  single combined "Tax (GST/PST)" line (lines 93-98) whenever
+  `tax_by_type` is empty — e.g. a statement period mixing pre-/post-PST-
+  cutover rides where no ride happens to have a populated breakdown, or
+  any future tax type the aggregator doesn't yet bucket. Low risk today
+  since `_aggregate_rows` in `routes/corporate_company.py` already buckets
+  by label, but the fallback path exists and would violate the
+  separate-line-items rule (regulatory-sk.md) if ever hit for a period
+  with real GST+PST both present.
+  - [ ] **Status:** open, low priority. Fix direction: either remove the
+    combined-line fallback (fail loudly instead) or confirm/document why
+    it's an acceptable degrade path.
+- **No `service_area_tax_history` (or equivalent) audit table.** The PST
+  enablement's only queryable-in-DB trace is the 4 retroactive `audit_logs`
+  rows (A27); there's no dedicated append-only table capturing
+  rate/enabled transitions over time the way `driver_insurance_periods`
+  does for insurance periods. If SK/CRA ever audits "when exactly did
+  Spinr start collecting PST," the only source of truth is those
+  `audit_logs` rows plus the change-log markdown.
+  - [ ] **Status:** open, low priority — `audit_logs` already covers the
+    "what changed and why" need; a dedicated history table would only add
+    value for high-volume tax-config churn, which this isn't yet. Revisit
+    if tax-rate changes become more frequent.
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"

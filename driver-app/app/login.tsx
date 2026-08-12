@@ -9,7 +9,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
-  Animated,
   ScrollView,
   Image,
 } from 'react-native';
@@ -19,7 +18,6 @@ import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api, { getApiErrorMessage } from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../store/languageStore';
 import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';

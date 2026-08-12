@@ -15,28 +15,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api, { setInMemoryToken, getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { logCompleteRegistration } from '@shared/analytics/meta';
 import { showToast } from '../hooks/useToast';
 import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-
-// Platform-safe token storage
-const storage = {
-  async setItem(key: string, value: string) {
-    try {
-      if (Platform.OS === 'web') {
-        localStorage.setItem(key, value);
-      } else {
-        const SecureStore = require('expo-secure-store');
-        await SecureStore.setItemAsync(key, value);
-      }
-    } catch (e) {
-      console.log('[Auth] Storage setItem FAILED:', e);
-    }
-  },
-};
 
 export default function OtpScreen() {
   const router = useRouter();
@@ -198,10 +182,6 @@ export default function OtpScreen() {
       showToast('error', 'Failed', getApiErrorMessage(err, 'Could not resend code. Please try again.'));
     }
   };
-
-  const maskedPhone = phoneNumber
-    ? `${phoneNumber.slice(0, -4)}${'•'.repeat(4)}`
-    : '';
 
   return (
     <KeyboardAvoidingView
